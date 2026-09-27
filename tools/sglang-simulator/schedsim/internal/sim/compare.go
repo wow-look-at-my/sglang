@@ -135,10 +135,10 @@ func PolicyIndex(m Mode) int {
 	return -1
 }
 
-// PerSeed lists one metric's value for each seed of one policy, in seed order, so
-// a comparison can be read against the spread across seeds rather than against a
-// single pooled number.
-func (r Row) PerSeed(mode Mode, k MetricKey) []float64 {
+// SeedValues lists one metric's value for each seed of one policy, in seed
+// order, so a comparison can be read against the spread across seeds rather
+// than against a single pooled number.
+func (r Row) SeedValues(mode Mode, k MetricKey) []float64 {
 	out := make([]float64, len(r.Runs[PolicyIndex(mode)]))
 	for i, res := range r.Runs[PolicyIndex(mode)] {
 		out[i] = Measure(res, r.Scenario.Window).Value(k)

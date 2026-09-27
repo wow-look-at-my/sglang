@@ -184,4 +184,3 @@ func SingleTokenSamples(res *Result, window float64) (single, total int, longest
 	}
 	return single, total, longest
 }
-
