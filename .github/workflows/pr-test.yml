@@ -95,6 +95,7 @@ jobs:
   wait-for-base-a:
     needs: [check-changes, call-gate]
     if: |
+      github.repository == 'sgl-project/sglang' &&
       always() &&
       !cancelled() &&
       needs.check-changes.result == 'success' &&
@@ -124,6 +125,7 @@ jobs:
   wait-for-base-b:
     needs: [check-changes, call-gate, wait-for-base-a]
     if: |
+      github.repository == 'sgl-project/sglang' &&
       always() &&
       !cancelled() &&
       needs.check-changes.result == 'success' &&

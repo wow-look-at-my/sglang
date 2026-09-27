@@ -1058,6 +1058,7 @@ jobs:
     name: wait-for-stage-b-amd
     needs: [check-changes, call-gate, wait-for-stage-a-amd]
     if: |
+      github.repository == 'sgl-project/sglang' &&
       always() &&
       !cancelled() &&
       github.event_name == 'pull_request' &&
