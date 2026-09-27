@@ -63,6 +63,8 @@ class _DispatchMetadata:
     token_to_kv_pool = None
     out_cache_loc = None
     compress_member_rows = None
+    compress_member_locs = None
+    compress_prior_ring_locs = None
     decode_logical_positions = None
     pending_ring_slots = None
     # Consumed by the real _pending_ring_slots helper the dispatch indexer
@@ -185,6 +187,7 @@ class TestQSACompressGroupOOBClampOnRealXpu(unittest.TestCase):
                     compressed_k.__setitem__(loc.long(), val)
                 ),
             ),
+            compress_member_locs=None,
             compress_member_rows=torch.tensor(
                 [0, 4, 5], dtype=torch.long, device="xpu"
             ),
@@ -217,6 +220,7 @@ class TestQSACompressGroupOOBClampOnRealXpu(unittest.TestCase):
                     reference_k.__setitem__(loc.long(), val)
                 ),
             ),
+            compress_member_locs=None,
             compress_member_rows=torch.tensor([5], dtype=torch.long, device="xpu"),
             is_cuda_graph=False,
             write_locs=torch.zeros(1, dtype=torch.long, device="xpu"),
