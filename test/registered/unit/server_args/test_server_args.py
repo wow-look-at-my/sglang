@@ -38,10 +38,6 @@ from sglang.srt.arg_groups.hicache_hook import (
     handle_hicache_auto,
     handle_hicache_ratio_default,
 )
-from sglang.srt.arg_groups.mixed_chunk_hook import (
-    auto_mixed_chunk_blocker,
-    handle_mixed_chunk_auto,
-)
 from sglang.srt.arg_groups.hisparse_hook import (
     validate_hisparse_dsa_backend,
     validate_hisparse_kv_cache_dtype,
@@ -54,6 +50,10 @@ from sglang.srt.arg_groups.kv_cache_hook import (
 )
 from sglang.srt.arg_groups.mamba_hook import handle_mamba_backend
 from sglang.srt.arg_groups.memory_hook import handle_gpu_memory_settings
+from sglang.srt.arg_groups.mixed_chunk_hook import (
+    auto_mixed_chunk_blocker,
+    handle_mixed_chunk_auto,
+)
 from sglang.srt.arg_groups.model_path_hook import handle_load_format
 from sglang.srt.arg_groups.moe_hook import (
     handle_a2a_moe,

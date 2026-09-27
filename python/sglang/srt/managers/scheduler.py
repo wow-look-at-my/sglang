@@ -228,6 +228,10 @@ from sglang.srt.managers.scheduler_components.dp_attn import SchedulerDPAttnAdap
 from sglang.srt.managers.scheduler_components.dynamic_chunk_sizer import (
     DynamicChunkSizer,
 )
+from sglang.srt.managers.scheduler_components.eviction_throttle import (
+    EvictionThrottle,
+    rank0_verdict_consensus,
+)
 from sglang.srt.managers.scheduler_components.flush_wrapper import SchedulerFlushWrapper
 from sglang.srt.managers.scheduler_components.idle_sleeper import (
     IdleSleeper,
@@ -265,10 +269,6 @@ from sglang.srt.managers.scheduler_components.output_streamer import (
 )
 from sglang.srt.managers.scheduler_components.pool_stats_observer import (
     SchedulerPoolStatsObserver,
-)
-from sglang.srt.managers.scheduler_components.eviction_throttle import (
-    EvictionThrottle,
-    rank0_verdict_consensus,
 )
 from sglang.srt.managers.scheduler_components.prefill_decode_balancer import (
     PrefillDecodeBalancer,
