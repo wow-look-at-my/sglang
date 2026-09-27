@@ -655,24 +655,50 @@ CONTEXT_LENGTH_KEYS = [
 ]
 
 
+# Rope types whose max_position_embeddings already states the extended window.
+_ROPE_TYPES_WITH_EXTENDED_MAX_POSITION = frozenset({"llama3", "longrope", "su"})
+
+
+def _rope_scaled_context_length(
+    rope: dict, base_len: int, scale_base_by_factor: bool
+) -> int:
+    rope_type = rope.get("rope_type") or rope.get("type")
+    factor = rope.get("factor")
+    if factor is None or rope_type in _ROPE_TYPES_WITH_EXTENDED_MAX_POSITION:
+        return base_len
+    original = rope.get("original_max_position_embeddings")
+    if original is not None:
+        # HF YaRN: the scaled window is original * factor with the explicit factor
+        # winning; max_position_embeddings may or may not already state it.
+        return max(base_len, int(original * factor))
+    return int(base_len * factor) if scale_base_by_factor else base_len
+
+
 def get_context_length(config):
     """Get the context length of a model from a huggingface model configs."""
-    text_config = config
-    rope_scaling = getattr(text_config, "rope_scaling", None)
-    if rope_scaling:
-        rope_scaling_factor = rope_scaling.get("factor", 1)
-        if "original_max_position_embeddings" in rope_scaling:
-            rope_scaling_factor = 1
-        if rope_scaling.get("rope_type", None) == "llama3":
-            rope_scaling_factor = 1
-    else:
-        rope_scaling_factor = 1
-
+    base_len = 2048
     for key in CONTEXT_LENGTH_KEYS:
-        val = getattr(text_config, key, None)
+        val = getattr(config, key, None)
         if val is not None:
-            return int(rope_scaling_factor * val)
-    return 2048
+            base_len = int(val)
+            break
+    else:
+        return base_len
+
+    # transformers 5 renames rope_scaling to rope_parameters; configs that do not
+    # subclass the v5 PretrainedConfig may still carry only rope_scaling.
+    rope = getattr(config, "rope_parameters", None) or getattr(
+        config, "rope_scaling", None
+    )
+    if not isinstance(rope, dict) or not rope:
+        return base_len
+    if all(isinstance(v, dict) for v in rope.values()):
+        # Per-layer-type params; only the explicit original * factor rule applies.
+        return max(
+            _rope_scaled_context_length(v, base_len, scale_base_by_factor=False)
+            for v in rope.values()
+        )
+    return _rope_scaled_context_length(rope, base_len, scale_base_by_factor=True)
 
 
 @lru_cache_frozenset(maxsize=32)

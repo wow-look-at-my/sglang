@@ -38,6 +38,7 @@ concurrency:
 jobs:
   # ==================== Check Changes ==================== #
   check-changes:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       changes_exist: ${{ steps.filter.outputs.main_package == 'true' || steps.filter.outputs.multimodal_gen == 'true' || steps.run-mode.outputs.run_all_tests == 'true'}}
@@ -98,11 +99,15 @@ jobs:
   # ==================== PR Gate ==================== #
   pr-gate:
     needs: check-changes
-    if: ${{ inputs.coverage_mode != true && needs.check-changes.outputs.changes_exist == 'true' }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        inputs.coverage_mode != true && needs.check-changes.outputs.changes_exist == 'true'
+      )
     uses: ./.github/workflows/pr-gate.yml
     secrets: inherit
 
   set-image-config:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       CANN_image_a3: ${{ steps.set-vars.outputs.CANN_image_a3 }}
@@ -117,7 +122,10 @@ jobs:
   # torch_npu / sgl_kernel_npu before importing, so a hosted runner suffices.
   base-a-test-npu:
     needs: [check-changes, pr-gate]
-    if: ${{ !failure() && !cancelled() && inputs.coverage_mode != true && needs.check-changes.outputs.main_package == 'true' }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && inputs.coverage_mode != true && needs.check-changes.outputs.main_package == 'true'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -171,7 +179,10 @@ jobs:
 
   base-b-test-1-npu-a3:
     needs: [check-changes, pr-gate, set-image-config, base-a-test-npu]
-    if: ${{ !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true')
+      )
     uses: ./.github/workflows/_npu-pr-test-stage.yml
     with:
       self_name: base-b-test-1-npu-a3
@@ -185,7 +196,10 @@ jobs:
 
   base-b-test-2-npu-a3:
     needs: [check-changes, pr-gate, set-image-config, base-a-test-npu]
-    if: ${{ !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true')
+      )
     uses: ./.github/workflows/_npu-pr-test-stage.yml
     with:
       self_name: base-b-test-2-npu-a3
@@ -199,7 +213,10 @@ jobs:
 
   base-b-test-4-npu-a3:
     needs: [check-changes, pr-gate, set-image-config, base-a-test-npu]
-    if: ${{ !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true')
+      )
     uses: ./.github/workflows/_npu-pr-test-stage.yml
     with:
       self_name: base-b-test-4-npu-a3
@@ -214,7 +231,10 @@ jobs:
 
   base-b-test-8-npu-a3:
     needs: [check-changes, pr-gate, set-image-config, base-a-test-npu]
-    if: ${{ !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true')
+      )
     uses: ./.github/workflows/_npu-pr-test-stage.yml
     with:
       self_name: base-b-test-8-npu-a3
@@ -228,7 +248,10 @@ jobs:
 
   base-b-test-16-npu-a3:
     needs: [check-changes, pr-gate, set-image-config, base-a-test-npu]
-    if: ${{ !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true')
+      )
     uses: ./.github/workflows/_npu-pr-test-stage.yml
     with:
       self_name: base-b-test-16-npu-a3
@@ -242,7 +265,10 @@ jobs:
 
   multimodal-gen-test-1-npu-a3:
     needs: [check-changes, pr-gate, set-image-config, base-a-test-npu]
-    if: ${{ !failure() && !cancelled() && inputs.coverage_mode != true && needs.check-changes.outputs.multimodal_gen == 'true' }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && inputs.coverage_mode != true && needs.check-changes.outputs.multimodal_gen == 'true'
+      )
     runs-on: linux-aarch64-a3-800t-2
     strategy:
       fail-fast: false
@@ -306,7 +332,10 @@ jobs:
 
   multimodal-gen-test-4-npu-a3:
     needs: [check-changes, pr-gate, set-image-config, base-a-test-npu]
-    if: ${{ !failure() && !cancelled() && inputs.coverage_mode != true && needs.check-changes.outputs.multimodal_gen == 'true' }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && inputs.coverage_mode != true && needs.check-changes.outputs.multimodal_gen == 'true'
+      )
     runs-on: linux-aarch64-a3-800t-4
     strategy:
       fail-fast: false
@@ -371,7 +400,10 @@ jobs:
   base-c-test-acc-2-npu-a3:
     name: base-c-test-acc-2-npu-a3
     needs: [ check-changes, pr-gate, set-image-config, base-b-test-1-npu-a3, base-b-test-2-npu-a3, base-b-test-4-npu-a3, base-b-test-8-npu-a3, base-b-test-16-npu-a3 ]
-    if: ${{ !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true')
+      )
     uses: ./.github/workflows/_npu-single-node-test-stage.yml
     with:
       runner: ${{ inputs.coverage_mode == true && 'linux-aarch64-a3-800t-2' || 'linux-aarch64-a3-2-' }}
@@ -387,7 +419,10 @@ jobs:
   base-c-test-acc-16-npu-a3:
     name: base-c-test-acc-16-npu-a3
     needs: [ check-changes, pr-gate, set-image-config, base-b-test-1-npu-a3, base-b-test-2-npu-a3, base-b-test-4-npu-a3, base-b-test-8-npu-a3, base-b-test-16-npu-a3 ]
-    if: ${{ !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true')
+      )
     uses: ./.github/workflows/_npu-single-node-test-stage.yml
     with:
       runner: ${{ inputs.coverage_mode == true && 'linux-aarch64-a3-800t-16' || 'linux-aarch64-a3-16-' }}
@@ -402,7 +437,10 @@ jobs:
   base-c-test-perf-2-npu-a3:
     name: base-c-test-perf-2-npu-a3
     needs: [ check-changes, pr-gate, set-image-config, base-c-test-acc-2-npu-a3, base-c-test-acc-16-npu-a3 ]
-    if: ${{ !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true')
+      )
     uses: ./.github/workflows/_npu-single-node-test-stage.yml
     with:
       runner: linux-aarch64-a3-800t-2
@@ -417,7 +455,10 @@ jobs:
   base-c-test-perf-16-npu-a3:
     name: base-c-test-perf-16-npu-a3
     needs: [ check-changes, pr-gate, set-image-config, base-c-test-acc-2-npu-a3, base-c-test-acc-16-npu-a3 ]
-    if: ${{ !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && (inputs.coverage_mode == true || needs.check-changes.outputs.main_package == 'true')
+      )
     uses: ./.github/workflows/_npu-single-node-test-stage.yml
     with:
       runner: linux-aarch64-a3-800t-16
@@ -438,7 +479,10 @@ jobs:
     name: Recommend tests from coverage
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && inputs.coverage_mode != true }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !cancelled() && github.event_name == 'pull_request' && inputs.coverage_mode != true
+      )
     outputs:
       coverage_paths: ${{ steps.export-paths.outputs.coverage_paths }}
     env:
@@ -542,7 +586,7 @@ jobs:
 
         recommend-tests-from-coverage,
       ]
-    if: ${{ !cancelled() && inputs.coverage_mode != true }}
+    if: github.repository == 'sgl-project/sglang' && (!cancelled() && inputs.coverage_mode != true)
     uses: ./.github/workflows/_npu-analyze-failure.yml
     with:
       log_artifact_pattern: selected-test-logs-*
@@ -565,7 +609,7 @@ jobs:
         base-c-test-perf-2-npu-a3,
         base-c-test-perf-16-npu-a3,
       ]
-    if: ${{ !failure() && !cancelled() && inputs.coverage_mode == true }}
+    if: github.repository == 'sgl-project/sglang' && (!failure() && !cancelled() && inputs.coverage_mode == true)
     runs-on: linux-aarch64-a3-800t-2
     container:
       image: ${{ needs.set-image-config.outputs.CANN_image_a3 }}
@@ -705,7 +749,7 @@ jobs:
 
         setup-covstub,
       ]
-    if: always()
+    if: github.repository == 'sgl-project/sglang' && (always())
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses

@@ -82,6 +82,7 @@ class CUDAPiecewiseBackend:
 
         self.compile_sizes: set[int] = set([])
         self.compile_config = compile_config
+        compile_config.piecewise_backends.append(self)
         self.cudagraph_capture_sizes: set[int] = set(compile_config.get_capture_sizes())
 
         self.first_run_finished = False
@@ -103,6 +104,15 @@ class CUDAPiecewiseBackend:
                 need_to_compile=shape in self.compile_sizes,
                 use_cudagraph=shape in self.cudagraph_capture_sizes,
             )
+
+    def discard_captured_graphs(self) -> None:
+        """Drop captured graphs, keeping compiled code; the next capture pass re-records."""
+        for entry in self.concrete_size_entries.values():
+            if entry.cudagraph is not None:
+                entry.cudagraph.reset()
+            entry.cudagraph = None
+            entry.output = None
+            entry.num_finished_warmup = 0
 
     def check_for_ending_compilation(self):
         if self.is_last_graph and not self.to_be_compiled_sizes:

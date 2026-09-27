@@ -3833,11 +3833,9 @@ class ServingChatTestCase(unittest.TestCase):
         chunks = get_or_create_event_loop().run_until_complete(_collect())
         return [c["usage"] for c in self._parse_chunks(chunks) if c.get("usage")]
 
-    def test_continuous_usage_reports_cached_tokens(self):
-        """continuous_usage_stats chunks include cached tokens when cache reporting is on."""
-        enter_override(
-            self, get_context().override_server_args(enable_cache_report=True)
-        )
+    def test_continuous_usage_reports_cached_tokens_by_default(self):
+        """Cached-token reporting is on without any flag, so clients see cache hits."""
+        enter_override(self, get_context().override_server_args())
         usages = self._collect_continuous_usage(cached_tokens=6)
         self.assertTrue(usages, "continuous_usage_stats attached no usage")
         self.assertEqual(usages[0]["prompt_tokens_details"]["cached_tokens"], 6)

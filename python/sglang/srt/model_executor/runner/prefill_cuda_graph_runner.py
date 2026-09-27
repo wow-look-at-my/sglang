@@ -94,6 +94,7 @@ from sglang.srt.model_executor.forward_batch_info import (
 from sglang.srt.model_executor.forward_context import ForwardContext, forward_context
 from sglang.srt.model_executor.runner.base_cuda_graph_runner import (
     BaseCudaGraphRunner,
+    capture_with_custom_ar_recovery,
     freeze_gc,
 )
 from sglang.srt.model_executor.runner.shape_key import ShapeKey
@@ -102,6 +103,9 @@ from sglang.srt.model_executor.runner_backend.breakable_cuda_graph_backend impor
 )
 from sglang.srt.model_executor.runner_backend.full_cuda_graph_backend import (
     FullCudaGraphBackend,
+)
+from sglang.srt.model_executor.runner_backend.tc_piecewise_cuda_graph_backend import (
+    TcPiecewiseCudaGraphBackend,
 )
 from sglang.srt.model_executor.runner_backend.utils import (
     resolve_prefill_backend,
@@ -618,7 +622,9 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
         # --- capture --------------------------------------------------
         self.device_module.synchronize()
         self.model_runner.tp_group.barrier()
-        self.capture()
+        capture_with_custom_ar_recovery(
+            capture=self.capture, discard_graphs=self._discard_captured_graphs
+        )
 
         self.raw_num_tokens = 0
         self.raw_bs = 0
@@ -1553,6 +1559,13 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
                 "Prefill CUDA graph captured a DP gather/scatter; "
                 "DP ranks will replay a shared MAX_LEN bucket."
             )
+
+    def _discard_captured_graphs(self) -> None:
+        if isinstance(self.backend, TcPiecewiseCudaGraphBackend):
+            # cleanup() would also drop the compiled callable that replay needs.
+            self.backend.discard_captured_graphs()
+        else:
+            self.backend.cleanup()
 
     def _capture_one_stream(self) -> None:
         avail_mem = get_available_gpu_memory(

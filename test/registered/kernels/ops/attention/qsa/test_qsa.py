@@ -535,6 +535,7 @@ def test_qsa_indexer_ignores_dp_attention_token_padding():
         metadata = SimpleNamespace(
             token_to_kv_pool=None,
             compress_member_rows=None,
+            compress_prior_ring_locs=None,
             decode_logical_positions=None,
             pending_ring_slots=None,
             get_token_to_batch_idx=lambda: mapping,
@@ -555,7 +556,7 @@ def test_qsa_indexer_ignores_dp_attention_token_padding():
             _pending_ring_slots=lambda metadata, logical_positions, is_extend: (
                 torch.zeros(logical_positions.numel(), dtype=torch.long)
             ),
-            update_key_state_and_compress=lambda token_k, logical, rope, meta, state_slots=None, state_stored=False: (
+            update_key_state_and_compress=lambda token_k, logical, rope, meta, state_slots=None, state_stored=False, prior_keys=None: (
                 calls.update(
                     token_rows=token_k.shape[0],
                     logical_rows=logical.numel(),
@@ -993,6 +994,8 @@ class _DispatchMetadata:
     token_to_kv_pool = None
     out_cache_loc = None
     compress_member_rows = None
+    compress_member_locs = None
+    compress_prior_ring_locs = None
     decode_logical_positions = None
     pending_ring_slots = None
     # Consumed by the real _pending_ring_slots helper the dispatch indexer

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from typing import (
     Any,
@@ -77,13 +78,22 @@ class Memory(msgspec.Struct):
         "Mamba backends.",
     ] = False
     enable_unified_memory: A[
-        bool,
-        "Replace the statically-partitioned hybrid-model pools (full-attn KV + "
-        "SWA/Mamba state) with one byte buffer split dynamically between "
-        "sub-pools. Requires the Triton attention / linear-attn / Mamba "
-        "backends. Supported PD-disaggregation and speculative-decoding "
-        "configurations are validated at startup.",
-    ] = False
+        Optional[bool],
+        Arg(
+            help="Replace the statically-partitioned hybrid-model pools "
+            "(full-attn KV + SWA/Mamba state) with one byte buffer split "
+            "dynamically between sub-pools. Supported attention, "
+            "linear-attention, PD-disaggregation and speculative-decoding "
+            "configurations are validated at startup. Unset, it turns on by "
+            "itself for a hybrid Mamba/linear-attention model when every one of "
+            "those checks passes (colocated, no speculative decoding, no HiCache, "
+            "CUDA); the startup log says which way it went and why. Use "
+            "--no-enable-unified-memory to keep the static split.",
+            action=argparse.BooleanOptionalAction,
+            resolvable=True,
+            fallback=False,
+        ),
+    ] = None
     enable_session_radix_cache: A[
         bool,
         "Track per-session references on UnifiedRadixCache KV: eviction consumes unreferenced entries before referenced ones, and closing a session only dereferences its KV.",

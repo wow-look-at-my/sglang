@@ -20,8 +20,14 @@ import gc
 import logging
 from abc import abstractmethod
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple
 
+import torch
+
+from sglang.srt.distributed.device_communicators.custom_all_reduce_utils import (
+    CustomAllreduceGraphRegistrationError,
+)
+from sglang.srt.distributed.parallel_state import get_world_group
 from sglang.srt.model_executor.runner.base_runner import BaseRunner
 from sglang.srt.runtime_context import (
     get_exec,
@@ -59,6 +65,34 @@ def freeze_gc(enable_cudagraph_gc: bool):
         if should_freeze:
             gc.unfreeze()
             gc.collect()
+
+
+def any_rank_needs_recapture(needs_recapture: bool) -> bool:
+    # A custom all-reduce subgroup (e.g. attention TP) fails only on its own ranks,
+    # yet every rank must recapture together or the capture collectives hang.
+    flag = torch.tensor([int(needs_recapture)], dtype=torch.int32)
+    torch.distributed.all_reduce(
+        flag, op=torch.distributed.ReduceOp.MAX, group=get_world_group().cpu_group
+    )
+    return bool(flag.item())
+
+
+def capture_with_custom_ar_recovery(
+    *, capture: Callable[[], None], discard_graphs: Callable[[], None]
+) -> None:
+    """Run ``capture``; recapture on every rank after custom all-reduce drops out."""
+    # Terminates: each registration failure disables one group's custom
+    # all-reduce on all of its ranks for good.
+    while True:
+        try:
+            capture()
+            needs_recapture = False
+        except CustomAllreduceGraphRegistrationError as e:
+            logger.warning("%s Recapturing CUDA graphs without it.", e)
+            needs_recapture = True
+        if not any_rank_needs_recapture(needs_recapture):
+            return
+        discard_graphs()
 
 
 def get_batch_sizes_to_capture(

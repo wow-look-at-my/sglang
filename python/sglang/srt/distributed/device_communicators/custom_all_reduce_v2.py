@@ -56,8 +56,11 @@ from .configs.custom_all_reduce_v2 import (
     get_supported_world_sizes,
 )
 from .custom_all_reduce_utils import (
+    CustomAllreduceGraphRegistrationError,
     can_use_custom_all_reduce_with_nvlink,
+    graph_registration_failure_message,
     is_one_nvlink_clique,
+    is_vmm_backed_allocator,
     is_weak_contiguous,
 )
 
@@ -412,12 +415,28 @@ class CustomAllReduceV2:
     def _register_graph_inputs(self) -> None:
         if not self._graph_inputs:
             return
-        first_ptr = self._graph_inputs[0][0]
-        if is_vmm_pointer(first_ptr):
-            # calls back into get_graph_capture_bases / register_peer_mapped_inputs
-            self._vmm_graph_input_manager.register_graph_inputs()
-        else:
-            self._register_graph_inputs_ipc()
+        try:
+            first_ptr = self._graph_inputs[0][0]
+            if is_vmm_pointer(first_ptr):
+                # calls back into get_graph_capture_bases / register_peer_mapped_inputs
+                self._vmm_graph_input_manager.register_graph_inputs()
+            else:
+                self._register_graph_inputs_ipc()
+            error = None
+        # OSError covers the SCM_RIGHTS fd exchange of the POSIX VMM path.
+        except (RuntimeError, OSError) as e:
+            error = str(e)
+        # Every rank votes, so the group disables together instead of one rank
+        # crashing while its peers wait in the next collective.
+        gathered: List[Optional[str]] = [None] * self.world_size
+        dist.all_gather_object(gathered, error, group=self.group)
+        errors = [e for e in gathered if e is not None]
+        if errors:
+            self.disabled = True
+            self._graph_inputs.clear()
+            raise CustomAllreduceGraphRegistrationError(
+                graph_registration_failure_message(errors[0])
+            )
 
     def _register_graph_inputs_ipc(self) -> None:
         """Register graph capture inputs via cudaIpc handles.
@@ -426,10 +445,17 @@ class CustomAllReduceV2:
         VMM pointers (expandable_segments), which use the VMM path instead.
         """
         ptrs = [ptr for ptr, _ in self._graph_inputs]
-        handles = self._ipc_manager.batch_get_handles(ptrs)
-        local = [(list(handle), int(offset)) for handle, offset in handles]
+        # An export failure still joins the exchange, so no peer is left waiting.
+        try:
+            handles = self._ipc_manager.batch_get_handles(ptrs)
+            local = [(list(handle), int(offset)) for handle, offset in handles]
+        except RuntimeError as e:
+            local = str(e)
         gathered: List[Optional[list]] = [None] * self.world_size
         dist.all_gather_object(gathered, local, group=self.group)
+        export_errors = [g for g in gathered if isinstance(g, str)]
+        if export_errors:
+            raise RuntimeError(export_errors[0])
         ptrs_per_rank: List[List[int]] = []
         for rank, remote in enumerate(gathered):
             if rank == self.rank:
@@ -473,12 +499,6 @@ class CustomAllReduceV2:
         self.close()
 
 
-def _is_vmm_backed_allocator(device: torch.device) -> bool:
-    """Check whether expandable-segments VMM backs the caching allocator."""
-    probe = torch.empty(1, dtype=torch.uint8, device=device)
-    return is_vmm_pointer(probe.data_ptr())
-
-
 def can_use_custom_all_reduce_v2(
     group: ProcessGroup,
     device: torch.device,
@@ -487,7 +507,7 @@ def can_use_custom_all_reduce_v2(
     if dist.get_world_size(group=group) not in supported:
         return False
     if not all(in_the_same_node_as(group, source_rank=0)):
-        return is_one_nvlink_clique(group, device) and _is_vmm_backed_allocator(device)
+        return is_one_nvlink_clique(group, device) and is_vmm_backed_allocator(device)
     full_nvlink = can_use_custom_all_reduce_with_nvlink(
         group=group,
         device=device,

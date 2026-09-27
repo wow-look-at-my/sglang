@@ -24,15 +24,11 @@ from sglang.srt.model_executor.runner import (
     DeepEPCudaGraphRunnerAdapter,
     ShapeKey,
     get_batch_sizes_to_capture,
-    model_capture_mode,
 )
 from sglang.srt.model_executor.runner.flashinfer_autotune import (
     maybe_flashinfer_autotune_speculative_draft,
 )
 from sglang.srt.model_executor.runner_backend.utils import resolve_decode_backend
-from sglang.srt.model_executor.runner_backend_utils import (
-    CUDA_GRAPH_CAPTURE_FAILED_MSG,
-)
 from sglang.srt.runtime_context import (
     get_exec,
     get_flags,
@@ -191,14 +187,9 @@ class FrozenKVMTPCudaGraphRunner(DecodeCudaGraphRunner):
 
         self.backend = resolve_decode_backend(self)
 
-        try:
-            with model_capture_mode():
-                self.capture()
-        except RuntimeError as e:
-            raise Exception(
-                f"Capture frozen-KV MTP cuda graph failed: {e}\n"
-                f"{CUDA_GRAPH_CAPTURE_FAILED_MSG}"
-            )
+        self._capture_all_graphs(
+            failure_label="Capture frozen-KV MTP cuda graph failed"
+        )
 
     def _make_graph_key(self, bs, stream_idx=None, variant_label=None):
         return ShapeKey(size=bs)
