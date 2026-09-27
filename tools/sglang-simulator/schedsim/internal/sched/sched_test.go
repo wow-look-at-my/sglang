@@ -206,7 +206,7 @@ func TestPerRequestDecodeCostDividesGeneration(t *testing.T) {
 		p.DecodePerReqFraction = 1.0
 		r := Simulate(w, p, 0)
 
-		require.Greater(t, r.GeneratedTokens, 0)
+		require.Greater(t, r.GeneratedTokens, float64(0))
 
 		perReq := r.GeneratedTokens / float64(reqs)
 		require.False(t, !first && perReq >= prevPerReq)
@@ -272,7 +272,7 @@ func TestWorkloadChunksComeFromTheLog(t *testing.T) {
 	for _, c := range w.Chunks {
 		require.Equal(t, 4096, c.Tokens)
 
-		require.Greater(t, c.Seconds, 0)
+		require.Greater(t, c.Seconds, float64(0))
 
 		// The log reports throughput to decimals, so the identity holds to
 		// that rounding rather than exactly.

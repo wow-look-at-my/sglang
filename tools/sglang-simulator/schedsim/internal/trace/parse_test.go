@@ -19,7 +19,7 @@ func TestParseReadsEverySchedulerStep(t *testing.T) {
 	require.NotEqual(t, 0, len(steps))
 
 	for _, s := range steps {
-		require.Greater(t, s.Throughput, 0)
+		require.Greater(t, s.Throughput, float64(0))
 
 		require.False(t, s.Kind == Prefill && s.NewTokens <= 0)
 
@@ -109,7 +109,7 @@ func TestDecodeLineIntervalBoundsTheWindow(t *testing.T) {
 	require.Greater(t, normal, bound)
 
 	lo := m.GenRateForSteps(MaxDecodeStepsInColdWindow())
-	require.Less(t, lo, 8)
+	require.Less(t, lo, float64(8))
 
 	got := m.StepsForGenRate(8)
 	require.Greater(t, got, bound)
@@ -126,7 +126,7 @@ func TestCollapseBandReadsBackAsADutyCycle(t *testing.T) {
 	hi := m.DecodeDutyCycleForRate(20)
 	require.False(t, lo <= 0 || hi <= lo)
 
-	require.Less(t, hi, 1)
+	require.Less(t, hi, float64(1))
 
 	// A conversation getting the pre-collapse share of steps would run at the
 	// baseline rate; the band must be far below it.
