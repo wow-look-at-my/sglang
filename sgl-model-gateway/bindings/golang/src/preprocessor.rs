@@ -16,8 +16,16 @@ use super::error::{set_error_message, SglErrorCode};
 use super::memory::{sgl_free_string, sgl_free_token_ids};
 use super::router_utils::{generate_tool_constraints, process_chat_messages};
 use super::tokenizer::TokenizerHandle;
+use serde_json::Value;
 use smg::protocols::chat::ChatCompletionRequest;
 use smg::tokenizer::create_tokenizer_from_file;
+
+/// Tool constraint in the shape the Go caller unmarshals: an object keyed by
+/// constraint type, the key naming a `SamplingParams.constraint` oneof field of
+/// the SGLang gRPC proto (`regex`, `json_schema`, `ebnf_grammar`, `structural_tag`).
+fn constraint_json(constraint_type: &str, constraint_value: &str) -> Value {
+    serde_json::json!({ constraint_type: constraint_value })
+}
 
 /// Preprocess a chat completion request
 ///
@@ -128,10 +136,7 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request(
     let tool_constraints_json = if let Some(tools) = chat_request.tools.as_ref() {
         match generate_tool_constraints(tools, &chat_request.tool_choice, &chat_request.model) {
             Ok(Some((constraint_type, constraint_value))) => {
-                // Object keyed by constraint type: the Go caller picks the proto
-                // SamplingParams.constraint oneof field by this name.
-                let constraint = serde_json::json!({ constraint_type: constraint_value });
-                match serde_json::to_string(&constraint) {
+                match serde_json::to_string(&constraint_json(&constraint_type, &constraint_value)) {
                     Ok(json_str) => Some(CString::new(json_str).unwrap()),
                     Err(e) => {
                         set_error_message(
@@ -286,10 +291,7 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request_with_tokenizer(
     let tool_constraints_json = if let Some(tools) = chat_request.tools.as_ref() {
         match generate_tool_constraints(tools, &chat_request.tool_choice, &chat_request.model) {
             Ok(Some((constraint_type, constraint_value))) => {
-                // Object keyed by constraint type: the Go caller picks the proto
-                // SamplingParams.constraint oneof field by this name.
-                let constraint = serde_json::json!({ constraint_type: constraint_value });
-                match serde_json::to_string(&constraint) {
+                match serde_json::to_string(&constraint_json(&constraint_type, &constraint_value)) {
                     Ok(json_str) => Some(CString::new(json_str).unwrap()),
                     Err(e) => {
                         set_error_message(
@@ -374,5 +376,26 @@ pub unsafe extern "C" fn sgl_preprocessed_request_free(
 
     if !tool_constraints_json.is_null() {
         sgl_free_string(tool_constraints_json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constraint_json;
+    use std::collections::HashMap;
+
+    /// `internal/grpc/client_grpc.go` decodes this as `map[string]string` and
+    /// reads the constraint type back out as the map key, so any other shape --
+    /// a two-element array, a `{"type":..,"value":..}` object -- decodes to
+    /// nothing and the constraint is dropped before it reaches the wire.
+    #[test]
+    fn constraint_decodes_as_a_map_keyed_by_constraint_type() {
+        let schema = r#"{"type":"object","properties":{"city":{"type":"string"}}}"#;
+        let encoded = serde_json::to_string(&constraint_json("json_schema", schema)).unwrap();
+
+        let decoded: HashMap<String, String> = serde_json::from_str(&encoded)
+            .expect("Go reads the constraint as map[string]string; it must decode as one");
+
+        assert_eq!(decoded.get("json_schema").map(String::as_str), Some(schema));
     }
 }
