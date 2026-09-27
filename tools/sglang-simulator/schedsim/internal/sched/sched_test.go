@@ -296,6 +296,34 @@ func TestQueueBalanceGivesSharedChunksTheirShare(t *testing.T) {
 	}
 }
 
+// With mixed chunks the cold prefill runs at prefill-priority speed plus only
+// the decode rows' extend cost, while every chunk still delivers a token to
+// each running request, so no stall exceeds one chunk.
+func TestMixedChunkKeepsPrefillSpeedAndBoundsTheStall(t *testing.T) {
+	w, _ := workload(t)
+
+	old := Simulate(w, w.Params(PolicyPrefillPriority), 0)
+	p := w.Params(PolicyQueueBalance)
+	p.MixedChunk = true
+	p.RunningReqs = 5
+	r := Simulate(w, p, 0)
+
+	rows := float64(p.RunningReqs) / float64(w.ChunkSize)
+	if r.WindowSeconds > old.WindowSeconds*(1+rows)+1e-9 {
+		t.Fatalf("mixed window %.3f s, prefill-priority %.3f s", r.WindowSeconds, old.WindowSeconds)
+	}
+	if r.GeneratedTokens != float64(len(w.Chunks)*p.RunningReqs) {
+		t.Fatalf("generated %.0f tokens, want one per running request per chunk", r.GeneratedTokens)
+	}
+	var longest float64
+	for _, e := range r.Trace {
+		longest = max(longest, e.Seconds)
+	}
+	if r.LongestDecodeGap > longest+1e-9 {
+		t.Fatalf("gap %.3f s exceeds the longest chunk %.3f s", r.LongestDecodeGap, longest)
+	}
+}
+
 // Every chunk the workload carries must be a step the log actually contains.
 func TestWorkloadChunksComeFromTheLog(t *testing.T) {
 	w, m := workload(t)

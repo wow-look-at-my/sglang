@@ -80,6 +80,13 @@ type Params struct {
 	// PolicyQueueBalance: the cold chunk plus any short requests that ride in
 	// the same batch. The log's cold chunks serve one (#new-seq: 1).
 	ReqsPerChunk int
+
+	// MixedChunk makes every chunk under PolicyQueueBalance carry one decode
+	// row per running request (mixed chunked prefill, resolved on by default):
+	// each row is one more extend token at the chunk's measured per-token cost
+	// and yields one token (speculative decoding degrades to a plain decode
+	// inside a mixed step). The balancer counts such a chunk as decode service.
+	MixedChunk bool
 }
 
 // Chunk is one cold-prefill batch as the log measured it.
@@ -289,6 +296,13 @@ func (x *runner) timeBalance() {
 // sequential (no overlap), so nothing is in flight at a decision and the
 // chunks are whole: the stall bound matches timeBalance here.
 func (x *runner) queueBalance() {
+	if x.p.MixedChunk && x.p.RunningReqs > 0 {
+		// Every chunk is decode service, so the balance never defers one.
+		for _, c := range x.w.Chunks {
+			x.mixedChunk(c)
+		}
+		return
+	}
 	x.prefillDivisor = float64(max(x.p.ReqsPerChunk, 1))
 	var debt float64
 	burst := 0
@@ -333,6 +347,21 @@ func (x *runner) prefill(c Chunk) {
 	x.lastCharge = secs / x.prefillDivisor
 	x.hasLastCharge = true
 	x.noteGap()
+}
+
+// mixedChunk runs one chunk with the running requests' decode rows inside it.
+func (x *runner) mixedChunk(c Chunk) {
+	rows := float64(x.p.RunningReqs)
+	rowSecs := rows * c.Seconds / float64(c.Tokens)
+	x.r.PrefillChunksRun++
+	x.r.PrefillGPUSeconds += c.Seconds
+	secs := (c.Seconds + rowSecs) * (1 + x.p.PrefillInterference)
+	x.wall += secs
+	x.r.Trace = append(x.r.Trace, Event{IsPrefill: true, Tokens: c.Tokens, Seconds: secs, Wall: x.wall})
+	x.r.DecodeSteps++
+	x.r.GeneratedTokens += rows
+	x.noteGap()
+	x.lastDecodeWall = x.wall
 }
 
 func (x *runner) decode(weight float64) {

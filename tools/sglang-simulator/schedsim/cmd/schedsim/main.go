@@ -74,21 +74,26 @@ func main() {
 		in.Params.RunningReqs = work.RunningReqs
 	}
 
-	// The revised balancer with the log's one-request chunks, with the log's
-	// peak queue behind them (which cannot join a chunk and so does not count),
-	// and with each chunk also serving two short requests.
+	// The revised scheduler as it resolves by default (mixed chunk on, so the
+	// running requests decode inside every chunk), then the balancer alone:
+	// the log's one-request chunks, the log's peak queue behind them (which
+	// cannot join a chunk and so does not count), and chunks that also serve
+	// two short requests.
 	var revisedRes sched.Result
 	for _, q := range []struct {
 		label string
 		reqs  int
 		queue int
+		mixed bool
 	}{
-		{"log: chunk serves 1 request", 1, metrics.QueueAtCold},
-		{"same, #queue-req at its peak", 1, metrics.QueuePeakInCold},
-		{"chunk shared with 2 requests", 3, metrics.QueueAtCold},
+		{"mixed chunk (default)", 1, metrics.QueueAtCold, true},
+		{"no mixed: chunk serves 1 request", 1, metrics.QueueAtCold, false},
+		{"no mixed: #queue-req at its peak", 1, metrics.QueuePeakInCold, false},
+		{"no mixed: chunk shared with 2", 3, metrics.QueueAtCold, false},
 	} {
 		p := work.Params(sched.PolicyQueueBalance)
 		p.ReqsPerChunk = q.reqs
+		p.MixedChunk = q.mixed
 		p.DecodePerReqFraction = *decodePerReq
 		p.PrefillInterference = *interference
 		r := sched.Simulate(work, p, q.queue)
