@@ -10,6 +10,7 @@ from sglang.srt.mem_cache.base_swa_memory_pool import BaseSWAKVPool
 from sglang.srt.mem_cache.memory_pool import (
     HybridLinearKVPool,
     HybridReqToTokenPool,
+    MambaPool,
     MHATokenToKVPool,
     MiniMaxSparseKVPool,
     MLATokenToKVPool,
@@ -51,6 +52,8 @@ def _pool_bytes(pool) -> int:
         return _pool_bytes(pool.full_kv_pool) + qsa_compressed_bytes(pool)
     if isinstance(pool, HybridLinearKVPool):
         return _pool_bytes(pool.full_kv_pool)
+    if isinstance(pool, MambaPool):
+        return pool.host_mirrored_bytes()
     sizes = getattr(pool, "host_capacity_bytes", None)
     if sizes is None:
         sizes = pool.get_kv_size_bytes()

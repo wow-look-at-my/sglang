@@ -323,12 +323,37 @@ class TestMambaHostBudget(CustomTestCase):
                 conv=[torch.zeros(1, 65, 4, 4)],
                 temporal=torch.zeros(1, 65, 2, 8, 8),
             ),
+            slot_sibling_views=lambda: [],
         )
         with base.host_memory_budget_scope(1024):
             with self.assertRaises(base.HostMemoryBudgetError):
                 MambaPoolHost(
                     device_pool, 2.0, 0, pin_memory=False, layout="page_first"
                 )
+
+
+class TestMambaHostWeight(CustomTestCase):
+    def test_state_weight_excludes_the_draft_state_scratch(self):
+        """The host tier mirrors the state slots only; weighting the state
+        pool by its whole allocation counted the per-request speculative
+        scratch (as large as the slots themselves) and shrank the KV share."""
+        from sglang.srt.mem_cache.hybrid_cache.hybrid_pool_assembler import (
+            _device_pool_bytes,
+        )
+        from sglang.srt.mem_cache.memory_pool import MambaPool
+
+        slots, layers = 6, 2
+        pool = object.__new__(MambaPool)
+        pool.size = slots
+        pool.mamba_cache = MambaPool.SpeculativeState(
+            conv=[torch.zeros(layers, slots + 1, 4, 3)],
+            temporal=torch.zeros(layers, slots + 1, 2, 8, 8),
+            intermediate_ssm=torch.zeros(layers, 49, 4, 2, 8, 8),
+            intermediate_conv_window=[torch.zeros(layers, 49, 4, 4, 3)],
+        )
+        mirrored = (slots + 1) * layers * (4 * 3 + 2 * 8 * 8) * 4
+        self.assertEqual(sizing._pool_bytes(pool), mirrored)
+        self.assertEqual(_device_pool_bytes(pool), mirrored)
 
 
 class TestAutoHiCacheAttach(CustomTestCase):
