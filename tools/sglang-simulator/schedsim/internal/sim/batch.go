@@ -50,16 +50,13 @@ func (e *Engine) admissionTokens(r *Request) int {
 	return r.target - r.prefixIdx + e.clipNew(r) + e.cfg.PageSize
 }
 
-func (e *Engine) prefillBatch(runnable []*Request, budget int, capped bool) *batch {
+func (e *Engine) prefillBatch(runnable []*Request) *batch {
 	if e.chunked == nil && (len(e.waiting) == 0 || len(e.running) >= e.cfg.MaxRunning) {
 		return nil
 	}
 	chunk := e.cfg.ChunkSize
-	if capped {
-		chunk = min(chunk, budget)
-	}
 	var rows []*Request
-	if e.mixed() {
+	if e.mixed() && !e.chunkFollows(chunk) {
 		rows = runnable
 	}
 	b := &batch{isPrefill: true, rows: rows}
@@ -71,7 +68,7 @@ func (e *Engine) prefillBatch(runnable []*Request, budget int, capped bool) *bat
 	hasChunked := false
 	if e.chunked != nil {
 		r := e.chunked
-		limit, limited := e.cedeBudget(remChunk, remTotal)
+		limit, limited := e.cedeBudget(remChunk)
 		n := min(r.target-r.done, remChunk, remTotal)
 		if limited {
 			n = min(n, limit)
@@ -88,6 +85,9 @@ func (e *Engine) prefillBatch(runnable []*Request, budget int, capped bool) *bat
 			remTotal -= n
 			remNoEvict -= n
 			if completes {
+				// add_chunked_req reserves the output of the chunk that finishes the prompt.
+				remTotal -= e.clipNew(r)
+				remNoEvict -= e.clipNew(r)
 				e.chunked = nil
 			} else {
 				hasChunked = true
@@ -145,6 +145,13 @@ func (e *Engine) prefillBatch(runnable []*Request, budget int, capped bool) *bat
 	return b
 }
 
+// chunkFollows mirrors PrefillDecodeBalancer.chunk_follows: the next chunk
+// launches before this batch is charged, so it carries the decode rows instead.
+func (e *Engine) chunkFollows(chunk int) bool {
+	return e.cfg.Overlap && e.nb != nil && e.chunked != nil &&
+		e.chunked.target-e.chunked.done > chunk && !e.nb.prefillInFlight()
+}
+
 const (
 	addFull = iota
 	addChunked
@@ -154,7 +161,14 @@ const (
 func (e *Engine) addOne(b *batch, r *Request, dev, host []*Segment, remChunk, remTotal, remNoEvict *int, hasChunked bool) int {
 	devLen, hostLen := tokensOf(dev), tokensOf(host)
 	total := r.target - devLen + e.clipNew(r) + e.cfg.PageSize
-	if total >= *remTotal {
+	// add_one_req pins the prefix before the check, so it is not evictable room.
+	pinned := 0
+	for _, s := range dev {
+		if s.lock == 0 {
+			pinned += s.Tokens
+		}
+	}
+	if total >= *remTotal-pinned {
 		return addStop
 	}
 	extend := r.target - devLen - hostLen
@@ -196,7 +210,7 @@ func (e *Engine) addOne(b *batch, r *Request, dev, host []*Segment, remChunk, re
 	if full {
 		consumed += e.clipNew(r)
 	}
-	*remTotal -= consumed
+	*remTotal -= consumed + pinned
 	*remNoEvict -= consumed
 	if !full {
 		e.chunked = r

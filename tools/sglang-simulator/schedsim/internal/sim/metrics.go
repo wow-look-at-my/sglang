@@ -30,6 +30,12 @@ type Recorder struct {
 	Retractions int
 
 	PrefillSeconds, DecodeSeconds float64
+	spans                         []span
+}
+
+type span struct {
+	start, end float64
+	isPrefill  bool
 }
 
 func newRecorder() *Recorder { return &Recorder{logs: map[*Request]*reqLog{}} }
@@ -57,6 +63,7 @@ func (rc *Recorder) launched(b *batch) {
 	} else {
 		rc.DecodeSeconds += b.end - b.start
 	}
+	rc.spans = append(rc.spans, span{b.start, b.end, b.isPrefill})
 }
 
 func (rc *Recorder) delivered(r *Request, t, n float64) {
@@ -91,6 +98,11 @@ type Metrics struct {
 	TurnTTFTp50, TurnTTFTp99 float64
 	Completed                int
 	Stuck                    bool
+
+	// Gaps counts inter-token gaps over all streams.
+	Gaps float64
+	// Cold TTFT windows: length, decode and prefill seconds inside, mean streams.
+	WindowSeconds, WindowDecode, WindowPrefill, WindowStreams float64
 }
 
 // Metrics reduces the recorded run.
@@ -171,6 +183,45 @@ func (rc *Recorder) Metrics() Metrics {
 	}
 	m.ITLp99 = quantile(gaps, 0.99)
 	m.ITLp999 = quantile(gaps, 0.999)
+	m.Gaps = float64(len(gaps))
+	if len(coldTTFT) > 0 {
+		for _, w := range windows {
+			m.WindowSeconds += w[1] - w[0]
+		}
+		for _, s := range rc.spans {
+			if s.isPrefill {
+				m.WindowPrefill += overlap(windows, s.start, s.end)
+			} else {
+				m.WindowDecode += overlap(windows, s.start, s.end)
+			}
+		}
+		m.WindowStreams = streamSecs / m.WindowSeconds
+	}
+	return m
+}
+
+// Mean averages every metric over runs; Stuck is true if any run stuck.
+func Mean(runs []Metrics) Metrics {
+	var m Metrics
+	n := float64(len(runs))
+	for _, r := range runs {
+		m.StreamRate += r.StreamRate / n
+		m.Stall += r.Stall / n
+		m.ColdTTFT += r.ColdTTFT / n
+		m.ITLp99 += r.ITLp99 / n
+		m.ITLp999 += r.ITLp999 / n
+		m.Throughput += r.Throughput / n
+		m.Recomputes += r.Recomputes
+		m.TurnTTFTp50 += r.TurnTTFTp50 / n
+		m.TurnTTFTp99 += r.TurnTTFTp99 / n
+		m.Completed += r.Completed
+		m.Stuck = m.Stuck || r.Stuck
+		m.Gaps += r.Gaps / n
+		m.WindowSeconds += r.WindowSeconds / n
+		m.WindowDecode += r.WindowDecode / n
+		m.WindowPrefill += r.WindowPrefill / n
+		m.WindowStreams += r.WindowStreams / n
+	}
 	return m
 }
 

@@ -4,12 +4,9 @@ import "math"
 
 // balancer decides whether a prefill batch may run while decode has work.
 type balancer interface {
-	shouldDefer(prefillPending, decodeRunnable, continuesChunk bool) bool
-	// budget caps the next prefill batch's tokens; ok is false for no cap.
-	budget() (tokens int, ok bool)
+	shouldDefer(prefillPending, decodeRunnable bool) bool
 	onLaunched(now float64, isPrefill bool, tokens, rows int)
 	onFinished(now float64)
-	secondsPerToken() float64
 }
 
 type inFlight struct {
@@ -21,15 +18,12 @@ type inFlight struct {
 // newBalancer mirrors python/sglang/srt/managers/scheduler_components/
 // prefill_decode_balancer.py on master.
 type newBalancer struct {
-	burstTokens int
-	debt        float64
+	debt float64
 
 	unsettledPrefill, unsettledDecode float64
-	lastDecode                        float64
 	unsettledBatches                  int
 	inFlight                          []inFlight
 	busySince                         float64
-	burstUsed                         int
 	extendSeconds                     float64
 	extendTokens                      int
 }
@@ -41,33 +35,19 @@ func (b *newBalancer) secondsPerToken() float64 {
 	return b.extendSeconds / float64(b.extendTokens)
 }
 
-func (b *newBalancer) budget() (int, bool) {
-	if b.burstUsed == 0 {
-		return 0, false
-	}
-	return b.burstTokens - b.burstUsed, true
-}
-
-func (b *newBalancer) shouldDefer(prefillPending, decodeRunnable, continuesChunk bool) bool {
+func (b *newBalancer) shouldDefer(prefillPending, decodeRunnable bool) bool {
 	if !(prefillPending && decodeRunnable) {
 		b.debt = 0
 		b.unsettledPrefill, b.unsettledDecode = 0, 0
 		b.unsettledBatches = 0
-		b.burstUsed = 0
 		return false
 	}
 	if b.unsettledBatches > 0 {
-		b.debt = math.Max(b.debt+b.unsettledPrefill-b.unsettledDecode, -b.lastDecode)
+		b.debt = math.Max(b.debt+b.unsettledPrefill-b.unsettledDecode, 0)
 		b.unsettledPrefill, b.unsettledDecode = 0, 0
 		b.unsettledBatches = 0
 	}
-	if b.debt <= 0 && !b.prefillInFlight() {
-		b.burstUsed = 0
-	}
-	if continuesChunk {
-		return b.burstUsed > 0
-	}
-	return b.burstUsed >= b.burstTokens
+	return b.debt > 0
 }
 
 func (b *newBalancer) onLaunched(now float64, isPrefill bool, tokens, rows int) {
@@ -75,9 +55,6 @@ func (b *newBalancer) onLaunched(now float64, isPrefill bool, tokens, rows int) 
 		b.busySince = now
 	}
 	b.inFlight = append(b.inFlight, inFlight{isPrefill, tokens, rows})
-	if isPrefill {
-		b.burstUsed += tokens
-	}
 }
 
 func (b *newBalancer) onFinished(now float64) {
@@ -97,7 +74,6 @@ func (b *newBalancer) onFinished(now float64) {
 		b.unsettledPrefill += elapsed - piggyback
 	} else {
 		b.unsettledDecode += elapsed
-		b.lastDecode = elapsed
 	}
 	b.unsettledBatches++
 }
@@ -117,20 +93,9 @@ type prevBalancer struct {
 	unsettledBatches                  int
 	inFlight                          []bool
 	busySince                         float64
-	extendSeconds                     float64
-	extendTokens                      int
 }
 
-func (b *prevBalancer) secondsPerToken() float64 {
-	if b.extendTokens == 0 {
-		return 0
-	}
-	return b.extendSeconds / float64(b.extendTokens)
-}
-
-func (b *prevBalancer) budget() (int, bool) { return 0, false }
-
-func (b *prevBalancer) shouldDefer(prefillPending, decodeRunnable, _ bool) bool {
+func (b *prevBalancer) shouldDefer(prefillPending, decodeRunnable bool) bool {
 	if !(prefillPending && decodeRunnable) {
 		b.debt = 0
 		b.unsettledPrefill, b.unsettledDecode = 0, 0
@@ -145,12 +110,11 @@ func (b *prevBalancer) shouldDefer(prefillPending, decodeRunnable, _ bool) bool 
 	return b.debt > 0
 }
 
-func (b *prevBalancer) onLaunched(now float64, isPrefill bool, tokens, _ int) {
+func (b *prevBalancer) onLaunched(now float64, isPrefill bool, _, _ int) {
 	if len(b.inFlight) == 0 {
 		b.busySince = now
 	}
 	b.inFlight = append(b.inFlight, isPrefill)
-	_ = tokens
 }
 
 func (b *prevBalancer) onFinished(now float64) {

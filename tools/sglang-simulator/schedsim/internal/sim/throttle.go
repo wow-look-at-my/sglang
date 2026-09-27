@@ -116,17 +116,21 @@ const (
 
 type throttle struct {
 	deviceTokens      int
-	capacity          int
+	unmirrored        int
 	secondsPerToken   func() float64
 	ledger            *ledger
 	lastEvictingAdmit float64
 	headTaken         bool
 }
 
+// newThrottle returns nil when the host tier mirrors the whole device pool:
+// then an evicted prefix reloads instead of being recomputed.
 func newThrottle(deviceTokens, hostTokens int, spt func() float64) *throttle {
-	capacity := max(deviceTokens, hostTokens)
-	return &throttle{deviceTokens: deviceTokens, capacity: capacity, secondsPerToken: spt,
-		ledger: newLedger(capacity), lastEvictingAdmit: math.Inf(-1)}
+	if hostTokens >= deviceTokens {
+		return nil
+	}
+	return &throttle{deviceTokens: deviceTokens, unmirrored: deviceTokens - hostTokens, secondsPerToken: spt,
+		ledger: newLedger(deviceTokens), lastEvictingAdmit: math.Inf(-1)}
 }
 
 func (t *throttle) beginPass(present map[int]bool) {
@@ -154,11 +158,11 @@ func (t *throttle) onAdmitted(evicted bool, now float64) {
 
 func (t *throttle) localVerdict(rid, totalTokens int, queuedAt, now float64) int {
 	lc := t.ledger.byRid[rid]
-	if t.ledger.liveTokens(now, lc)+totalTokens <= t.capacity {
+	if t.ledger.liveTokens(now, lc)+totalTokens <= t.deviceTokens {
 		return verdictAdmit
 	}
 	waited := now - math.Max(queuedAt, t.lastEvictingAdmit)
-	if waited < float64(t.deviceTokens)*t.secondsPerToken() {
+	if waited < float64(t.unmirrored)*t.secondsPerToken() {
 		return verdictHold
 	}
 	return verdictAdmitAged

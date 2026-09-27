@@ -67,9 +67,9 @@ type Engine struct {
 	nextID   int
 	lastEnd  float64
 
-	bal  balancer
-	thr  *throttle
-	cede cedeLedger
+	bal balancer
+	nb  *newBalancer
+	thr *throttle
 
 	Rec *Recorder
 }
@@ -77,13 +77,12 @@ type Engine struct {
 // NewEngine builds an engine; the workload seeds it in Run.
 func NewEngine(cfg Config) *Engine {
 	e := &Engine{cfg: cfg, Cache: NewCache(cfg.Cost.DevicePoolTokens, cfg.HostTokens), Rec: newRecorder()}
-	e.cede.rid = -1
 	switch cfg.Policy {
 	case Prev:
 		e.bal = &prevBalancer{}
 	case New:
-		nb := &newBalancer{burstTokens: cfg.ChunkSize}
-		e.bal = nb
+		nb := &newBalancer{}
+		e.bal, e.nb = nb, nb
 		e.thr = newThrottle(cfg.Cost.DevicePoolTokens, cfg.HostTokens, nb.secondsPerToken)
 	}
 	return e
@@ -183,15 +182,11 @@ func (e *Engine) decide() *batch {
 	runnable := e.decodable()
 	if e.bal != nil {
 		pending := len(e.waiting) > 0 || e.chunked != nil
-		if e.bal.shouldDefer(pending, len(runnable) > 0, e.chunked != nil) {
+		if e.bal.shouldDefer(pending, len(runnable) > 0) {
 			return e.decodeBatch(runnable)
 		}
 	}
-	budget, capped := 0, false
-	if e.bal != nil {
-		budget, capped = e.bal.budget()
-	}
-	if b := e.prefillBatch(runnable, budget, capped); b != nil {
+	if b := e.prefillBatch(runnable); b != nil {
 		return b
 	}
 	return e.decodeBatch(runnable)

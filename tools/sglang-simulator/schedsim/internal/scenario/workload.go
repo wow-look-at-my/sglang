@@ -34,21 +34,21 @@ type Agents struct {
 	Colds   []ColdPrompt
 	Horizon float64
 
-	rng   *rand.Rand
-	convs map[*sim.Conv]bool
+	// Per-agent draws keep each agent's n-th turn the same under every policy.
+	convs map[*sim.Conv]*rand.Rand
 }
 
 // Start seeds every agent's context in the cache and queues its first turn.
 func (a *Agents) Start(e *sim.Engine) {
-	a.rng = rand.New(rand.NewSource(a.Seed))
-	a.convs = map[*sim.Conv]bool{}
+	a.convs = map[*sim.Conv]*rand.Rand{}
 	for i := range a.N {
-		ctx := a.Ctx0.drawInt(a.rng)
+		rng := rand.New(rand.NewSource(a.Seed*1000 + int64(i)))
+		ctx := a.Ctx0.drawInt(rng)
 		seg := &sim.Segment{Tokens: ctx}
 		e.Cache.Seed(seg, true, -float64(a.N-i))
 		conv := &sim.Conv{ID: i, Chain: []*sim.Segment{seg}, Len: ctx, Finished: 1}
-		a.convs[conv] = true
-		a.submitTurn(e, conv, a.Think.draw(a.rng)/2)
+		a.convs[conv] = rng
+		a.submitTurn(e, conv, a.Think.draw(rng)/2)
 	}
 	for i, c := range a.Colds {
 		conv := &sim.Conv{ID: 1000 + i}
@@ -61,14 +61,15 @@ func (a *Agents) submitTurn(e *sim.Engine, conv *sim.Conv, at float64) {
 	if at >= a.Horizon {
 		return
 	}
-	e.Submit(&sim.Request{Conv: conv, Kind: sim.Turn, Arrival: at, NewTokens: a.Turn.drawInt(a.rng),
-		OutputLen: a.Output.drawInt(a.rng), MaxNew: a.MaxNew})
+	rng := a.convs[conv]
+	e.Submit(&sim.Request{Conv: conv, Kind: sim.Turn, Arrival: at, NewTokens: a.Turn.drawInt(rng),
+		OutputLen: a.Output.drawInt(rng), MaxNew: a.MaxNew})
 }
 
 // OnFinish queues the agent's next turn after its think time.
 func (a *Agents) OnFinish(e *sim.Engine, r *sim.Request) {
-	if a.convs[r.Conv] {
-		a.submitTurn(e, r.Conv, e.Now()+a.Think.draw(a.rng))
+	if rng := a.convs[r.Conv]; rng != nil {
+		a.submitTurn(e, r.Conv, e.Now()+a.Think.draw(rng))
 	}
 }
 

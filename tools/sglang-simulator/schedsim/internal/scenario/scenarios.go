@@ -12,9 +12,11 @@ import (
 // Scenario is one workload on one deployment.
 type Scenario struct {
 	Name    string
-	Build   func() (sim.Workload, float64)
+	Build   func(seed int64) (sim.Workload, float64)
 	Adjust  func(*sim.Config)
 	Summary string
+	// Colds are the prompt lengths of the workload's cold prompts.
+	Colds []int
 }
 
 func Deployment(m cost.Model) sim.Config {
@@ -22,17 +24,30 @@ func Deployment(m cost.Model) sim.Config {
 		HostTokens: 2 * m.DevicePoolTokens, Overlap: true, NewTokenRatio: 0.3, ClipMaxNew: 4096}
 }
 
-// Run simulates one scenario under one policy.
+// Seeds are the workload draws every scenario is averaged over.
+var Seeds = func() []int64 {
+	s := make([]int64, 16)
+	for i := range s {
+		s[i] = int64(7 + i)
+	}
+	return s
+}()
+
+// Run simulates one scenario under one policy, averaged over Seeds.
 func Run(s Scenario, p sim.Policy, base sim.Config) sim.Metrics {
 	cfg := base
 	cfg.Policy = p
 	if s.Adjust != nil {
 		s.Adjust(&cfg)
 	}
-	w, horizon := s.Build()
-	e := sim.NewEngine(cfg)
-	e.Run(w, horizon)
-	return e.Rec.Metrics()
+	runs := make([]sim.Metrics, len(Seeds))
+	for i, seed := range Seeds {
+		w, horizon := s.Build(seed)
+		e := sim.NewEngine(cfg)
+		e.Run(w, horizon)
+		runs[i] = e.Rec.Metrics()
+	}
+	return sim.Mean(runs)
 }
 
 var (
@@ -41,8 +56,8 @@ var (
 	agentThink  = Span{3, 15}
 )
 
-func agents(n int, ctx0 Span, colds []ColdPrompt, horizon float64) *Agents {
-	return &Agents{Seed: 7, N: n, Ctx0: ctx0, Turn: agentTurn, Output: agentOutput, Think: agentThink,
+func agents(seed int64, n int, ctx0 Span, colds []ColdPrompt, horizon float64) *Agents {
+	return &Agents{Seed: seed, N: n, Ctx0: ctx0, Turn: agentTurn, Output: agentOutput, Think: agentThink,
 		MaxNew: 16384, Colds: colds, Horizon: horizon}
 }
 
@@ -56,10 +71,15 @@ func periodicColds(every, horizon float64, tokens int) []ColdPrompt {
 
 // B is agents with a cold 400K prompt every period.
 func B(minutes float64, horizon float64, tweak func(*Agents)) Scenario {
+	var colds []int
+	for range periodicColds(60*minutes, horizon, 400000) {
+		colds = append(colds, 400000)
+	}
 	return Scenario{
-		Name: fmt.Sprintf("B-%g (cold every %g min)", minutes, minutes),
-		Build: func() (sim.Workload, float64) {
-			a := agents(5, Span{60000, 180000}, periodicColds(60*minutes, horizon, 400000), horizon)
+		Name:  fmt.Sprintf("B-%g (cold every %g min)", minutes, minutes),
+		Colds: colds,
+		Build: func(seed int64) (sim.Workload, float64) {
+			a := agents(seed, 5, Span{60000, 180000}, periodicColds(60*minutes, horizon, 400000), horizon)
 			if tweak != nil {
 				tweak(a)
 			}
@@ -72,9 +92,10 @@ func B(minutes float64, horizon float64, tweak func(*Agents)) Scenario {
 func D(tokens int) Scenario {
 	horizon := 90 + float64(tokens)/1500
 	return Scenario{
-		Name: fmt.Sprintf("D-%dK", tokens/1000),
-		Build: func() (sim.Workload, float64) {
-			return agents(5, Span{60000, 180000}, []ColdPrompt{{At: 30, Tokens: tokens, Output: 1000}}, horizon), horizon
+		Name:  fmt.Sprintf("D-%dK", tokens/1000),
+		Colds: []int{tokens},
+		Build: func(seed int64) (sim.Workload, float64) {
+			return agents(seed, 5, Span{60000, 180000}, []ColdPrompt{{At: 30, Tokens: tokens, Output: 1000}}, horizon), horizon
 		},
 	}
 }
@@ -83,8 +104,8 @@ func D(tokens int) Scenario {
 func Thrash(hostRatio float64, horizon float64) Scenario {
 	return Scenario{
 		Name: fmt.Sprintf("Thrash host=%gx %gs", hostRatio, horizon),
-		Build: func() (sim.Workload, float64) {
-			return agents(10, Span{150000, 280000}, nil, horizon), horizon
+		Build: func(seed int64) (sim.Workload, float64) {
+			return agents(seed, 10, Span{150000, 280000}, nil, horizon), horizon
 		},
 		Adjust: func(c *sim.Config) { c.HostTokens = int(hostRatio * float64(c.Cost.DevicePoolTokens)) },
 	}
@@ -95,8 +116,8 @@ func C(rate float64, maxRunning int) Scenario {
 	const horizon = 300
 	return Scenario{
 		Name: fmt.Sprintf("C rate=%g max_running=%d", rate, maxRunning),
-		Build: func() (sim.Workload, float64) {
-			return &Chat{Seed: 11, Rate: rate, System: 2000, Prompts: 4, User: Span{200, 1500},
+		Build: func(seed int64) (sim.Workload, float64) {
+			return &Chat{Seed: seed + 4, Rate: rate, System: 2000, Prompts: 4, User: Span{200, 1500},
 				Output: Span{100, 600}, MaxNew: 4096, Horizon: horizon}, horizon
 		},
 		Adjust: func(c *sim.Config) { c.MaxRunning = maxRunning },
@@ -126,8 +147,9 @@ func A() Scenario {
 	}
 	followCtx := mixed.HitTokens
 	return Scenario{
-		Name: "A (logged episode)",
-		Build: func() (sim.Workload, float64) {
+		Name:  "A (logged episode)",
+		Colds: []int{c1, inputs[1], inputs[2]},
+		Build: func(int64) (sim.Workload, float64) {
 			seg := &sim.Segment{Tokens: followCtx}
 			r1 := &sim.Conv{ID: 1, Chain: []*sim.Segment{seg}, Len: followCtx, Finished: 1}
 			reqs := []*sim.Request{
