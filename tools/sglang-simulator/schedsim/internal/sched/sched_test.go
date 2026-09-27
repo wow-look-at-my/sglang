@@ -3,19 +3,18 @@ package sched
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"schedsim/internal/trace"
 )
 
 func workload(t *testing.T) (Workload, trace.Metrics) {
 	t.Helper()
 	steps, err := trace.Parse(trace.EmbeddedLog)
-	if err != nil {
-		t.Fatalf("parse embedded log: %v", err)
-	}
+	require.Nil(t, err)
+
 	m := trace.Summarize(steps, 4096)
-	if m.ColdStart < 0 {
-		t.Fatal("no cold prefill stretch in the embedded log")
-	}
+	require.GreaterOrEqual(t, m.ColdStart, 0)
+
 	return WorkloadFromLog(steps, m, 4096), m
 }
 
@@ -27,20 +26,15 @@ func TestOldPolicyStarvesDecodeAndNewPolicyDoesNot(t *testing.T) {
 	w, _ := workload(t)
 
 	oldRes := Simulate(w, w.Params(PolicyPrefillPriority), 0)
-	if oldRes.DecodeSteps != 0 {
-		t.Fatalf("old policy ran %d decode steps in the window, want 0", oldRes.DecodeSteps)
-	}
-	if oldRes.GeneratedTokens != 0 {
-		t.Fatalf("old policy generated %v tokens, want 0", oldRes.GeneratedTokens)
-	}
+	require.Equal(t, 0, oldRes.DecodeSteps)
+
+	require.Equal(t, float64(0), oldRes.GeneratedTokens)
 
 	newRes := Simulate(w, w.Params(PolicyTimeBalance), 0)
-	if newRes.DecodeSteps <= 0 {
-		t.Fatalf("new policy ran %d decode steps in the window, want > 0", newRes.DecodeSteps)
-	}
-	if newRes.EffectiveGenTPS <= oldRes.EffectiveGenTPS {
-		t.Fatalf("new policy gen %.2f tok/s is not above old %.2f", newRes.EffectiveGenTPS, oldRes.EffectiveGenTPS)
-	}
+	require.Greater(t, newRes.DecodeSteps, 0)
+
+	require.Greater(t, newRes.EffectiveGenTPS, oldRes.EffectiveGenTPS)
+
 }
 
 // The fix must not livelock prefill: both policies finish every chunk.
@@ -49,12 +43,10 @@ func TestBothPoliciesCompleteTheColdPrefill(t *testing.T) {
 
 	for _, p := range []Policy{PolicyPrefillPriority, PolicyTimeBalance} {
 		r := Simulate(w, w.Params(p), 0)
-		if !r.PrefillCompleted {
-			t.Fatalf("%s ran %d of %d chunks", p, r.PrefillChunksRun, len(w.Chunks))
-		}
-		if r.PrefillChunksRun != len(w.Chunks) {
-			t.Fatalf("%s ran %d chunks, want %d", p, r.PrefillChunksRun, len(w.Chunks))
-		}
+		require.True(t, r.PrefillCompleted)
+
+		require.Equal(t, len(w.Chunks), r.PrefillChunksRun)
+
 	}
 }
 
@@ -62,14 +54,12 @@ func TestBothPoliciesCompleteTheColdPrefill(t *testing.T) {
 func TestOldPolicyGapIsTheWholeWindow(t *testing.T) {
 	w, _ := workload(t)
 	r := Simulate(w, w.Params(PolicyPrefillPriority), 0)
-	if diff := r.LongestDecodeGap - r.WindowSeconds; diff > 1e-9 || diff < -1e-9 {
-		t.Fatalf("old policy longest decode gap %.6f s, window %.6f s; want them equal",
-			r.LongestDecodeGap, r.WindowSeconds)
-	}
+	diff := r.LongestDecodeGap - r.WindowSeconds
+	require.False(t, diff > 1e-9 || diff < -1e-9)
+
 	n := Simulate(w, w.Params(PolicyTimeBalance), 0)
-	if n.LongestDecodeGap >= r.LongestDecodeGap {
-		t.Fatalf("new policy gap %.6f s is not shorter than old %.6f s", n.LongestDecodeGap, r.LongestDecodeGap)
-	}
+	require.Less(t, n.LongestDecodeGap, r.LongestDecodeGap)
+
 }
 
 // A scheduling parameter must move the result: the model is not a pair of
@@ -84,15 +74,12 @@ func TestDecodeIntervalMovesBothOutcomes(t *testing.T) {
 		p.Interval = n
 		r := Simulate(w, p, 0)
 
-		if n > 1 && r.EffectiveGenTPS <= prevGen {
-			t.Fatalf("interval %d gave %.2f tok/s, not above the previous %.2f", n, r.EffectiveGenTPS, prevGen)
-		}
-		if n > 1 && r.WindowSeconds <= prevFinish {
-			t.Fatalf("interval %d finished in %.2f s, not after the previous %.2f", n, r.WindowSeconds, prevFinish)
-		}
-		if !r.PrefillCompleted {
-			t.Fatalf("interval %d left the prefill incomplete", n)
-		}
+		require.False(t, n > 1 && r.EffectiveGenTPS <= prevGen)
+
+		require.False(t, n > 1 && r.WindowSeconds <= prevFinish)
+
+		require.True(t, r.PrefillCompleted)
+
 		prevGen, prevFinish = r.EffectiveGenTPS, r.WindowSeconds
 	}
 }
@@ -111,12 +98,10 @@ func TestPrefillShareTradesPrefillTimeAgainstGeneration(t *testing.T) {
 		r := Simulate(w, p, 0)
 
 		if !first {
-			if r.EffectiveGenTPS >= prevGen {
-				t.Fatalf("share %.2f gave %.2f tok/s, not below the previous %.2f", share, r.EffectiveGenTPS, prevGen)
-			}
-			if r.WindowSeconds >= prevFinish {
-				t.Fatalf("share %.2f finished in %.2f s, not before the previous %.2f", share, r.WindowSeconds, prevFinish)
-			}
+			require.Less(t, r.EffectiveGenTPS, prevGen)
+
+			require.Less(t, r.WindowSeconds, prevFinish)
+
 		}
 		first = false
 		prevGen, prevFinish = r.EffectiveGenTPS, r.WindowSeconds
@@ -140,13 +125,11 @@ func TestBalancedShareSplitsGPUTimeEvenly(t *testing.T) {
 			decodeSecs += e.Seconds
 		}
 	}
-	if prefillSecs <= 0 || decodeSecs <= 0 {
-		t.Fatalf("one class got no GPU time: prefill %.3f s, decode %.3f s", prefillSecs, decodeSecs)
-	}
+	require.False(t, prefillSecs <= 0 || decodeSecs <= 0)
+
 	ratio := prefillSecs / (prefillSecs + decodeSecs)
-	if ratio < 0.4 || ratio > 0.6 {
-		t.Fatalf("prefill took %.1f%% of contended GPU time at share 0.5, want ~50%%", ratio*100)
-	}
+	require.False(t, ratio < 0.4 || ratio > 0.6)
+
 }
 
 // Costs must come from the log: the model's prefill seconds must equal the sum
@@ -155,13 +138,11 @@ func TestPrefillCostIsTheMeasuredLogCost(t *testing.T) {
 	w, m := workload(t)
 
 	r := Simulate(w, w.Params(PolicyPrefillPriority), 0)
-	if diff := r.PrefillGPUSeconds - m.ColdSeconds; diff > 1e-9 || diff < -1e-9 {
-		t.Fatalf("model prefill %.6f s, log measured %.6f s", r.PrefillGPUSeconds, m.ColdSeconds)
-	}
-	if r.WindowSeconds != m.ColdSeconds {
-		t.Fatalf("old policy window %.6f s should be exactly the measured prefill %.6f s",
-			r.WindowSeconds, m.ColdSeconds)
-	}
+	diff := r.PrefillGPUSeconds - m.ColdSeconds
+	require.False(t, diff > 1e-9 || diff < -1e-9)
+
+	require.Equal(t, m.ColdSeconds, r.WindowSeconds)
+
 }
 
 // Decode cost scaling is a knob because the log only ever decodes one request.
@@ -182,13 +163,10 @@ func TestDecodeCostKnobResponds(t *testing.T) {
 
 	// Both generate for three conversations, so compare step counts and window,
 	// which the per-request cost does govern.
-	if rScaled.DecodeSteps >= rFlat.DecodeSteps {
-		t.Fatalf("decode cost knob did nothing: %d steps at flat cost, %d at 3x",
-			rFlat.DecodeSteps, rScaled.DecodeSteps)
-	}
-	if rScaled.WindowSeconds <= rFlat.WindowSeconds {
-		t.Fatalf("window stayed at %.2f s despite higher decode cost", rFlat.WindowSeconds)
-	}
+	require.Less(t, rScaled.DecodeSteps, rFlat.DecodeSteps)
+
+	require.Greater(t, rScaled.WindowSeconds, rFlat.WindowSeconds)
+
 }
 
 // A decode step advances every running request. Since batch-size scaling of
@@ -209,15 +187,12 @@ func TestFlatDecodeCostScalesGenerationWithTheBatch(t *testing.T) {
 		p.RunningReqs = reqs
 		r := Simulate(w, p, 0)
 
-		if r.DecodeSteps != rBase.DecodeSteps {
-			t.Fatalf("flat cost changed the step count at %d requests: %d vs %d",
-				reqs, r.DecodeSteps, rBase.DecodeSteps)
-		}
+		require.Equal(t, rBase.DecodeSteps, r.DecodeSteps)
+
 		want := perReq * float64(reqs)
-		if diff := r.GeneratedTokens - want; diff > 1e-6 || diff < -1e-6 {
-			t.Fatalf("%d requests generated %.1f tokens, want %.1f with flat per-request cost",
-				reqs, r.GeneratedTokens, want)
-		}
+		diff := r.GeneratedTokens - want
+		require.False(t, diff > 1e-6 || diff < -1e-6)
+
 	}
 }
 
@@ -234,14 +209,11 @@ func TestPerRequestDecodeCostDividesGeneration(t *testing.T) {
 		p.DecodePerReqFraction = 1.0
 		r := Simulate(w, p, 0)
 
-		if r.GeneratedTokens <= 0 {
-			t.Fatalf("%d running requests generated nothing", reqs)
-		}
+		require.Greater(t, r.GeneratedTokens, 0)
+
 		perReq := r.GeneratedTokens / float64(reqs)
-		if !first && perReq >= prevPerReq {
-			t.Fatalf("%d requests got %.1f tokens each, not below the previous %.1f",
-				reqs, perReq, prevPerReq)
-		}
+		require.False(t, !first && perReq >= prevPerReq)
+
 		first = false
 		prevPerReq = perReq
 	}
@@ -258,14 +230,11 @@ func TestQueueBalanceIgnoresRequestsThatCannotRun(t *testing.T) {
 	alone := Simulate(w, p, 0)
 	queued := Simulate(w, p, 3)
 
-	if queued.DecodeSteps != alone.DecodeSteps || queued.WindowSeconds != alone.WindowSeconds {
-		t.Fatalf("queue changed the run: %d steps over %.3f s, alone %d over %.3f s",
-			queued.DecodeSteps, queued.WindowSeconds, alone.DecodeSteps, alone.WindowSeconds)
-	}
-	if d := even.DecodeSteps - alone.DecodeSteps; d < 0 || d > len(w.Chunks) {
-		t.Fatalf("revised %d decode steps, shipped %d: more than one step of carry per chunk",
-			alone.DecodeSteps, even.DecodeSteps)
-	}
+	require.False(t, queued.DecodeSteps != alone.DecodeSteps || queued.WindowSeconds != alone.WindowSeconds)
+
+	d := even.DecodeSteps - alone.DecodeSteps
+	require.False(t, d < 0 || d > len(w.Chunks))
+
 }
 
 // Mixed-chunk tokens ride on top of decode's half and never replace it: a
@@ -292,37 +261,30 @@ func TestMixedChunkRidesOnTopOfDecodeHalf(t *testing.T) {
 	}
 	// The window ends with the last chunk, which decode has not yet repaid.
 	owed := chunkSecs - w.Chunks[len(w.Chunks)-1].Seconds
-	if decodeSecs < owed-p.DecodeStepSeconds {
-		t.Fatalf("pure decode %.2f s against %.2f s of chunks: rows replaced decode's half", decodeSecs, owed)
-	}
-	if r.GeneratedTokens <= plain.GeneratedTokens {
-		t.Fatalf("mixed generated %.0f tokens, plain %.0f: rows added nothing", r.GeneratedTokens, plain.GeneratedTokens)
-	}
-	if r.LongestDecodeGap > longest+1e-9 {
-		t.Fatalf("gap %.3f s exceeds the longest batch %.3f s", r.LongestDecodeGap, longest)
-	}
+	require.GreaterOrEqual(t, decodeSecs, owed-p.DecodeStepSeconds)
+
+	require.Greater(t, r.GeneratedTokens, plain.GeneratedTokens)
+
+	require.LessOrEqual(t, r.LongestDecodeGap, longest+1e-9)
+
 }
 
 // Every chunk the workload carries must be a step the log actually contains.
 func TestWorkloadChunksComeFromTheLog(t *testing.T) {
 	w, m := workload(t)
 
-	if len(w.Chunks) != m.ColdChunks {
-		t.Fatalf("workload has %d chunks, log's cold window has %d", len(w.Chunks), m.ColdChunks)
-	}
-	for i, c := range w.Chunks {
-		if c.Tokens != 4096 {
-			t.Fatalf("chunk %d has %d tokens, want 4096", i, c.Tokens)
-		}
-		if c.Seconds <= 0 {
-			t.Fatalf("chunk %d has %v seconds", i, c.Seconds)
-		}
+	require.Equal(t, m.ColdChunks, len(w.Chunks))
+
+	for _, c := range w.Chunks {
+		require.Equal(t, 4096, c.Tokens)
+
+		require.Greater(t, c.Seconds, 0)
+
 		// The log reports throughput to two decimals, so the identity holds to
 		// that rounding rather than exactly.
 		back := float64(c.Tokens) / c.Seconds
-		if rel := (back - c.InputTPS) / c.InputTPS; rel > 1e-4 || rel < -1e-4 {
-			t.Fatalf("chunk %d: %.2f tok/s and %v s disagree with %d tokens by %.4f",
-				i, c.InputTPS, c.Seconds, c.Tokens, rel)
-		}
+		rel := (back - c.InputTPS) / c.InputTPS
+		require.False(t, rel > 1e-4 || rel < -1e-4)
+
 	}
 }
