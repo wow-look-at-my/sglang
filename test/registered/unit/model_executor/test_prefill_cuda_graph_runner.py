@@ -1,13 +1,15 @@
 """CPU coverage for chunked-prefix Full prefill CUDA-graph state."""
 
+import sys
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import torch
 
 import sglang.srt.model_executor.model_runner_components.cuda_graph_setup as graph_setup
 import sglang.srt.model_executor.runner.prefill_cuda_graph_runner as runner_module
+from sglang.srt.compilation.compilation_config import CompilationConfig
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.model_executor.cuda_graph_config import Backend
 from sglang.srt.model_executor.forward_batch_info import (
@@ -24,6 +26,9 @@ from sglang.srt.model_executor.runner.prefill_cuda_graph_runner import (
     PrefillCudaGraphRunner,
 )
 from sglang.srt.model_executor.runner.shape_key import ShapeKey
+from sglang.srt.model_executor.runner_backend.tc_piecewise_cuda_graph_backend import (
+    TcPiecewiseCudaGraphBackend,
+)
 from sglang.srt.runtime_context import get_context
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -603,6 +608,64 @@ class TestPrefillCudaGraphRunnerChunkedPrefix(CustomTestCase):
         )
         forward_batch.extend_prefix_lens_cpu = [9, 1]
         self.assertFalse(runner.can_run_graph(forward_batch))
+
+
+class _FakeCudaGraph:
+    def __init__(self):
+        self.was_reset = False
+
+    def reset(self):
+        self.was_reset = True
+
+
+class TestDiscardCapturedPrefillGraphs(CustomTestCase):
+    def test_tc_piecewise_recapture_keeps_compiled_model_and_rerecords(self):
+        """Recapturing after custom all-reduce drops out must keep the compiled
+        TcPiecewise model and re-record every piece instead of replaying stale ones."""
+        # weak_ref_tensor refuses to import without an accelerator; capture is faked.
+        weak_ref_stub = ModuleType("sglang.srt.compilation.weak_ref_tensor")
+        weak_ref_stub.weak_ref_tensors = lambda tensors: tensors
+        with patch.dict(
+            sys.modules, {"sglang.srt.compilation.weak_ref_tensor": weak_ref_stub}
+        ):
+            from sglang.srt.compilation.cuda_piecewise_backend import (
+                CUDAPiecewiseBackend,
+            )
+
+        num_tokens = 16
+        compile_config = CompilationConfig([num_tokens])
+        piece = CUDAPiecewiseBackend(
+            graph=None,
+            compile_config=compile_config,
+            inductor_config={},
+            graph_pool=None,
+            piecewise_compile_index=0,
+            total_piecewise_compiles=1,
+            sym_shape_indices=[0],
+            compiled_graph_for_general_shape=lambda *args: None,
+            sglang_backend=None,
+        )
+        stale_graph = _FakeCudaGraph()
+        entry = piece.concrete_size_entries[num_tokens]
+        entry.cudagraph = stale_graph
+        entry.output = object()
+        entry.num_finished_warmup = 1
+
+        backend = TcPiecewiseCudaGraphBackend.__new__(TcPiecewiseCudaGraphBackend)
+        compiled_fn = object()
+        backend._compiled_fn = compiled_fn
+        backend._compile_config = compile_config
+
+        PrefillCudaGraphRunner._discard_captured_graphs(
+            SimpleNamespace(backend=backend)
+        )
+
+        self.assertIs(backend._compiled_fn, compiled_fn)
+        self.assertTrue(stale_graph.was_reset)
+        # The next capture pass warms once, then records a fresh graph.
+        self.assertIsNone(entry.cudagraph)
+        self.assertIsNone(entry.output)
+        self.assertEqual(entry.num_finished_warmup, 0)
 
 
 if __name__ == "__main__":

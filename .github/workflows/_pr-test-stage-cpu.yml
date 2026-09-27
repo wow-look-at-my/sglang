@@ -28,6 +28,10 @@ on:
         description: 'timeout-minutes for the Run test step. Required so compute_partitions.py can read it from pr-test.yml without a duplicated default constant.'
         type: string
         required: true
+      python_version:
+        description: 'Interpreter for the tests; the downloaded rust-ext modules must include it.'
+        type: string
+        default: '3.12'
       rust_ext_artifact:
         description: 'Artifact of prebuilt Rust extension modules, from rust-ext-build. Empty, or a download that fails, falls back to the cache; a miss there compiles during install.'
         type: string
@@ -82,14 +86,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ inputs.python_version }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
       # This stage compiled the workspace too - 7+ minutes per partition on
       # billable hosted minutes. rust-ext-build's modules need an older glibc than
-      # this runner has, which is the safe direction, and both pin Python 3.10.
+      # this runner has, which is the safe direction, and both pin Python 3.12.
       - uses: ./.github/actions/download-rust-ext
         id: rust_ext
         with:
@@ -118,7 +122,17 @@ jobs:
         env:
           UV_SYSTEM_PYTHON: "1"
         run: |
-          uv pip install -e "python[dev]" --index-strategy unsafe-best-match --prerelease allow
+          # A kernel pin bumped ahead of its PyPI release (the wheel is built by
+          # release-whl-kernel.yml, or fork-ci.yml on forks) must not block this
+          # stage: its tests stub sgl_kernel, so any published wheel serves.
+          KERNEL_PIN=$(grep -Po -m1 '(?<="sglang-kernel==)[^"]+' python/pyproject.toml)
+          OVERRIDE_ARGS=()
+          if ! curl -fsS --max-time 15 --retry 3 -o /dev/null "https://pypi.org/pypi/sglang-kernel/${KERNEL_PIN}/json"; then
+            echo "::warning::sglang-kernel==${KERNEL_PIN} is not on PyPI; installing the latest published sglang-kernel for the CPU stage"
+            echo "sglang-kernel" > "${RUNNER_TEMP}/uv-overrides.txt"
+            OVERRIDE_ARGS=(--override "${RUNNER_TEMP}/uv-overrides.txt")
+          fi
+          uv pip install -e "python[dev]" --index-strategy unsafe-best-match --prerelease allow "${OVERRIDE_ARGS[@]}"
 
       # Hosted runners are ephemeral, so models are re-fetched every run and the
       # Hub occasionally returns 429s. Persist the HF cache in GitHub's cache

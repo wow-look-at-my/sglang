@@ -2,7 +2,7 @@
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import (
@@ -28,6 +28,11 @@ class _FakeReq:
         self.kv = SimpleNamespace(holds_kv=True, holds_mamba=False)
         self.to_finish = None
         self._finished = False
+        self.return_logprob = False
+        self.output_ids = []
+        self.weight_version_events = []
+        self.cache_request_handle = None
+        self.time_stats = SimpleNamespace(trace_ctx=Mock())
 
     def finished(self):
         return self._finished
@@ -70,6 +75,46 @@ class TestPendingChunkedAbortRace(CustomTestCase):
 
         self.assertIsNone(req.to_finish)
         self.assertIsNone(sched._pending_chunked_abort_req)
+
+    def test_pp_disagg_prefill_drops_aborted_chunked_req_before_next_chunk(self):
+        """A PP prefill server must release an aborted in-progress chunked
+        request before scheduling its next chunk, not prefill the whole prompt."""
+        enter_scope(self, published_topology(pp_size=2))
+        req = _FakeReq("chunked_rid")
+        sched = _make_scheduler(req, chunked_req=req, running_reqs=[])
+        sched.tree_cache = Mock()
+        sched.ipc_channels = Mock()
+        sched.init_pp_loop_state = Mock()
+        sched.pp_loop_size = 1
+        sched.pp_group = SimpleNamespace(is_last_rank=True)
+        sched.running_mbs = [sched.running_batch]
+        sched.last_mbs = [None]
+        sched.ingest_requests = Mock(return_value=[])
+        sched._pp_pd_get_bootstrapped_ids = Mock(return_value=[])
+        sched._pp_pd_get_prefill_transferred_ids = Mock(return_value=[])
+        sched._pp_commit_comm_work = Mock()
+        sched._process_hicache_events = Mock()
+        chunked_req_at_chunk_step = []
+        sched.process_prefill_chunk = lambda **_: chunked_req_at_chunk_step.append(
+            sched.chunked_req
+        )
+        # Stop the infinite loop at admission; no PP transport or GPU is needed.
+        sched.get_new_batch_prefill = Mock(side_effect=StopIteration)
+
+        def release(r, *_args, **_kwargs):
+            r.kv.holds_kv = False
+
+        with patch(
+            "sglang.srt.managers.scheduler.release_kv_cache", side_effect=release
+        ):
+            with self.assertRaises(StopIteration):
+                sched.event_loop_pp_disagg_prefill()
+
+        self.assertEqual(chunked_req_at_chunk_step, [None])
+        self.assertFalse(req.kv.holds_kv, "aborted chunked request kept its KV")
+        self.assertIsNone(sched._pending_chunked_abort_req)
+        (sent,) = sched.ipc_channels.send_to_tokenizer.send_output.call_args_list
+        self.assertEqual(sent.args[0].rid, "chunked_rid")
 
 
 if __name__ == "__main__":

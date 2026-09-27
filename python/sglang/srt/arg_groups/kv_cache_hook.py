@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from sglang.srt.arg_groups.overrides import (
     attention_backends_of,
@@ -418,6 +418,15 @@ def handle_cache_compatibility(server_args: Any) -> None:
             "_handle_cache_compatibility",
             _swa_full_tokens_ratio_explicitly_set=cfg.swa_full_tokens_ratio is not None,
         )
+    # Runs after the model overrides, so a per-arch ratio (Inkling) counts as set.
+    if cfg._mamba_full_memory_ratio_explicitly_set is None:
+        declare_resolution(
+            server_args,
+            "_handle_cache_compatibility",
+            _mamba_full_memory_ratio_explicitly_set=(
+                cfg.mamba_full_memory_ratio is not None
+            ),
+        )
 
     # Validate the effective ratio: model branches may declare a reset
     # (e.g. Step3p forces 1.0 under hierarchical cache) that supersedes
@@ -474,11 +483,104 @@ def handle_cache_compatibility(server_args: Any) -> None:
             )
 
 
+# KV dtypes whose scale buffers the unified MHA pool does not allocate.
+_UNIFIED_UNSUPPORTED_KV_DTYPES = frozenset({"nvfp4", "fp4_mx_block16", "mxfp8"})
+
+
+def resolve_unified_memory_default(server_args: Any) -> None:
+    """Decide an unset --enable-unified-memory: on for a hybrid Mamba /
+    linear-attention model when the unified pool supports the config.
+
+    Runs after the attention, linear-attention and speculative backends are
+    resolved and before the page-major and unified-pool handlers read the flag.
+    """
+    cfg = resolving_view(server_args)
+    if cfg.enable_unified_memory is not None:
+        return
+    if mambaish_config(model_config_of(server_args)) is None:
+        declare_resolution(
+            server_args, "_resolve_unified_memory_default", enable_unified_memory=False
+        )
+        return
+    blocker = _unified_memory_auto_blocker(server_args)
+    declare_resolution(
+        server_args,
+        "_resolve_unified_memory_default",
+        enable_unified_memory=blocker is None,
+    )
+    if blocker is None:
+        logger.info(
+            "Unified memory pool: on (auto). Hybrid state and KV share one "
+            "buffer split at runtime; pass --no-enable-unified-memory for the "
+            "static split."
+        )
+    else:
+        logger.info(
+            "Unified memory pool: off (auto: %s); the state/KV split is static.",
+            blocker,
+        )
+
+
+def _unified_memory_auto_blocker(server_args: Any) -> Optional[str]:
+    """Why an unset flag stays off for this hybrid Mamba model, or None.
+
+    Besides the checks an explicit --enable-unified-memory runs, the
+    combinations below are only reachable by opting in: they are validated
+    for an explicit flag but were not audited as a default.
+    """
+    from sglang.srt.layers.attention.qsa.config import is_qwen_qsa
+
+    cfg = resolving_view(server_args)
+    model_config = model_config_of(server_args)
+    if model_config.is_hybrid_swa:
+        return "hybrid sliding-window models stay opt-in"
+    if is_qwen_qsa(model_config.hf_config):
+        return (
+            "QSA sparse attention has no unified sub-pool for its compressed "
+            "index-K cache and pending ring"
+        )
+    if not get_platform().is_cuda:
+        return "not a CUDA platform"
+    if cfg.disaggregation_mode != "null":
+        return "PD disaggregation needs both peers to opt in"
+    if cfg.speculative_algorithm is not None:
+        return "speculative decoding (only DSPARK is supported, by opting in)"
+    if cfg.enable_hierarchical_cache:
+        return "HiCache host tier (supported by opting in)"
+    if cfg.pp_size > 1:
+        return "pipeline parallelism"
+    if cfg.enable_dp_attention:
+        return "DP attention"
+    if cfg.kv_cache_dtype in _UNIFIED_UNSUPPORTED_KV_DTYPES:
+        return f"--kv-cache-dtype {cfg.kv_cache_dtype}"
+    # The memory hook sized mem_fraction_static before this decision, possibly
+    # skipping the graph reserve for post-capture sizing, which unified pools forgo.
+    if envs.SGLANG_ENABLE_POST_CAPTURE_KV_SIZING.get():
+        return "SGLANG_ENABLE_POST_CAPTURE_KV_SIZING is set"
+    if None in attention_backends_of(resolved_view(server_args)):
+        return "the attention backend is only chosen at load time"
+    if _full_prefill_cuda_graph_unsupported(server_args):
+        return "it would turn off FULL prefill CUDA graphs on this backend"
+    try:
+        _check_unified_memory_pool(server_args)
+        _check_page_major_kv_layout(server_args, unified=True)
+    except (AssertionError, ValueError) as error:
+        return str(error).split(". ")[0]
+    return None
+
+
 def handle_unified_memory_pool(server_args: Any) -> None:
 
     cfg = resolving_view(server_args)
     if not cfg.enable_unified_memory:
         return
+    _check_unified_memory_pool(server_args)
+    _fall_back_from_full_prefill_cuda_graph(server_args)
+
+
+def _check_unified_memory_pool(server_args: Any) -> None:
+    """Assert the unified pool supports this config; declares and mutates nothing."""
+    cfg = resolving_view(server_args)
     if cfg.disaggregation_mode != "null":
         # Constraints of the whole-envelope transfer; see the unified MHA and
         # MLA pool get_contiguous_buf_infos implementations.
@@ -580,6 +682,19 @@ def handle_unified_memory_pool(server_args: Any) -> None:
     )
     if cfg.dcp_size > 1:
         _validate_unified_memory_dcp(server_args)
+
+
+def _full_prefill_cuda_graph_unsupported(server_args: Any) -> bool:
+    cfg = resolving_view(server_args)
+    cg_cfg = cfg.cuda_graph_config
+    if cg_cfg is None or cg_cfg.prefill.backend != Backend.FULL:
+        return False
+    backends = set(attention_backends_of(resolved_view(server_args)))
+    backends.discard(None)
+    return not backends <= {"fa3", "fa4"}
+
+
+def _fall_back_from_full_prefill_cuda_graph(server_args: Any) -> None:
     # Prefill cuda-graph capture IS wired for the unified pool: the captured
     # batch reads `out_cache_loc` out of the registry slot, which
     # `populate_from_forward_batch` refills from the already-rebound (kernel-
@@ -592,22 +707,19 @@ def handle_unified_memory_pool(server_args: Any) -> None:
     # `_apply_cuda_graph_metadata`, which has no EXTEND branch at all. Inkling
     # declares FULL as a MODEL default, indistinguishable here from a flag the
     # user typed, so warn and fall back rather than refuse to boot.
-    _cg_cfg = cfg.cuda_graph_config
-    if _cg_cfg is not None and _cg_cfg.prefill.backend == Backend.FULL:
-        full_cg_backends = {"fa3", "fa4"}
-        backends = set(attention_backends_of(resolved_view(server_args)))
-        backends.discard(None)
-        if not backends <= full_cg_backends:
-            _cg_cfg.prefill.backend = Backend.DISABLED
-            logger.warning(
-                "--enable-unified-memory: disabling the FULL prefill "
-                "cuda-graph backend. It builds its block table in "
-                "_init_full_cg_prefill_metadata, which only %s implement; the "
-                "resolved attention backends are %s. Decode capture and the "
-                "other prefill backends are unaffected.",
-                sorted(full_cg_backends),
-                sorted(backends),
-            )
+    if not _full_prefill_cuda_graph_unsupported(server_args):
+        return
+    backends = set(attention_backends_of(resolved_view(server_args)))
+    backends.discard(None)
+    resolving_view(server_args).cuda_graph_config.prefill.backend = Backend.DISABLED
+    logger.warning(
+        "--enable-unified-memory: disabling the FULL prefill "
+        "cuda-graph backend. It builds its block table in "
+        "_init_full_cg_prefill_metadata, which only ['fa3', 'fa4'] implement; "
+        "the resolved attention backends are %s. Decode capture and the "
+        "other prefill backends are unaffected.",
+        sorted(backends),
+    )
 
 
 def _validate_unified_memory_dcp(server_args: Any) -> None:
@@ -669,7 +781,13 @@ def handle_page_major_kv_layout(server_args: Any):
         )
     if not cfg.enable_page_major_kv_layout:
         return
-    assert cfg.enable_unified_memory, (
+    _check_page_major_kv_layout(server_args, unified=bool(cfg.enable_unified_memory))
+
+
+def _check_page_major_kv_layout(server_args: Any, *, unified: bool) -> None:
+    """Assert the page-major layout supports this config; declares nothing."""
+    cfg = resolving_view(server_args)
+    assert unified, (
         "--enable-page-major-kv-layout without --enable-unified-memory is "
         "temporarily unsupported: the strided MHA K/V views were removed "
         "and the static-pool page-major layout awaits its per-layer-view "
@@ -701,7 +819,7 @@ def handle_page_major_kv_layout(server_args: Any):
     #     Triton. fa4 is the fa3 class.
     #   * Without the unified pool, plain page-major stays Triton-only.
     # Names are the RESOLVED ids from attention_backends_of.
-    if cfg.enable_unified_memory and use_mla_backend(server_args):
+    if unified and use_mla_backend(server_args):
         allowed_full = {
             "triton",
             "fa3",
@@ -711,7 +829,7 @@ def handle_page_major_kv_layout(server_args: Any):
             "tokenspeed_mla",
             "flashmla",
         }
-    elif cfg.enable_unified_memory:
+    elif unified:
         allowed_full = {
             "triton",
             "fa3",

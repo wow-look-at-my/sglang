@@ -422,6 +422,7 @@ class TestSchedulerIdleStepCounters(CustomTestCase):
         scheduler.running_batch = ScheduleBatch(reqs=[])
         scheduler.last_batch = None
         scheduler.chunked_req = None
+        scheduler._pending_chunked_abort_req = None
         scheduler.waiting_queue = []
         scheduler.enable_staging = False
         scheduler.request_receiver = SimpleNamespace(

@@ -168,7 +168,7 @@ jobs:
 
   official-gt-hopper:
     needs: compute-official-gt-matrix
-    if: needs.compute-official-gt-matrix.result == 'success'
+    if: github.repository == 'sgl-project/sglang' && (needs.compute-official-gt-matrix.result == 'success')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     strategy:
@@ -378,8 +378,10 @@ jobs:
   multimodal-diffusion-gen-1gpu:
     needs: compute-diffusion-partitions
     if: |
-      needs.compute-diffusion-partitions.result == 'success' &&
-      needs.compute-diffusion-partitions.outputs.matrix-1gpu != '{"include":[]}'
+      github.repository == 'sgl-project/sglang' && (
+        needs.compute-diffusion-partitions.result == 'success' &&
+        needs.compute-diffusion-partitions.outputs.matrix-1gpu != '{"include":[]}'
+      )
     runs-on: 1-gpu-h100
     strategy:
       fail-fast: false
@@ -454,8 +456,10 @@ jobs:
   multimodal-diffusion-gen-2gpu:
     needs: compute-diffusion-partitions
     if: |
-      needs.compute-diffusion-partitions.result == 'success' &&
-      needs.compute-diffusion-partitions.outputs.matrix-2gpu != '{"include":[]}'
+      github.repository == 'sgl-project/sglang' && (
+        needs.compute-diffusion-partitions.result == 'success' &&
+        needs.compute-diffusion-partitions.outputs.matrix-2gpu != '{"include":[]}'
+      )
     runs-on: 2-gpu-h100
     strategy:
       fail-fast: false
@@ -532,8 +536,10 @@ jobs:
   multimodal-diffusion-gen-b200:
     needs: compute-diffusion-partitions
     if: |
-      needs.compute-diffusion-partitions.result == 'success' &&
-      needs.compute-diffusion-partitions.outputs.matrix-b200 != '{"include":[]}'
+      github.repository == 'sgl-project/sglang' && (
+        needs.compute-diffusion-partitions.result == 'success' &&
+        needs.compute-diffusion-partitions.outputs.matrix-b200 != '{"include":[]}'
+      )
     runs-on: 4-gpu-b200
     strategy:
       fail-fast: false
@@ -609,7 +615,7 @@ jobs:
     # The 5090 canary suite is six cases; it is generated whole rather than
     # partitioned, so it needs no entry in the partition plan.
     needs: compute-diffusion-partitions
-    if: needs.compute-diffusion-partitions.result == 'success'
+    if: github.repository == 'sgl-project/sglang' && (needs.compute-diffusion-partitions.result == 'success')
     runs-on: 1-gpu-5090
     timeout-minutes: 150
     steps:
