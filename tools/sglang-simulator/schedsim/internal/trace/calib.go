@@ -42,6 +42,9 @@ type DecodeCost struct {
 	Base        float64
 	PerReq      float64
 	PerTokenCtx float64
+	// MeanCtx is the context of the steady single-request lines the base term was
+	// solved at, so a term can be re-scaled without moving the fitted step time.
+	MeanCtx     float64
 	NumDraft    int
 	// Accept carries the accepted-token counts the log reported per step; a run
 	// draws a per-request acceptance rate from it.
@@ -104,6 +107,16 @@ func ColdRuns(steps []Step, chunkSize int) [][]int {
 // the first run as the fit set and the second as the holdout. Chunk seconds come
 // from StepSeconds, which inverts the log's own input-throughput definition.
 func FitPrefill(steps []Step, chunkSize int) PrefillCost {
+	return fitPrefill(steps, chunkSize, 2)
+}
+
+// FitPrefillLinear fits the same samples with a degree-1 polynomial, for the
+// comparison that must show what the quadratic form is worth.
+func FitPrefillLinear(steps []Step, chunkSize int) PrefillCost {
+	return fitPrefill(steps, chunkSize, 1)
+}
+
+func fitPrefill(steps []Step, chunkSize, deg int) PrefillCost {
 	runs := ColdRuns(steps, chunkSize)
 	if len(runs) == 0 {
 		return PrefillCost{ChunkTokens: chunkSize, Base: PrefillBaseSeconds}
@@ -117,14 +130,18 @@ func FitPrefill(steps []Step, chunkSize int) PrefillCost {
 		xs = append(xs, float64(k*chunkSize)+float64(chunkSize)/2)
 		ys = append(ys, StepSeconds(steps[i]))
 	}
-	co := polyfit(xs, ys, 2)
+	co := polyfit(xs, ys, deg)
 	p := PrefillCost{
-		ChunkTokens:   chunkSize,
-		Base:          PrefillBaseSeconds,
-		PerToken:      (co[0] - PrefillBaseSeconds) / float64(chunkSize),
-		PerTokenCtx:   co[1] / float64(chunkSize),
-		PerTokenCtxSq: co[2] / float64(chunkSize),
-		Samples:       len(xs),
+		ChunkTokens: chunkSize,
+		Base:        PrefillBaseSeconds,
+		PerToken:    (co[0] - PrefillBaseSeconds) / float64(chunkSize),
+		Samples:     len(xs),
+	}
+	if len(co) > 1 {
+		p.PerTokenCtx = co[1] / float64(chunkSize)
+	}
+	if len(co) > 2 {
+		p.PerTokenCtxSq = co[2] / float64(chunkSize)
 	}
 	p.RMSEFit, _ = fitError(p, steps, runs[0], chunkSize)
 	if len(runs) > 1 {
@@ -219,12 +236,15 @@ func FitDecode(steps []Step) DecodeCost {
 	if len(stepS) == 0 {
 		return d
 	}
-	var mean float64
+	var mean, meanCtx float64
 	for i := range stepS {
 		mean += stepS[i] - d.PerTokenCtx*ctxS[i]
+		meanCtx += ctxS[i]
 	}
 	mean /= float64(len(stepS))
+	meanCtx /= float64(len(stepS))
 	d.Base = mean
+	d.MeanCtx = meanCtx
 	for _, a := range accept {
 		d.AcceptMean += a
 	}

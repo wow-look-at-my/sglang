@@ -42,6 +42,7 @@ func (k Kind) String() string {
 type Step struct {
 	Line       int
 	Kind       Kind
+	NewSeq     int     // prefill: #new-seq, requests the batch prefilled
 	NewTokens  int     // prefill: #new-token, the tokens this forward computed
 	HitTokens  int     // prefill: #cached-token, prefix reused without recompute
 	Pending    int     // prefill: #pending-token outstanding across the queue
@@ -75,6 +76,7 @@ func Parse(log string) ([]Step, error) {
 			key string
 			dst *int
 		}{
+			{"new-seq", &s.NewSeq},
 			{"new-token", &s.NewTokens},
 			{"cached-token", &s.HitTokens},
 			{"pending-token", &s.Pending},
