@@ -33,7 +33,16 @@ func TestScenarioBBalanceWinsAgainstPrev(t *testing.T) {
 	rows := RunSuite([]Scenario{ScenarioB(2), ScenarioB(5)}, cost, DefaultConfig, 0)
 	for _, row := range rows {
 		t.Run(row.Scenario.Name, func(t *testing.T) {
-			prev, neu := row.Metrics[ModePrev], row.Metrics[ModeNew]
+			old, prev, neu := row.Metrics[ModeOld], row.Metrics[ModePrev], row.Metrics[ModeNew]
+			t.Logf("%s / OLD / PREV / NEW", row.Scenario.Name)
+			t.Logf("  stream time in stalls over 1 s: %.2f%% / %.2f%% / %.2f%%",
+				100*old.StallFrac1s, 100*prev.StallFrac1s, 100*neu.StallFrac1s)
+			t.Logf("  longest stall: %s / %s / %s", seconds(old.LongestStall),
+				seconds(prev.LongestStall), seconds(neu.LongestStall))
+			t.Logf("  stream decode tok/s in cold: %.1f / %.1f / %.1f",
+				old.StreamDecodeTokSCold, prev.StreamDecodeTokSCold, neu.StreamDecodeTokSCold)
+			t.Logf("  output tok/s: %.1f / %.1f / %.1f",
+				old.OutputTokS, prev.OutputTokS, neu.OutputTokS)
 			if neu.LongestStall > prev.LongestStall {
 				t.Errorf("longest stall %s, worse than PREV %s",
 					seconds(neu.LongestStall), seconds(prev.LongestStall))
@@ -61,9 +70,12 @@ func TestScenarioBBalanceWinsAgainstPrev(t *testing.T) {
 			if decode == nil || len(decode.PerToken) == 0 {
 				t.Fatal("no decode-class ITL samples to compare against")
 			}
-			if p99 := pct(decode.PerToken, 99); p99 > prev.ITLp99 {
+			decodeP99 := pct(decode.PerToken, 99)
+			t.Logf("  NEW decode-class p99 %s, mixed share %.2f%% (PREV ITL p99 %s)",
+				seconds(decodeP99), 100*mixedShare(pooled), seconds(prev.ITLp99))
+			if decodeP99 > prev.ITLp99 {
 				t.Errorf("NEW's pure-decode per-token p99 %s, worse than PREV's ITL p99 %s",
-					seconds(p99), seconds(prev.ITLp99))
+					seconds(decodeP99), seconds(prev.ITLp99))
 			}
 
 			// The bound holds per batch: at most one chunk of prefill tokens, plus
@@ -132,6 +144,21 @@ func TestMixedRideIsWhatDecidesTheP99Cell(t *testing.T) {
 		t.Errorf("p99 came free without the ride: stream rate %.1f tok/s against PREV's %.1f",
 			withoutRide.StreamDecodeTokSCold, prevOff.StreamDecodeTokSCold)
 	}
+	// The table in docs/derivation-itl-percentiles-under-mixed-chunk.md is these
+	// three rows; each is printed as PREV / NEW.
+	for _, r := range []struct {
+		label     string
+		prev, neu Metrics
+	}{
+		{"as shipped: off for PREV, on for NEW", prevOff, newOn},
+		{"on for both", prevOn, newOn},
+		{"off for both", prevOff, withoutRide},
+	} {
+		t.Logf("%s: ITL p99 %s / %s, longest stall %s / %s, stream decode tok/s in cold %.1f / %.1f",
+			r.label, seconds(r.prev.ITLp99), seconds(r.neu.ITLp99),
+			seconds(r.prev.LongestStall), seconds(r.neu.LongestStall),
+			r.prev.StreamDecodeTokSCold, r.neu.StreamDecodeTokSCold)
+	}
 }
 
 // TestITLP99BandFollowsTheMixedShare pins the pivot docs/derivation-itl-percentiles-under-mixed-chunk.md
@@ -164,6 +191,8 @@ func TestITLP99BandFollowsTheMixedShare(t *testing.T) {
 		m := Pool(runs, sc.Window)
 		decodeTop := pct(decode.PerToken, 99.9)
 		decodeP99 := pct(decode.PerToken, 99)
+		t.Logf("%s: mixed share %.2f%%, reported ITL p99 %s, decode class p99 %s p99.9 %s",
+			sc.Name, 100*share, seconds(m.ITLp99), seconds(decodeP99), seconds(decodeTop))
 		switch {
 		case tc.overLine && share <= 0.01:
 			t.Errorf("%s: mixed share %.2f%% fell under the 1%% line", sc.Name, 100*share)
@@ -179,6 +208,44 @@ func TestITLP99BandFollowsTheMixedShare(t *testing.T) {
 				t.Errorf("%s: p99 %s is not the decode band's %s at a %.2f%% mixed share",
 					sc.Name, seconds(m.ITLp99), seconds(decodeP99), 100*share)
 			}
+		}
+	}
+}
+
+// TestDeliveryClassShareTable prints the rows
+// docs/derivation-itl-percentiles-under-mixed-chunk.md tabulates for the scenarios
+// whose ITL cells the tables mark. The mixed share says which band a reported
+// percentile is drawn from - over 1% decides p99, over 0.1% decides p99.9 - and the
+// band's height then says whether it beats the other interleaving policy. Counts are
+// summed per run rather than read off a merged trace, because request ids repeat
+// across seeds.
+func TestDeliveryClassShareTable(t *testing.T) {
+	cost := ScenarioCost()
+	for _, sc := range []Scenario{
+		ScenarioA(), ScenarioC(2, 16), ScenarioC(0.5, 16),
+		ScenarioD(400000), ScenarioD(100000), ScenarioThrash(4, 600), ScenarioThrash(4, 1800),
+	} {
+		for _, mode := range Modes {
+			var runs []*Result
+			mixed, total := 0, 0
+			for _, seed := range sc.Seeds {
+				res := Run(sc, DefaultConfig(mode, cost), seed)
+				runs = append(runs, res)
+				for _, c := range deliveryClassStats(res) {
+					total += c.Copies
+					if c.Label == "mixed" {
+						mixed += c.Copies
+					}
+				}
+			}
+			m := Pool(runs, sc.Window)
+			t.Logf("%s / %s: mixed %d of %d (%.2f%%), ITL p99 %s p99.9 %s, ITL p50 %s,"+
+				" raw gap p99 %s, longest stall %s, stream time in stalls over 1 s %.2f%%,"+
+				" GPU busy %.1f%%, decode share %.1f%%, output %.1f tok/s",
+				sc.Name, mode, mixed, total, 100*float64(mixed)/float64(total),
+				seconds(m.ITLp99), seconds(m.ITLp999), seconds(m.ITLp50),
+				seconds(m.ITLp99Raw), seconds(m.LongestStall), 100*m.StallFrac1s,
+				100*m.GPUBusyShare, 100*m.DecodeShare, m.OutputTokS)
 		}
 	}
 }

@@ -56,6 +56,8 @@ conversations' turns are gated by the three cold prompts:
 | stream time in stalls over 1 s | 0.0% | 35.3% |
 | longest stall | 748.2 ms | 76.1 s |
 
+`TestDeliveryClassShareTable` prints both stall shares above for scenario A.
+
 OLD's summed cold windows are 176.26 s shorter than NEW's, the same gap the cold-TTFT
 bound accounts for second by second in `derivation-cold-ttft-vs-old.md`. OLD's extra
 158.59 live stream-seconds are a different measurement, not that gap transferred:
@@ -83,16 +85,16 @@ Refuses:
   the per-stream-second rate (95.22 against 91.00), so no claim is needed.
 * Every other scenario: B at 1, 2 and 5 minutes, C at every rate and `max_running`, D
   at every prompt length, and the thrash episodes. None of their `output tok/s` cells
-  is mapped to a derivation, and the only ones where NEW is nominally behind are ties:
-  C 0.5 req/s at max_running 16, where OLD delivered 303,501 tokens against NEW's
-  303,471; C 1 req/s at 16, 601,189 against 601,164; C 1 req/s at max_running 6,
-  601,179 against 601,174; and thrash at the 4x host tier over 600 s, 571,658 against
-  571,562. Those gaps are 30, 25, 5 and 96 tokens, 0.010%, 0.004%, 0.001% and 0.017% -
-  all inside `TieRelative`'s 0.5%, which is what the contract judges. The scenario
-  tables mark any non-zero difference with a caret, so a tie can print as `^old` and
-  still be a tie. `boundName` returns no derivation for those keys, so a loss beyond the
-  tie band in one of them fails the build, which is the honest outcome for a metric that
-  could have improved.
+  is mapped to a derivation, and the only ones where NEW is nominally behind are ties
+  the contract prints at its own precision: +0.01% at C 0.5 req/s with
+  `max_running_requests 16` (NEW 168.6 tok/s against OLD's and PREV's 168.6), +0.00% at
+  C 1 req/s with 16 and again with 6 (334.0 tok/s either way), and +0.02% under thrash
+  at the 4x host tier over 600 s (317.5 against 317.6). A difference of a hundredth of a
+  percent over the scenario's own window, inside `TieRelative`'s 0.5%, which is what
+  the contract judges. The scenario tables mark any non-zero difference with a caret, so
+  a tie can print as `^old` and still be a tie. `boundName` returns no derivation for
+  those keys, so a loss beyond the tie band in one of them fails the build, which is the
+  honest outcome for a metric that could have improved.
 * A throughput *improvement* claim. The bound shows the loss is admission timing, not
   rate: it says nothing about whether NEW would have overtaken OLD given the same
   stream-seconds, only that at OLD's own live seconds and NEW's own rate the ordering

@@ -160,7 +160,7 @@ Each column is per prompt: the scenario's own work is 44.04 s and OLD's whole wa
 work. NEW's wait is that same 44.04 s plus 267.4 s it chose to spend elsewhere:
 127.6 s of queued prefill that the 1-minute cadence stacked up, 127.0 s of decode for
 the five resident streams, and 12.7 s of per-pass base and reload copy across the
-118.8 extra forward passes per prompt (8,182 passes against 6,762 over the 69
+118.6 forward passes per prompt (8,182 passes against OLD's 6,762 over the 69
 windows). The gap the bound has to explain is 266.29 s per prompt and the buckets
 leave 1.14 s per prompt of surplus, the tightest in the suite.
 
@@ -170,30 +170,20 @@ leave 1.14 s per prompt of surplus, the tightest in the suite.
 nothing. `Unserved` is a run that ended before the prompt reached a first token,
 `Orphan` is a window no request in the run opened, `Empty` is a first token that is
 not after the arrival. The bound excludes them and says how many:
-`cold window census: 69/70 windows priced, 1 empty` at B 1 min seed 4, and that
-single window is why the bound's per-prompt mean differs from the metric's.
 
-The tag 13 prompt on seed 4 arrived at 840.000 s and never sampled a first token:
-its request's `FirstTok` is the -1 sentinel, its prefix stopped at 399,841 of
-400,000 tokens and it delivered 0 of its 400 output tokens. The window still reads
-`Done()`, because `ColdWindow` is appended with `FirstTok` at its zero value and
-`Done` asks `FirstTok >= 0`, so an unserved prompt looks finished at t = 0. That
-mislabel has two measured consequences. Inside the bound, none: the window lands in
-`Empty` and is excluded. Outside it, two: metric 4's mean for that seed is
-236.598672 s over 14 "served" windows where the 14th term is 0 - 840 = -840 s, and
-dropping that one term gives 319.413954 s. The pooled number the table prints is
+    NEW cold windows: 69/70 priced, excluded: seed 4 13/14 windows priced, 1 unserved
 
-    295.0 s = 311.4630 s - (319.413954 - 236.598672) / 5 seeds
-            = 311.4630 s - 16.5631 s
+at B 1 min, which is one window in seventy.
 
-where 311.4630 s is exactly the paired-window mean this document's table computes
-(21490.949521 / 69). So the bound's arithmetic is unaffected, and the reported
-`cold TTFT mean` for that cell is 16.6 s lower than the wait the surviving windows
-show. `cold prompts served/arrived 70/70` in the same table is the same mislabel:
-69 prompts reached a first token. A fix belongs in the window record, not in the
-bound - write `ColdWindow{Tag: ..., Arrival: ..., FirstTok: -1}` where the window
-is opened, at `engine.go` in the arrival loop - and it would move the reported D and
-B figures by a fraction of a percent while leaving every cell in this table alone.
+The tag 13 prompt on seed 4 arrived at 840.000 s and never sampled a first token: its
+prefix stopped at 399,841 of 400,000 tokens and it delivered 0 of its 400 output
+tokens. A window opens with `FirstTok` at -1 (`newColdWindow` in `engine.go`, asserted
+by `cold_window_test.go`), because 0.0 is a legal timestamp and cannot also mark the
+unserved case, so `Done()` is false for this prompt and it is counted as `Unserved`
+rather than served at t = 0. The metric and the bound then agree: the table prints
+`cold prompts served/arrived 69/70` and a `cold TTFT mean` of 311.5 s, which is the
+paired-window mean this document's table computes (21490.949521 / 69 = 311.4630) with
+no term subtracted from it.
 
 ## Cells this derivation covers and refuses
 

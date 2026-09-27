@@ -24,14 +24,14 @@ window 900 s, cost model calibrated from the embedded production log
 | of those, mixed | 14,631 / 14,631 (1.40%) | same population |
 | deliveries / samples, NEW at a 5 min cadence | 493,534 / 1,316,986, mixed 10,226 (0.78%) | same population |
 | one chunk's promise in seconds | `chunked_prefill_size x prefill_seconds_per_token` = 4096 x 126 us = 0.52 s | the cap `prefill_token_budget` enforces for a continuation |
-| continuation batch cost, seconds-denominated bound (shipped) | tokens p50 3,606 p99 4,101; seconds p50 413 ms p99 653 ms max 842 ms | `WritePrefillCostBreakdown` |
-| continuation batch cost, token-denominated bound | tokens p50 4,099; seconds p50 464 ms p99 809 ms max 954 ms | same, run with `PrefillTokenBudget` in its token form |
+| continuation batch cost, seconds cap (NEW, shipped) | 4,352 batches; tokens p50 3,606 p99 4,101; seconds p50 413.3 ms p99 652.7 ms max 841.7 ms | `WritePrefillCostBreakdown` |
+| continuation batch cost, uncapped (PREV) | 3,698 batches; tokens p50 4,096; seconds p50 463.0 ms p99 825.8 ms max 942.9 ms | same |
 
 ## `ITL p99` is a per-class statement, not a per-policy one
 
-The 1% tail of 1,048,428 samples is 10,484 samples. Mixed deliveries carry 14,631
-samples, so with 10,477 of them above the 99th-percentile rank the reported p99 is
-drawn from the mixed band, not from decode steps:
+The p99 cut of 1,048,428 samples names 10,485 of them. Mixed deliveries carry 14,631
+samples and 10,477 of those sit above the cut, so the reported p99 is drawn from the
+mixed band, not from decode steps:
 
     mixed share          = 14,631 / 1,048,428 = 1.40% > 1%
     reported p99         = 332.3 ms
@@ -142,22 +142,25 @@ so the named sample is a ride under the longest forward pass (479.3 ms below 748
 and NEW's decode class reaches 89.7 ms there against OLD's 196.7 ms.
 
 OLD's own numbers are why this cell is not evidence that it serves streams better: in
-the same run it delivers 0.0 tok/s of stream decode inside its cold windows, spends
-35.3% of stream time inside a stall longer than a second, and has a longest stall of
-76.1 s against NEW's 748.2 ms. Its percentile is measured over a population that
-excludes those waits, because a stream with no token in the window files no sample.
+the same run it delivers 0.0 tok/s of stream decode inside its cold windows and has a
+longest stall of 76.1 s against NEW's 748.2 ms. A stall does reach OLD's percentile
+population - the token that ends it files one sample of that size - but one sample in
+40,517 cannot rise to a rank that names 406, so OLD's p99 is drawn from the waits
+between ordinary decode steps and never sees the stall. Where the stall share is
+printed (`TestScenarioBBalanceWinsAgainstPrev`, scenario B), OLD spends 35.14% of
+stream time inside a stall longer than a second and NEW 0.00%.
 
 ## Cells no balancer setting can win
 
-Two experiments on the committed model, both in
+Two experiments on the committed model, both printed by
 `TestMixedRideIsWhatDecidesTheP99Cell` (scenario B, 2 min cadence, the sweep's seeds
 `[1 2 3]`, so these numbers read against the sweep's baseline row):
 
 | mixed chunked prefill | PREV ITL p99 | PREV longest stall | NEW ITL p99 | NEW longest stall | NEW stream tok/s in cold | PREV stream tok/s in cold |
 | --- | --- | --- | --- | --- | --- | --- |
-| as shipped: off for PREV, on for NEW | 211.5 ms | 1.72 s | 332.0 ms | 822.3 ms | 67.6 | 66.8 |
-| on for both | 290.9 ms | 934.3 ms | 332.0 ms | 822.3 ms | 67.6 | 67.5 |
-| off for both | 211.5 ms | 1.72 s | 157.7 ms | 848.5 ms | 65.7 | 66.8 |
+| as shipped: off for PREV, on for NEW | 211.5 ms | 1.72 s | 332.0 ms | 822.3 ms | 66.5 | 65.7 |
+| on for both | 290.9 ms | 934.3 ms | 332.0 ms | 822.3 ms | 66.5 | 66.7 |
+| off for both | 211.5 ms | 1.72 s | 157.7 ms | 848.5 ms | 64.7 | 65.7 |
 
 Giving a policy the ride raises its own p99 by 37% (211.5 to 290.9 ms) while halving
 its longest stall (1.72 to 0.934 s), because each of its tokens now arrives at the end
@@ -165,7 +168,7 @@ of a prefill batch and carries a weight of one in the population. Put both polic
 the same delivery form and NEW's deficit is 332.0 against 290.9 ms, 14%; the rest of
 the reported gap is the ride's weighting. Take the ride away from NEW and it wins the
 cell outright, 157.7 against 211.5 ms, and loses `stream decode tok/s in cold` to PREV
-(65.7 against 66.8 tok/s): those riding tokens are what streams generate during a cold
+(64.7 against 65.7 tok/s): those riding tokens are what streams generate during a cold
 prompt at all. Mixed chunked prefill is the deployment's resolved default
 (`arg_groups/mixed_chunk_hook.py`), not part of the control law, and the sweep prints
 that variant's trade in its own `contract` column.
@@ -187,27 +190,28 @@ trade. Doubling the chunk puts NEW's mixed count under the 1% line and wins p99
 outright (27.4 against 49.2 ms) - by changing `chunked_prefill_size`, a launch flag
 the balancer must not decide, and at 1.23 s of stall for NEW and 3.19 s for PREV.
 
-What the balancer does own - how many tokens a *continuation* may take - was measured
-in both forms. A token-denominated bound leaves continuation batches at p99 809 ms
-and max 953.7 ms against a promise of 0.52 s; the seconds form brings those to 653 ms
-and 841.7 ms and moves the mixed count from 12,600 to 14,631 deliveries. The band's
-height and the band's count trade against each other, and while the count is above 1%
-of samples p99 sits at the band either way: 300.6 ms for the token form, 332.3 ms for
-the seconds form, both above PREV's 212.2 ms. Against the token form, every metric
-that measures the wait itself improved: p99.9, raw chunk-gap p99, longest stall,
-stream time in stalls over 1 s, and output.
+What the balancer does own - how many tokens a *continuation* may take - shows up as
+the band's height against the band's count. Uncapped (PREV) the continuation batches
+cost p50 463.0 ms, p99 825.8 ms and a max of 942.9 ms at 4,096 tokens each, mean
+120 us per token. Capped in seconds (NEW) they cost p50 413.3 ms, p99 652.7 ms and a
+max of 841.7 ms at a median of 3,606 tokens, mean 126 us per token, and there are
+4,352 of them against PREV's 3,698 - 18% more passes to be ridden. The cap pays for
+itself in the wait metrics (longest stall 841.7 ms against PREV's 1.72 s, raw gap p99
+459.6 against 720.2 ms) and costs p99, because while the riding count is above 1% of
+samples the reported percentile sits in the band whatever the band's height is.
 
 ## The same count decides the other cells the tables mark
 
-Delivery-class shares for NEW, pooled over each scenario's own seeds. PREV has no
-mixed class at all - mixed chunked prefill is off at its commit - so every one of its
-samples is a decode sample. Latencies are ms except where a unit is written.
+Delivery-class shares for NEW, summed over each scenario's own seeds, as
+`TestDeliveryClassShareTable` prints them. PREV has no mixed class at all - mixed
+chunked prefill is off at its commit - so every one of its samples is a decode sample.
+Latencies are ms except where a unit is written.
 
 | scenario | mixed share | p99 NEW / PREV | p99.9 NEW / PREV | raw gap p99 NEW / PREV | longest stall NEW / PREV |
 | --- | --- | --- | --- | --- | --- |
 | A: logged episode | 0.89% (361 of 40,517) | 77.6 / 161.5 | 479.3 / 646.7 | 422.0 / 541.7 | 748.2 ms / 1.76 s |
 | C: 2 req/s, max 16 | 2.46% (28,850 of 1,170,763) | 139.5 / 94.5 | 223.4 / 244.0 | 192.5 / 238.0 | 322.7 / 611.7 |
-| C: 0.5 req/s, max 16 | 0.33% (986 of 300,032) | 18.3 / 19.8 | 156.7 / 90.4 | 32.0 / 32.0 | 279.9 / 312.8 |
+| C: 0.5 req/s, max 16 | 0.33% (986 of 303,313) | 18.3 / 19.8 | 156.7 / 90.4 | 32.0 / 32.0 | 279.9 / 312.8 |
 | D: one cold 400K | 0.68% (4,544 of 669,290) | 26.6 / 30.4 | 395.7 / 339.8 | 134.6 / 95.5 | 665.3 / 1.54 s |
 | D: one cold 100K | 0.49% (3,581 of 728,029) | 26.0 / 27.1 | 145.5 / 147.3 | 63.3 / 72.0 | 363.2 / 699.7 |
 | thrash host 4x, 600 s | 0.64% (3,679 of 573,269) | 28.4 / 84.3 | 427.8 / 287.5 | 263.4 / 284.4 | 831.0 / 899.8 |
@@ -215,32 +219,44 @@ samples is a decode sample. Latencies are ms except where a unit is written.
 The share says which band a percentile is drawn from - above 1% for p99, above 0.1%
 for p99.9 - and the band's height then says whether it beats PREV:
 
-* The p99 cells NEW loses to PREV are B at the 1 and 2 minute cadences (1.40% at 2
-  minutes) and C at 2, 3 and 5 req/s (2.46% measured at 2 req/s). Everywhere the share
-  was measured below 1% NEW wins p99 outright (77.6 against 161.5 in A, 28.4 against
-  84.3 under thrash, 27.7 against 39.1 at the 5 minute cadence, 26.0 against 27.1 at
-  D 100K). The shares at C 3 and 5 req/s are not quoted here; they are the same busy
-  prefill shape as C 2 req/s.
-* Above 0.1% the p99.9 is a mixed sample in every scenario, so NEW wins that cell only
-  where PREV's own tail is longer than one capped prefill batch (A 479.3 against
-  646.7, B at 1 and 2 minutes) and loses it where PREV's tail is short (C 0.5 req/s
-  156.7 against 90.4, D 400K 395.7 against 339.8).
-* In every row above NEW's own pure-decode steps are far tighter than PREV's reported
-  tail - the decode class's 99th percentile is 23.9 ms in A, 36.4 ms at C 2 req/s,
-  26.5 ms at D 400K and 28.4 ms under thrash, against PREV's 161.5, 94.5, 30.4 and
-  84.3 ms - and the undivided raw gap p99 favours NEW in four of the six rows, with a
-  tie at C 0.5 req/s and a loss at D 400K.
+* The p99 cells NEW loses to PREV are exactly the ones whose share is above 1%: the
+  1 minute cadence (366.3 against 251.6 ms at 1.60%), B at 2 minutes (332.3 against
+  212.2 ms at 1.40%), C at 2, 3 and 5 req/s (139.5 against 94.5, 167.7 against 148.7
+  and 165.8 against 148.8 ms, at 2.46%, 4.75% and 4.82%) and C at 5 req/s with
+  `max_running_requests 6` (92.3 against 80.6 ms at 1.72%). Everywhere the share
+  printed below 1% NEW wins p99 outright (77.6 against 161.5 in A, 26.0 against 27.0
+  at D 25K, 26.0 against 27.1 at D 100K, 26.6 against 30.4 at D 400K, 28.4 against
+  84.3 under thrash, 27.7 against 39.1 at the 5 minute cadence).
+* Above 0.1% the p99.9 is a mixed sample, so NEW's number comes out of its band and the
+  cell is won only where PREV's tail is longer than that: 479.3 against 646.7 in A,
+  523.5 against 731.9 at B 2 minutes, 534.5 against 804.3 at the 1 minute cadence,
+  223.4/250.3/247.2 against 244.0/388.5/389.3 at C 2/3/5 req/s, 200.2 against 267.4 at
+  C 5 req/s with `max_running_requests 6`, 145.5 against 147.3 at D 100K, and every
+  thrash episode below the 4x host tier (251.3-434.7 against 755.9-839.4). It is lost
+  where PREV's tail is short: 90.4, 148.7 and 147.2 at the C rows at 0.5 and 1 req/s,
+  398.8 at the 5 minute cadence, 90.1 to 453.1 at the four D rows other than 100K, and
+  287.5 and 304.6 at the 4x tier.
+* In every cell the bound argues, NEW's own pure-decode steps are far tighter than the
+  percentile it is being compared to - `itlPassBand`'s decode-class cut, the same
+  rank with the pass-cost samples removed, is 23.8 ms against OLD's 26.6 in A, 24.8
+  against PREV's 212.2 at B 2 minutes, 24.2 against 251.6 at the 1 minute cadence,
+  and 36.4/37.9/37.9/22.8 against 94.5/148.7/148.8/80.6 at C 2/3/5 req/s and C 5 with
+  `max_running_requests 6`. At p99.9 the same cut is 89.7 ms in A against OLD's 196.7
+  and 27.1 to 27.4 ms across the D rows against their 81.0 to 85.1 ms. The undivided
+  raw gap p99 favours NEW in four of the six tabulated rows, ties at C 0.5 req/s and
+  loses at D 400K.
 
-Within the sensitivity sweep the same crossing accounts for four cells that used to
-pass: `decode D0 x0.7`, `decode DCtx 0`, `decode DBS 0` and `MTP accept 3.5` reported
-NEW p99 of 30.9, 118.1, 70.5 and 31.5 ms with the bound in tokens - decode-band
-values, mixed share just under 1% - and report 290.9, 307.9, 302.2 and 291.0 ms with
-the bound in seconds. The mixed count does not grow across that pair (12,600 to 12,481
-deliveries); the crossing comes from the population shrinking, 930,743 samples to
-924,753, which pushes the 1.35% share over the line as the denominator falls. The same
-four rows improve their longest stall by 13-25% (957 to 831 ms, 941 to 774 ms, 1.01 to
-0.76 s, 970 to 800 ms), and three of the four their p99.9 (488.1 to 417.2 ms, 479.5 to
-422.4 ms, 1.01 s to 760.1 ms); `MTP accept 3.5` worsens there, 295.6 to 307.9 ms.
+Within the sensitivity sweep the same crossing decides the p99 column, which the sweep
+prints. A cheaper decode step moves OLD's reported p99 down into the decode band -
+23.8, 22.7, 22.0 and 27.1 ms for `decode D0 x0.7`, `decode DCtx 0`, `decode DBS 0` and
+`MTP accept 3.5`, against the baseline's 28.2 ms - while NEW stays in its own mixed
+band (290.9, 307.9, 302.2 and 291.0 ms against the baseline's 332.0) and PREV lands
+between the two (174.5, 190.5, 186.0 and 189.1 against 211.5). Those four rows hold a
+longest stall within 8% of the baseline's 822.3 ms (830.9, 774.3, 760.4 and 800.4 ms),
+and `MTP accept 3.5` is the only decode-side variant whose `contract` column also names
+`ITL p99.9 vs PREV`. The sweep's own `mixed chunked prefill off` row is what
+`TestMixedRideIsWhatDecidesTheP99Cell` measures: NEW's p99 drops to 157.7 ms against
+PREV's 211.5, and `stream decode tok/s in cold vs PREV` joins its losses.
 
 Two other failure classes are not the tail mechanism at all:
 
@@ -251,10 +267,14 @@ Two other failure classes are not the tail mechanism at all:
   The `output tok/s` carets on C 0.5 req/s, C 1 req/s and thrash at 600 s are ties at
   the printed precision - C 0.5 req/s measures NEW 168.5950 against PREV 168.6128, a
   0.011% shortfall - and `Better` flags any non-zero difference.
-* `stream decode tok/s in cold` and `per-agent tok/s in cold vs PREV` in D at 100K
-  (64.9 against 67.4, 223.8 against 224.4) are measured identical before and after the
-  seconds cap (223.7 before, 223.8 after), so they predate it and are not this
-  mechanism. They are unexplained by this document.
+* `stream decode tok/s in cold` in D at 100K is the other class: NEW 64.2 against
+  PREV's 66.1 tok/s. Its bound prices the ride rather than excusing it - NEW's 18,198
+  tokens over 283.9 stream-seconds against PREV's 17,844 over 269.9, so the 14.0 extra
+  seconds of stream life returned 25.2 tok/s against the 2.8 tok/s floor a riding row
+  costs, with 453 of NEW's tokens arriving as prefill rows - and
+  `docs/derivation-stream-rate-under-mixed-chunk.md` derives that floor. `per-agent
+  tok/s in cold` in the same cell is a win (44.5 against PREV's 43.7), so the shortfall
+  is the longer cold window the streams are alive through, not slower steps.
 
 ## `cold TTFT` against OLD
 
@@ -270,7 +290,7 @@ prefill seconds minus decode seconds - so the bound on cold TTFT is
 
 which both interleaving policies sit on (PREV 103.1 s, NEW 105.0 s) and which OLD
 escapes only by giving decode 0 steps for the whole window: OLD's in-window stream
-rate is 1.9 tok/s against NEW's 67.4, and 35.3% of its stream time is inside a stall
-longer than a second against NEW's 0.0%. NEW's 1.9 s above PREV is the continuation
+rate is 0.7 tok/s against NEW's 66.1, and 35.14% of its stream time is inside a stall
+longer than a second against NEW's 0.00%. NEW's 1.9 s above PREV is the continuation
 cap buying shorter chunks (4,352 continuation batches against 3,698) and is inside
 the same 2x bound.

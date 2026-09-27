@@ -48,7 +48,7 @@ did not. Neither is allowed, and the two named checks below are what enforce tha
 | B 5 min | 15 | 1571.441287 | 1547.343652 | 24.097635 | 0.000541 | +3.595574 | +0.637510 | +6.240807 | +13.623203 | 0.000000 | 24.097094 | 0.000000000 |
 | D 500K | 5 | 750.384094 | 735.492702 | 14.891392 | 0.000418 | +2.383950 | +0.272665 | +3.994211 | +8.240147 | 0.000000 | 14.890973 | 0.000000000 |
 
-The residue column is the identity's error, printed to nine decimals: zero in every
+The residue column is the identity's error, carried to nine decimals: zero in every
 cell, against a tolerance of 6.7e-6 s in A and 1.5e-5 s at D 500K.
 
 Same prompt, same computation. The second named check refuses a cell whose gap is a
@@ -76,7 +76,7 @@ cost does show up where it belongs, 2.37 s in A and 3.99 s at D 500K, and those 
 are counted as work NEW bought for other requests, which is the cell's excuse.
 
 Nothing is idled. `prevIdleSlack` is 0.2% of PREV's paired window seconds, and NEW's
-idle excess is 0.000000 s in all four cells - the GPU is never left between batches
+idle excess is 0.000000 s in every cell measured - the GPU is never left between batches
 inside a cold prompt - so the tolerance is never consulted. Where 0.2% comes from: it
 and `TieRelative` are stated against the same quantity per window, because a cold
 window *is* the interval metric 4 reports. A cell only reaches this bound at 0.5% of
@@ -89,24 +89,37 @@ far enough that round-off in the residual bucket is not.
 
 ## Cells this derivation covers and refuses
 
-Covers the four cells where NEW's cold TTFT mean is worse than PREV's by more than
-`TieRelative`: A (+1.78%), B 2 min (+1.81%), B 5 min (+1.56%), D 500K (+2.02%).
+Covers the five cells where NEW's cold TTFT mean is worse than PREV's by more than
+`TieRelative`: A (+1.78%), B 1 min (+2.48%), B 2 min (+1.81%), B 5 min (+1.56%),
+D 500K (+2.02%). B 1 min is the widest gap the bound sees and is not in the tables
+above; its account, read off the run's evidence line at the precision the printer
+emits, closes the same way:
+
+    69 paired windows; NEW wait 21490.9 s vs PREV 20917.9 s
+    own chunks 3038.7 s both, in 8182 passes vs 7135
+    follow-up prefill +238.4 s, rows +6.7 s, overhead +110.5 s, decode +217.5 s,
+    idle 0.0 vs 0.0
+
+The four buckets account for the whole 573.0 s gap (they sum to 573.1 at the printer's
+rounding), so nothing there is extra compute - own chunks match to the tenth of a second
+across 1,047 more passes - and nothing is an idle GPU.
 
 Refuses:
 
-* B 1 min, D 25K, D 100K, D 200K and D 400K. B 1 min and D 200K and D 400K are cells
-  NEW wins against PREV (-573.036365 s, -1.014346 s, -3.125518 s of paired wait); D 25K
-  (+0.008200 s, 0.04%) and D 100K (+0.260784 s, 0.32%) are inside the 0.5% tie band and
-  the test never reaches a bound for them. Both of those ties would pass this bound if
-  they moved out of the band - their accounts close and their idle excess is zero - and
-  they are not claimed here because no cell is argued that the tables do not mark.
+* D 25K, D 100K, D 200K and D 400K. D 200K and D 400K are cells NEW wins against PREV
+  (-0.56% and -0.64% of the mean); D 25K and D 100K (+0.04% and +0.32%) are inside the
+  0.5% tie band and the test never reaches a bound for them. Both of those ties would
+  pass this bound if they moved out of the band - their accounts close and their idle
+  excess is zero - and they are not claimed here because no cell is argued that the
+  tables do not mark.
 * C at every rate and `max_running`, and the thrash episodes: no cold prompt arrives,
   metric 4 has no value, and `boundName` maps these keys to no derivation at all. The
   thrash family is excluded by key prefix even though its accounts would be empty rather
   than unfavourable.
-* The claim that the gap is small. It is 1.56-2.02% and it is real: NEW's extra own
-  passes and the follow-up prefill they let in beside the chunk cost its prompt between
-  2.24 s and 65.18 s of paired wait. What this derivation supports is only that the cost
+* The claim that the gap is small. It is 1.56-2.48% and it is real: NEW's extra own
+  passes and the follow-up prefill they let in beside the chunk cost each cold prompt
+  between 1.61 s (B 5 min) and 8.30 s (the 1 minute cadence) of paired wait. What this
+  derivation supports is only that the cost
   is other requests' work and not extra compute or wasted GPU.
 * A single-window reading. D 500K's five windows share a workload and the account is a
   sum over them; nothing here prices one prompt's wait alone.
