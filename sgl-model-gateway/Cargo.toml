@@ -62,7 +62,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "chron
 tracing-log = "0.2"
 tracing-appender = "0.2.3"
 opentelemetry = "0.27"
-opentelemetry_sdk = { version = "0.27", features = ["trace", "rt-tokio"] }
+opentelemetry_sdk = { version = "0.33", features = ["trace", "rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["trace", "grpc-tonic"] }
 tracing-opentelemetry = "0.28"
 chrono = "0.4"
@@ -92,7 +92,7 @@ smg-mesh = "=1.0.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2.2"
 openssl = "0.10.73"
-rmcp = { version = "0.8.3", features = ["client", "server",
+rmcp = { version = "3.4.1", features = ["client", "server",
     "transport-child-process",
     "transport-sse-client-reqwest",
     "transport-streamable-http-client-reqwest",
