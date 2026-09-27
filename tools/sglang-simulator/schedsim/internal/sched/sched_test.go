@@ -247,6 +247,62 @@ func TestPerRequestDecodeCostDividesGeneration(t *testing.T) {
 	}
 }
 
+// Requests queued behind the chunk cannot join it, so they must not weigh the
+// split: the revised balancer gives decode the shipped 50/50 share whatever
+// the queue, carrying at most one decode step of overshoot per chunk.
+func TestQueueBalanceIgnoresRequestsThatCannotRun(t *testing.T) {
+	w, _ := workload(t)
+
+	even := Simulate(w, w.Params(PolicyTimeBalance), 0)
+	p := w.Params(PolicyQueueBalance)
+	alone := Simulate(w, p, 0)
+	queued := Simulate(w, p, 3)
+
+	if queued.DecodeSteps != alone.DecodeSteps || queued.WindowSeconds != alone.WindowSeconds {
+		t.Fatalf("queue changed the run: %d steps over %.3f s, alone %d over %.3f s",
+			queued.DecodeSteps, queued.WindowSeconds, alone.DecodeSteps, alone.WindowSeconds)
+	}
+	if d := even.DecodeSteps - alone.DecodeSteps; d < 0 || d > len(w.Chunks) {
+		t.Fatalf("revised %d decode steps, shipped %d: more than one step of carry per chunk",
+			alone.DecodeSteps, even.DecodeSteps)
+	}
+}
+
+// Mixed-chunk tokens ride on top of decode's half and never replace it: a
+// chunk that gives each running request one token is still followed by pure
+// decode worth its own time, so no stream collapses to a token per chunk.
+func TestMixedChunkRidesOnTopOfDecodeHalf(t *testing.T) {
+	w, _ := workload(t)
+
+	p := w.Params(PolicyQueueBalance)
+	p.RunningReqs = 5
+	plain := Simulate(w, p, 0)
+	p.MixedChunk = true
+	r := Simulate(w, p, 0)
+
+	var chunkSecs, decodeSecs, longest float64
+	for _, c := range w.Chunks {
+		chunkSecs += c.Seconds
+	}
+	for _, e := range r.Trace {
+		longest = max(longest, e.Seconds)
+		if !e.IsPrefill {
+			decodeSecs += e.Seconds
+		}
+	}
+	// The window ends with the last chunk, which decode has not yet repaid.
+	owed := chunkSecs - w.Chunks[len(w.Chunks)-1].Seconds
+	if decodeSecs < owed-p.DecodeStepSeconds {
+		t.Fatalf("pure decode %.2f s against %.2f s of chunks: rows replaced decode's half", decodeSecs, owed)
+	}
+	if r.GeneratedTokens <= plain.GeneratedTokens {
+		t.Fatalf("mixed generated %.0f tokens, plain %.0f: rows added nothing", r.GeneratedTokens, plain.GeneratedTokens)
+	}
+	if r.LongestDecodeGap > longest+1e-9 {
+		t.Fatalf("gap %.3f s exceeds the longest batch %.3f s", r.LongestDecodeGap, longest)
+	}
+}
+
 // Every chunk the workload carries must be a step the log actually contains.
 func TestWorkloadChunksComeFromTheLog(t *testing.T) {
 	w, m := workload(t)

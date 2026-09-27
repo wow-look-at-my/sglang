@@ -23,6 +23,11 @@ const (
 	// PolicyTimeBalance splits contended GPU time between prefill and decode by
 	// measured batch duration, which is the shipped balancer.
 	PolicyTimeBalance
+	// PolicyQueueBalance is the revised balancer: prefill and decode batches get
+	// equal time however many requests a prefill batch serves (decode's floor),
+	// at most one chunk budget of prefill tokens runs between two points where
+	// decode has caught up, and waiting requests that cannot run take nothing.
+	PolicyQueueBalance
 )
 
 func (p Policy) String() string {
@@ -31,6 +36,8 @@ func (p Policy) String() string {
 		return "prefill-priority (old)"
 	case PolicyFixedInterval:
 		return "fixed-interval"
+	case PolicyQueueBalance:
+		return "queue-balance (revised)"
 	default:
 		return "time-balance (new)"
 	}
@@ -67,6 +74,14 @@ type Params struct {
 	// Assumed: unmeasurable from a single-request log. 0 keeps each class's
 	// measured cost intact and lets the time split alone decide.
 	PrefillInterference float64
+
+	// MixedChunk makes every chunk under PolicyQueueBalance carry one decode
+	// row per running request (mixed chunked prefill, resolved on by default):
+	// each row is one more extend token at the chunk's measured per-token cost
+	// and yields one token (speculative decoding degrades to a plain decode
+	// inside a mixed step). The balancer charges such a chunk as prefill minus
+	// its rows, so pure decode keeps its half and the rows' tokens come on top.
+	MixedChunk bool
 }
 
 // Chunk is one cold-prefill batch as the log measured it.
@@ -153,8 +168,8 @@ type Result struct {
 
 	// DecodeSteps is how many decode steps ran before the cold prefill finished,
 	// which is the window the collapse was measured in.
-	DecodeSteps      int
-	GeneratedTokens  float64
+	DecodeSteps     int
+	GeneratedTokens float64
 
 	// WindowSeconds is wall time from the first batch to prefill completion.
 	WindowSeconds     float64
@@ -197,6 +212,8 @@ func Simulate(w Workload, p Params, queueAtStart int) Result {
 		run.prefillPriority()
 	case PolicyFixedInterval:
 		run.fixedInterval()
+	case PolicyQueueBalance:
+		run.queueBalance()
 	default:
 		run.timeBalance()
 	}
@@ -250,7 +267,7 @@ func (x *runner) timeBalance() {
 	weight := x.p.PrefillShare / (1 - x.p.PrefillShare)
 	var debt float64
 	for i := 0; i < len(x.w.Chunks); {
-		x.settle(&debt)
+		x.settle(&debt, 0)
 		if debt > 0 && x.p.RunningReqs > 0 && x.decodeSeconds() > 0 {
 			x.decode(weight)
 			continue
@@ -260,13 +277,51 @@ func (x *runner) timeBalance() {
 	}
 }
 
+// queueBalance implements the revised balancer
+// (python/sglang/srt/managers/scheduler_components/prefill_decode_balancer.py).
+// A prefill batch's seconds are charged in full (a mixed chunk's minus its
+// decode rows), so decode keeps half of contended time; the queue behind the
+// chunk does not count. burst counts prefill tokens since decode last caught
+// up; a chunk continuation runs only once it is zero, and no batch runs once it
+// reaches a chunk. The balance may go negative by one decode step, the
+// overshoot the balancer carries. This model is sequential (no overlap), so
+// nothing is in flight at a decision and the chunks are whole.
+func (x *runner) queueBalance() {
+	var debt float64
+	burst := 0
+	for i := 0; i < len(x.w.Chunks); {
+		x.settle(&debt, -x.decodeSeconds())
+		if x.p.RunningReqs <= 0 || x.decodeSeconds() <= 0 {
+			// No contention: the balancer resets and never defers.
+			debt, burst = 0, 0
+		}
+		if debt <= 0 {
+			burst = 0
+		}
+		continuesChunk := i > 0
+		exhausted := burst >= x.w.ChunkSize || (continuesChunk && burst > 0)
+		if exhausted && x.p.RunningReqs > 0 && x.decodeSeconds() > 0 {
+			x.decode(1)
+			continue
+		}
+		if x.p.MixedChunk && x.p.RunningReqs > 0 {
+			x.mixedChunk(x.w.Chunks[i])
+		} else {
+			x.prefill(x.w.Chunks[i])
+		}
+		burst += x.w.Chunks[i].Tokens
+		i++
+	}
+}
+
 // settle folds the last completed batch's measured duration into the balance,
 // which is what the balancer does at the next decision after a completion.
-func (x *runner) settle(debt *float64) {
+// floor is how far below zero the balance may go.
+func (x *runner) settle(debt *float64, floor float64) {
 	if !x.hasLastCharge {
 		return
 	}
-	*debt = maxFloat(*debt+x.lastCharge, 0)
+	*debt = maxFloat(*debt+x.lastCharge, floor)
 	x.lastCharge = 0
 	x.hasLastCharge = false
 }
@@ -280,6 +335,23 @@ func (x *runner) prefill(c Chunk) {
 	x.lastCharge = secs
 	x.hasLastCharge = true
 	x.noteGap()
+}
+
+// mixedChunk runs one chunk with the running requests' decode rows inside it.
+func (x *runner) mixedChunk(c Chunk) {
+	rows := float64(x.p.RunningReqs)
+	rowSecs := rows * c.Seconds / float64(c.Tokens)
+	x.r.PrefillChunksRun++
+	x.r.PrefillGPUSeconds += c.Seconds
+	secs := (c.Seconds + rowSecs) * (1 + x.p.PrefillInterference)
+	x.wall += secs
+	x.r.Trace = append(x.r.Trace, Event{IsPrefill: true, Tokens: c.Tokens, Seconds: secs, Wall: x.wall})
+	x.r.DecodeSteps++
+	x.r.GeneratedTokens += rows
+	x.noteGap()
+	x.lastDecodeWall = x.wall
+	x.lastCharge = secs - rowSecs*(1+x.p.PrefillInterference)
+	x.hasLastCharge = true
 }
 
 func (x *runner) decode(weight float64) {

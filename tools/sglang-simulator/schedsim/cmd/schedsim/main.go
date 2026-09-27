@@ -74,6 +74,31 @@ func main() {
 		in.Params.RunningReqs = work.RunningReqs
 	}
 
+	// The revised scheduler as it resolves by default (mixed chunk on, so the
+	// running requests also decode inside every chunk), then the balancer
+	// alone, and with the log's peak queue behind the chunks (which cannot
+	// join a chunk and so does not count).
+	var revisedRes sched.Result
+	for _, q := range []struct {
+		label string
+		queue int
+		mixed bool
+	}{
+		{"mixed chunk (default)", metrics.QueueAtCold, true},
+		{"no mixed", metrics.QueueAtCold, false},
+		{"no mixed: #queue-req at its peak", metrics.QueuePeakInCold, false},
+	} {
+		p := work.Params(sched.PolicyQueueBalance)
+		p.MixedChunk = q.mixed
+		p.DecodePerReqFraction = *decodePerReq
+		p.PrefillInterference = *interference
+		r := sched.Simulate(work, p, q.queue)
+		if len(in.Revised) == 0 {
+			revisedRes = r
+		}
+		in.Revised = append(in.Revised, report.RevisedRun{Queue: q.queue, Label: q.label, Result: r})
+	}
+
 	if *sweep {
 		for _, n := range []int{1, 2, 4, 8, 16} {
 			p := work.Params(sched.PolicyFixedInterval)
@@ -92,7 +117,7 @@ func main() {
 
 	report.Write(os.Stdout, in)
 	fmt.Fprintln(os.Stdout)
-	report.Summary(os.Stdout, oldRes, newRes)
+	report.Summary(os.Stdout, oldRes, newRes, revisedRes)
 }
 
 func splitLines(s string) []string {
