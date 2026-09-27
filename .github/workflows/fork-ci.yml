@@ -376,6 +376,15 @@ jobs:
           go vet ./...
           go build -o "${RUNNER_TEMP}/go-examples/oai_server" .
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/sglang-simulator/schedsim/go.mod
+          cache-dependency-path: tools/sglang-simulator/schedsim/go.sum
+
+      - name: Scheduler simulator tests
+        working-directory: tools/sglang-simulator/schedsim
+        run: go test ./...
+
   # ------------------------------------------------------ sglang-kernel wheel
   fork-sgl-kernel-wheel:
     needs: fork-plan
