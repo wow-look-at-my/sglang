@@ -17,6 +17,7 @@ from sglang.srt.mem_cache.hicache_storage import (
 from sglang.srt.mem_cache.hybrid_cache.hybrid_cache_controller import (
     HybridCacheController,
 )
+from sglang.srt.mem_cache.memory_pool import MambaPool
 from sglang.srt.mem_cache.memory_pool_host import (
     DeepSeekV4PagedHostPool,
     DeepSeekV4StateHostPool,
@@ -186,6 +187,8 @@ def build_kv_host_pool(
 
 
 def _device_pool_bytes(kv_pool: Any) -> int:
+    if isinstance(kv_pool, MambaPool):
+        return kv_pool.host_mirrored_bytes()
     size_bytes = getattr(kv_pool, "host_capacity_bytes", None)
     if size_bytes is None:
         size_bytes = kv_pool.get_kv_size_bytes()

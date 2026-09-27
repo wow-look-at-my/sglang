@@ -247,6 +247,152 @@ def test_qsa_sm121_compaction_and_attention_match_sparse_reference():
     torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
 
 
+def test_qsa_kv_gather_translates_unified_pool_slots():
+    """Under the unified pool req_to_token holds virtual slots while the K/V
+    views are addressed by kernel-facing ids; gathering the virtual slots
+    directly reads another layer's (or another page's) rows. The page stride
+    need not be whole pages: an envelope with index rows is not."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    device = torch.device("cuda")
+    torch.manual_seed(0)
+    page, stride, num_pages, heads, head_dim = 4, 27, 16, 2, 32
+    batch, max_len, topk = 3, 40, 24
+    v2p = torch.randperm(num_pages, device=device, dtype=torch.int64)
+    v2p = torch.cat([v2p, torch.full((1,), -1, device=device, dtype=torch.int64)])
+    req_to_token = (
+        torch.randperm(num_pages * page, device=device)[: batch * max_len]
+        .to(torch.int32)
+        .reshape(batch, max_len)
+    )
+    rows = num_pages * stride
+    k_view = torch.randn(rows, heads, head_dim, dtype=torch.bfloat16, device=device)
+    v_view = torch.randn_like(k_view)
+    sequence_lengths = torch.tensor([40, 17, 33], dtype=torch.int32, device=device)
+    indices = torch.stack(
+        [
+            torch.cat(
+                [
+                    torch.randperm(int(n), device=device)[: min(int(n), topk)],
+                    torch.full((topk - min(int(n), topk),), -1, device=device),
+                ]
+            )
+            for n in sequence_lengths.tolist()
+        ]
+    ).to(torch.int32)
+    valid_counts = torch.empty(batch, dtype=torch.int32, device=device)
+    cu_k = torch.empty(batch + 1, dtype=torch.int32, device=device)
+    qwen_sparse_fa2_cu_seqlens_triton(
+        sequence_lengths, indices, valid_counts, cu_k, batch, topk
+    )
+    packed_k = torch.zeros(
+        batch * topk, heads, head_dim, dtype=torch.bfloat16, device=device
+    )
+    packed_v = torch.zeros_like(packed_k)
+    qwen_sparse_kv_extraction_compact_triton(
+        k_view,
+        v_view,
+        req_to_token,
+        torch.arange(batch, dtype=torch.int32, device=device),
+        indices,
+        sequence_lengths,
+        cu_k,
+        packed_k,
+        packed_v,
+        batch,
+        topk,
+        v2p_page_table=v2p,
+        v2p_page_size=page,
+        v2p_page_stride=stride,
+    )
+    for row in range(batch):
+        count = int(valid_counts[row])
+        virtual = req_to_token[row, indices[row, :count].long()].long()
+        kernel_ids = v2p[virtual // page] * stride + virtual % page
+        start = int(cu_k[row])
+        torch.testing.assert_close(packed_k[start : start + count], k_view[kernel_ids])
+        torch.testing.assert_close(packed_v[start : start + count], v_view[kernel_ids])
+
+
+def test_qsa_graph_decode_metadata_follows_the_unified_page_table():
+    """On the unified pool the compressed keys live in each full page's
+    envelope: the graph kernel's write slots and compressed page table must
+    follow the live page table as `QSATokenToKVPool.qsa_index_slots` does on
+    the eager path; reading req_to_token as physical slots writes and scores
+    another page's keys."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    from sglang.kernels.ops.memory.virtual_slot import write_loc_to_kernel_ids
+    from sglang.srt.layers.attention.qsa.graph_metadata import launch_graph_metadata
+
+    device = torch.device("cuda")
+    torch.manual_seed(0)
+    page, ratio, multiplier = 16, 4, 9
+    num_pages, max_pages, bs = 12, 4, 3
+    v2p = torch.randperm(num_pages, device=device, dtype=torch.int64) + 1
+    width = max_pages * page
+    virtual_pages = torch.randperm(num_pages, device=device)[: bs * max_pages]
+    req_to_token = torch.zeros(bs + 1, width, dtype=torch.int32, device=device)
+    req_to_token[1:] = (
+        virtual_pages.reshape(bs, max_pages, 1) * page
+        + torch.arange(page, device=device)
+    ).reshape(bs, width)
+    seq_lens = torch.tensor([page * 2, page + ratio, 7], device=device)
+    req_pool_indices = torch.arange(1, bs + 1, device=device, dtype=torch.int32)
+
+    def buffer(*shape, dtype=torch.int32):
+        return torch.full(shape, -7, dtype=dtype, device=device)
+
+    indexer = SimpleNamespace(
+        graph_compressed_page_table=buffer(bs, max_pages),
+        graph_compressed_lengths=buffer(bs),
+        graph_write_locs=buffer(bs),
+        decode_logical_positions=buffer(bs),
+        pending_ring_slots=buffer(bs, dtype=torch.int64),
+        graph_ring_group_locs=buffer(bs * ratio),
+        graph_prefix_lengths=buffer(bs),
+        compress_ratio=ratio,
+    )
+    launch_graph_metadata(
+        mode=0,
+        bs=bs,
+        num_rows=bs,
+        seq_lens=seq_lens,
+        req_pool_indices=req_pool_indices,
+        extend_lens=None,
+        extend_len=0,
+        num_padding=0,
+        metadata=SimpleNamespace(
+            indexer_metadata=indexer,
+            sequence_lengths=buffer(bs),
+            row_req_pool_indices=buffer(bs),
+        ),
+        req_to_token=req_to_token,
+        pool=SimpleNamespace(
+            qsa_compressed_page_size=page // ratio,
+            qsa_index_v2p=v2p,
+            qsa_index_page_multiplier=multiplier,
+        ),
+    )
+
+    def index_slots(slots):
+        return write_loc_to_kernel_ids(
+            loc=slots.long().contiguous(),
+            v2p=v2p,
+            page_size=page,
+            stride=page * multiplier,
+        )
+
+    rows = req_to_token[req_pool_indices.long()]
+    last = rows[torch.arange(bs, device=device), (seq_lens - 1).long()]
+    expected_write = torch.where(seq_lens % ratio == 0, index_slots(last) // ratio, 0)
+    torch.testing.assert_close(indexer.graph_write_locs.long(), expected_write)
+    torch.testing.assert_close(
+        indexer.graph_compressed_page_table.long(),
+        index_slots(rows[:, ::page]) // page,
+    )
+
+
 def _compressed_config_namespace(**overrides):
     fields = dict(
         model_type="qwen4_exp",
@@ -390,6 +536,7 @@ def test_qsa_draft_extend_backend_decision_follows_profile():
         runner = SimpleNamespace(
             model_config=SimpleNamespace(hf_config=config),
             draft_attention_backend=None,
+            kv_index_translator=None,
         )
         return DraftBackendFactory(
             draft_model_runner=runner,
@@ -413,6 +560,7 @@ def _make_mtp_draft_batch(steps: int, seq_lens=(8, 16), loc_base: int = 40):
     )
     runner = SimpleNamespace(
         device="cpu",
+        kv_index_translator=None,
         token_to_kv_pool=pool,
         req_to_token_pool=SimpleNamespace(req_to_token=req_to_token),
         model_config=SimpleNamespace(
@@ -736,6 +884,7 @@ def _make_qsa_runner_and_pool(num_reqs=4):
     )
     runner = SimpleNamespace(
         device="cpu",
+        kv_index_translator=None,
         token_to_kv_pool=pool,
         req_to_token_pool=SimpleNamespace(req_to_token=req_to_token),
         model_config=SimpleNamespace(

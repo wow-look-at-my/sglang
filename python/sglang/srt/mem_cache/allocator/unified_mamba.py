@@ -261,8 +261,12 @@ class UnifiedMambaTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         return result
 
     @property
-    def kernel_page_multiplier(self) -> int:
+    def kernel_page_multiplier(self) -> Optional[int]:
         return self.full_attn_allocator.kernel_page_multiplier
+
+    @property
+    def kernel_page_stride(self) -> int:
+        return self.full_attn_allocator.kernel_page_stride
 
     @property
     def full_v2p_page_table(self) -> torch.Tensor:
