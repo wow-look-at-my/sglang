@@ -134,6 +134,7 @@ def run_resolution_pipeline(server_args: Any) -> None:
         handle_page_major_kv_layout,
         handle_prefill_only_disable_kv_cache,
         handle_unified_memory_pool,
+        resolve_unified_memory_default,
         validate_prefill_only_disable_kv_cache_args,
     )
     from sglang.srt.arg_groups.parallel_hook import (
@@ -308,6 +309,7 @@ def run_resolution_pipeline(server_args: Any) -> None:
 
     run_hook(handle_cache_compatibility, server_args)
 
+    run_hook(resolve_unified_memory_default, server_args)
     run_hook(handle_page_major_kv_layout, server_args)
 
     run_hook(handle_unified_memory_pool, server_args)
@@ -325,6 +327,11 @@ def run_resolution_pipeline(server_args: Any) -> None:
 
     # Apply model-capability constraints after backend selection.
     run_hook(handle_model_capability_adjustments, server_args)
+
+    # Last reader-sensitive step: every hook above saw an unset flag as off.
+    from sglang.srt.arg_groups.hicache_hook import handle_hicache_auto
+
+    run_hook(handle_hicache_auto, server_args)
 
     finalize_cuda_graph_prefill_max_context(server_args)
 
