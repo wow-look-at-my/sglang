@@ -5,6 +5,8 @@ lib/
 # Compiled binaries
 examples/simple/simple
 examples/streaming/streaming
+examples/oai_server/build/
+examples/oai_server/oai_server
 
 # Go build artifacts
 *.o

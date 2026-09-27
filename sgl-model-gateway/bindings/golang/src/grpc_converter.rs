@@ -1,30 +1,28 @@
 //! gRPC response converter FFI functions
 
-use std::{
-    collections::HashMap,
-    ffi::{CStr, CString},
-    os::raw::{c_char, c_int},
-    ptr,
-    sync::Arc,
-};
-
 use once_cell::sync::Lazy;
 use serde_json::Value;
-use smg::{
-    protocols::common::{
-        FunctionCallDelta, StringOrArray, Tool, ToolCallDelta, ToolChoice, ToolChoiceValue, Usage,
-    },
-    tokenizer::{stop::StopSequenceDecoder, stream::DecodeStream, traits::Tokenizer},
-    tool_parser::ToolParser,
+use std::collections::HashMap;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int};
+use std::ptr;
+use std::sync::Arc;
+use tokio::runtime::Runtime;
+
+use smg::protocols::common::{
+    FunctionCallDelta, StringOrArray, Tool, ToolCallDelta, ToolChoice, ToolChoiceValue, Usage,
 };
+use smg::tokenizer::stop::StopSequenceDecoder;
+use smg::tokenizer::stream::DecodeStream;
+use smg::tokenizer::traits::Tokenizer;
+use smg::tool_parser::ToolParser;
 use smg_grpc_client::sglang_proto as proto;
 use tokio::runtime::Runtime;
 
-use super::{
-    error::{clear_error_message, set_error_message, SglErrorCode},
-    tokenizer::TokenizerHandle,
-    utils::generate_tool_call_id,
-};
+use super::error::{clear_error_message, set_error_message, SglErrorCode};
+use super::router_utils::create_stop_decoder;
+use super::tokenizer::TokenizerHandle;
+use super::utils::generate_tool_call_id;
 
 /// Global parser factory (initialized once)
 // Use the re-exported ParserFactory from tool_parser module
@@ -71,10 +69,15 @@ pub struct GrpcResponseConverterHandle {
 /// * `stop` - Optional stop sequences (JSON array)
 /// * `stop_token_ids` - Optional stop token IDs (JSON array)
 /// * `skip_special_tokens` - Whether to skip special tokens
+/// * `initial_prompt_tokens` - Prompt token count for this request; negative means unknown
 /// * `error_out` - Optional pointer to receive error message
 ///
 /// # Returns
 /// * Pointer to GrpcResponseConverterHandle on success, null on failure
+///
+/// # Safety
+/// `tokenizer_handle` must be live; `model` and `request_id` must be
+/// NUL-terminated UTF-8; the optional JSON arguments must be null or valid C strings.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_create(
     tokenizer_handle: *mut TokenizerHandle,
@@ -85,6 +88,7 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
     stop: *const c_char,
     stop_token_ids: *const c_char,
     skip_special_tokens: c_int,
+    initial_prompt_tokens: c_int,
     error_out: *mut *mut c_char,
 ) -> *mut GrpcResponseConverterHandle {
     if tokenizer_handle.is_null() || model.is_null() || request_id.is_null() {
@@ -155,15 +159,13 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
 
     // Create stop decoder if needed
     let stop_decoder = if stop.is_some() || stop_token_ids.is_some() {
-        Some(Arc::new(tokio::sync::Mutex::new(
-            smg::routers::grpc::utils::create_stop_decoder(
-                &tokenizer,
-                stop.as_ref(),
-                stop_token_ids.as_ref(),
-                skip_special_tokens != 0,
-                false, // no_stop_trim
-            ),
-        )))
+        Some(Arc::new(tokio::sync::Mutex::new(create_stop_decoder(
+            &tokenizer,
+            stop.as_ref(),
+            stop_token_ids.as_ref(),
+            skip_special_tokens != 0,
+            false, // no_stop_trim
+        ))))
     } else {
         None
     };
@@ -201,7 +203,11 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
         is_first_chunk: HashMap::new(),
         prompt_tokens: HashMap::new(),
         completion_tokens: HashMap::new(),
-        initial_prompt_tokens: None, // Will be set from stream handle
+        initial_prompt_tokens: if initial_prompt_tokens >= 0 {
+            Some(initial_prompt_tokens)
+        } else {
+            None
+        },
         skip_special_tokens: skip_special_tokens != 0,
     }))
 }
@@ -216,6 +222,10 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `response_json` must be NUL-terminated UTF-8;
+/// `result_json_out` must be writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_convert_chunk(
     handle: *mut GrpcResponseConverterHandle,
@@ -792,6 +802,10 @@ pub(crate) async fn convert_proto_chunk_to_openai(
 }
 
 /// Free a gRPC response converter handle
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by
+/// `sgl_grpc_response_converter_create` that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_free(
     handle: *mut GrpcResponseConverterHandle,

@@ -1,25 +1,19 @@
 //! Tool parser FFI functions
 
-use std::{
-    collections::HashMap,
-    ffi::{CStr, CString},
-    os::raw::c_char,
-    ptr,
-    sync::Arc,
-};
-
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
-use smg::{
-    protocols::common::Tool,
-    tool_parser::{ParserFactory, ToolParser},
-};
+use std::collections::HashMap;
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+use std::ptr;
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-use super::{
-    error::{clear_error_message, set_error_message, SglErrorCode},
-    utils::generate_tool_call_id,
-};
+use smg::protocols::common::Tool;
+use smg::tool_parser::{ParserFactory, ToolParser};
+
+use super::error::{clear_error_message, set_error_message, SglErrorCode};
+use super::utils::generate_tool_call_id;
 
 /// Global parser factory (initialized once)
 static PARSER_FACTORY: Lazy<ParserFactory> = Lazy::new(ParserFactory::new);
@@ -46,6 +40,9 @@ pub struct ToolParserHandle {
 ///
 /// # Returns
 /// * Pointer to ToolParserHandle on success, null on failure
+///
+/// # Safety
+/// `parser_type` must be a valid NUL-terminated UTF-8 string.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_create(
     parser_type: *const c_char,
@@ -93,6 +90,10 @@ pub unsafe extern "C" fn sgl_tool_parser_create(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `text` must be NUL-terminated UTF-8; `result_json_out`
+/// must be writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_parse_complete(
     handle: *mut ToolParserHandle,
@@ -188,6 +189,10 @@ pub unsafe extern "C" fn sgl_tool_parser_parse_complete(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `chunk` must be NUL-terminated UTF-8 and `tools_json`
+/// null or UTF-8; `result_json_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_parse_incremental(
     handle: *mut ToolParserHandle,
@@ -218,7 +223,6 @@ pub unsafe extern "C" fn sgl_tool_parser_parse_incremental(
                 return SglErrorCode::InvalidArgument;
             }
         };
-        // If parsing fails, use empty tools
         serde_json::from_str::<Vec<Tool>>(tools_str).unwrap_or_default()
     } else {
         vec![]
@@ -307,6 +311,9 @@ pub unsafe extern "C" fn sgl_tool_parser_parse_incremental(
 }
 
 /// Reset the parser state for reuse
+///
+/// # Safety
+/// `handle` must be null or a live pointer returned by `sgl_tool_parser_create`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_reset(handle: *mut ToolParserHandle) {
     if handle.is_null() {
@@ -328,6 +335,10 @@ pub unsafe extern "C" fn sgl_tool_parser_reset(handle: *mut ToolParserHandle) {
 }
 
 /// Free a tool parser handle
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by `sgl_tool_parser_create` that
+/// has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_free(handle: *mut ToolParserHandle) {
     if !handle.is_null() {

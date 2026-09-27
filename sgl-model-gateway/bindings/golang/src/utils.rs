@@ -33,6 +33,10 @@ pub fn generate_tool_call_id(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// The out pointers must be null or writable `char**`; only `error_out` is
+/// ever written.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_generate_tool_constraints(
     _tools_json: *const std::os::raw::c_char,

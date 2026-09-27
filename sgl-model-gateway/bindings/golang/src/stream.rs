@@ -15,25 +15,21 @@
 //! - Ensure proper pointer lifetime management
 //! - Call corresponding free functions for cleanup
 
-use std::{
-    ffi::CString,
-    os::raw::{c_char, c_int},
-    ptr,
-    sync::Arc,
-};
-
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
+use std::ffi::CString;
+use std::os::raw::{c_char, c_int};
+use std::ptr;
+use std::sync::Arc;
+use tokio::runtime::Runtime;
+
 use smg_grpc_client::{
     sglang_proto as proto,
     sglang_scheduler::{AbortOnDropStream, SglangSchedulerClient},
 };
-use tokio::runtime::Runtime;
 
-use super::{
-    error::{set_error_message, SglErrorCode},
-    grpc_converter::{convert_proto_chunk_to_openai, GrpcResponseConverterHandle},
-};
+use super::error::{set_error_message, SglErrorCode};
+use super::grpc_converter::{convert_proto_chunk_to_openai, GrpcResponseConverterHandle};
 
 /// Global tokio runtime for async operations
 static RUNTIME: Lazy<Runtime> =

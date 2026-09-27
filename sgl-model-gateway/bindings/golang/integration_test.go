@@ -11,6 +11,7 @@ package sglang
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"testing"
@@ -54,7 +55,7 @@ func TestIntegrationNonStreamingCompletion(t *testing.T) {
 			{Role: "user", Content: "Say 'Hello, World!' only"},
 		},
 		Stream:              false,
-		Temperature:         float32Ptr(0.0),
+		Temperature:         floatPtr(0.0),
 		MaxCompletionTokens: intPtr(50),
 	}
 
@@ -75,7 +76,7 @@ func TestIntegrationNonStreamingCompletion(t *testing.T) {
 		t.Error("Response content is empty")
 	}
 
-	if resp.Usage == nil || resp.Usage.TotalTokens == 0 {
+	if resp.Usage.TotalTokens == 0 {
 		t.Error("Usage information is missing or invalid")
 	}
 
@@ -102,7 +103,7 @@ func TestIntegrationStreamingCompletion(t *testing.T) {
 			{Role: "user", Content: "Count from 1 to 5"},
 		},
 		Stream:              true,
-		Temperature:         float32Ptr(0.0),
+		Temperature:         floatPtr(0.0),
 		MaxCompletionTokens: intPtr(100),
 	}
 
@@ -116,13 +117,18 @@ func TestIntegrationStreamingCompletion(t *testing.T) {
 	totalContent := ""
 
 	for {
-		chunk, err := stream.Recv()
+		chunkJSON, err := stream.RecvJSON()
 		if err == io.EOF {
 			// io.EOF is expected at end of stream
 			break
 		}
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
+		}
+
+		var chunk ChatCompletionStreamResponse
+		if err := json.Unmarshal([]byte(chunkJSON), &chunk); err != nil {
+			t.Fatalf("Failed to parse stream chunk: %v", err)
 		}
 
 		chunkCount++
@@ -216,13 +222,4 @@ func TestIntegrationContextCancellation(t *testing.T) {
 	}
 
 	t.Logf("Cancelled context handled: %v", err)
-}
-
-// Helper functions
-func float32Ptr(f float32) *float32 {
-	return &f
-}
-
-func intPtr(i int) *int {
-	return &i
 }

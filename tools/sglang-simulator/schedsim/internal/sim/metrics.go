@@ -5,288 +5,433 @@ import (
 	"sort"
 )
 
-type delivery struct {
-	t   float64
-	gap float64
-	n   float64
-}
-
-type reqLog struct {
-	req        *Request
-	arrival    float64
-	firstToken float64
-	finish     float64
-	deliveries []delivery
-	recompute  bool
-}
-
-// Recorder collects what the metrics are computed from.
-type Recorder struct {
-	logs  map[*Request]*reqLog
-	order []*reqLog
-
-	End         float64
-	Stuck       bool
-	Retractions int
-	// Drained is true when the run went on until every request finished.
-	Drained bool
-
-	PrefillSeconds, DecodeSeconds float64
-	spans                         []span
-}
-
-type span struct {
-	start, end float64
-	isPrefill  bool
-}
-
-func newRecorder() *Recorder { return &Recorder{logs: map[*Request]*reqLog{}} }
-
-func (rc *Recorder) arrived(r *Request) {
-	if _, ok := rc.logs[r]; ok {
-		return
-	}
-	l := &reqLog{req: r, arrival: r.Arrival, firstToken: math.NaN(), finish: math.NaN()}
-	rc.logs[r] = l
-	rc.order = append(rc.order, l)
-}
-
-// matched counts a returning conversation that lost at least half its
-// previous context from both tiers.
-func (rc *Recorder) matched(r *Request, hit int) {
-	if r.Conv.Finished > 0 && 2*hit < r.Conv.Len {
-		rc.logs[r].recompute = true
-	}
-}
-
-func (rc *Recorder) launched(b *batch) {
-	if b.isPrefill {
-		rc.PrefillSeconds += b.end - b.start
-	} else {
-		rc.DecodeSeconds += b.end - b.start
-	}
-	rc.spans = append(rc.spans, span{b.start, b.end, b.isPrefill})
-}
-
-func (rc *Recorder) delivered(r *Request, t, n float64) {
-	l := rc.logs[r]
-	if math.IsNaN(l.firstToken) {
-		l.firstToken = t
-		r.lastToken = t
-		l.deliveries = append(l.deliveries, delivery{t: t, n: n})
-		return
-	}
-	l.deliveries = append(l.deliveries, delivery{t: t, gap: t - r.lastToken, n: n})
-	r.lastToken = t
-}
-
-func (rc *Recorder) finished(r *Request) { rc.logs[r].finish = r.finish }
-
-// Metrics are one run's outcome.
+// Metrics is the seven measurements the comparison is judged on, plus the
+// supporting columns the spec asks to report alongside them. Every one is a pure
+// function of the run trace, so two runs with the same trace report the same
+// numbers.
 type Metrics struct {
-	// StreamRate is tokens per second a decoding request receives while a cold.
-	StreamRate float64
-	// Stall is the longest gap between tokens of one stream.
-	Stall float64
-	// ColdTTFT is the mean cold-prompt TTFT, or the mean TTFT of all requests when the workload has no cold prompt.
-	ColdTTFT float64
-	ITLp99   float64
-	ITLp999  float64
-	// Throughput is output tokens per second over the run.
-	Throughput float64
-	// Tokens are the output tokens delivered by the end of the run.
-	Tokens float64
-	// Drained is true when the run went on until every request finished.
-	Drained bool
-	// Recomputes counts returning turns whose cached context was lost.
+	// 1: tokens per second per stream, over the seconds each agent stream spent
+	// past its first token inside a cold prefill's window.
+	StreamDecodeTokSCold float64
+	// 2: the same tokens over the cold window times every agent conversation, so
+	// a follow-up stuck in the queue shows up as a lost rate.
+	PerAgentTokSCold float64
+	// 3: the longest gap between consecutive deliveries of any stream.
+	LongestStall float64
+	// 4: time to first token of the cold prompts.
+	ColdTTFTMean, ColdTTFTMax float64
+	// 5 and 6: inter-token latency percentiles, each gap spread over the tokens
+	// its chunk carried, which is what a per-token claim compares against.
+	ITLp99, ITLp999 float64
+	// 7: output tokens per second over the window, and full-prefix recomputes.
+	OutputTokS float64
 	Recomputes int
 
-	TurnTTFTp50, TurnTTFTp99 float64
-	Completed                int
-	Stuck                    bool
-
-	// Gaps counts inter-token gaps over all streams.
-	Gaps float64
-	// Cold TTFT windows: length, decode and prefill seconds inside.
-	WindowSeconds, WindowDecode, WindowPrefill, WindowStreams float64
+	// Supporting columns.
+	StallFrac1s    float64
+	LowGenLines    int
+	DecodeLogLines int
+	CompletedTurns int
+	GPUBusyShare   float64
+	DecodeShare    float64
+	TurnTTFTp50    float64
+	TurnTTFTp99    float64
+	ITLp50         float64
+	ITLp99Raw      float64
+	ColdArrived    int
+	ColdServed     int
+	ShortTTFTp50   float64
+	ShortTTFTp99   float64
 }
 
-// Metrics reduces the recorded run.
-func (rc *Recorder) Metrics() Metrics {
+// MetricKey names one of the seven metrics the contract is written over.
+type MetricKey int
+
+const (
+	MStreamRate MetricKey = iota
+	MAgentRate
+	MLongestStall
+	MColdTTFT
+	MITLp99
+	MITLp999
+	MThroughput
+	MRecomputes
+)
+
+// ContractMetrics is the ordered list of the seven metrics.
+var ContractMetrics = []MetricKey{MStreamRate, MAgentRate, MLongestStall, MColdTTFT,
+	MITLp99, MITLp999, MThroughput, MRecomputes}
+
+func (k MetricKey) String() string {
+	switch k {
+	case MStreamRate:
+		return "stream decode tok/s in cold"
+	case MAgentRate:
+		return "per-agent tok/s in cold"
+	case MLongestStall:
+		return "longest stall"
+	case MColdTTFT:
+		return "cold TTFT mean"
+	case MITLp99:
+		return "ITL p99"
+	case MITLp999:
+		return "ITL p99.9"
+	case MThroughput:
+		return "output tok/s"
+	default:
+		return "full-prefix recomputes"
+	}
+}
+
+// HigherIsBetter states the metric's direction: rates and completed work want to
+// rise, stalls and recomputes want to fall.
+func (k MetricKey) HigherIsBetter() bool {
+	switch k {
+	case MStreamRate, MAgentRate, MThroughput:
+		return true
+	default:
+		return false
+	}
+}
+
+// Value reads one metric out of a measurement.
+func (m Metrics) Value(k MetricKey) float64 {
+	switch k {
+	case MStreamRate:
+		return m.StreamDecodeTokSCold
+	case MAgentRate:
+		return m.PerAgentTokSCold
+	case MLongestStall:
+		return m.LongestStall
+	case MColdTTFT:
+		return m.ColdTTFTMean
+	case MITLp99:
+		return m.ITLp99
+	case MITLp999:
+		return m.ITLp999
+	case MThroughput:
+		return m.OutputTokS
+	default:
+		return float64(m.Recomputes)
+	}
+}
+
+// interval is a merged stretch of cold-prefill time.
+type interval struct{ lo, hi float64 }
+
+// Measure reduces a run's trace to the metrics, over [0, window].
+func Measure(res *Result, window float64) Metrics {
 	var m Metrics
-	m.Stuck = rc.Stuck
-	end := rc.End
-	var windows [][2]float64
-	var coldTTFT, allTTFT, turnTTFT []float64
-	for _, l := range rc.order {
-		ft := l.firstToken
-		if math.IsNaN(ft) {
-			ft = end
-		}
-		allTTFT = append(allTTFT, ft-l.arrival)
-		if l.req.Kind == Cold {
-			coldTTFT = append(coldTTFT, ft-l.arrival)
-			windows = append(windows, [2]float64{l.arrival, ft})
-		} else {
-			turnTTFT = append(turnTTFT, ft-l.arrival)
-		}
-		if l.recompute {
-			m.Recomputes++
-		}
-		if !math.IsNaN(l.finish) {
-			m.Completed++
+	if window <= 0 {
+		window = res.End
+	}
+	wins := coldWindows(res, window)
+	m.ColdArrived = len(res.Windows)
+	for _, w := range res.Windows {
+		if w.Done() {
+			m.ColdServed++
 		}
 	}
-	if len(coldTTFT) > 0 {
-		m.ColdTTFT = mean(coldTTFT)
+	// Cold TTFT over the prompts that reached a first token; the arrived/served
+	// count is reported beside it so an unserved prompt cannot hide a number. A
+	// workload with no cold prompt has no value to report, not a zero one.
+	var ttft []float64
+	for _, w := range res.Windows {
+		if w.Done() {
+			ttft = append(ttft, w.FirstTok-w.Arrival)
+		}
+	}
+	m.ColdTTFTMean, m.ColdTTFTMax = meanOf(ttft), maxOf(ttft)
+	if len(ttft) == 0 {
+		m.ColdTTFTMean = math.NaN()
+	}
+
+	var agent []float64
+	agent = coldTokens(res, wins)
+	if len(wins) == 0 {
+		m.StreamDecodeTokSCold = math.NaN()
+	} else if secs := streamSeconds(res, wins); secs > 0 {
+		m.StreamDecodeTokSCold = sum(agent) / secs
+	}
+	if res.Agents > 0 && len(wins) > 0 {
+		m.PerAgentTokSCold = sum(agent) / (spanOf(wins) * float64(res.Agents))
 	} else {
-		m.ColdTTFT = mean(allTTFT)
+		m.PerAgentTokSCold = math.NaN()
 	}
-	m.TurnTTFTp50 = quantile(turnTTFT, 0.5)
-	m.TurnTTFTp99 = quantile(turnTTFT, 0.99)
-	if len(windows) == 0 {
-		windows = [][2]float64{{0, end}}
-	}
-	windows = mergeWindows(windows)
 
-	var gaps []float64
-	var total, streamTokens, streamSecs, decodeSecs float64
-	for _, l := range rc.order {
-		for _, d := range l.deliveries {
-			if d.t <= end {
-				total += d.n
+	m.LongestStall = maxOf(gaps(res, func(*Request) bool { return true }))
+	itl := spread(res, func(*Request) bool { return true })
+	m.ITLp50, m.ITLp99, m.ITLp999 = pct(itl, 50), pct(itl, 99), pct(itl, 99.9)
+	m.ITLp99Raw = pct(gaps(res, func(*Request) bool { return true }), 99)
+	m.StallFrac1s = stalledFraction(res, window)
+
+	out := 0
+	for _, r := range res.Requests {
+		for _, d := range r.Deliveries {
+			if d.T <= window {
+				out += d.N
 			}
-			if d.gap > 0 {
-				gaps = append(gaps, d.gap)
-				m.Stall = math.Max(m.Stall, d.gap)
-			}
 		}
-		if math.IsNaN(l.firstToken) {
-			continue
+		if r.Finish >= 0 && r.Finish <= window {
+			m.CompletedTurns++
 		}
-		stop := end
-		if !math.IsNaN(l.finish) {
-			stop = l.finish
-		} else {
-			// A stream still waiting at the end is stalled until then.
-			m.Stall = math.Max(m.Stall, end-l.req.lastToken)
-		}
-		decodeSecs += overlap(windows, l.firstToken, stop)
-		if l.req.Kind == Cold {
-			continue
-		}
-		streamSecs += overlap(windows, l.firstToken, stop)
-		for _, d := range l.deliveries[1:] {
-			if inWindows(windows, d.t) {
-				streamTokens += d.n
+	}
+	if window > 0 {
+		m.OutputTokS = float64(out) / window
+	}
+	recomp := 0
+	for _, n := range res.Pool.Recomputes {
+		recomp += n
+	}
+	m.Recomputes = recomp
+
+	for _, l := range res.DecodeLog {
+		if l.T <= window {
+			m.DecodeLogLines++
+			if l.Gen < 25 {
+				m.LowGenLines++
 			}
 		}
 	}
-	if streamSecs > 0 {
-		m.StreamRate = streamTokens / streamSecs
+	busy, dec := busySeconds(res, window)
+	m.GPUBusyShare = busy / window
+	if busy > 0 {
+		m.DecodeShare = dec / busy
 	}
-	if end > 0 {
-		m.Throughput = total / end
-	}
-	m.Tokens = total
-	m.Drained = rc.Drained
-	m.ITLp99 = quantile(gaps, 0.99)
-	m.ITLp999 = quantile(gaps, 0.999)
-	m.Gaps = float64(len(gaps))
-	if len(coldTTFT) > 0 {
-		for _, w := range windows {
-			m.WindowSeconds += w[1] - w[0]
-		}
-		for _, s := range rc.spans {
-			if s.isPrefill {
-				m.WindowPrefill += overlap(windows, s.start, s.end)
-			} else {
-				m.WindowDecode += overlap(windows, s.start, s.end)
-			}
-		}
-		m.WindowStreams = decodeSecs / m.WindowSeconds
-	}
+	turn := ttfts(res, func(r *Request) bool { return r.Kind == KindAgent })
+	m.TurnTTFTp50, m.TurnTTFTp99 = pct(turn, 50), pct(turn, 99)
+	short := ttfts(res, func(r *Request) bool { return r.Kind == KindShort })
+	m.ShortTTFTp50, m.ShortTTFTp99 = pct(short, 50), pct(short, 99)
 	return m
 }
 
-// Mean averages every metric over runs; Stuck is true if any run stuck.
-func Mean(runs []Metrics) Metrics {
-	var m Metrics
-	n := float64(len(runs))
-	for _, r := range runs {
-		m.StreamRate += r.StreamRate / n
-		m.Stall += r.Stall / n
-		m.ColdTTFT += r.ColdTTFT / n
-		m.ITLp99 += r.ITLp99 / n
-		m.ITLp999 += r.ITLp999 / n
-		m.Throughput += r.Throughput / n
-		m.Tokens += r.Tokens / n
-		m.Drained = r.Drained
-		m.Recomputes += r.Recomputes
-		m.TurnTTFTp50 += r.TurnTTFTp50 / n
-		m.TurnTTFTp99 += r.TurnTTFTp99 / n
-		m.Completed += r.Completed
-		m.Stuck = m.Stuck || r.Stuck
-		m.Gaps += r.Gaps / n
-		m.WindowSeconds += r.WindowSeconds / n
-		m.WindowDecode += r.WindowDecode / n
-		m.WindowPrefill += r.WindowPrefill / n
-		m.WindowStreams += r.WindowStreams / n
+// coldWindows merges the cold prompts' prefill stretches, clipped to the run
+// window. A prompt that never reached its first token keeps a window that runs
+// to the end of the measurement, so the streams it crowded out are still
+// counted against the policy that left it unserved.
+func coldWindows(res *Result, window float64) []interval {
+	var raw []interval
+	for _, w := range res.Windows {
+		hi := w.FirstTok
+		if !w.Done() {
+			hi = minF(window, res.End)
+		}
+		hi = minF(hi, window)
+		if hi > w.Arrival {
+			raw = append(raw, interval{w.Arrival, hi})
+		}
 	}
-	return m
-}
-
-func mean(xs []float64) float64 {
-	if len(xs) == 0 {
-		return 0
-	}
-	s := 0.0
-	for _, x := range xs {
-		s += x
-	}
-	return s / float64(len(xs))
-}
-
-func quantile(xs []float64, q float64) float64 {
-	if len(xs) == 0 {
-		return 0
-	}
-	s := append([]float64(nil), xs...)
-	sort.Float64s(s)
-	i := int(math.Ceil(q*float64(len(s)))) - 1
-	return s[max(0, min(i, len(s)-1))]
-}
-
-func mergeWindows(ws [][2]float64) [][2]float64 {
-	sort.Slice(ws, func(i, j int) bool { return ws[i][0] < ws[j][0] })
-	out := [][2]float64{ws[0]}
-	for _, w := range ws[1:] {
-		last := &out[len(out)-1]
-		if w[0] <= last[1] {
-			last[1] = math.Max(last[1], w[1])
+	sort.Slice(raw, func(i, j int) bool { return raw[i].lo < raw[j].lo })
+	var out []interval
+	for _, in := range raw {
+		if n := len(out); n > 0 && in.lo <= out[n-1].hi {
+			if in.hi > out[n-1].hi {
+				out[n-1].hi = in.hi
+			}
 			continue
 		}
-		out = append(out, w)
+		out = append(out, in)
 	}
 	return out
 }
 
-func overlap(ws [][2]float64, a, b float64) float64 {
-	s := 0.0
-	for _, w := range ws {
-		lo, hi := math.Max(a, w[0]), math.Min(b, w[1])
-		if hi > lo {
-			s += hi - lo
-		}
-	}
-	return s
-}
-
-func inWindows(ws [][2]float64, t float64) bool {
-	for _, w := range ws {
-		if t > w[0] && t <= w[1] {
+func inWindows(wins []interval, t float64) bool {
+	for _, w := range wins {
+		if t >= w.lo && t <= w.hi {
 			return true
 		}
 	}
 	return false
+}
+
+func spanOf(wins []interval) float64 {
+	s := 0.0
+	for _, w := range wins {
+		s += w.hi - w.lo
+	}
+	return s
+}
+
+// coldTokens counts the agent streams' delivered tokens inside the cold windows.
+func coldTokens(res *Result, wins []interval) []float64 {
+	var out []float64
+	for _, r := range res.Requests {
+		if r.Kind != KindAgent {
+			continue
+		}
+		for _, d := range r.Deliveries {
+			if inWindows(wins, d.T) {
+				out = append(out, float64(d.N))
+			}
+		}
+	}
+	return out
+}
+
+// streamSeconds is the time each agent stream spent past its first token inside
+// the cold windows, summed over streams: metric 1's denominator.
+func streamSeconds(res *Result, wins []interval) float64 {
+	total := 0.0
+	for _, r := range res.Requests {
+		if r.Kind != KindAgent {
+			continue
+		}
+		for _, w := range wins {
+			lo := maxF(w.lo, r.FirstTok)
+			if r.FirstTok < 0 || lo >= w.hi {
+				continue
+			}
+			hi := w.hi
+			if r.Finish >= 0 && r.Finish < hi {
+				hi = r.Finish
+			}
+			if hi > lo {
+				total += hi - lo
+			}
+		}
+	}
+	return total
+}
+
+// gaps lists the interval between consecutive deliveries of each selected
+// stream after its first token.
+func gaps(res *Result, sel func(*Request) bool) []float64 {
+	var out []float64
+	for _, r := range res.Requests {
+		if !sel(r) || len(r.Deliveries) < 2 {
+			continue
+		}
+		for i := 1; i < len(r.Deliveries); i++ {
+			out = append(out, r.Deliveries[i].T-r.Deliveries[i-1].T)
+		}
+	}
+	return out
+}
+
+// spread lists per-token inter-token gaps: a chunk that carried N tokens over
+// T seconds contributes N samples of T/N.
+func spread(res *Result, sel func(*Request) bool) []float64 {
+	var out []float64
+	for _, r := range res.Requests {
+		if !sel(r) || len(r.Deliveries) < 2 {
+			continue
+		}
+		for i := 1; i < len(r.Deliveries); i++ {
+			n := r.Deliveries[i].N
+			if n < 1 {
+				n = 1
+			}
+			g := (r.Deliveries[i].T - r.Deliveries[i-1].T) / float64(n)
+			for k := 0; k < n; k++ {
+				out = append(out, g)
+			}
+		}
+	}
+	return out
+}
+
+// stalledFraction is the share of stream time spent inside a stall longer than
+// a second, which separates one unlucky stream from a system that stalls always.
+func stalledFraction(res *Result, window float64) float64 {
+	inStall, live := 0.0, 0.0
+	for _, r := range res.Requests {
+		if len(r.Deliveries) < 2 {
+			continue
+		}
+		end := r.Finish
+		if end < 0 || end > window {
+			end = window
+		}
+		for i := 1; i < len(r.Deliveries); i++ {
+			gap := r.Deliveries[i].T - r.Deliveries[i-1].T
+			if r.Deliveries[i-1].T >= end {
+				break
+			}
+			live += minF(gap, end-r.Deliveries[i-1].T)
+			if gap > 1 {
+				inStall += minF(gap, end-r.Deliveries[i-1].T)
+			}
+		}
+	}
+	if live <= 0 {
+		return math.NaN()
+	}
+	return inStall / live
+}
+
+func busySeconds(res *Result, window float64) (busy, decode float64) {
+	for _, b := range res.Batches {
+		if b.Start >= window {
+			continue
+		}
+		end := minF(b.End, window)
+		if end <= b.Start {
+			continue
+		}
+		busy += end - b.Start
+		if !b.IsPrefill {
+			decode += end - b.Start
+		}
+	}
+	return busy, decode
+}
+
+func ttfts(res *Result, sel func(*Request) bool) []float64 {
+	var out []float64
+	for _, r := range res.Requests {
+		if sel(r) && r.FirstTok >= 0 {
+			out = append(out, r.FirstTok-r.Arrival)
+		}
+	}
+	return out
+}
+
+// FindTag returns the scripted request with this tag, or nil.
+func FindTag(res *Result, tag string) *Request {
+	for _, r := range res.Requests {
+		if r.Tag == tag {
+			return r
+		}
+	}
+	return nil
+}
+
+// FindWindow returns the cold window a tagged prompt opened.
+func FindWindow(res *Result, tag string) (ColdWindow, bool) {
+	for _, w := range res.Windows {
+		if w.Tag == tag {
+			return w, true
+		}
+	}
+	return ColdWindow{}, false
+}
+
+func pct(v []float64, p float64) float64 {
+	if len(v) == 0 {
+		return math.NaN()
+	}
+	c := append([]float64(nil), v...)
+	sort.Float64s(c)
+	idx := p / 100 * float64(len(c)-1)
+	lo := int(math.Floor(idx))
+	hi := int(math.Ceil(idx))
+	return c[lo] + (c[hi]-c[lo])*(idx-float64(lo))
+}
+
+func maxOf(v []float64) float64 {
+	m := math.NaN()
+	for _, x := range v {
+		if math.IsNaN(m) || x > m {
+			m = x
+		}
+	}
+	return m
+}
+
+func sum(v []float64) float64 {
+	t := 0.0
+	for _, x := range v {
+		t += x
+	}
+	return t
 }

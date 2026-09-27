@@ -1,249 +1,207 @@
 package sim
 
-import (
-	"math"
-	"os"
-	"strconv"
-)
+// Balancer is PrefillDecodeBalancer (prefill_decode_balancer.py), shared by the
+// two balancing modes: Prev selects the balance floored at zero with no token
+// bound and no piggyback credit, and the default selects HEAD's rules.
+//
+// Elapsed time is charged at completion, from the previous completion (or the
+// batch's own launch when the GPU was idle), because the overlap scheduler
+// picks batch N+1 while batch N still runs.
+type Balancer struct {
+	Prev bool
+	// BurstTokens is the stall bound in prefill tokens; 0 means none.
+	BurstTokens int
+	// PiggybackCredit prices a mixed batch's decode rows out of its charge.
+	PiggybackCredit bool
 
-// balancer decides whether a prefill batch may run while decode has work.
-type balancer interface {
-	shouldDefer(prefillPending, decodeRunnable bool) bool
-	onLaunched(now float64, isPrefill bool, tokens, rows int)
-	onFinished(now float64)
+	Debt        float64
+	UnsettledPf float64
+	UnsettledDc float64
+	LastDecode  float64
+	UnsettledN  int
+	BurstUsed   int
+	// ExtendSecond and ExtendTokens are the running measurement behind
+	// prefill_seconds_per_token, which prices a mixed batch's decode rows. They
+	// count prefill batches only, so the rate stays a prefill rate.
+	ExtendSecond float64
+	ExtendTokens int
+	// LastPrefillSecond and LastPrefillTokens are the marginal rate of the last
+	// prefill batch: what a token cost at the context it attended over.
+	LastPrefillSecond float64
+	LastPrefillTokens int
+
+	inFlight []launched
+	busy     float64
 }
 
-type inFlight struct {
-	isPrefill bool
-	tokens    int
-	rows      int
-	contended bool
-	deferred  bool
+type launched struct {
+	IsPrefill bool
+	Tokens    int
+	Rows      int
 }
 
-// newBalancer mirrors python/sglang/srt/managers/scheduler_components/
-// prefill_decode_balancer.py on master.
-type newBalancer struct {
-	debt float64
-
-	unsettledPrefill, unsettledDecode float64
-	unsettledBatches                  int
-	inFlight                          []inFlight
-	busySince                         float64
-	extendSeconds                     float64
-	extendTokens                      int
-
-	contended   bool
-	burstOpen   bool
-	lastPrefill float64
-	run         float64
-	longest     float64
-	lastDecode  float64
-	target      float64
-
-	deferring          bool
-	lastDeferredDecode float64
-}
-
-var burstVariant = func() int {
-	v, _ := strconv.Atoi(os.Getenv("SCHEDSIM_BURST"))
-	return v
-}()
-
-var bankVariant, _ = strconv.Atoi(os.Getenv("SCHEDSIM_BANK"))
-
-// projected is the stall the running streams sit in once every prefill in
-// flight has finished, estimating each at the last prefill's time.
-func (b *newBalancer) projected() float64 {
-	p := b.run
-	for _, f := range b.inFlight {
-		if f.isPrefill {
-			p += b.lastPrefill
-		}
-		if !f.isPrefill || f.rows > 0 {
-			p = 0
-		}
+// NewBalancer builds the controller a mode selects. chunkSize is
+// chunked_prefill_size, used as the stall bound where the mode has one.
+func NewBalancer(f Features, chunkSize int) *Balancer {
+	b := &Balancer{Prev: f.Cede == CedeHalf}
+	if f.BurstTokens {
+		b.BurstTokens = chunkSize
 	}
-	return p
+	b.PiggybackCredit = f.PiggybackCredit
+	return b
 }
 
-// fits reports whether extra more prefill batches fit in the longest stall paid.
-func (b *newBalancer) fits(extra int) bool {
-	return b.lastPrefill > 0 && b.projected()+float64(extra)*b.lastPrefill <= b.longest
-}
-
-func (b *newBalancer) secondsPerToken() float64 {
-	if b.extendTokens == 0 {
+// PrefillSecondsPerToken is the measured cost of one prefill token so far; 0
+// before any prefill batch has finished.
+func (b *Balancer) PrefillSecondsPerToken() float64 {
+	if b.ExtendTokens == 0 {
 		return 0
 	}
-	return b.extendSeconds / float64(b.extendTokens)
+	return b.ExtendSecond / float64(b.ExtendTokens)
 }
 
-func (b *newBalancer) shouldDefer(prefillPending, decodeRunnable bool) bool {
-	b.deferring = b.decide(prefillPending, decodeRunnable)
-	return b.deferring
+// marginalSecondsPerToken is the last prefill batch's own cost per token, which
+// is the rate the next chunk of the same prompt faces: cost per token rises with
+// the context attention reads. 0 before any prefill batch has finished.
+func (b *Balancer) marginalSecondsPerToken() float64 {
+	if b.LastPrefillTokens == 0 {
+		return 0
+	}
+	return b.LastPrefillSecond / float64(b.LastPrefillTokens)
 }
 
-func (b *newBalancer) decide(prefillPending, decodeRunnable bool) bool {
-	b.contended = prefillPending && decodeRunnable
-	if !b.contended {
-		b.debt = 0
-		b.unsettledPrefill, b.unsettledDecode = 0, 0
-		b.unsettledBatches = 0
+// ShouldDeferPrefill is should_defer_prefill. Without contention the balance is
+// cleared and nothing is deferred; continuesChunk says the pending prefill work
+// is the next chunk of a request already being chunked.
+func (b *Balancer) ShouldDeferPrefill(prefillPending, decodeRunnable, continuesChunk bool) bool {
+	if !prefillPending || !decodeRunnable {
+		b.Debt = 0
+		b.UnsettledPf, b.UnsettledDc = 0, 0
+		b.UnsettledN = 0
+		b.BurstUsed = 0
 		return false
 	}
-	if b.unsettledBatches > 0 {
-		floor := 0.0
-		switch bankVariant {
-		case 1:
-			floor = -b.lastDecode
-		case 2:
-			floor = -b.lastDeferredDecode
+	if b.UnsettledN > 0 {
+		if b.Prev {
+			// Decode never banks credit: the balance stops at zero.
+			b.Debt = maxF(b.Debt+b.UnsettledPf-b.UnsettledDc, 0)
+		} else {
+			// At most the last decode batch overshoots into the next decision.
+			b.Debt = maxF(b.Debt+b.UnsettledPf-b.UnsettledDc, -b.LastDecode)
 		}
-		b.debt = math.Max(b.debt+b.unsettledPrefill-b.unsettledDecode, floor)
-		b.unsettledPrefill, b.unsettledDecode = 0, 0
-		b.unsettledBatches = 0
+		b.UnsettledPf, b.UnsettledDc = 0, 0
+		b.UnsettledN = 0
 	}
-	switch burstVariant {
-	case 1:
-		if b.burstOpen {
-			return true
-		}
-	case 2:
-		if b.burstOpen {
-			return !b.fits(1)
-		}
-	case 3:
-		if b.burstOpen && b.fits(1) {
-			return false
-		}
-	case 4:
-		if b.target > 0 && b.burstOpen {
-			return !(b.lastPrefill > 0 && b.projected()+b.lastPrefill <= b.target)
-		}
+	if b.Debt <= 0 && !b.prefillInFlight() {
+		b.BurstUsed = 0
 	}
-	return b.debt > 0
+	if b.BurstTokens == 0 {
+		return b.Debt > 0
+	}
+	if continuesChunk {
+		return b.BurstUsed > 0
+	}
+	return b.BurstUsed >= b.BurstTokens
 }
 
-// burstContinues reports whether the prefill batch being formed is followed by
-// another before decode runs, so it should not carry the decode rows.
-func (b *newBalancer) burstContinues(overlap, chunkContinues bool) bool {
-	overlapChunk := overlap && chunkContinues && !b.prefillInFlight()
-	switch burstVariant {
-	case 1:
-		return false
-	case 2:
-		return chunkContinues && b.fits(2)
-	case 3:
-		return overlapChunk || chunkContinues && b.fits(2)
-	case 4:
-		if b.target > 0 {
-			return chunkContinues && b.lastPrefill > 0 && b.projected()+2*b.lastPrefill <= b.target
-		}
+// PrefillTokenBudget caps the next prefill batch's tokens; -1 is Python's None.
+// continuesChunk picks which bound applies. A batch that continues a chunked
+// prompt is capped to the GPU seconds one chunk is worth at the measured average
+// rate, priced at the marginal rate this prompt's context is now paying: cost per
+// token rises with the context attention reads, so the token bound alone lets the
+// same 4096 tokens stall decode for three times the seconds they promise. A fresh
+// request cannot drift that far - its cost is bounded by its own length - so fresh
+// work keeps the token form, which is what lets several short prefills share one
+// burst instead of each waiting out a decode slice.
+func (b *Balancer) PrefillTokenBudget(continuesChunk bool) int {
+	if b.BurstTokens == 0 {
+		return -1
 	}
-	return overlapChunk
+	average := b.PrefillSecondsPerToken()
+	marginal := b.marginalSecondsPerToken()
+	if continuesChunk && average > 0 && marginal > 0 {
+		return maxI(0, int(float64(b.BurstTokens)*average/marginal))
+	}
+	if b.BurstUsed == 0 {
+		return -1
+	}
+	return b.BurstTokens - b.BurstUsed
 }
 
-func (b *newBalancer) onLaunched(now float64, isPrefill bool, tokens, rows int) {
+// OnLaunch records a launched batch, starting the busy clock when the GPU was
+// idle. tokens are the batch's extend tokens, rows the requests a mixed batch
+// decodes alongside them.
+func (b *Balancer) OnLaunch(isPrefill bool, tokens, rows int, now float64) {
 	if len(b.inFlight) == 0 {
-		b.busySince = now
+		b.busy = now
 	}
-	b.inFlight = append(b.inFlight, inFlight{isPrefill, tokens, rows, b.contended, b.deferring && !isPrefill})
-	b.burstOpen = isPrefill && rows == 0
+	b.inFlight = append(b.inFlight, launched{IsPrefill: isPrefill, Tokens: tokens, Rows: rows})
+	if isPrefill {
+		b.BurstUsed += tokens
+	}
 }
 
-func (b *newBalancer) onFinished(now float64) {
+// OnFinish charges the oldest launched batch the elapsed time, from the
+// previous completion rather than from its own launch.
+func (b *Balancer) OnFinish(now float64) {
 	if len(b.inFlight) == 0 {
 		return
 	}
-	elapsed := now - b.busySince
-	b.busySince = now
+	el := now - b.busy
+	b.busy = now
 	f := b.inFlight[0]
 	b.inFlight = b.inFlight[1:]
-	piggyback := math.Min(float64(f.rows)*b.secondsPerToken(), elapsed)
-	if f.tokens > 0 {
-		b.extendSeconds += elapsed
-		b.extendTokens += f.tokens
+	piggy := 0.0
+	if f.Rows > 0 && b.PiggybackCredit {
+		piggy = minF(float64(f.Rows)*b.PrefillSecondsPerToken(), el)
 	}
-	switch {
-	case !f.contended:
-		b.run = 0
-	case f.isPrefill:
-		b.lastPrefill = elapsed
-		b.run += elapsed
-		b.longest = math.Max(b.longest, b.run)
-		if f.rows > 0 {
-			b.run = 0
-		}
-	default:
-		b.run = 0
+	if f.IsPrefill && f.Tokens > 0 {
+		b.ExtendSecond += el
+		b.ExtendTokens += f.Tokens
+		b.LastPrefillSecond, b.LastPrefillTokens = el, f.Tokens
 	}
-	if !f.isPrefill {
-		b.lastDecode = elapsed
-		b.lastDeferredDecode = 0
-		if f.deferred {
-			b.lastDeferredDecode = elapsed
-		}
-	}
-	if f.isPrefill {
-		b.unsettledPrefill += elapsed - piggyback
+	if f.IsPrefill {
+		b.UnsettledPf += el - piggy
 	} else {
-		b.unsettledDecode += elapsed
+		b.UnsettledDc += el
+		b.LastDecode = el
 	}
-	b.unsettledBatches++
+	b.UnsettledN++
 }
 
-func (b *newBalancer) prefillInFlight() bool {
+func (b *Balancer) prefillInFlight() bool {
 	for _, f := range b.inFlight {
-		if f.isPrefill {
+		if f.IsPrefill {
 			return true
 		}
 	}
 	return false
 }
 
-type prevBalancer struct {
-	debt                              float64
-	unsettledPrefill, unsettledDecode float64
-	unsettledBatches                  int
-	inFlight                          []bool
-	busySince                         float64
+func maxF(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
-func (b *prevBalancer) shouldDefer(prefillPending, decodeRunnable bool) bool {
-	if !(prefillPending && decodeRunnable) {
-		b.debt = 0
-		b.unsettledPrefill, b.unsettledDecode = 0, 0
-		b.unsettledBatches = 0
-		return false
+func minF(a, b float64) float64 {
+	if a < b {
+		return a
 	}
-	if b.unsettledBatches > 0 {
-		b.debt = math.Max(b.debt+b.unsettledPrefill-b.unsettledDecode, 0)
-		b.unsettledPrefill, b.unsettledDecode = 0, 0
-		b.unsettledBatches = 0
-	}
-	return b.debt > 0
+	return b
 }
 
-func (b *prevBalancer) onLaunched(now float64, isPrefill bool, _, _ int) {
-	if len(b.inFlight) == 0 {
-		b.busySince = now
+func maxI(a, b int) int {
+	if a > b {
+		return a
 	}
-	b.inFlight = append(b.inFlight, isPrefill)
+	return b
 }
 
-func (b *prevBalancer) onFinished(now float64) {
-	if len(b.inFlight) == 0 {
-		return
+func minI(a, b int) int {
+	if a < b {
+		return a
 	}
-	elapsed := now - b.busySince
-	b.busySince = now
-	isPrefill := b.inFlight[0]
-	b.inFlight = b.inFlight[1:]
-	if isPrefill {
-		b.unsettledPrefill += elapsed
-	} else {
-		b.unsettledDecode += elapsed
-	}
-	b.unsettledBatches++
+	return b
 }

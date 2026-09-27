@@ -10,8 +10,8 @@ name: Fork CI
 # (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded.
 #
 #   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
-#                     + model gateway (fmt, clippy, cargo test, sglang-router wheel)
-#                     + gateway Go bindings (native lib, go test, examples)
+#                     + model gateway (fmt, clippy, cargo test, sglang-router wheel,
+#                       Go bindings build + go test)
 #   AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for
 #                     FORK_KERNEL_CUDA_ARCHS (default 120a: RTX PRO 6000 Blackwell), checked
 #                     against the ops this tree calls
@@ -267,6 +267,16 @@ jobs:
           cargo test
           cargo test -p smg-mcp
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/sglang-simulator/schedsim/go.mod
+
+      # The simulator is the proof artifact for scheduler changes, so its tests
+      # gate a push the same way the gateway's do.
+      - name: scheduler simulator tests
+        working-directory: tools/sglang-simulator/schedsim
+        run: go test ./... -count=1
+
   fork-gateway-wheel:
     needs: fork-plan
     # Same as upstream: ubuntu-22.04 keeps the wheel at manylinux_2_35.
@@ -316,20 +326,25 @@ jobs:
           path: sgl-model-gateway/bindings/python/dist/*.whl
           if-no-files-found: error
 
-  # bindings/golang is outside the gateway workspace: own lockfile, cache and target dir.
-  fork-gateway-go-bindings:
+  # bindings/golang is in the gateway workspace's `exclude`, so fork-gateway-test's
+  # fmt/clippy/test never compile it and a drifted FFI signature merges silently.
+  # Built through its own manifest instead, on the same x86_64 target as the rest.
+  fork-gateway-golang:
     needs: fork-plan
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: sgl-model-gateway/bindings/golang
-    env:
-      # cgo links the debug build of libsgl_model_gateway_go; the tests load it at run time.
-      CGO_LDFLAGS: -L${{ github.workspace }}/sgl-model-gateway/bindings/golang/target/debug
-      LD_LIBRARY_PATH: ${{ github.workspace }}/sgl-model-gateway/bindings/golang/target/debug
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sgl-model-gateway/bindings/golang/go.mod
+          # Two modules sit under this path (the bindings and examples/oai_server)
+          # and the action keys its cache on one go.sum.
+          cache: false
 
       - name: Install Rust, protoc and system deps
         working-directory: .
@@ -341,49 +356,40 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: sgl-model-gateway/bindings/golang
-          shared-key: fork-gateway-go
+          shared-key: fork-gateway-golang
           cache-on-failure: true
 
+      # No pre-commit hook covers Go, so this is the only thing holding the two
+      # trees this fork adds to the formatting the rest of them already uses.
+      - name: gofmt
+        working-directory: .
+        run: test -z "$(gofmt -l sgl-model-gateway/bindings/golang tools/sglang-simulator/schedsim)"
+
+      # Stable rustfmt: imports_granularity and group_imports in
+      # sgl-model-gateway/rustfmt.toml are nightly-only, so stable does not check
+      # import grouping. Run `cargo +nightly fmt --all` before widening this.
       - name: rustfmt
-        run: |
-          rustup toolchain install nightly --profile minimal --component rustfmt
-          cargo +nightly fmt -- --check
+        run: cargo fmt --all -- --check
 
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Build and test the native library
+      - name: cargo test
+        run: cargo test
+
+      - name: Build cdylib
+        run: make build-dev
+
+      # The cgo directives name the library but not the directory it sits in, and
+      # the Makefile's CGO_LDFLAGS is what supplies it, so a `go build` of the
+      # example binaries outside make cannot link.
+      - name: Build the Go SDK and examples
         run: |
-          cargo build
-          cargo test
+          make build-go BUILD_MODE=debug
+          make examples BUILD_MODE=debug
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: sgl-model-gateway/bindings/golang/go.mod
-          cache-dependency-path: |
-            sgl-model-gateway/bindings/golang/go.sum
-            sgl-model-gateway/bindings/golang/examples/oai_server/go.sum
-
-      - name: Go vet and unit tests
-        run: |
-          go vet ./...
-          go test ./...
-
-      - name: Build examples
-        run: |
-          go build -o "${RUNNER_TEMP}/go-examples/" ./examples/simple ./examples/streaming
-          cd examples/oai_server
-          go vet ./...
-          go build -o "${RUNNER_TEMP}/go-examples/oai_server" .
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: tools/sglang-simulator/schedsim/go.mod
-          cache-dependency-path: tools/sglang-simulator/schedsim/go.sum
-
-      - name: Scheduler simulator tests
-        working-directory: tools/sglang-simulator/schedsim
-        run: go test ./...
+      - name: Go tests against the cdylib
+        run: make test BUILD_MODE=debug
 
   # ------------------------------------------------------ sglang-kernel wheel
   fork-sgl-kernel-wheel:

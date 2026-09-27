@@ -8,22 +8,19 @@
 //! These functions are designed to be called for each stream chunk, but can be optimized
 //! with batching in the future.
 
-use std::{
-    ffi::{CStr, CString},
-    os::raw::{c_char, c_int},
-    ptr,
-    sync::Arc,
-};
+use serde_json::Value;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int};
+use std::ptr;
+use std::sync::Arc;
+
+use smg_grpc_client::sglang_proto as proto;
+
+use super::error::{set_error_message, SglErrorCode};
+use super::grpc_converter::GrpcResponseConverterHandle;
 
 use once_cell::sync::Lazy;
-use serde_json::Value;
-use smg_grpc_client::sglang_proto as proto;
 use tokio::runtime::Runtime;
-
-use super::{
-    error::{set_error_message, SglErrorCode},
-    grpc_converter::GrpcResponseConverterHandle,
-};
 
 /// Global tokio runtime for async operations
 static RUNTIME: Lazy<Runtime> =
@@ -45,6 +42,10 @@ static RUNTIME: Lazy<Runtime> =
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `converter_handle` must be live; `proto_chunk_json` must be NUL-terminated
+/// UTF-8; the out pointers must be null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_postprocess_stream_chunk(
     converter_handle: *mut GrpcResponseConverterHandle,
@@ -238,6 +239,10 @@ pub unsafe extern "C" fn sgl_postprocess_stream_chunk(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `converter_handle` must be live; `proto_chunks_json_array` must be
+/// NUL-terminated UTF-8; the out pointers must be null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_postprocess_stream_chunks_batch(
     converter_handle: *mut GrpcResponseConverterHandle,

@@ -1,13 +1,11 @@
 //! Tokenizer FFI functions
 
-use std::{
-    ffi::{CStr, CString},
-    os::raw::{c_char, c_int},
-    ptr,
-    sync::Arc,
-};
-
 use serde_json::Value;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int};
+use std::ptr;
+use std::sync::Arc;
+
 use smg::tokenizer::{
     chat_template::ChatTemplateParams, create_tokenizer_from_file,
     huggingface::HuggingFaceTokenizer, traits::Tokenizer as TokenizerTrait,
@@ -140,6 +138,10 @@ pub unsafe extern "C" fn sgl_tokenizer_encode(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `messages_json` must be NUL-terminated UTF-8 and
+/// `tools_json` null or UTF-8; `result_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
     handle: *mut TokenizerHandle,
@@ -212,9 +214,7 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
             add_generation_prompt: true,
             tools: tools_slice,
             documents: Some(&empty_docs),
-            template_kwargs: None,
-            // None: the HuggingFace tokenizer injects its own bos/eos/unk/pad tokens.
-            special_tokens: None,
+            ..Default::default()
         };
 
         match hf_tokenizer.apply_chat_template(&messages, params) {
@@ -257,6 +257,10 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `messages_json` must be NUL-terminated UTF-8;
+/// `result_out` must be writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
     handle: *mut TokenizerHandle,
@@ -301,9 +305,7 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
             add_generation_prompt: true, // Important: tells the model to start generating
             tools: Some(&empty_tools),
             documents: Some(&empty_docs),
-            template_kwargs: None,
-            // None: the HuggingFace tokenizer injects its own bos/eos/unk/pad tokens.
-            special_tokens: None,
+            ..Default::default()
         };
 
         match hf_tokenizer.apply_chat_template(&messages, params) {
@@ -348,6 +350,10 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `token_ids` must point to at least `token_count`
+/// readable `u32`s; `result_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_decode(
     handle: *mut TokenizerHandle,

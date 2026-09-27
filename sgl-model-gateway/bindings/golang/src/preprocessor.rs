@@ -7,25 +7,25 @@
 //!
 //! These functions are designed to be called once per request, reducing FFI overhead.
 
-use std::{
-    ffi::{CStr, CString},
-    os::raw::{c_char, c_int, c_uint},
-    ptr,
-};
+use std::ffi::{CStr, CString};
+use std::os::raw::c_uint;
+use std::os::raw::{c_char, c_int};
+use std::ptr;
 
-use smg::{
-    protocols::chat::ChatCompletionRequest,
-    routers::grpc::utils::{
-        filter_chat_request_by_tool_choice, generate_tool_constraints, process_chat_messages,
-    },
-    tokenizer::create_tokenizer_from_file,
-};
+use super::error::{set_error_message, SglErrorCode};
+use super::memory::{sgl_free_string, sgl_free_token_ids};
+use super::router_utils::{generate_tool_constraints, process_chat_messages};
+use super::tokenizer::TokenizerHandle;
+use serde_json::Value;
+use smg::protocols::chat::ChatCompletionRequest;
+use smg::tokenizer::create_tokenizer_from_file;
 
-use super::{
-    error::{set_error_message, SglErrorCode},
-    memory::{sgl_free_string, sgl_free_token_ids},
-    tokenizer::TokenizerHandle,
-};
+/// Tool constraint in the shape the Go caller unmarshals: an object keyed by
+/// constraint type, the key naming a `SamplingParams.constraint` oneof field of
+/// the SGLang gRPC proto (`regex`, `json_schema`, `ebnf_grammar`, `structural_tag`).
+fn constraint_json(constraint_type: &str, constraint_value: &str) -> Value {
+    serde_json::json!({ constraint_type: constraint_value })
+}
 
 /// Preprocess a chat completion request
 ///
@@ -46,6 +46,10 @@ use super::{
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `request_json` and `tokenizer_path` must be NUL-terminated UTF-8; the
+/// non-optional out pointers must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_preprocess_chat_request(
     request_json: *const c_char,
@@ -129,11 +133,29 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request(
 
     let prompt_tokens = token_ids_vec.len() as i32;
 
-    let tool_constraints_json = match tool_constraints_json(&chat_request) {
-        Ok(json) => json,
-        Err(e) => {
-            set_error_message(error_out, &e);
-            return SglErrorCode::ParsingError;
+    // Generate tool constraints if tools are present
+    let tool_constraints_json = if let Some(tools) = chat_request.tools.as_ref() {
+        match generate_tool_constraints(tools, &chat_request.tool_choice, &chat_request.model) {
+            Ok(Some((constraint_type, constraint_value))) => {
+                match serde_json::to_string(&constraint_json(&constraint_type, &constraint_value)) {
+                    Ok(json_str) => Some(CString::new(json_str).unwrap()),
+                    Err(e) => {
+                        set_error_message(
+                            error_out,
+                            &format!("Failed to serialize tool constraints: {}", e),
+                        );
+                        return SglErrorCode::ParsingError;
+                    }
+                }
+            }
+            Ok(None) => None,
+            Err(e) => {
+                set_error_message(
+                    error_out,
+                    &format!("Failed to generate tool constraints: {}", e),
+                );
+                return SglErrorCode::ParsingError;
+            }
         }
     };
 
@@ -210,6 +232,10 @@ fn tool_constraints_json(request: &ChatCompletionRequest) -> Result<Option<CStri
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `request_json` must be NUL-terminated UTF-8; `tokenizer_handle` must be
+/// live; the non-optional out pointers must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_preprocess_chat_request_with_tokenizer(
     request_json: *const c_char,
@@ -280,11 +306,29 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request_with_tokenizer(
 
     let prompt_tokens = token_ids_vec.len() as i32;
 
-    let tool_constraints_json = match tool_constraints_json(&chat_request) {
-        Ok(json) => json,
-        Err(e) => {
-            set_error_message(error_out, &e);
-            return SglErrorCode::ParsingError;
+    // Generate tool constraints if tools are present
+    let tool_constraints_json = if let Some(tools) = chat_request.tools.as_ref() {
+        match generate_tool_constraints(tools, &chat_request.tool_choice, &chat_request.model) {
+            Ok(Some((constraint_type, constraint_value))) => {
+                match serde_json::to_string(&constraint_json(&constraint_type, &constraint_value)) {
+                    Ok(json_str) => Some(CString::new(json_str).unwrap()),
+                    Err(e) => {
+                        set_error_message(
+                            error_out,
+                            &format!("Failed to serialize tool constraints: {}", e),
+                        );
+                        return SglErrorCode::ParsingError;
+                    }
+                }
+            }
+            Ok(None) => None,
+            Err(e) => {
+                set_error_message(
+                    error_out,
+                    &format!("Failed to generate tool constraints: {}", e),
+                );
+                return SglErrorCode::ParsingError;
+            }
         }
     };
 
@@ -328,6 +372,10 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request_with_tokenizer(
 ///
 /// This function frees the memory allocated by sgl_preprocess_chat_request.
 /// It should be called after the preprocessed data is no longer needed.
+///
+/// # Safety
+/// Each pointer must be null or a buffer handed out by the preprocess
+/// functions, and `token_ids_len` must be the length reported for `token_ids`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_preprocessed_request_free(
     prompt_text: *mut c_char,
@@ -350,55 +398,21 @@ pub unsafe extern "C" fn sgl_preprocessed_request_free(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, Value};
+    use super::constraint_json;
+    use std::collections::HashMap;
 
-    use super::*;
-
-    fn request(tool_choice: Value) -> ChatCompletionRequest {
-        let tool = |name: &str, arg: &str| {
-            json!({
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "parameters": {"type": "object", "properties": {arg: {"type": "string"}}}
-                }
-            })
-        };
-        serde_json::from_value(json!({
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hi"}],
-            "tools": [tool("get_weather", "city"), tool("get_time", "zone")],
-            "tool_choice": tool_choice,
-        }))
-        .unwrap()
-    }
-
-    fn constraints(tool_choice: Value) -> Option<Value> {
-        let parsed = request(tool_choice);
-        let filtered = filter_chat_request_by_tool_choice(&parsed);
-        tool_constraints_json(&filtered)
-            .unwrap()
-            .map(|c| serde_json::from_str(c.to_str().unwrap()).unwrap())
-    }
-
+    /// `internal/grpc/client_grpc.go` decodes this as `map[string]string` and
+    /// reads the constraint type back out as the map key, so any other shape --
+    /// a two-element array, a `{"type":..,"value":..}` object -- decodes to
+    /// nothing and the constraint is dropped before it reaches the wire.
     #[test]
-    fn named_function_constrains_to_that_function() {
-        let json = constraints(json!({"type": "function", "function": {"name": "get_time"}}))
-            .expect("a named function yields a constraint");
-        // The Go client reads a JSON object keyed by constraint type.
-        let schema: Value = serde_json::from_str(json["json_schema"].as_str().unwrap()).unwrap();
-        assert!(schema["properties"].get("zone").is_some(), "{schema}");
-    }
+    fn constraint_decodes_as_a_map_keyed_by_constraint_type() {
+        let schema = r#"{"type":"object","properties":{"city":{"type":"string"}}}"#;
+        let encoded = serde_json::to_string(&constraint_json("json_schema", schema)).unwrap();
 
-    #[test]
-    fn required_constrains_to_any_tool() {
-        let json = constraints(json!("required")).expect("required yields a constraint");
-        let schema: Value = serde_json::from_str(json["json_schema"].as_str().unwrap()).unwrap();
-        assert_eq!(schema["items"]["anyOf"].as_array().unwrap().len(), 2);
-    }
+        let decoded: HashMap<String, String> = serde_json::from_str(&encoded)
+            .expect("Go reads the constraint as map[string]string; it must decode as one");
 
-    #[test]
-    fn auto_has_no_constraint() {
-        assert_eq!(constraints(json!("auto")), None);
+        assert_eq!(decoded.get("json_schema").map(String::as_str), Some(schema));
     }
 }

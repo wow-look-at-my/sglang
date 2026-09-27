@@ -1439,17 +1439,11 @@ class Scheduler(
             rids.add(self.chunked_req.rid)
         return rids
 
-    def _mixes_decode_rows(self, chunk_tokens: int) -> bool:
-        """Whether the prefill batch being formed carries the running requests'
-        decode rows; with overlap only the last chunk of a two-chunk burst does."""
-        if not self.is_mixed_chunk:
-            return False
-        if self.prefill_decode_balancer is None or self.chunked_req is None:
-            return True
-        req = self.chunked_req
-        remaining = len(req.full_untruncated_fill_ids) - len(req.prefix_indices)
-        return not self.prefill_decode_balancer.chunk_follows(
-            chunk_continues=remaining > chunk_tokens
+    def _prefill_token_budget(self) -> Optional[int]:
+        if self.prefill_decode_balancer is None:
+            return None
+        return self.prefill_decode_balancer.prefill_token_budget(
+            continues_chunk=self.chunked_req is not None
         )
 
     def _arm_prefill_decode_interval(self, batch: Optional[ScheduleBatch]) -> None:

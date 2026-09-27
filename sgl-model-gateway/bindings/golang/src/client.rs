@@ -1,30 +1,22 @@
 //! Client SDK FFI functions
 
-use std::{
-    ffi::{CStr, CString},
-    os::raw::c_char,
-    ptr,
-    sync::Arc,
-};
-
 use once_cell::sync::Lazy;
-use smg::{
-    protocols::chat::ChatCompletionRequest,
-    routers::grpc::utils::{
-        filter_chat_request_by_tool_choice, generate_tool_constraints, process_chat_messages,
-    },
-    tokenizer::{create_tokenizer_from_file, traits::Tokenizer},
-};
-use smg_grpc_client::sglang_scheduler::SglangSchedulerClient;
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+use std::ptr;
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use super::{
-    error::{set_error_message, SglErrorCode},
-    grpc_converter::sgl_grpc_response_converter_create,
-    stream::SglangStreamHandle,
-    tokenizer::TokenizerHandle,
-};
+use super::error::{set_error_message, SglErrorCode};
+use super::grpc_converter::sgl_grpc_response_converter_create;
+use super::router_utils::{generate_tool_constraints, process_chat_messages};
+use super::stream::SglangStreamHandle;
+use super::tokenizer::TokenizerHandle;
+use smg::protocols::chat::ChatCompletionRequest;
+use smg::tokenizer::create_tokenizer_from_file;
+use smg::tokenizer::traits::Tokenizer;
+use smg_grpc_client::sglang_scheduler::SglangSchedulerClient;
 
 /// Global tokio runtime for async operations
 static RUNTIME: Lazy<Runtime> =
@@ -52,6 +44,10 @@ pub struct StreamRequestState {
 ///
 /// # Returns
 /// * Pointer to SglangClientHandle on success, null on failure
+///
+/// # Safety
+/// `endpoint` and `tokenizer_path` must be valid NUL-terminated UTF-8 strings;
+/// `error_out` must be null or a writable `char**`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_create(
     endpoint: *const c_char,
@@ -102,6 +98,10 @@ pub unsafe extern "C" fn sgl_client_create(
 }
 
 /// Free a client handle
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by `sgl_client_create` that has
+/// not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_free(handle: *mut SglangClientHandle) {
     if !handle.is_null() {
@@ -119,6 +119,10 @@ pub unsafe extern "C" fn sgl_client_free(handle: *mut SglangClientHandle) {
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `client_handle` must be live; `request_json` must be NUL-terminated UTF-8;
+/// `stream_handle_out` and `error_out` must be null or writable pointers.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_chat_completion_stream(
     client_handle: *mut SglangClientHandle,
@@ -260,6 +264,7 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
         } else {
             0
         },
+        prompt_tokens,
         error_out,
     );
 
@@ -284,9 +289,8 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
         let _ = CString::from_raw(ptr);
     }
 
-    // Create converter handle and set initial_prompt_tokens immediately
-    let mut converter_handle = *Box::from_raw(converter);
-    converter_handle.initial_prompt_tokens = Some(prompt_tokens);
+    // Take ownership of the converter so the stream handle can free it
+    let converter_handle = *Box::from_raw(converter);
 
     // Create stream handle with prompt_tokens
     *stream_handle_out = Box::into_raw(Box::new(SglangStreamHandle {

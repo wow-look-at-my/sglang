@@ -17,13 +17,14 @@ pub enum SglErrorCode {
 /// Helper to set error message in FFI output parameter
 ///
 /// # Safety
-/// `error_out` must be null or valid for writes.
+/// `error_out` must be null or point to a writable `*mut c_char`. A non-null
+/// `message` leak is intentional: the caller frees it with `sgl_free_string`.
 pub unsafe fn set_error_message(error_out: *mut *mut c_char, message: &str) {
     if !error_out.is_null() {
         if let Ok(cstr) = CString::new(message) {
-            *error_out = cstr.into_raw();
+            unsafe { *error_out = cstr.into_raw() };
         } else {
-            *error_out = ptr::null_mut();
+            unsafe { *error_out = ptr::null_mut() };
         }
     }
 }
@@ -31,21 +32,21 @@ pub unsafe fn set_error_message(error_out: *mut *mut c_char, message: &str) {
 /// Helper to set error message from format string
 ///
 /// # Safety
-/// `error_out` must be null or valid for writes.
+/// Inherits [`set_error_message`]'s requirement on `error_out`.
 pub unsafe fn set_error_message_fmt(error_out: *mut *mut c_char, fmt: std::fmt::Arguments) {
-    if !error_out.is_null() {
-        let msg = format!("{}", fmt);
-        set_error_message(error_out, &msg);
-    }
+    let msg = format!("{}", fmt);
+    unsafe { set_error_message(error_out, &msg) };
 }
 
 /// Helper to clear error message
 ///
 /// # Safety
-/// `error_out` must be null or valid for writes.
+/// `error_out` must be null or point to a writable `*mut c_char`. Any previous
+/// value is leaked rather than freed, since ownership may already have moved
+/// to the caller.
 pub unsafe fn clear_error_message(error_out: *mut *mut c_char) {
     if !error_out.is_null() {
-        *error_out = ptr::null_mut();
+        unsafe { *error_out = ptr::null_mut() };
     }
 }
 
