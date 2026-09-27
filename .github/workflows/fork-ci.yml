@@ -117,7 +117,8 @@ jobs:
           # can install it: PyPI (upstream releases) or this fork's release.
           KERNEL_AVAILABLE=false
           if curl -fsS --max-time 15 --retry 3 -o /dev/null "https://pypi.org/pypi/sglang-kernel/${KERNEL_VERSION}/json" \
-             || gh release view "sglang-kernel-v${KERNEL_VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+             || gh release view "sglang-kernel-v${KERNEL_VERSION}" --repo "$GITHUB_REPOSITORY" \
+                  --json assets --jq ".assets[].name" 2>/dev/null | grep -q "_x86_64\.whl$"; then
             KERNEL_AVAILABLE=true
           fi
 
@@ -440,25 +441,28 @@ jobs:
             echo "::error::no sglang-kernel wheel was built"; exit 1
           fi
           TAG="sglang-kernel-v${VERSION}"
+          # Releases here are immutable once published, so a release is created
+          # with its wheels in one call and never gets assets added later.
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            gh release create "$TAG" "${WHEELS[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "sglang-kernel ${VERSION}" \
               --notes "sglang-kernel ${VERSION} built from ${GITHUB_SHA}. Install: pip install sglang-kernel==${VERSION} --find-links https://github.com/${GITHUB_REPOSITORY}/releases/expanded_assets/${TAG}"
+            exit 0
           fi
           EXISTING=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           for WHEEL in "${WHEELS[@]}"; do
             NAME=$(basename "$WHEEL")
-            if printf '%s\n' "$EXISTING" | grep -qxF "$NAME"; then
-              if [ "$KERNEL_CHANGED" = true ]; then
-                # One version must mean one op set: a wheel already published under
-                # this version would silently lack whatever this change adds.
-                echo "::error::$NAME is already published; bump the kernel version (scripts/release/bump_kernel_version.py, then bump_kernel_version_to_sglang.py) to ship a changed kernel"
-                exit 1
-              fi
-              echo "$NAME already published; keeping it"
-            else
-              gh release upload "$TAG" "$WHEEL" --repo "$GITHUB_REPOSITORY"
+            if ! printf '%s\n' "$EXISTING" | grep -qxF "$NAME"; then
+              echo "::error::release $TAG is published without $NAME and cannot take new assets; bump the kernel version (scripts/release/bump_kernel_version.py)"
+              exit 1
             fi
+            if [ "$KERNEL_CHANGED" = true ]; then
+              # One version must mean one op set: a wheel already published under
+              # this version would silently lack whatever this change adds.
+              echo "::error::$NAME is already published; bump the kernel version (scripts/release/bump_kernel_version.py, then bump_kernel_version_to_sglang.py) to ship a changed kernel"
+              exit 1
+            fi
+            echo "$NAME already published; keeping it"
           done
 
   # ------------------------------------------------------------ serving image
