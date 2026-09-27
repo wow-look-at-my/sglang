@@ -121,11 +121,11 @@ func (w ColdWindow) Done() bool { return w.FirstTok >= 0 }
 
 // Result is one run: the trace every metric is computed from.
 type Result struct {
-	Cfg        Config
-	Requests   []*Request
-	Batches    []*Batch
-	DecodeLog  []DecodeLogLine
-	PrefillLog []PrefillLogLine
+	Cfg         Config
+	Requests    []*Request
+	Batches     []*Batch
+	DecodeLog   []DecodeLogLine
+	PrefillLog  []PrefillLogLine
 	// Windows lists every cold prompt's prefill stretch in arrival order; a
 	// Request's Win field is its index here.
 	Windows     []ColdWindow
@@ -155,15 +155,15 @@ type engine struct {
 	chunked *Request
 	running []*Request
 
-	now       float64
-	gpuFree   float64
-	inflight  []*Batch
-	future    []*Request
-	decodeCt  int
-	genSince  int
-	lastLogT  float64
-	cedeReq   *Request
-	cedeBase  int
+	now      float64
+	gpuFree  float64
+	inflight []*Batch
+	future   []*Request
+	decodeCt int
+	genSince int
+	lastLogT float64
+	cedeReq  *Request
+	cedeBase int
 	cededToks int
 }
 
@@ -174,9 +174,8 @@ func Run(sc Scenario, cfg Config, seed int64) *Result {
 	if sc.MaxRunning > 0 {
 		cfg.MaxRunning = sc.MaxRunning
 	}
-	if sc.HostMul > 0 {
-		cfg.HostMul = sc.HostMul
-	}
+	// A zero host tier is a deployment without HiCache, not an unset field.
+	cfg.HostMul = sc.HostMul
 	e := newEngine(cfg, sc.Build(seed, cfg.Cost))
 	e.run()
 	return e.res

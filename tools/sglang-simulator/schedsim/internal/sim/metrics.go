@@ -24,8 +24,8 @@ type Metrics struct {
 	// its chunk carried, which is what a per-token claim compares against.
 	ITLp99, ITLp999 float64
 	// 7: output tokens per second over the window, and full-prefix recomputes.
-	OutputTokS float64
-	Recomputes int
+	OutputTokS   float64
+	Recomputes   int
 
 	// Supporting columns.
 	StallFrac1s    float64
@@ -133,7 +133,8 @@ func Measure(res *Result, window float64) Metrics {
 		}
 	}
 	// Cold TTFT over the prompts that reached a first token; the arrived/served
-	// count is reported beside it so an unserved prompt cannot hide a number.
+	// count is reported beside it so an unserved prompt cannot hide a number. A
+	// workload with no cold prompt has no value to report, not a zero one.
 	var ttft []float64
 	for _, w := range res.Windows {
 		if w.Done() {
@@ -141,14 +142,21 @@ func Measure(res *Result, window float64) Metrics {
 		}
 	}
 	m.ColdTTFTMean, m.ColdTTFTMax = meanOf(ttft), maxOf(ttft)
+	if len(ttft) == 0 {
+		m.ColdTTFTMean = math.NaN()
+	}
 
 	var agent []float64
 	agent = coldTokens(res, wins)
-	if secs := streamSeconds(res, wins); secs > 0 {
+	if len(wins) == 0 {
+		m.StreamDecodeTokSCold = math.NaN()
+	} else if secs := streamSeconds(res, wins); secs > 0 {
 		m.StreamDecodeTokSCold = sum(agent) / secs
 	}
-	if n := res.Agents; n > 0 && len(wins) > 0 {
-		m.PerAgentTokSCold = sum(agent) / (spanOf(wins) * float64(n))
+	if res.Agents > 0 && len(wins) > 0 {
+		m.PerAgentTokSCold = sum(agent) / (spanOf(wins) * float64(res.Agents))
+	} else {
+		m.PerAgentTokSCold = math.NaN()
 	}
 
 	m.LongestStall = maxOf(gaps(res, func(*Request) bool { return true }))

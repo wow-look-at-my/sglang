@@ -1,6 +1,7 @@
 package sim
 
 import (
+	"math"
 	"runtime"
 	"sync"
 
@@ -92,7 +93,7 @@ func Pool(runs []*Result, window float64) Metrics {
 		return Measure(runs[0], window)
 	}
 	merged := &Result{Agents: runs[0].Agents, End: window, Pool: kv.New(0, 0)}
-	var out, util, share float64
+	var out, util, share, stream, agent, stalled float64
 	for _, r := range runs {
 		merged.Requests = append(merged.Requests, r.Requests...)
 		merged.Windows = append(merged.Windows, r.Windows...)
@@ -106,21 +107,60 @@ func Pool(runs []*Result, window float64) Metrics {
 		out += m.OutputTokS
 		util += m.GPUBusyShare
 		share += m.DecodeShare
+		stream += m.StreamDecodeTokSCold
+		agent += m.PerAgentTokSCold
+		stalled += m.StallFrac1s
 	}
 	m := Measure(merged, window)
 	n := float64(len(runs))
+	// These are per-run ratios: their denominators are that run's own cold windows
+	// and conversation count, so they are averaged across seeds. The latency
+	// percentiles pool their samples instead, which is what makes a p99 meaningful
+	// over five seeds rather than five separate p99s.
 	m.OutputTokS, m.GPUBusyShare, m.DecodeShare = out/n, util/n, share/n
+	m.StreamDecodeTokSCold, m.PerAgentTokSCold = stream/n, agent/n
+	if !isNaN(stalled) {
+		m.StallFrac1s = stalled / n
+	}
 	return m
 }
 
-// Cell compares one metric between two policies. HigherIsBetter states which
-// direction is an improvement; NaN means the metric is undefined for the
-// scenario, for example a cold-prefill rate in a workload with no cold prompt.
-type Cell struct {
-	Key   MetricKey
-	Old   float64
-	New   float64
-	Worse bool
+// PolicyIndex is a mode's position in a Row's arrays.
+func PolicyIndex(m Mode) int {
+	for i, x := range Modes {
+		if x == m {
+			return i
+		}
+	}
+	return -1
+}
+
+// PerSeed lists one metric's value for each seed of one policy, in seed order, so
+// a comparison can be read against the spread across seeds rather than against a
+// single pooled number.
+func (r Row) PerSeed(mode Mode, k MetricKey) []float64 {
+	out := make([]float64, len(r.Runs[PolicyIndex(mode)]))
+	for i, res := range r.Runs[PolicyIndex(mode)] {
+		out[i] = Measure(res, r.Scenario.Window).Value(k)
+	}
+	return out
+}
+
+// Spread reports the full range of a list of values as a fraction of its mean.
+func Spread(v []float64) float64 {
+	if len(v) < 2 {
+		return 0
+	}
+	lo, hi, total := v[0], v[0], 0.0
+	for _, x := range v {
+		lo, hi = minF(lo, x), maxF(hi, x)
+		total += x
+	}
+	mean := total / float64(len(v))
+	if mean == 0 {
+		return 0
+	}
+	return (hi - lo) / mean
 }
 
 // Better reports whether a is at least as good as b under the metric's direction.
@@ -135,12 +175,74 @@ func Better(k MetricKey, a, b float64) bool {
 	return a <= b
 }
 
-// Deficient reports the shortfall of a relative to b, signed so that a positive
-// number always means a is worse: the excess of a bad latency, or the shortfall
-// of a missing rate. Scale is the metric's own magnitude.
+// TieRelative is the relative gap below which a cell's ordering is set by which
+// requests happened to fall inside the measurement window rather than by the
+// policy: half a percent of a throughput or a latency percentile is seed noise,
+// and a contract that asserts on it would be asserting on the seed list. A cell
+// at or beyond this gap is a win or a loss and is argued as one; the deficit is
+// always reported with the number, never rounded away.
+const TieRelative = 0.005
+
+// Verdict is the outcome of comparing one metric across two policies.
+type Verdict int
+
+const (
+	// VerdictUndefined: at least one side has no value (no cold prompt in the
+	// workload), so no claim is made either way.
+	VerdictUndefined Verdict = iota
+	VerdictWin
+	VerdictTie
+	VerdictLoss
+)
+
+func (v Verdict) String() string {
+	switch v {
+	case VerdictWin:
+		return "win"
+	case VerdictTie:
+		return "tie"
+	case VerdictLoss:
+		return "loss"
+	default:
+		return "undefined"
+	}
+}
+
+// Judge compares one metric between the new policy and another, returning the
+// shortfall as a fraction of the other value: positive only when the new policy
+// is worse by more than TieRelative.
+func Judge(k MetricKey, newv, other float64) (Verdict, float64) {
+	if isNaN(newv) || isNaN(other) {
+		return VerdictUndefined, 0
+	}
+	gap := Deficient(k, newv, other)
+	switch {
+	case gap > TieRelative:
+		return VerdictLoss, gap
+	case -gap > TieRelative:
+		return VerdictWin, gap
+	default:
+		return VerdictTie, gap
+	}
+}
+
+// Deficient reports how far a falls short of b under the metric's direction, as a
+// fraction of b: positive when a is worse, negative when a is better. A policy
+// that delivered nothing (b == 0) on a rate metric is beaten by any positive
+// value, which is the one case the ratio cannot express.
 func Deficient(k MetricKey, a, b float64) float64 {
-	if isNaN(a) || isNaN(b) || b == 0 {
+	if isNaN(a) || isNaN(b) {
 		return 0
+	}
+	if b == 0 {
+		switch {
+		case a == 0:
+			return 0
+		case k.HigherIsBetter():
+			return -math.Inf(1)
+		default:
+			return math.Inf(1)
+		}
 	}
 	if k.HigherIsBetter() {
 		return (b - a) / absF(b)

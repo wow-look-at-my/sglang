@@ -144,8 +144,10 @@ func fitPrefill(steps []Step, chunkSize, deg int) PrefillCost {
 		p.PerTokenCtxSq = co[2] / float64(chunkSize)
 	}
 	p.RMSEFit, _ = fitError(p, steps, runs[0], chunkSize)
+	p.Samples = maxInt(len(runs[0])-1, 0)
 	if len(runs) > 1 {
 		p.RMSEHoldout, p.MaxErrHoldout = fitError(p, steps, runs[1], chunkSize)
+		p.HoldoutSamples = len(runs[1]) - 1
 	}
 	return p
 }
