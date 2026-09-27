@@ -100,12 +100,69 @@ func TestBurstBoundGatesContinuationsNotFreshWork(t *testing.T) {
 	if b.ShouldDeferPrefill(true, true, false) {
 		t.Error("a fresh prefill was deferred below the bound")
 	}
-	if got := b.PrefillTokenBudget(); got != 4096-100 {
+	if got := b.PrefillTokenBudget(false); got != 4096-100 {
 		t.Errorf("token budget %d, want %d", got, 4096-100)
 	}
 	b.BurstUsed = 4096
 	if !b.ShouldDeferPrefill(true, true, false) {
 		t.Error("a fresh prefill ran once the bound was spent")
+	}
+}
+
+// Cost per prefill token rises with the context attention reads, so a token bound
+// alone lets a chunked prompt's later chunks stall decode for several times the
+// seconds one chunk promises. The continuation's cap is the GPU seconds one chunk
+// is worth at the measured average rate, priced at the marginal rate of the batch
+// that just ran.
+func TestContinuationBudgetIsDenominatedInSeconds(t *testing.T) {
+	b := NewBalancer(FeaturesOf(ModeNew), 4096)
+	// The first prefill measures 200 us per token, and a decode batch follows it.
+	b.OnLaunch(true, 4000, 0, 0)
+	b.OnFinish(0.8)
+	b.OnLaunch(false, 0, 0, 0.8)
+	b.OnFinish(1.0)
+	if avg := b.PrefillSecondsPerToken(); avg != 0.0002 {
+		t.Fatalf("average prefill rate %v, want 0.0002 s/token", avg)
+	}
+	// The same prompt's next chunk reads a longer context: 2000 tokens cost the
+	// same 0.8 s, four times the average rate.
+	b.OnLaunch(true, 2000, 0, 1.0)
+	b.OnFinish(1.8)
+	average, marginal := b.PrefillSecondsPerToken(), b.marginalSecondsPerToken()
+	if marginal != 0.0004 {
+		t.Fatalf("marginal rate %v, want 0.0004 s/token", marginal)
+	}
+	got := b.PrefillTokenBudget(true)
+	if want := int(4096 * average / marginal); got != want {
+		t.Errorf("continuation budget %d, want %d", got, want)
+	}
+	if float64(got)*marginal > 4096*average {
+		t.Errorf("%d tokens at %v s/token cost %v s, more than the %v s one chunk promises",
+			got, marginal, float64(got)*marginal, 4096*average)
+	}
+	if got >= 4096 {
+		t.Errorf("budget %d does not bind at 4x the measured average rate", got)
+	}
+}
+
+// The prefill rates are prefill measurements: a decode batch also reports extend
+// tokens (one per running request) and costs an order of magnitude more per token,
+// so letting one in would price prefill work at decode cost and un-bind every
+// continuation cap.
+func TestDecodeBatchTokensDoNotEnterThePrefillRates(t *testing.T) {
+	b := NewBalancer(FeaturesOf(ModeNew), 4096)
+	b.OnLaunch(true, 4000, 0, 0)
+	b.OnFinish(0.8)
+	b.OnLaunch(false, 8, 0, 0.8) // a decode step of 8 requests, as the scheduler reports it
+	b.OnFinish(1.0)
+	if avg := b.PrefillSecondsPerToken(); avg != 0.0002 {
+		t.Errorf("average prefill rate %v after a decode batch, want 0.0002 s/token", avg)
+	}
+	if m := b.marginalSecondsPerToken(); m != 0.0002 {
+		t.Errorf("marginal rate %v after a decode batch, want 0.0002 s/token", m)
+	}
+	if got := b.PrefillTokenBudget(true); got != 4096 {
+		t.Errorf("continuation budget %d at equal rates, want the full chunk", got)
 	}
 }
 
@@ -116,7 +173,7 @@ func TestPrevHasNoTokenBound(t *testing.T) {
 	if b.ShouldDeferPrefill(true, true, true) {
 		t.Error("PREV deferred with a repaid balance")
 	}
-	if got := b.PrefillTokenBudget(); got != -1 {
+	if got := b.PrefillTokenBudget(true); got != -1 {
 		t.Errorf("PREV token budget %d, want -1 (Python None)", got)
 	}
 	b.Debt = 1e-9

@@ -21,9 +21,14 @@ type Balancer struct {
 	UnsettledN  int
 	BurstUsed   int
 	// ExtendSecond and ExtendTokens are the running measurement behind
-	// prefill_seconds_per_token, which prices a mixed batch's decode rows.
+	// prefill_seconds_per_token, which prices a mixed batch's decode rows. They
+	// count prefill batches only, so the rate stays a prefill rate.
 	ExtendSecond float64
 	ExtendTokens int
+	// LastPrefillSecond and LastPrefillTokens are the marginal rate of the last
+	// prefill batch: what a token cost at the context it attended over.
+	LastPrefillSecond float64
+	LastPrefillTokens int
 
 	inFlight []launched
 	busy     float64
@@ -53,6 +58,16 @@ func (b *Balancer) PrefillSecondsPerToken() float64 {
 		return 0
 	}
 	return b.ExtendSecond / float64(b.ExtendTokens)
+}
+
+// marginalSecondsPerToken is the last prefill batch's own cost per token, which
+// is the rate the next chunk of the same prompt faces: cost per token rises with
+// the context attention reads. 0 before any prefill batch has finished.
+func (b *Balancer) marginalSecondsPerToken() float64 {
+	if b.LastPrefillTokens == 0 {
+		return 0
+	}
+	return b.LastPrefillSecond / float64(b.LastPrefillTokens)
 }
 
 // ShouldDeferPrefill is should_defer_prefill. Without contention the balance is
@@ -90,8 +105,24 @@ func (b *Balancer) ShouldDeferPrefill(prefillPending, decodeRunnable, continuesC
 }
 
 // PrefillTokenBudget caps the next prefill batch's tokens; -1 is Python's None.
-func (b *Balancer) PrefillTokenBudget() int {
-	if b.BurstTokens == 0 || b.BurstUsed == 0 {
+// continuesChunk picks which bound applies. A batch that continues a chunked
+// prompt is capped to the GPU seconds one chunk is worth at the measured average
+// rate, priced at the marginal rate this prompt's context is now paying: cost per
+// token rises with the context attention reads, so the token bound alone lets the
+// same 4096 tokens stall decode for three times the seconds they promise. A fresh
+// request cannot drift that far - its cost is bounded by its own length - so fresh
+// work keeps the token form, which is what lets several short prefills share one
+// burst instead of each waiting out a decode slice.
+func (b *Balancer) PrefillTokenBudget(continuesChunk bool) int {
+	if b.BurstTokens == 0 {
+		return -1
+	}
+	average := b.PrefillSecondsPerToken()
+	marginal := b.marginalSecondsPerToken()
+	if continuesChunk && average > 0 && marginal > 0 {
+		return maxI(0, int(float64(b.BurstTokens)*average/marginal))
+	}
+	if b.BurstUsed == 0 {
 		return -1
 	}
 	return b.BurstTokens - b.BurstUsed
@@ -124,9 +155,10 @@ func (b *Balancer) OnFinish(now float64) {
 	if f.Rows > 0 && b.PiggybackCredit {
 		piggy = minF(float64(f.Rows)*b.PrefillSecondsPerToken(), el)
 	}
-	if f.Tokens > 0 {
+	if f.IsPrefill && f.Tokens > 0 {
 		b.ExtendSecond += el
 		b.ExtendTokens += f.Tokens
+		b.LastPrefillSecond, b.LastPrefillTokens = el, f.Tokens
 	}
 	if f.IsPrefill {
 		b.UnsettledPf += el - piggy

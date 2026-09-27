@@ -365,7 +365,7 @@ func (e *engine) prefillBatch(policyOn bool) *Batch {
 	}
 	budget := e.cfg.ChunkSize
 	if policyOn {
-		if limit := e.bal.PrefillTokenBudget(); limit >= 0 && limit < budget {
+		if limit := e.bal.PrefillTokenBudget(e.chunked != nil); limit >= 0 && limit < budget {
 			budget = limit
 		}
 	}
