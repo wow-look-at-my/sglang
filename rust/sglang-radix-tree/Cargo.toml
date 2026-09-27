@@ -16,8 +16,8 @@ torch-compat-header = "torch_2_13_compat.h"
 name = "mem_cache"
 crate-type = ["cdylib"]
 
-# Keep this crate in its own workspace until its PyO3 version can be aligned
-# with the root workspace without conflicting native `links = "python"` crates.
+# Its own workspace and Cargo.lock. PyO3 matches the root workspace's version,
+# which joining that workspace would require (`links = "python"`).
 [workspace]
 
 [dependencies]
