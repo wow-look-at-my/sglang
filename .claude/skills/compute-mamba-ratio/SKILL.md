@@ -12,6 +12,15 @@ A hybrid model (attention layers + linear-attention layers — the recurrent-sta
 
 `--mamba-full-memory-ratio r` splits the post-weight budget: `mamba_budget = rest · r/(1+r)`, i.e. `mamba_budget : kv_budget = r`. This skill picks the `r` (or the pin-`--max-mamba-cache-size` alternative) at which **neither pool bottlenecks first** for the user's workload.
 
+## What SGLang picks when nothing is set
+
+With no `--mamba-full-memory-ratio`, no `--max-mamba-cache-size` and no per-arch default (Inkling declares 0.1), the pool sizer derives the split at startup (`mem_cache/mamba_pool_split.py`, logged as `Hybrid state/KV split derived`). It uses this formula with `L = context_len`, `S` and `D` from the running config, and `token_equiv` read off the pool configurator's KV bytes per token:
+
+- `--max-running-requests N` set (or declared by a hook, e.g. the speculative default of 48): the state pool holds exactly `N · (S+D)` slots plus padding, capped at the old default share `0.9/1.9`.
+- otherwise: the balanced share at `L = context_len`, raised to a floor of 1/8 of the budget so short requests still run concurrently. At long contexts the floor binds.
+
+It is skipped under unified memory, hybrid SWA and PP > 1, where the old `0.9` default still applies. Use this skill when the workload's `L` is known to differ from `context_len`, or to pin a target concurrency.
+
 ## The formula
 
 ```

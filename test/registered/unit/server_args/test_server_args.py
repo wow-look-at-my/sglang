@@ -53,6 +53,7 @@ from sglang.srt.arg_groups.moe_hook import (
 )
 from sglang.srt.arg_groups.overrides import (
     cutedsl_moe_max_num_tokens,
+    declare_resolution,
     max_speculative_num_draft_tokens,
     resolution_result,
 )
@@ -2224,6 +2225,24 @@ class TestHiCacheArgs(CustomTestCase):
         )
 
         handle_cache_compatibility(args)
+
+
+class TestMambaRatioExplicitlySet(CustomTestCase):
+    """The pool sizer derives the state/KV split only when this records False;
+    a model default declared before the cache hook (Inkling's 0.1) must count
+    as set, or the derivation would silently replace it."""
+
+    def _explicitly_set(self, *, declared=None, **fields):
+        args = ServerArgs(model_path="dummy", **fields)
+        if declared is not None:
+            declare_resolution(args, "model", mamba_full_memory_ratio=declared)
+        handle_cache_compatibility(args)
+        return resolution_result(args, "_mamba_full_memory_ratio_explicitly_set")
+
+    def test_what_was_given_counts_as_set(self):
+        self.assertFalse(self._explicitly_set())
+        self.assertTrue(self._explicitly_set(mamba_full_memory_ratio=0.5))
+        self.assertTrue(self._explicitly_set(declared=0.1))
 
 
 class TestNgramExternalSamArgs(CustomTestCase):
