@@ -850,8 +850,9 @@ export const config = {
     // native), with the concurrency pinned explicitly:
     // the hybrid model reserves mamba state slots per running request (5 with
     // the default extra_buffer strategy, 4 with extra_buffer_lazy), and the
-    // scheduler silently caps --max-running-requests to what the mamba pool
-    // admits unless --max-mamba-cache-size = requests x slots is set.
+    // scheduler caps --max-running-requests to what the mamba pool admits;
+    // without a pin that pool is sized for the requested concurrency only up
+    // to 47% of the budget, so --max-mamba-cache-size = requests x slots is set.
     // The PLE Offload row is forced to Off on this hardware (see overlayDims),
     // which appends --no-ple-offload-embedding: the FP8 table stays GPU-resident
     // and TP-sharded, since on unified memory the "offloaded" pinned-host copy
@@ -898,7 +899,7 @@ export const config = {
     {
       match: { hw: "dgx-spark", variant: "default", quant: "nvfp4", strategy: "high-throughput", nodes: "multi-2" },
       verified: true,
-      warn: "2x DGX Spark only (GB10 pair, TP=2 over ConnectX-7); in Docker mode use the lmsysorg/sglang:dev-qwen38-next-local image, the qwen4-main-squashed build the Spark rows are generated for. At 96 concurrent requests the KV pool is ~1.07M tokens (~11k per request when full); lower --max-running-requests for long-context workloads. See [DGX Spark notes](#spark-note).",
+      warn: "2x DGX Spark only (GB10 pair, TP=2 over ConnectX-7); in Docker mode use the lmsysorg/sglang:dev-qwen38-next-local image, the qwen4-main-squashed build the Spark rows are generated for. At 96 concurrent requests the KV pool is ~1.07M tokens (~11k per request when full); for long-context workloads drop --max-running-requests and --max-mamba-cache-size, and SGLang sizes the state pool from --context-length and gives the rest to the KV pool. See [DGX Spark notes](#spark-note).",
       env: [],
       flags: [
         "--model-path {{MODEL_NAME}}",
@@ -978,7 +979,7 @@ export const config = {
     {
       match: { hw: "rtx6000", variant: "default", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
       verified: true,
-      warn: "Single RTX PRO 6000 (96 GB). Use the lmsysorg/sglang:dev-qwen38-next-local image, the build this cell is verified on. The FP8 N-gram table lives in pinned host RAM: keep >= 64 GB of host memory free and run Docker with --ulimit memlock=-1. The KV pool is ~78k tokens (~4.9k per request at 16 concurrent); lower --max-running-requests for long-context work. See [RTX PRO 6000 notes](#rtx6000-note).",
+      warn: "Single RTX PRO 6000 (96 GB). Use the lmsysorg/sglang:dev-qwen38-next-local image, the build this cell is verified on. The FP8 N-gram table lives in pinned host RAM: keep >= 64 GB of host memory free and run Docker with --ulimit memlock=-1. The KV pool is ~78k tokens (~4.9k per request at 16 concurrent); for long-context workloads drop --max-running-requests and --max-mamba-cache-size, and SGLang sizes the state pool from --context-length and gives the rest to the KV pool. See [RTX PRO 6000 notes](#rtx6000-note).",
       env: ["PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True", "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1"],
       flags: [
         "--model-path {{MODEL_NAME}}",
@@ -1014,7 +1015,7 @@ export const config = {
     {
       match: { hw: "rtx6000", variant: "default", quant: "nvfp4", strategy: "high-throughput", nodes: "single" },
       verified: true,
-      warn: "Single RTX PRO 6000 (96 GB). Use the lmsysorg/sglang:dev-qwen38-next-local image, the build this cell is verified on. The FP8 N-gram table lives in pinned host RAM: keep >= 64 GB of host memory free and run Docker with --ulimit memlock=-1. At 64 concurrent requests the KV pool is ~98k tokens (~1.5k per request when full); lower --max-running-requests for long-context workloads. See [RTX PRO 6000 notes](#rtx6000-note).",
+      warn: "Single RTX PRO 6000 (96 GB). Use the lmsysorg/sglang:dev-qwen38-next-local image, the build this cell is verified on. The FP8 N-gram table lives in pinned host RAM: keep >= 64 GB of host memory free and run Docker with --ulimit memlock=-1. At 64 concurrent requests the KV pool is ~98k tokens (~1.5k per request when full); for long-context workloads drop --max-running-requests and --max-mamba-cache-size, and SGLang sizes the state pool from --context-length and gives the rest to the KV pool. See [RTX PRO 6000 notes](#rtx6000-note).",
       env: ["PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True", "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1"],
       flags: [
         "--model-path {{MODEL_NAME}}",
@@ -1084,7 +1085,7 @@ export const config = {
     {
       match: { hw: "dgx-spark", variant: "default", quant: "nvfp4", strategy: "high-throughput", nodes: "single" },
       verified: true,
-      warn: "Single DGX Spark (GB10, 128 GB unified). The N-gram table is a 47.7 GiB sparse file on the local NVMe (PLE Offload = On (NVMe file)); keep ~50 GB free there and mount that directory into the container. Boot writes the whole table each time: delete the previous file first (a populated file rewrites at ~17 MB/s). At 24 concurrent requests the KV pool is ~286k tokens; lower --max-running-requests for long-context workloads. See [DGX Spark notes](#spark-note).",
+      warn: "Single DGX Spark (GB10, 128 GB unified). The N-gram table is a 47.7 GiB sparse file on the local NVMe (PLE Offload = On (NVMe file)); keep ~50 GB free there and mount that directory into the container. Boot writes the whole table each time: delete the previous file first (a populated file rewrites at ~17 MB/s). At 24 concurrent requests the KV pool is ~286k tokens; for long-context workloads drop --max-running-requests and --max-mamba-cache-size, and SGLang sizes the state pool from --context-length and gives the rest to the KV pool. See [DGX Spark notes](#spark-note).",
       env: [],
       flags: [
         "--model-path {{MODEL_NAME}}",
@@ -1153,7 +1154,7 @@ export const config = {
     {
       match: { hw: "dgx-spark", variant: "default", quant: "nvfp4-nvda", strategy: "high-throughput", nodes: "multi-2" },
       verified: true,
-      warn: "2x DGX Spark only (GB10 pair, TP=2 over ConnectX-7). Verified on the qwen4-main-squashed branch (the Python install path above). In Docker mode use the lmsysorg/sglang:dev-qwen38-next-local image (the qwen4-main-squashed build); the qwen38flashnext image predates the MIXED_PRECISION loader ([sgl-project/sglang#38121](https://github.com/sgl-project/sglang/pull/38121)) and cannot load this export. At 96 concurrent requests the KV pool is ~1.1M tokens; lower --max-running-requests for long-context workloads. See [DGX Spark notes](#spark-note).",
+      warn: "2x DGX Spark only (GB10 pair, TP=2 over ConnectX-7). Verified on the qwen4-main-squashed branch (the Python install path above). In Docker mode use the lmsysorg/sglang:dev-qwen38-next-local image (the qwen4-main-squashed build); the qwen38flashnext image predates the MIXED_PRECISION loader ([sgl-project/sglang#38121](https://github.com/sgl-project/sglang/pull/38121)) and cannot load this export. At 96 concurrent requests the KV pool is ~1.1M tokens; for long-context workloads drop --max-running-requests and --max-mamba-cache-size, and SGLang sizes the state pool from --context-length and gives the rest to the KV pool. See [DGX Spark notes](#spark-note).",
       env: [],
       flags: [
         "--model-path {{MODEL_NAME}}",
@@ -1212,7 +1213,7 @@ export const config = {
     {
       match: { hw: "dgx-spark", variant: "default", quant: "nvfp4-nvda", strategy: "high-throughput", nodes: "single" },
       verified: true,
-      warn: "Single DGX Spark (GB10, 128 GB unified). Use the lmsysorg/sglang:dev-qwen38-next-local image: this ModelOpt MIXED_PRECISION export needs the loader from [sgl-project/sglang#38121](https://github.com/sgl-project/sglang/pull/38121), which the qwen38flashnext image does not have. The N-gram table is a 47.7 GiB sparse file on the local NVMe (PLE Offload = On (NVMe file)); keep ~50 GB free there and mount that directory into the container. Boot writes the whole table each time: delete the previous file first (a populated file rewrites at ~17 MB/s). At 24 concurrent requests the KV pool is ~300k tokens; lower --max-running-requests for long-context workloads. See [DGX Spark notes](#spark-note).",
+      warn: "Single DGX Spark (GB10, 128 GB unified). Use the lmsysorg/sglang:dev-qwen38-next-local image: this ModelOpt MIXED_PRECISION export needs the loader from [sgl-project/sglang#38121](https://github.com/sgl-project/sglang/pull/38121), which the qwen38flashnext image does not have. The N-gram table is a 47.7 GiB sparse file on the local NVMe (PLE Offload = On (NVMe file)); keep ~50 GB free there and mount that directory into the container. Boot writes the whole table each time: delete the previous file first (a populated file rewrites at ~17 MB/s). At 24 concurrent requests the KV pool is ~300k tokens; for long-context workloads drop --max-running-requests and --max-mamba-cache-size, and SGLang sizes the state pool from --context-length and gives the rest to the KV pool. See [DGX Spark notes](#spark-note).",
       env: [],
       flags: [
         "--model-path {{MODEL_NAME}}",
@@ -1283,7 +1284,7 @@ export const config = {
     {
       match: { hw: "rtx6000", variant: "default", quant: "nvfp4-nvda", strategy: "high-throughput", nodes: "single" },
       verified: true,
-      warn: "Single RTX PRO 6000 (96 GB). Use the lmsysorg/sglang:dev-qwen38-next-local image: this ModelOpt MIXED_PRECISION export needs the loader from [sgl-project/sglang#38121](https://github.com/sgl-project/sglang/pull/38121), which the qwen38flashnext image does not have. The FP8 N-gram table lives in pinned host RAM: keep >= 64 GB of host memory free and run Docker with --ulimit memlock=-1. At 64 concurrent requests the KV pool is ~98k tokens (~1.5k per request when full); lower --max-running-requests for long-context workloads. See [RTX PRO 6000 notes](#rtx6000-note).",
+      warn: "Single RTX PRO 6000 (96 GB). Use the lmsysorg/sglang:dev-qwen38-next-local image: this ModelOpt MIXED_PRECISION export needs the loader from [sgl-project/sglang#38121](https://github.com/sgl-project/sglang/pull/38121), which the qwen38flashnext image does not have. The FP8 N-gram table lives in pinned host RAM: keep >= 64 GB of host memory free and run Docker with --ulimit memlock=-1. At 64 concurrent requests the KV pool is ~98k tokens (~1.5k per request when full); for long-context workloads drop --max-running-requests and --max-mamba-cache-size, and SGLang sizes the state pool from --context-length and gives the rest to the KV pool. See [RTX PRO 6000 notes](#rtx6000-note).",
       env: ["PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True", "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1"],
       flags: [
         "--model-path {{MODEL_NAME}}",

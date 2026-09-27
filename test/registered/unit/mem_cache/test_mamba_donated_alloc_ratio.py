@@ -334,5 +334,185 @@ class TestPPMambaPoolSizing(unittest.TestCase):
         )
 
 
+_GiB = 1 << 30
+_MiB = 1 << 20
+_KiB = 1 << 10
+
+
+class TestDerivedMambaPoolSplit(unittest.TestCase):
+    """The split SGLang picks when no ratio, state-pool size or model default
+    was given: both pools fill together at context_len, but the state pool keeps
+    at least MIN_STATE_POOL_SHARE so short requests still run concurrently."""
+
+    @staticmethod
+    def _split(*, context_len, max_running_requests=None, fixed_state_bytes=0.0):
+        from sglang.srt.mem_cache.mamba_pool_split import derive_mamba_pool_split
+
+        # Qwen3-Next-class GDN hybrid at TP2 on a 96 GB card: 27.9 MiB per state
+        # slot, 12 KiB of KV per token, 4 slots per request (extra_buffer_lazy).
+        return derive_mamba_pool_split(
+            budget_bytes=16.56 * _GiB,
+            state_bytes_per_request=4 * 27.9 * _MiB,
+            fixed_state_bytes=fixed_state_bytes,
+            kv_bytes_per_token=12 * _KiB,
+            context_len=context_len,
+            max_running_requests=max_running_requests,
+            default_share=0.9 / 1.9,
+        )
+
+    def test_balanced_split_is_the_skill_ratio(self):
+        from sglang.srt.mem_cache.mamba_pool_split import derive_mamba_pool_split
+
+        # compute-mamba-ratio worked example: r* = S * token_equiv / L with
+        # token_equiv = 56.4 MB / 13.8 KB, S = 4, L = 9216 -> ~1.8.
+        state_slot, kv_token = 56.4e6, 13.8e3
+        split = derive_mamba_pool_split(
+            budget_bytes=100e9,
+            state_bytes_per_request=4 * state_slot,
+            fixed_state_bytes=0.0,
+            kv_bytes_per_token=kv_token,
+            context_len=9216,
+            max_running_requests=None,
+            default_share=0.9 / 1.9,
+        )
+        self.assertEqual(split.sized_by, "context_len")
+        self.assertAlmostEqual(
+            split.mamba_full_memory_ratio, 4 * (state_slot / kv_token) / 9216
+        )
+        self.assertAlmostEqual(split.state_requests, split.kv_context_len_requests)
+
+    def test_long_context_gives_kv_the_budget_but_keeps_a_short_request_floor(self):
+        from sglang.srt.mem_cache.mamba_pool_split import MIN_STATE_POOL_SHARE
+
+        for context_len in (262144, 524288):
+            with self.subTest(context_len=context_len):
+                split = self._split(context_len=context_len)
+                # The undecided 0.9 gave the state pool 47% of the budget here,
+                # leaving KV for fewer than two 400K-token conversations.
+                self.assertEqual(split.sized_by, "short_request_floor")
+                self.assertAlmostEqual(split.state_share, MIN_STATE_POOL_SHARE)
+                self.assertLess(split.balanced_share, MIN_STATE_POOL_SHARE)
+                # The state pool never binds before KV at context_len.
+                self.assertGreater(split.state_requests, split.kv_context_len_requests)
+                kv_tokens = (1 - split.state_share) * 16.56 * _GiB / (12 * _KiB)
+                self.assertGreater(kv_tokens / 400_000, 3)
+
+    def test_short_context_is_not_capped_at_the_default_share(self):
+        # At 8K context every request is small; the balanced split gives the
+        # state pool more than the undecided 0.9 did, and must not be clipped to it.
+        split = self._split(context_len=8192)
+        self.assertEqual(split.sized_by, "context_len")
+        self.assertGreater(split.state_share, 0.9 / 1.9)
+
+    def test_requested_concurrency_is_capped_at_the_default_share(self):
+        split = self._split(context_len=262144, max_running_requests=100_000)
+        self.assertEqual(split.sized_by, "default_share_cap")
+        self.assertAlmostEqual(split.state_share, 0.9 / 1.9)
+
+
+class TestDerivedSplitThroughPoolSizer(unittest.TestCase):
+    """End to end through _handle_max_mamba_cache: an unset ratio is replaced by
+    the derived one, and a pool sized for --max-running-requests admits all of
+    them after the padding slots and the speculative joint solve."""
+
+    CONTEXT_LEN = 262144
+    BUDGET_GB = 16.56
+
+    @classmethod
+    def _run(cls, *, explicitly_set, num_draft_tokens=None, **fields):
+        import types
+
+        from sglang.srt import runtime_context as rc
+        from sglang.srt.configs.mamba_utils import (
+            Mamba2CacheParams,
+            Mamba2StateDType,
+            Mamba2StateShape,
+        )
+        from sglang.srt.mem_cache.kv_cache_configurator import KVCacheConfigurator
+        from sglang.srt.runtime_context import get_schedule
+
+        shape = Mamba2StateShape(
+            conv=[(4096, 3)],
+            temporal=(16, 128, 128),
+            intermediate_size=0,
+            conv_dim=0,
+            ssm_state_size=0,
+            num_heads=0,
+            head_dim=0,
+            state_size=0,
+            conv_kernel=0,
+            num_k_heads_per_tp=8,
+        )
+        params = Mamba2CacheParams(
+            shape=shape,
+            dtype=Mamba2StateDType(conv=torch.bfloat16, temporal=torch.bfloat16),
+            layers=list(range(36)),
+        )
+        fake = SimpleNamespace(
+            mambaish_config=SimpleNamespace(
+                mamba2_cache_params=params, full_attention_layer_ids=[3, 7, 11]
+            ),
+            server_args=SimpleNamespace(),
+            spec_algorithm=SimpleNamespace(is_none=lambda: num_draft_tokens is None),
+            attn_dp_size=1,
+            pp_size=1,
+            is_hybrid_swa=False,
+            hybrid_gdn_config=None,
+            model_config=SimpleNamespace(context_len=cls.CONTEXT_LEN),
+            # The KV cell size is the pool configurator's; pin it here.
+            _kv_bytes_per_logical_token=lambda: 12 * _KiB,
+        )
+        for name in (
+            "_can_derive_mamba_split",
+            "_derive_mamba_full_memory_ratio",
+            "_calculate_mamba_ratio",
+        ):
+            setattr(
+                fake, name, types.MethodType(getattr(KVCacheConfigurator, name), fake)
+            )
+        with rc.get_context().override_server_args(
+            disable_radix_cache=False,
+            max_mamba_cache_size=None,
+            enable_linear_replayssm_spec=False,
+            speculative_num_draft_tokens=num_draft_tokens,
+            _mamba_full_memory_ratio_explicitly_set=explicitly_set,
+            **fields,
+        ):
+            KVCacheConfigurator._handle_max_mamba_cache(fake, cls.BUDGET_GB)
+            schedule = get_schedule()
+            return (
+                schedule.max_mamba_cache_size,
+                schedule.mamba_full_memory_ratio,
+                fake._calculate_mamba_ratio(),
+            )
+
+    def test_pool_sized_for_max_running_requests_admits_all_of_them(self):
+        for num_draft_tokens in (None, 4):
+            with self.subTest(num_draft_tokens=num_draft_tokens):
+                pool, _, slots_per_request = self._run(
+                    explicitly_set=False,
+                    num_draft_tokens=num_draft_tokens,
+                    max_running_requests=16,
+                )
+                self.assertEqual(pool // slots_per_request, 16)
+
+    def test_unset_ratio_is_derived_from_context_len(self):
+        from sglang.srt.mem_cache.mamba_pool_split import MIN_STATE_POOL_SHARE
+
+        _, ratio, _ = self._run(explicitly_set=False, max_running_requests=None)
+        self.assertAlmostEqual(ratio, MIN_STATE_POOL_SHARE / (1 - MIN_STATE_POOL_SHARE))
+
+    def test_a_given_ratio_is_left_alone(self):
+        for explicitly_set in (True, None):
+            with self.subTest(explicitly_set=explicitly_set):
+                pool, ratio, _ = self._run(
+                    explicitly_set=explicitly_set,
+                    max_running_requests=None,
+                    mamba_full_memory_ratio=0.5,
+                )
+                self.assertEqual(ratio, 0.5)
+                self.assertGreater(pool, 16 * 5)
+
+
 if __name__ == "__main__":
     unittest.main()

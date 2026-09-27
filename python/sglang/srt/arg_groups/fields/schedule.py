@@ -214,10 +214,23 @@ class Schedule(msgspec.Struct):
     mamba_full_memory_ratio: A[
         Optional[float],
         Arg(
-            help="The ratio of mamba state memory to full kv cache memory.",
+            help=(
+                "The ratio of mamba state memory to full kv cache memory. When "
+                "neither this, --max-mamba-cache-size nor a model default is "
+                "given, the split is derived at startup: the state pool is sized "
+                "for --max-running-requests if set, otherwise so that the KV "
+                "pool holds as many context-length requests as the state pool "
+                "admits, keeping at least 1/8 of the budget for the state pool "
+                "so short requests still run concurrently."
+            ),
             resolvable=True,
             fallback=0.9,
         ),
+    ] = None
+    # Recorded by the cache hook; the pool sizer derives the split when False.
+    _mamba_full_memory_ratio_explicitly_set: A[
+        Optional[bool],
+        Arg(no_cli=True),
     ] = None
 
     # -------------------------------------------------------------------------

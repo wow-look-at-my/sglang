@@ -418,6 +418,15 @@ def handle_cache_compatibility(server_args: Any) -> None:
             "_handle_cache_compatibility",
             _swa_full_tokens_ratio_explicitly_set=cfg.swa_full_tokens_ratio is not None,
         )
+    # Runs after the model overrides, so a per-arch ratio (Inkling) counts as set.
+    if cfg._mamba_full_memory_ratio_explicitly_set is None:
+        declare_resolution(
+            server_args,
+            "_handle_cache_compatibility",
+            _mamba_full_memory_ratio_explicitly_set=(
+                cfg.mamba_full_memory_ratio is not None
+            ),
+        )
 
     # Validate the effective ratio: model branches may declare a reset
     # (e.g. Step3p forces 1.0 under hierarchical cache) that supersedes
