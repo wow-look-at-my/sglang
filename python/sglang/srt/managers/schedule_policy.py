@@ -460,9 +460,6 @@ class SchedulePolicy:
         )
 
     def cede_chunk_budget(
-<<<<<<< HEAD
-        self, chunked_req: Req, waiting_queue: List[Req], budget: int, page_size: int
-=======
         self,
         chunked_req: Req,
         waiting_queue: List[Req],
@@ -471,7 +468,6 @@ class SchedulePolicy:
         *,
         max_new_reqs: Optional[int] = None,
         admissible: Optional[Callable[[Req], bool]] = None,
->>>>>>> origin/master
     ) -> Optional[int]:
         """Cap the in-progress chunk so shorter waiting requests prefill beside it.
 
@@ -479,21 +475,6 @@ class SchedulePolicy:
         left is moved ahead of the rest of the queue (in place) and its work is
         reserved from this step's budget; the returned limit is what the chunked
         request may still take. Without this, one long prompt holds every chunk
-<<<<<<< HEAD
-        until it finishes, and a follow-up turn needing a few hundred tokens
-        waits behind hundreds of thousands. Outside shortest-prefill-first the
-        reservation is capped at half the budget, so the long prompt keeps at
-        least half of every step while short ones keep arriving.
-        """
-        if budget < 2 * page_size or not waiting_queue:
-            return None
-        is_shortest_first = self.policy == CacheAwarePolicy.SHORTEST_PREFILL_FIRST
-        max_reserved = (
-            budget - page_size
-            if is_shortest_first
-            else budget // 2 // page_size * page_size
-        )
-=======
         until it finishes, and a follow-up turn waits behind hundreds of
         thousands of tokens. Only requests ``admissible`` accepts (memory can
         hold them) are reserved for, at most ``max_new_reqs`` of them,
@@ -517,7 +498,6 @@ class SchedulePolicy:
             # Keeps ceded + reserved <= progress + (budget - reserved).
             fair_share = (progress - self._ceded_tokens + budget) // 2
             max_reserved = min(budget - page_size, fair_share // page_size * page_size)
->>>>>>> origin/master
         # Only policies that sort by prefix match keep the match fresh.
         refresh_match = not self.waiting_queue_prefix_matched(waiting_queue)
         remaining = len(chunked_req.full_untruncated_fill_ids) - len(
@@ -526,33 +506,22 @@ class SchedulePolicy:
         shorter: List[Req] = []
         reserved = 0
         for req in waiting_queue[:_CEDE_SCAN_LIMIT]:
-<<<<<<< HEAD
-            if reserved + page_size > max_reserved:
-=======
             if reserved + page_size > max_reserved or len(shorter) == max_new_reqs:
->>>>>>> origin/master
                 break
             if refresh_match:
                 match_prefix_for_req(self.tree_cache, req, include_req=True)
             work = self._shortest_prefill_work(req)
             charge = _ceil_div(work, page_size) * page_size
-<<<<<<< HEAD
-            if work < remaining and reserved + charge <= max_reserved:
-=======
             if (
                 work < remaining
                 and reserved + charge <= max_reserved
                 and (admissible is None or admissible(req))
             ):
->>>>>>> origin/master
                 shorter.append(req)
                 reserved += charge
         if not reserved:
             return None
-<<<<<<< HEAD
-=======
         self._ceded_tokens += reserved
->>>>>>> origin/master
         chosen = set(map(id, shorter))
         waiting_queue[:] = shorter + [r for r in waiting_queue if id(r) not in chosen]
         # Page alignment keeps continuation boundaries allocator-compatible.

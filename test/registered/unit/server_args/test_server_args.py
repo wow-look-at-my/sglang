@@ -15,10 +15,7 @@ import msgspec.structs
 import sglang.srt.server_args as server_args_module
 from sglang.srt.arg_groups import (
     hicache_hook,
-<<<<<<< HEAD
-=======
     mixed_chunk_hook,
->>>>>>> origin/master
     parallel_hook,
     pd_disaggregation_hook,
     serving_hook,
@@ -2242,8 +2239,6 @@ class TestHiCacheArgs(CustomTestCase):
         handle_cache_compatibility(args)
 
 
-<<<<<<< HEAD
-=======
 class TestMixedChunkAutoResolution(CustomTestCase):
     """An unset --enable-mixed-chunk resolves per configuration."""
 
@@ -2350,7 +2345,6 @@ class TestMambaRatioExplicitlySet(CustomTestCase):
         self.assertTrue(self._explicitly_set(declared=0.1))
 
 
->>>>>>> origin/master
 class TestHiCacheAutoResolution(CustomTestCase):
     """An unset --enable-hierarchical-cache resolves per configuration."""
 
@@ -2475,25 +2469,6 @@ class TestHiCacheAutoResolution(CustomTestCase):
                 hf_config = SimpleNamespace(architectures=[arch], index_topk=2048)
                 reason = auto_hicache_model_blocker(cfg, hf_config)
                 self.assertEqual(reason is not None, arch in blocked)
-<<<<<<< HEAD
-class TestMambaRatioExplicitlySet(CustomTestCase):
-    """The pool sizer derives the state/KV split only when this records False;
-    a model default declared before the cache hook (Inkling's 0.1) must count
-    as set, or the derivation would silently replace it."""
-
-    def _explicitly_set(self, *, declared=None, **fields):
-        args = ServerArgs(model_path="dummy", **fields)
-        if declared is not None:
-            declare_resolution(args, "model", mamba_full_memory_ratio=declared)
-        handle_cache_compatibility(args)
-        return resolution_result(args, "_mamba_full_memory_ratio_explicitly_set")
-
-    def test_what_was_given_counts_as_set(self):
-        self.assertFalse(self._explicitly_set())
-        self.assertTrue(self._explicitly_set(mamba_full_memory_ratio=0.5))
-        self.assertTrue(self._explicitly_set(declared=0.1))
-=======
->>>>>>> origin/master
 
 
 class TestNgramExternalSamArgs(CustomTestCase):

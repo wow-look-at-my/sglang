@@ -648,10 +648,7 @@ class Scheduler(
         # Init diffusion LLM
         self.init_diffusion_llm()
         self.maybe_init_prefill_decode_balancer()
-<<<<<<< HEAD
-=======
         self.maybe_init_eviction_throttle()
->>>>>>> origin/master
 
         self.init_metrics_reporter()
         self.scheduler_stage_metrics = self.metrics_reporter.scheduler_stage_metrics
@@ -1367,9 +1364,6 @@ class Scheduler(
         ):
             return
         self.prefill_decode_balancer = PrefillDecodeBalancer(
-<<<<<<< HEAD
-            consensus_elapsed=rank0_consensus(self.attn_tp_cpu_group)
-=======
             burst_tokens=self.chunked_prefill_size,
             consensus_elapsed=rank0_consensus(self.attn_tp_cpu_group),
         )
@@ -1396,7 +1390,6 @@ class Scheduler(
                 self.prefill_decode_balancer.prefill_seconds_per_token
             ),
             consensus=rank0_verdict_consensus(self.attn_tp_cpu_group),
->>>>>>> origin/master
         )
 
     def _should_defer_prefill(self, running_batch: ScheduleBatch) -> bool:
@@ -1406,10 +1399,7 @@ class Scheduler(
                 or self.chunked_req is not None,
                 decode_runnable=not running_batch.is_empty()
                 and not running_batch.is_prefill_only,
-<<<<<<< HEAD
-=======
                 continues_chunk=self.chunked_req is not None,
->>>>>>> origin/master
             )
         if self._prefill_decode_interval_remaining == 0:
             return False
@@ -1450,9 +1440,6 @@ class Scheduler(
     def _arm_prefill_decode_interval(self, batch: Optional[ScheduleBatch]) -> None:
         if self.prefill_decode_balancer is not None:
             if batch is not None:
-<<<<<<< HEAD
-                self.prefill_decode_balancer.on_batch_launched()
-=======
                 decode_rows = (
                     len(batch.decoding_reqs)
                     if batch.forward_mode.is_mixed() and batch.decoding_reqs
@@ -1463,7 +1450,6 @@ class Scheduler(
                     num_tokens=batch.extend_num_tokens or 0,
                     num_decode_rows=decode_rows,
                 )
->>>>>>> origin/master
             return
         if self.prefill_decode_interval == 0 or batch is None:
             return
@@ -4927,11 +4913,6 @@ class Scheduler(
         elif batch.forward_mode.is_idle():
             self.batch_result_processor.process_batch_result_idle(batch, result)
         if self.prefill_decode_balancer is not None:
-<<<<<<< HEAD
-            self.prefill_decode_balancer.on_batch_finished(
-                batch_class(batch.forward_mode)
-            )
-=======
             self.prefill_decode_balancer.on_batch_finished()
         if self.eviction_throttle is not None:
             for req in batch.reqs:
@@ -4941,7 +4922,6 @@ class Scheduler(
                         input_ids=req.origin_input_ids,
                         output_ids=req.output_ids,
                     )
->>>>>>> origin/master
 
         # Submit this batch's queued host backups before the next scheduler step.
         self.tree_cache.flush_pending_backups()

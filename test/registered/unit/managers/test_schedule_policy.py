@@ -226,8 +226,6 @@ class TestShortestPrefillFirst(CustomTestCase):
         queue = [cold, over_half, short]
         limit = self.policy.cede_chunk_budget(
             self.make_req("continuation", 16384), queue, 4096, 256
-<<<<<<< HEAD
-=======
         )
         self.assertEqual(limit, 3584)
         self.assertEqual([req.rid for req in queue], ["short", "cold", "over-half"])
@@ -273,6 +271,23 @@ class TestShortestPrefillFirst(CustomTestCase):
             self.policy.cede_chunk_budget(
                 continuation, waiting, 4096, 256, max_new_reqs=0
             )
+        )
+        self.assertEqual(
+            self.policy.cede_chunk_budget(
+                continuation, waiting, 4096, 256, max_new_reqs=1
+            ),
+            3584,
+        )
+        # A follow-up whose context memory cannot hold is not reserved for.
+        self.assertEqual(
+            self.policy.cede_chunk_budget(
+                continuation,
+                waiting,
+                4096,
+                256,
+                admissible=lambda req: req.rid != "a",
+            ),
+            3072,
         )
         self.assertEqual(
             self.policy.cede_chunk_budget(

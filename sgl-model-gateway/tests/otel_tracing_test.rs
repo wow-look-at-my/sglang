@@ -24,12 +24,7 @@ use smg::{
     routers::RouterFactory,
 };
 use tokio::sync::oneshot;
-<<<<<<< HEAD
-use tonic::metadata::MetadataMap;
-use tonic::{transport::Server, Request as TonicRequest, Response, Status};
-=======
 use tonic::{metadata::MetadataMap, transport::Server, Request as TonicRequest, Response, Status};
->>>>>>> origin/master
 use tower::ServiceExt;
 use tracing::info_span;
 use tracing_subscriber::prelude::*;

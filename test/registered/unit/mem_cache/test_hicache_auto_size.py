@@ -235,8 +235,6 @@ class TestAutoHiCacheSizing(CustomTestCase):
         self.assertIsNone(plan.ratio)
         self.assertIn("cgroup", plan.reason)
 
-<<<<<<< HEAD
-=======
     def test_unreadable_cgroup_turns_off_an_explicitly_sized_tier_too(self):
         """An explicit --hicache-ratio skips the budget, but the pools still
         read the cgroup while building; that failure must turn HiCache off
@@ -332,7 +330,6 @@ class TestMambaHostBudget(CustomTestCase):
                     device_pool, 2.0, 0, pin_memory=False, layout="page_first"
                 )
 
->>>>>>> origin/master
 
 class TestAutoHiCacheAttach(CustomTestCase):
     """Pinning is best-effort: a failed attempt releases every pinned buffer

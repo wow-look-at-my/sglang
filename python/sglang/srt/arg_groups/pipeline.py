@@ -333,13 +333,10 @@ def run_resolution_pipeline(server_args: Any) -> None:
 
     run_hook(handle_hicache_auto, server_args)
 
-<<<<<<< HEAD
-=======
     from sglang.srt.arg_groups.mixed_chunk_hook import handle_mixed_chunk_auto
 
     run_hook(handle_mixed_chunk_auto, server_args)
 
->>>>>>> origin/master
     finalize_cuda_graph_prefill_max_context(server_args)
 
     # Validate after all batch-size declarations are visible.
