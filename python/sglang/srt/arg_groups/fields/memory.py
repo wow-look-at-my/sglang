@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from typing import (
     Any,
@@ -96,7 +97,27 @@ class Memory(msgspec.Struct):
     # -------------------------------------------------------------------------
     # Hierarchical cache
     # -------------------------------------------------------------------------
-    enable_hierarchical_cache: A[bool, "Enable hierarchical cache"] = False
+    enable_hierarchical_cache: A[
+        Optional[bool],
+        Arg(
+            help=(
+                "Keep a second-tier prefix cache in host memory (HiCache). "
+                "Unset (the default): enabled automatically when HiCache "
+                "mirrors every piece of this configuration's cache state and "
+                "free host memory can hold a tier of at least 1.5x the device "
+                "cache (grown up to 8x within --hicache-host-memory-fraction); "
+                "the startup log states the decision and its reason. "
+                "--enable-hierarchical-cache requires it and fails on an "
+                "incompatible configuration; --no-enable-hierarchical-cache "
+                "turns it off."
+            ),
+            action=argparse.BooleanOptionalAction,
+            fallback=False,
+        ),
+    ] = None
+    # Set by resolution when enable_hierarchical_cache was left unset and the
+    # configuration qualified; startup then sizes and pins best-effort.
+    _enable_hierarchical_cache_auto: A[bool, Arg(no_cli=True)] = False
     hicache_host_memory_mode: A[
         str,
         Arg(
