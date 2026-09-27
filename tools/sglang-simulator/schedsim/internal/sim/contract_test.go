@@ -2,6 +2,8 @@ package sim
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -108,7 +110,7 @@ func boundEvidence(sc Scenario, k MetricKey, opp string, r Row) (string, bool) {
 			" %.0f of NEW's tokens arrived as rows",
 			n.Toks, n.Secs, n.rate(), opp, o.Toks, o.Secs, o.rate(), n.Secs-o.Secs, marginal,
 			floor, n.Rows), true
-	case boundEvictionTail, boundMixedChunkTail:
+	case boundEvictionTail:
 		oi := PolicyIndex(prevOr(opp))
 		over, total := samplesAbove(r, ModeNew, r.Metrics[oi].Value(k))
 		rows, batchMax := mixedRowTally(r)
@@ -119,6 +121,33 @@ func boundEvidence(sc Scenario, k MetricKey, opp string, r Row) (string, bool) {
 			over, total, 100*float64(over)/float64(total), opp, fmtVal(k, r.Metrics[oi].Value(k)),
 			rows, 100*single, 100*oppSingle, opp, 100*(1-percentileAt(k)),
 			fmtVal(k, r.Metrics[2].Value(k)), fmtVal(k, batchMax)), true
+	case boundMixedChunkTail:
+		q := percentileAt(k)
+		band, err := itlPassBand(r, Mode(prevOr(opp)), q)
+		if err != nil {
+			return "", false
+		}
+		head := fmt.Sprintf("a p%.1f names %d of %d NEW samples; %d ride a mixed batch and %d more waited"+
+			" out a pass they were not a row on (%d mixed + %d waited inside the tail itself; of the %d"+
+			" waiting samples %d are a stream's first gap and %d mid-stream); the tail's %.1f s of wait"+
+			" leaves %.2f%% inside no launched pass and its widest gap spans %d prefill pass(es)",
+			100*(1-q), band.Slots, band.Samples, band.Mixed, band.Waited, band.TailMixed,
+			band.TailWaited, band.Waited, band.WaitedFirst, band.WaitedMid, band.Wait,
+			100*idleShare(band), band.MaxPasses)
+		claim := fmt.Sprintf("NEW's own decode-class p%.1f is %s against %s's %s", 100*(1-q),
+			fmtVal(k, band.DecodeCut), opp, fmtVal(k, r.Metrics[PolicyIndex(prevOr(opp))].Value(k)))
+		if band.Mixed >= band.Slots {
+			return head + fmt.Sprintf("; the named sample is a mixed ride, so the bound is NEW's %s of %s"+
+				" sitting under its longest forward pass of %s; %s", k.String(),
+				fmtVal(k, r.Metrics[2].Value(k)), fmtVal(k, band.PassMax), claim), true
+		}
+		return head + fmt.Sprintf("; the named sample waited out one prefill pass, so the ceiling is the"+
+			" chunk at this run's deepest context %s + %d riding rows %s + reload %s + the calibrated step"+
+			" at its largest decode batch %s = %s, over NEW's %s of %s (its longest pass and step were %s"+
+			" + %s); %s", fmtVal(k, band.ChunkCeil), band.MaxRows, fmtVal(k, band.RowCeil),
+			fmtVal(k, band.ReloadCeil), fmtVal(k, band.StepCeil), fmtVal(k, band.Ceiling), k.String(),
+			fmtVal(k, r.Metrics[2].Value(k)), fmtVal(k, band.PassMax), fmtVal(k, band.StepMax),
+			claim), true
 	case boundAdmissionRate:
 		var out, sec [NumModes]float64
 		for mi := range Modes {
@@ -529,12 +558,40 @@ func excludedNote(skipped [NumExclusions]int) string {
 
 // boundITLPercentile argues the cells where NEW's inter-token percentile is the
 // larger one. The percentile is taken over per-token samples, and a delivery of N
-// tokens contributes N samples of gap/N: a policy that serves its streams one
-// token inside every prefill batch therefore files a whole-batch-time sample per
-// token, while a policy that serves them only in decode batches files one sample
-// per batch covering several tokens. The bound is that NEW's percentile is not
-// longer than one of its own forward passes -- the stall bound in another unit --
-// and it is admissible only while the older policy is withholding tokens outright.
+// tokens contributes N samples of gap/N, so which delivery the named sample came
+// from is a count, not a guess: the class that fills the p(1-q) tail owns the
+// reported number. Two classes can fill it, and the bound each gets is different.
+//
+// Mixed class first. A mixed delivery is one token carried by a prefill batch, so
+// it files that batch's whole wall clock as one sample; a policy that serves its
+// streams only in decode batches files one sample per batch covering several
+// tokens. When that class alone reaches the tail's slot count the named sample is a
+// ride, and the bound is that it is not longer than one of NEW's own forward
+// passes -- the stall bound in another unit.
+//
+// When the mixed class falls short of the slot count, the named sample is the
+// largest non-mixed one and a mixed ride is not this cell's mechanism. The tail
+// then belongs to the pass-cost class: the samples that waited out a prefill pass
+// they were not a row on. Every one of those is a stream's first gap, because the
+// pass it waits out was composed one overlap decision before it joined the running
+// batch (see Balancer's charge-at-completion note), and a stream that is already a
+// row is served by every pass. One gap therefore spans at most one pass, and the
+// bound on it is the calibrated wall clock of that pass plus the step that ended
+// the gap: a whole chunk plus one extend token per riding request, both priced at
+// the deepest mid-context this run's extend batches attended over, the largest
+// host-tier copy any pass paid, and the calibrated decode step at the largest
+// decode batch NEW launched. Every term is computed from the cost model and the
+// run's own trace, never stated as a constant, and if the run's numbers cannot
+// produce a ceiling the percentile sits under, the cell is not arguable and fails.
+//
+// The pass-cost bound carries two more claims. None of the tail's wait may be GPU
+// time inside no launched pass: a percentile made of dead time is a defect, not a
+// trade. And NEW's pure-decode samples must beat the opponent's reported percentile
+// outright -- the improvement claim, which is what trips if a future control law
+// makes NEW's own steps the slower ones rather than merely shifting its tail.
+//
+// Admissibility is shared: the older policy must be withholding tokens outright,
+// which is what makes its shorter tail a symptom rather than a merit.
 // See docs/derivation-itl-percentiles-under-mixed-chunk.md.
 func boundITLPercentile(r Row, k MetricKey, opp string) error {
 	newRuns, oppRuns := r.Runs[PolicyIndex(ModeNew)], r.Runs[PolicyIndex(ModeOld)]
@@ -544,59 +601,271 @@ func boundITLPercentile(r Row, k MetricKey, opp string) error {
 	if len(newRuns) != len(oppRuns) {
 		return fmt.Errorf("%d NEW runs vs %d %s runs", len(newRuns), len(oppRuns), opp)
 	}
-	var single, total, oppSingle, oppTotal int
-	var batchMax, gapMax, worstBatch float64
-	for i := range newRuns {
-		s, t, longest := SingleTokenSamples(newRuns[i], r.Scenario.Window)
-		single, total = single+s, total+t
-		if longest > gapMax {
-			gapMax = longest
-		}
-		pf, _, _ := newRuns[i].BatchSeconds(r.Scenario.Window)
-		if m := maxOf(pf); m > batchMax {
-			batchMax = m
-		}
-		s2, t2, _ := SingleTokenSamples(oppRuns[i], r.Scenario.Window)
-		oppSingle, oppTotal = oppSingle+s2, oppTotal+t2
-		pf2, _, _ := oppRuns[i].BatchSeconds(r.Scenario.Window)
-		if m := maxOf(pf2); m > worstBatch {
-			worstBatch = m
-		}
+	q := percentileAt(k)
+	band, err := itlPassBand(r, Mode(prevOr(opp)), q)
+	if err != nil {
+		return err
 	}
-	if total == 0 || oppTotal == 0 {
+	if band.Samples == 0 || band.OppSamples == 0 {
 		return fmt.Errorf("no inter-token samples to argue from")
 	}
-	q := 0.01
-	if k == MITLp999 {
-		q = 0.001
+	if band.OppMixed >= band.Mixed {
+		return fmt.Errorf("%s files %d of %d samples as a mixed delivery against NEW's %d of %d, so it"+
+			" is not the policy withholding tokens inside prefill batches", opp, band.OppMixed,
+			band.OppSamples, band.Mixed, band.Samples)
 	}
-	// The class this bound argues about is the delivery the percentile lands on: a
-	// mixed batch's ride carries exactly one token and files that whole batch's
-	// wall clock as one sample. A single-token sample is not that class -- a decode
-	// step whose drafts were all rejected also files one token, which is why OLD
-	// files many of them -- so the precondition is the mixed-delivery share.
-	newMixed, oppMixed := mixedShare(pooledTrace(newRuns)), mixedShare(pooledTrace(oppRuns))
-	if newMixed <= q {
-		return fmt.Errorf("only %.2f%% of NEW's samples ride a mixed batch, which cannot move a "+
-			"p%.1f; the gap is not the mixed-delivery effect this bound argues",
-			100*newMixed, 100*(1-q))
-	}
-	if oppMixed >= newMixed {
-		return fmt.Errorf("%s rides a mixed batch at least as often (%.2f%% vs %.2f%%), so it is not "+
-			"the policy delivering tokens inside prefill batches", opp, 100*oppMixed, 100*newMixed)
-	}
-	// The bound itself: no sample can outlast a forward pass that served the
-	// stream, and the percentile must sit under the longest one NEW launched.
 	value := r.Metrics[2].Value(k)
-	if value > batchMax {
-		return fmt.Errorf("NEW's p%.1f is %.3f s, longer than its longest forward pass of %.3f s",
-			100*(1-q), value, batchMax)
+	switch {
+	case band.Mixed >= band.Slots:
+		// The named sample is a mixed delivery: one pass's wall clock, one token.
+	case band.Mixed+band.Waited >= band.Slots:
+		if err := band.checkPassCost(value, r.Metrics[PolicyIndex(prevOr(opp))].Value(k), q); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("%d mixed samples and %d that waited out a prefill pass, of %d: a p%.1f names"+
+			" %d, so neither a mixed ride nor one forward pass reaches a percentile this long",
+			band.Mixed, band.Waited, band.Samples, 100*(1-q), band.Slots)
 	}
-	// Admissibility: the other policy must be withholding tokens during the cold
-	// prefills, which is what makes its shorter tail a symptom rather than a merit.
-	// Delivered volume inside the windows is the direct measure of that. The stream
-	// rate is not: it divides that volume by stream-seconds the policy chose for
-	// itself, so a policy serving strictly more tokens can post a lower rate.
+	// No sample can outlast a forward pass that served the stream, and the
+	// percentile must sit under the longest one NEW launched.
+	if value > band.PassMax {
+		return fmt.Errorf("NEW's p%.1f is %.3f s, longer than its longest forward pass of %.3f s",
+			100*(1-q), value, band.PassMax)
+	}
+	return boundTailAdmissible(r, k, opp)
+}
+
+// itlBand is the population one inter-token percentile is drawn from, split by the
+// delivery each sample came from and by the prefill passes its gap waited out.
+// Both branches of boundITLPercentile and the evidence line read it, so a cell is
+// argued on the numbers it can also show.
+type itlBand struct {
+	// Samples is the metric's population, one per generated token, and Slots the
+	// count a p(1-q) names: the samples at or above the reported percentile.
+	Samples, Slots int
+	// Mixed counts samples a prefill batch handed its riding request; Waited
+	// counts the decode-class samples whose gap spanned a prefill pass, of which
+	// WaitedFirst are a stream's first gap and WaitedMid the ones that were not.
+	Mixed, Waited, WaitedFirst, WaitedMid int
+	// TailMixed and TailWaited are the same two classes within the samples at or
+	// above the reported percentile, which is what decides what that percentile is.
+	TailMixed, TailWaited int
+	// MaxPasses is the most prefill passes any one decode-class gap spanned.
+	MaxPasses int
+	// Idle and Wait sum the unaccounted and the total GPU-clock seconds over the
+	// samples at or above the cut.
+	Idle, Wait float64
+	// DecodeCut is the p(1-q) of NEW's decode-class samples, token-weighted like
+	// the metric itself: the percentile with the pass-cost samples taken out.
+	DecodeCut float64
+	// PassMax and StepMax are the longest prefill pass and decode step NEW
+	// launched. Ceiling is what one such pair may cost at most: a whole chunk of
+	// prefill tokens plus one extend token for every request the pass can carry a
+	// row for, both priced at the deepest mid-context this run's extend batches
+	// attended over, the largest host-tier copy any pass paid, and the calibrated
+	// step at the largest decode batch. Every term comes from the cost model the run
+	// itself ran on and from the run's own batches.
+	PassMax, StepMax, Ceiling float64
+	// MaxRows is the most requests any one pass carried as decode rows.
+	MaxRows int
+	// The terms Ceiling is built from, kept so the evidence line can show the sum.
+	ChunkCeil, RowCeil, ReloadCeil, StepCeil float64
+	// OppSamples and OppMixed are the same population for the policy compared
+	// against, counted the same way.
+	OppSamples, OppMixed int
+}
+
+// itlPassBand measures the band over NEW's runs and the opponent's, per run: the
+// batches of one seed cannot be attributed to another seed's deliveries, so the
+// populations are reduced per run and summed, never pooled into one trace.
+func itlPassBand(r Row, opp Mode, q float64) (itlBand, error) {
+	var band itlBand
+	type sample struct {
+		v, idle, wait float64
+		mixed, waited bool
+	}
+	var all, decode []sample
+	for _, res := range r.Runs[PolicyIndex(ModeNew)] {
+		if res == nil {
+			return band, fmt.Errorf("a NEW run is missing")
+		}
+		cost := res.Cfg.Cost
+		if cost.Cal.ChunkSize == 0 {
+			return band, fmt.Errorf("the run carries no chunk size to price a pass with")
+		}
+		tl := newGPUTimeline(res)
+		cls := classifyDeliveries(res)
+		deepest, reloadMax, rowsMax, stepCeil := 0.0, 0.0, 0, 0.0
+		for _, b := range res.Batches {
+			if b.IsPrefill {
+				for _, it := range b.Items {
+					if m := float64(it.PrefixBefore) + float64(it.Extend)/2; m > deepest {
+						deepest = m
+					}
+				}
+				if d := b.End - b.Start; d > band.PassMax {
+					band.PassMax = d
+				}
+				if b.ReloadSeconds > reloadMax {
+					reloadMax = b.ReloadSeconds
+				}
+				if len(b.Rows) > rowsMax {
+					rowsMax = len(b.Rows)
+				}
+				continue
+			}
+			sumCtx := 0
+			for i := range b.Decode {
+				sumCtx += b.Decode[i].Context() - b.DecodeToks[i]
+			}
+			if c := cost.DecodeSeconds(len(b.Decode), sumCtx); c > stepCeil {
+				stepCeil = c
+			}
+			if d := b.End - b.Start; d > band.StepMax {
+				band.StepMax = d
+			}
+		}
+		// One pass can carry a whole chunk of prefill tokens, one extend token per
+		// riding request, and the host-tier copy the admission it completes pays.
+		// All of it priced at the deepest context this run's prefill attended over.
+		perTok := cost.Cal.Prefill.PrefillSecondsPerToken(deepest)
+		chunkCeil := float64(res.Cfg.ChunkSize)*perTok + cost.PerBatchSeconds()
+		rowCeil := float64(rowsMax) * perTok
+		if c := chunkCeil + rowCeil + reloadMax + stepCeil; c > band.Ceiling {
+			band.Ceiling = c
+			band.ChunkCeil, band.RowCeil = chunkCeil, rowCeil
+			band.ReloadCeil, band.StepCeil = reloadMax, stepCeil
+			band.MaxRows = rowsMax
+		}
+		for _, req := range res.Requests {
+			for i := 1; i < len(req.Deliveries); i++ {
+				d := req.Deliveries[i]
+				n := maxI(d.N, 1)
+				from := req.Deliveries[i-1].T
+				gap := d.T - from
+				npf, busy := tl.inside(from, d.T)
+				label := cls[deliveryKey{req.ID, int64(math.Round(d.T * 1e6))}]
+				s := sample{v: gap / float64(n), idle: gap - busy, wait: gap,
+					mixed: label == "mixed", waited: label == "decode" && npf > 0}
+				for k := 0; k < n; k++ {
+					all = append(all, s)
+					if label == "decode" {
+						decode = append(decode, s)
+					}
+				}
+				switch {
+				case s.mixed:
+					band.Mixed += n
+				case s.waited:
+					band.Waited += n
+					if i == 1 {
+						band.WaitedFirst += n
+					} else {
+						band.WaitedMid += n
+					}
+					if npf > band.MaxPasses {
+						band.MaxPasses = npf
+					}
+				}
+			}
+		}
+	}
+	band.Samples = len(all)
+	band.Slots = int(math.Ceil(q * float64(len(all))))
+	sort.Slice(all, func(i, j int) bool { return all[i].v < all[j].v })
+	for _, s := range all[maxI(0, len(all)-band.Slots):] {
+		band.Idle += s.idle
+		band.Wait += s.wait
+		if s.mixed {
+			band.TailMixed++
+		}
+		if s.waited {
+			band.TailWaited++
+		}
+	}
+	dv := make([]float64, len(decode))
+	for i, s := range decode {
+		dv[i] = s.v
+	}
+	band.DecodeCut = pct(dv, 100*(1-q))
+	for _, res := range r.Runs[PolicyIndex(opp)] {
+		if res == nil {
+			return band, fmt.Errorf("a %s run is missing", opp)
+		}
+		cls := classifyDeliveries(res)
+		for _, req := range res.Requests {
+			for i := 1; i < len(req.Deliveries); i++ {
+				n := maxI(req.Deliveries[i].N, 1)
+				band.OppSamples += n
+				if cls[deliveryKey{req.ID,
+					int64(math.Round(req.Deliveries[i].T * 1e6))}] == "mixed" {
+					band.OppMixed += n
+				}
+			}
+		}
+	}
+	return band, nil
+}
+
+// checkPassCost states the arithmetic of a tail made of samples that waited out one
+// prefill pass: the wait is one pass and one step, its whole length is work some
+// other request was served, and NEW's own decode steps are still the faster ones.
+func (b itlBand) checkPassCost(value, oppValue, q float64) error {
+	if b.TailMixed+b.TailWaited < b.Slots {
+		return fmt.Errorf("%d mixed and %d pass-waiting samples fill only %d of the %d slots a p%.1f"+
+			" names, so the percentile itself is a plain decode sample that no forward pass explains",
+			b.TailMixed, b.TailWaited, b.TailMixed+b.TailWaited, b.Slots, 100*(1-q))
+	}
+	if b.WaitedMid > 0 {
+		return fmt.Errorf("%d of NEW's samples are a mid-stream delivery that waited out a prefill pass"+
+			" it was not a row on, so the ride is not covering every running request", b.WaitedMid)
+	}
+	if b.MaxPasses > 1 {
+		return fmt.Errorf("NEW's widest gap spans %d back-to-back prefill passes, so the tail is more"+
+			" than the one batch's stall this bound prices", b.MaxPasses)
+	}
+	if b.PassMax+b.StepMax > b.Ceiling {
+		return fmt.Errorf("NEW launched a prefill pass of %.3f s and a decode step of %.3f s together"+
+			" worth %.3f s, over the %.3f s the deployment's own chunk, rows and reload cost at the"+
+			" deepest context this run reached, so the wait a stream can be charged is not bounded by"+
+			" one chunk of the deployment's own sizing", b.PassMax, b.StepMax, b.PassMax+b.StepMax,
+			b.Ceiling)
+	}
+	if value > b.Ceiling {
+		return fmt.Errorf("NEW's p%.1f of %.3f s exceeds the %.3f s one pass and one step can cost at"+
+			" the deepest context this run reached", 100*(1-q), value, b.Ceiling)
+	}
+	if b.Wait <= 0 {
+		return fmt.Errorf("the samples at or above the cut waited out no GPU time at all")
+	}
+	if b.Idle > itlIdleSlack*b.Wait {
+		return fmt.Errorf("%.1f ms of the %.1f ms the tail samples waited out is not inside a launched"+
+			" pass (%.2f%%, against a %.2f%% tolerance), so part of NEW's tail is a GPU left idle rather"+
+			" than work run for another request", b.Idle*1e3, b.Wait*1e3, 100*b.Idle/b.Wait,
+			100*itlIdleSlack)
+	}
+	if b.DecodeCut > oppValue {
+		return fmt.Errorf("NEW's decode-class samples reach %.3f s at their p%.1f against the %.3f s"+
+			" percentile it is being compared to, so its own decode steps are the slower ones, which"+
+			" no tail's shape explains", b.DecodeCut, 100*(1-q), oppValue)
+	}
+	return nil
+}
+
+// itlIdleSlack bounds the share of a tail sample's wait that no launched forward
+// pass accounts for. The engine charges every pass its calibrated seconds and
+// starts each at the end of the last one, so a gap with time inside no pass is the
+// scheduler holding no work; measured, the tail samples of every cell this bound
+// covers account for 100% of their wait.
+const itlIdleSlack = 0.01
+
+// boundTailAdmissible is the shared test that the policy being beaten was
+// withholding tokens outright: delivered volume inside the cold prefills is the
+// direct measure of that. The stream rate is not: it divides that volume by
+// stream-seconds the policy chose for itself, so a policy serving strictly more
+// tokens can post a lower rate.
+func boundTailAdmissible(r Row, k MetricKey, opp string) error {
 	ni, oi := PolicyIndex(ModeNew), PolicyIndex(prevOr(opp))
 	nf, of := coldFlowOf(r, ModeNew), coldFlowOf(r, Mode(prevOr(opp)))
 	if nf.Toks < of.Toks {
@@ -609,10 +878,59 @@ func boundITLPercentile(r Row, k MetricKey, opp string) error {
 			" it is not the policy keeping the whole conversation set generating",
 			r.Metrics[ni].PerAgentTokSCold, opp, pa)
 	}
-	if r.Metrics[2].LongestStall > r.Metrics[PolicyIndex(Mode(prevOr(opp)))].LongestStall {
+	if r.Metrics[ni].LongestStall > r.Metrics[oi].LongestStall {
 		return fmt.Errorf("NEW's longest stall is worse too, so the percentile is not the only thing moving")
 	}
 	return nil
+}
+
+// gpuTimeline indexes one run's batches for a gap query. The engine starts every
+// pass at or after the end of the previous one, so the list is ordered and
+// non-overlapping and a gap's contents are a binary search plus two prefix sums.
+type gpuTimeline struct {
+	starts, ends, busy, prefill []float64
+}
+
+func newGPUTimeline(res *Result) gpuTimeline {
+	tl := gpuTimeline{}
+	var busy, pf float64
+	for _, b := range res.Batches {
+		tl.starts = append(tl.starts, b.Start)
+		tl.ends = append(tl.ends, b.End)
+		busy += b.End - b.Start
+		if b.IsPrefill {
+			pf++
+		}
+		tl.busy = append(tl.busy, busy)
+		tl.prefill = append(tl.prefill, pf)
+	}
+	return tl
+}
+
+// inside reports how many prefill passes and how many GPU seconds fall in
+// (from, to], the window one inter-token gap covers.
+func (tl gpuTimeline) inside(from, to float64) (passes int, secs float64) {
+	if len(tl.ends) == 0 {
+		return 0, 0
+	}
+	lo := sort.Search(len(tl.ends), func(i int) bool { return tl.ends[i] > from })
+	hi := sort.Search(len(tl.starts), func(i int) bool { return tl.starts[i] >= to })
+	if hi <= lo {
+		return 0, 0
+	}
+	prior, priorPf := 0.0, 0.0
+	if lo > 0 {
+		prior, priorPf = tl.busy[lo-1], tl.prefill[lo-1]
+	}
+	return int(tl.prefill[hi-1] - priorPf), tl.busy[hi-1] - prior
+}
+
+// idleShare is the part of a tail's wait that no launched forward pass covers.
+func idleShare(b itlBand) float64 {
+	if b.Wait <= 0 {
+		return 0
+	}
+	return b.Idle / b.Wait
 }
 
 // coldFlow is metric 1's numerator and denominator for one policy, summed over
