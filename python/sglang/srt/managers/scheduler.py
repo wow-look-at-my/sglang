@@ -1435,7 +1435,9 @@ class Scheduler(
     def _prefill_token_budget(self) -> Optional[int]:
         if self.prefill_decode_balancer is None:
             return None
-        return self.prefill_decode_balancer.prefill_token_budget
+        return self.prefill_decode_balancer.prefill_token_budget(
+            continues_chunk=self.chunked_req is not None
+        )
 
     def _arm_prefill_decode_interval(self, batch: Optional[ScheduleBatch]) -> None:
         if self.prefill_decode_balancer is not None:

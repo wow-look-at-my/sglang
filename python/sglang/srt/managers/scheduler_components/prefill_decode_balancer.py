@@ -24,7 +24,10 @@ There is nothing to tune:
   prefills that arrive one after another use what is left of that budget
   instead of each waiting out a decode slice, as they would have shared one
   batch had they arrived together. A chunked prompt's next chunk waits for
-  decode to catch up rather than taking a sliver of the leftover.
+  decode to catch up rather than taking a sliver of the leftover, and is
+  capped in seconds rather than tokens: cost per prefill token rises with the
+  context attention reads, so a token bound leaves the wait to grow with the
+  prompt instead of staying at what one chunk was worth.
 * **Piggybacked decode is a bonus, not the share.** With mixed chunked
   prefill every running request decodes one token inside each prefill chunk.
   That batch is charged as prefill, minus only the marginal cost of its decode
@@ -83,9 +86,16 @@ class PrefillDecodeBalancer:
         self._busy_since = 0.0
         # Prefill tokens launched since decode last caught up.
         self._burst_used = 0
-        # Local GPU seconds and tokens of every batch that extended tokens.
+        # Local GPU seconds and tokens of every prefill batch that extended
+        # tokens. A decode batch also reports extend tokens (one per request) and
+        # costs an order of magnitude more per token, so it cannot join a rate
+        # that prices prefill work.
         self._extend_seconds = 0.0
         self._extend_tokens = 0
+        # GPU seconds and tokens of the last finished prefill batch: the marginal
+        # rate, which is what the next chunk of the same prompt will pay.
+        self._last_prefill_seconds = 0.0
+        self._last_prefill_tokens = 0
 
     @property
     def debt(self) -> float:
@@ -99,9 +109,34 @@ class PrefillDecodeBalancer:
         return self._extend_seconds / self._extend_tokens
 
     @property
-    def prefill_token_budget(self) -> Optional[int]:
-        """Cap on the next prefill batch's new tokens; None means uncapped."""
-        if self._burst_tokens is None or self._burst_used == 0:
+    def marginal_prefill_seconds_per_token(self) -> float:
+        """Cost of one more prefill token at the last finished prefill batch.
+
+        Attention reads the whole context, so this rate rises along a chunked
+        prompt and is what its next chunk actually pays. 0 before a prefill has
+        finished.
+        """
+        if self._last_prefill_tokens == 0:
+            return 0.0
+        return self._last_prefill_seconds / self._last_prefill_tokens
+
+    def prefill_token_budget(self, *, continues_chunk: bool) -> Optional[int]:
+        """Cap on the next prefill batch's new tokens; None means uncapped.
+
+        A batch continuing a chunked prompt is capped to the GPU seconds one
+        chunk is worth at the measured average rate, priced at the marginal rate
+        this prompt's context is now paying. A fresh request cannot drift that
+        far -- its cost is bounded by its own length -- so fresh work keeps the
+        token form, which is what lets several short prefills share one burst
+        instead of each waiting out a decode slice.
+        """
+        if self._burst_tokens is None:
+            return None
+        average = self.prefill_seconds_per_token
+        marginal = self.marginal_prefill_seconds_per_token
+        if continues_chunk and average > 0.0 and marginal > 0.0:
+            return max(0, int(self._burst_tokens * average / marginal))
+        if self._burst_used == 0:
             return None
         return self._burst_tokens - self._burst_used
 
@@ -164,9 +199,10 @@ class PrefillDecodeBalancer:
         # A decode row adds one token to the extend pass; its attention over its
         # own context is not counted, so the estimate errs toward decode time.
         piggyback = min(num_decode_rows * self.prefill_seconds_per_token, elapsed)
-        if num_tokens > 0:
+        if is_prefill and num_tokens > 0:
             self._extend_seconds += elapsed
             self._extend_tokens += num_tokens
+            self._last_prefill_seconds, self._last_prefill_tokens = elapsed, num_tokens
         if is_prefill is None:
             return
         if is_prefill:
