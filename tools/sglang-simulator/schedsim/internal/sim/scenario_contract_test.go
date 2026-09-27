@@ -134,21 +134,23 @@ func TestMixedRideIsWhatDecidesTheP99Cell(t *testing.T) {
 	}
 }
 
+// TestITLP99BandFollowsTheMixedShare pins the pivot itl-contract-derivation.md
 // computes: whether mixed deliveries are more or less than 1% of the metric's
 // samples decides whether ITL p99 reports a prefill batch's seconds or a decode
-// step's. The dense cadence lands above the line and the sparse one below it, and
-// that is the whole difference between NEW winning p99 at one and losing it at the
-// other.
+// step's. The dense cold cadence and the busy short-chat scenario land above the
+// line, the sparse cadence below it, and that is the whole difference between NEW
+// winning p99 in one and losing it in the other.
 func TestITLP99BandFollowsTheMixedShare(t *testing.T) {
 	cost := ScenarioCost()
 	for _, tc := range []struct {
-		everyMin float64
+		sc       Scenario
 		overLine bool
 	}{
-		{everyMin: 2, overLine: true},
-		{everyMin: 5, overLine: false},
+		{sc: ScenarioB(2), overLine: true},
+		{sc: ScenarioC(2, 16), overLine: true},
+		{sc: ScenarioB(5), overLine: false},
 	} {
-		sc := ScenarioB(tc.everyMin)
+		sc := tc.sc
 		var runs []*Result
 		for _, seed := range sc.Seeds {
 			runs = append(runs, Run(sc, DefaultConfig(ModeNew, cost), seed))

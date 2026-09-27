@@ -126,6 +126,62 @@ the seconds form, both above PREV's 212.2 ms. Against the token form, every metr
 that measures the wait itself improved: p99.9, raw chunk-gap p99, longest stall,
 stream time in stalls over 1 s, and output.
 
+## The same count decides the other cells the tables mark
+
+Delivery-class shares for NEW, pooled over each scenario's own seeds. PREV has no
+mixed class at all - mixed chunked prefill is off at its commit - so every one of its
+samples is a decode sample. Latencies are ms except where a unit is written.
+
+| scenario | mixed share | p99 NEW / PREV | p99.9 NEW / PREV | raw gap p99 NEW / PREV | longest stall NEW / PREV |
+| --- | --- | --- | --- | --- | --- |
+| A: logged episode | 0.89% (361 of 40,517) | 77.6 / 161.5 | 479.3 / 646.7 | 422.0 / 541.7 | 748.2 ms / 1.76 s |
+| C: 2 req/s, max 16 | 2.46% (28,850 of 1,170,763) | 139.5 / 94.5 | 223.4 / 244.0 | 192.5 / 238.0 | 322.7 / 611.7 |
+| C: 0.5 req/s, max 16 | 0.33% (986 of 303,313) | 18.3 / 19.8 | 156.7 / 90.4 | 32.0 / 32.0 | 279.9 / 312.8 |
+| D: one cold 400K | 0.68% (4,544 of 669,290) | 26.6 / 30.4 | 395.7 / 339.8 | 134.6 / 95.5 | 665.3 / 1.54 s |
+| D: one cold 100K | 0.49% (3,581 of 728,029) | 26.0 / 27.1 | 145.5 / 147.3 | 63.3 / 72.0 | 363.2 / 699.7 |
+| thrash host 4x, 600 s | 0.64% (3,679 of 573,269) | 28.4 / 84.3 | 427.8 / 287.5 | 263.4 / 284.4 | 831.0 / 899.8 |
+
+The share says which band a percentile is drawn from - above 1% for p99, above 0.1%
+for p99.9 - and the band's height then says whether it beats PREV:
+
+* The p99 cells NEW loses to PREV are B at the 1 and 2 minute cadences (1.40% at 2
+  minutes) and C at 2, 3 and 5 req/s (2.46% measured at 2 req/s). Everywhere the share
+  was measured below 1% NEW wins p99 outright (77.6 against 161.5 in A, 28.4 against
+  84.3 under thrash, 27.7 against 39.1 at the 5 minute cadence, 26.0 against 27.1 at
+  D 100K). The shares at C 3 and 5 req/s are not quoted here; they are the same busy
+  prefill shape as C 2 req/s.
+* Above 0.1% the p99.9 is a mixed sample in every scenario, so NEW wins that cell only
+  where PREV's own tail is longer than one capped prefill batch (A 479.3 against
+  646.7, B at 1 and 2 minutes) and loses it where PREV's tail is short (C 0.5 req/s
+  156.7 against 90.4, D 400K 395.7 against 339.8).
+* In every row above NEW's own pure-decode steps are far tighter than PREV's reported
+  tail - the decode class's 99th percentile is 23.9 ms in A, 36.4 ms at C 2 req/s,
+  26.5 ms at D 400K and 28.4 ms under thrash, against PREV's 161.5, 94.5, 30.4 and
+  84.3 ms - and the undivided raw gap p99 favours NEW in four of the six rows, with a
+  tie at C 0.5 req/s and a loss at D 400K.
+
+Within the sensitivity sweep the same crossing accounts for four cells that used to
+pass: `decode D0 x0.7`, `decode DCtx 0`, `decode DBS 0` and `MTP accept 3.5` reported
+NEW p99 of 30.9, 118.1, 70.5 and 31.5 ms with the bound in tokens - decode-band
+values, mixed share just under 1% - and report 290.9, 307.9, 302.2 and 291.0 ms with
+the bound in seconds, as the extra chunks take their share just over it. The same
+four rows improve their longest stall by 13-25% (957 to 831 ms, 941 to 774 ms, 1.01 to
+0.76 s, 970 to 800 ms) and their p99.9 with it.
+
+Two other failure classes are not the tail mechanism at all:
+
+* `output tok/s vs OLD` in A (132.1 against 139.7) is the half-share trade, not a
+  regression: OLD gives the cold prompt the whole GPU and is done with it in 70.0 s,
+  NEW splits it and is done in 128.8 s, and the tokens the streams did not generate
+  during that window are the difference. NEW beats PREV there (132.1 against 125.3).
+  The `output tok/s` carets on C 0.5 req/s, C 1 req/s and thrash at 600 s are ties at
+  the printed precision - C 0.5 req/s measures NEW 168.5950 against PREV 168.6128, a
+  0.011% shortfall - and `Better` flags any non-zero difference.
+* `stream decode tok/s in cold` and `per-agent tok/s in cold vs PREV` in D at 100K
+  (64.9 against 67.4, 223.8 against 224.4) are measured identical before and after the
+  seconds cap (223.7 before, 223.8 after), so they predate it and are not this
+  mechanism. They are unexplained by this document.
+
 ## `cold TTFT` against OLD
 
 OLD finishes a cold 400K prompt in 45.3 s, NEW in 105.0 s. A 400K prompt at the
