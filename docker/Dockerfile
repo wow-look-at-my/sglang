@@ -1,10 +1,18 @@
 ARG CUDA_VERSION=13.0.3
+# Kept in sync with python/sglang/kernels/aot by scripts/release/bump_kernel_version_to_sglang.py.
+ARG SGL_KERNEL_VERSION=0.4.9
+# Semicolon-separated GPU archs the image must serve, e.g. "120a"; empty builds
+# every optional arch-specific component.
+ARG GPU_ARCHS=
+# Compile jobs per native build step; empty keeps each tool's own default.
+ARG BUILD_JOBS=
+# 0 leaves sgl-model-gateway (the Rust router binary and sglang-router wheel) out.
+ARG INSTALL_GATEWAY=1
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
 
 ARG TARGETARCH
 ARG BUILD_TYPE=all
 ARG BRANCH_TYPE=remote
-ARG SGL_KERNEL_VERSION=0.4.7
 ARG SGL_VERSION
 ARG USE_LATEST_SGLANG=0
 ARG GDRCOPY_VERSION=2.5.1
@@ -161,6 +169,12 @@ ENV LANG=en_US.UTF-8 \
 #   framework (combines all artifacts)
 #
 
+# Holds no wheel by default, so sglang-kernel comes from PyPI. Override it with
+# `--build-context sgl_kernel_wheels=<dir of sglang_kernel-*.whl>` to install the
+# kernel built from this checkout, e.g. before that version is published;
+# SGL_KERNEL_WHEEL_REQUIRED=1 then fails the build instead of falling back to PyPI.
+FROM base AS sgl_kernel_wheels
+
 ########################################################
 # PARALLEL STAGE 1: Torch/Deps Builder (starts from base)
 ########################################################
@@ -169,7 +183,9 @@ FROM base AS torch_deps
 ARG CUDA_VERSION
 ARG BUILD_TYPE
 ARG SGL_KERNEL_VERSION
+ARG SGL_KERNEL_WHEEL_REQUIRED=0
 ARG GITHUB_ARTIFACTORY
+ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
@@ -182,13 +198,24 @@ RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.ru
 
 # Install sgl-kernel (from pre-built wheel)
 RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,from=sgl_kernel_wheels,target=/tmp/sgl_kernel_wheels \
     python3 -m pip install --upgrade pip setuptools wheel html5lib six \
     && case "$CUDA_VERSION" in \
         13.0.3) ;; \
         *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
+    && LOCAL_KERNEL_WHL=$(ls /tmp/sgl_kernel_wheels/sglang_kernel-${SGL_KERNEL_VERSION}[+-]*_$(uname -m).whl 2>/dev/null | head -1) \
     # --no-deps prevents pip from pulling torch from default PyPI
-    && python3 -m pip install sglang-kernel==${SGL_KERNEL_VERSION} --force-reinstall --no-deps
+    && if [ -n "$LOCAL_KERNEL_WHL" ]; then \
+        echo "Installing local sglang-kernel wheel: $LOCAL_KERNEL_WHL" \
+        && python3 -m pip install "$LOCAL_KERNEL_WHL" --force-reinstall --no-deps; \
+    elif [ "$SGL_KERNEL_WHEEL_REQUIRED" = "1" ]; then \
+        echo "ERROR: no sglang_kernel-${SGL_KERNEL_VERSION}+*_$(uname -m).whl in the sgl_kernel_wheels build context:" \
+        && ls -al /tmp/sgl_kernel_wheels \
+        && exit 1; \
+    else \
+        python3 -m pip install sglang-kernel==${SGL_KERNEL_VERSION} --force-reinstall --no-deps; \
+    fi
 
 # Copy dep spec + Rust crate source + proto files. setuptools-rust compiles the
 # Rust extension during the stub wheel build; the crate's build.rs references
@@ -207,6 +234,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         13.0.3) CUINDEX=130 ;; \
         *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
+    && if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
     && cd /tmp/sglang_deps/python \
     && mkdir -p sglang \
     && touch sglang/__init__.py \
@@ -249,15 +277,22 @@ FROM torch_deps AS hpc_ops_builder
 # RoPE kernels from the Tencent Hunyuan AI Infra team, consumed by the opt-in
 # hpc_ops attention and MoE runner backends.
 ARG HPC_OPS_COMMIT=ab1a402724635507037426068f6cddc3d30dc0a8
+ARG GPU_ARCHS
+ARG BUILD_JOBS
 
 WORKDIR /build
 
-# The kernels target Hopper (sm90a) only, so skip non-x86_64 images.
-# setup.py derives the version from `git rev-parse`, so keep the .git dir
-# (a source zip archive would not build).
+# The kernels target Hopper (sm90a) only, so skip non-x86_64 images and images
+# whose GPU_ARCHS leave out sm90. setup.py derives the version from
+# `git rev-parse`, so keep the .git dir (a source zip archive would not build).
 RUN --mount=type=cache,target=/root/.cache/pip \
     mkdir -p /wheels && \
-    if [ "$(uname -m)" = "x86_64" ]; then \
+    case ";${GPU_ARCHS};" in \
+        ";;"|*";90;"*|*";90a;"*) WANT_HPC_OPS=1 ;; \
+        *) WANT_HPC_OPS=0; echo "Skipping hpc-ops: GPU_ARCHS=${GPU_ARCHS} has no sm90" ;; \
+    esac && \
+    if [ -n "$BUILD_JOBS" ]; then export MAX_JOBS="$BUILD_JOBS" CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"; fi && \
+    if [ "$(uname -m)" = "x86_64" ] && [ "$WANT_HPC_OPS" = "1" ]; then \
         git clone https://github.com/Tencent/hpc-ops.git && \
         cd hpc-ops && \
         git checkout ${HPC_OPS_COMMIT} && \
@@ -351,6 +386,7 @@ ARG GITHUB_ARTIFACTORY
 ARG BRANCH_TYPE
 ARG SGL_VERSION
 ARG USE_LATEST_SGLANG
+ARG BUILD_JOBS
 
 WORKDIR /build
 
@@ -361,13 +397,25 @@ COPY sgl-model-gateway /build/sgl-model-gateway
 RUN --mount=type=cache,target=/root/.cache/pip \
     curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && export PATH="/root/.cargo/bin:${PATH}" \
+    && if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
     && python3 -m pip install maturin \
     && cd /build/sgl-model-gateway/bindings/python \
     && ulimit -n 65536 && maturin build --release --features vendored-openssl --out /build/gateway_wheels \
     && cd /build/sgl-model-gateway \
     && cargo build --release --bin sgl-model-gateway --features vendored-openssl \
-    && cp target/release/sgl-model-gateway /build/sgl-model-gateway-bin \
+    && mkdir -p /build/gateway_bin \
+    && cp target/release/sgl-model-gateway /build/gateway_bin/sgl-model-gateway \
     && rm -rf /root/.cargo /root/.rustup /build/sgl-model-gateway/target /build/sgl-model-gateway/bindings/python/target
+
+# INSTALL_GATEWAY picks the gateway artifacts: the build above, or two empty
+# directories, in which case BuildKit never runs gateway_builder at all.
+FROM base AS gateway_artifacts_0
+RUN mkdir -p /build/gateway_wheels /build/gateway_bin
+
+FROM gateway_builder AS gateway_artifacts_1
+
+# hadolint ignore=DL3006
+FROM gateway_artifacts_${INSTALL_GATEWAY} AS gateway_artifacts
 
 ########################################################
 ########## Final Framework Image ######################
@@ -388,6 +436,7 @@ ARG MSCCLPP_VERSION
 # Renamed from NCCL_VERSION: the nvidia/cuda base image sets ENV NCCL_VERSION
 # (Debian apt format, e.g. 2.28.3-1), which shadows a same-named ARG inside RUN.
 ARG SGL_NCCL_VERSION
+ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
@@ -395,7 +444,7 @@ WORKDIR /sgl-workspace
 # Copy artifacts from parallel builders
 # =============================================================================
 
-# Copy HPC-Ops wheel and install (empty on non-x86_64; kernels are sm90a-only)
+# Copy HPC-Ops wheel and install (empty on non-x86_64 or without sm90 in GPU_ARCHS)
 COPY --from=hpc_ops_builder /wheels /tmp/wheels/hpc-ops
 RUN --mount=type=cache,target=/root/.cache/pip \
     if ls /tmp/wheels/hpc-ops/*.whl >/dev/null 2>&1; then \
@@ -466,7 +515,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Install MSCCL++ Python dependencies and package (builds extension via CMake through pip)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    git clone --depth=1 --branch ${MSCCLPP_VERSION} https://${GITHUB_ARTIFACTORY}/microsoft/mscclpp.git /tmp/mscclpp \
+    if [ -n "$BUILD_JOBS" ]; then export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"; fi \
+    && git clone --depth=1 --branch ${MSCCLPP_VERSION} https://${GITHUB_ARTIFACTORY}/microsoft/mscclpp.git /tmp/mscclpp \
     && case "${CUDA_VERSION}" in \
            13.*) \
                CMAKE_ARGS="-DMSCCLPP_BYPASS_GPU_CHECK=ON -DMSCCLPP_USE_CUDA=ON -DMSCCLPP_GPU_ARCHS=80,90,100,100a,103,103a" \
@@ -562,6 +612,8 @@ ARG BUILD_TYPE
 ARG CUDA_VERSION
 ARG SGL_VERSION
 ARG USE_LATEST_SGLANG
+ARG SGL_KERNEL_VERSION
+ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
@@ -580,7 +632,8 @@ RUN if [ "$BRANCH_TYPE" = "local" ]; then \
 # Editable install (fast - dependencies already installed via constraints)
 # Clean up __pycache__/tests/pyc in same RUN to avoid writing ~28k files to layer
 RUN --mount=type=cache,target=/root/.cache/pip \
-    cd /sgl-workspace/sglang \
+    if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
+    && cd /sgl-workspace/sglang \
     && python3 -m pip install --no-deps -e "python[${BUILD_TYPE}]" \
     && kernels lock python \
     && ( success=0; \
@@ -612,12 +665,17 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 ENV SGLANG_RUST_BUILD_MODE=never
 
 
-# Install pre-built gateway artifacts from parallel builder
-COPY --from=gateway_builder /build/sgl-model-gateway-bin /opt/sglang/bin/sgl-model-gateway
-COPY --from=gateway_builder /build/gateway_wheels /tmp/gateway_wheels
+# Install pre-built gateway artifacts from parallel builder (none when INSTALL_GATEWAY=0)
+COPY --from=gateway_artifacts /build/gateway_bin/ /opt/sglang/bin/
+COPY --from=gateway_artifacts /build/gateway_wheels /tmp/gateway_wheels
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install --force-reinstall /tmp/gateway_wheels/*.whl \
+    if ls /tmp/gateway_wheels/*.whl >/dev/null 2>&1; then \
+        python3 -m pip install --force-reinstall /tmp/gateway_wheels/*.whl; \
+    fi \
     && rm -rf /tmp/gateway_wheels
+
+# Every later pip step could have swapped the kernel wheel installed in torch_deps.
+RUN python3 -c "import importlib.metadata as m, sys; v = m.version('sglang-kernel'); print('sglang-kernel', v); sys.exit(0 if v.split('+')[0] == '${SGL_KERNEL_VERSION}' else 'sglang-kernel ' + v + ' is not ${SGL_KERNEL_VERSION}')"
 
 # Set workspace directory
 WORKDIR /sgl-workspace/sglang
@@ -753,8 +811,8 @@ COPY --from=framework_final /opt/sglang/lib/python3.12/site-packages /opt/sglang
 # Copy SGLang workspace
 COPY --from=framework_final /sgl-workspace /sgl-workspace
 
-# Copy sgl-model-gateway binary
-COPY --from=framework_final /opt/sglang/bin/sgl-model-gateway /opt/sglang/bin/sgl-model-gateway
+# Copy sgl-model-gateway binary (none when INSTALL_GATEWAY=0)
+COPY --from=gateway_artifacts /build/gateway_bin/ /opt/sglang/bin/
 
 # Copy sglang binary
 COPY --from=framework_final /opt/sglang/bin/sglang /opt/sglang/bin/sglang

@@ -220,6 +220,7 @@ from sglang.srt.managers.schedule_policy import (
     AddReqResult,
     PrefillAdder,
     SchedulePolicy,
+    match_prefix_for_req,
 )
 from sglang.srt.managers.scheduler_components.batch_result_processor import (
     SchedulerBatchResultProcessor,
@@ -227,6 +228,10 @@ from sglang.srt.managers.scheduler_components.batch_result_processor import (
 from sglang.srt.managers.scheduler_components.dp_attn import SchedulerDPAttnAdapter
 from sglang.srt.managers.scheduler_components.dynamic_chunk_sizer import (
     DynamicChunkSizer,
+)
+from sglang.srt.managers.scheduler_components.eviction_throttle import (
+    EvictionThrottle,
+    rank0_verdict_consensus,
 )
 from sglang.srt.managers.scheduler_components.flush_wrapper import SchedulerFlushWrapper
 from sglang.srt.managers.scheduler_components.idle_sleeper import (
@@ -265,6 +270,11 @@ from sglang.srt.managers.scheduler_components.output_streamer import (
 )
 from sglang.srt.managers.scheduler_components.pool_stats_observer import (
     SchedulerPoolStatsObserver,
+)
+from sglang.srt.managers.scheduler_components.prefill_decode_balancer import (
+    PrefillDecodeBalancer,
+    batch_class,
+    rank0_consensus,
 )
 from sglang.srt.managers.scheduler_components.profiler_manager import (
     SchedulerProfilerManager,
@@ -359,6 +369,7 @@ from sglang.srt.utils.hf_transformers_utils import (
 )
 from sglang.srt.utils.msgspec_utils import msgspec_to_builtins
 from sglang.srt.utils.numa_utils import get_numa_node_if_available, numa_bind_to_node
+from sglang.srt.utils.sgl_kernel_ops import warn_missing_sgl_kernel_ops
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.utils.weight_versions import (
     compute_weight_version_spans,
@@ -590,6 +601,7 @@ class Scheduler(
         self.token_to_kv_pool_allocator = result.token_to_kv_pool_allocator
         self.disable_radix_cache = result.disable_radix_cache
         self.tree_cache = result.tree_cache
+        self.enable_hierarchical_cache = result.enable_hierarchical_cache
         if self.enable_hierarchical_cache:
             cache_controller = self.tree_cache.cache_controller
             if cache_controller is not None:
@@ -636,6 +648,8 @@ class Scheduler(
 
         # Init diffusion LLM
         self.init_diffusion_llm()
+        self.maybe_init_prefill_decode_balancer()
+        self.maybe_init_eviction_throttle()
 
         self.init_metrics_reporter()
         self.scheduler_stage_metrics = self.metrics_reporter.scheduler_stage_metrics
@@ -1341,14 +1355,108 @@ class Scheduler(
         if sizer.profile_and_fit():
             self.dynamic_chunk_sizer = sizer
 
-    def _should_defer_prefill(self) -> bool:
+    def maybe_init_prefill_decode_balancer(self) -> None:
+        """Time-share prefill and decode unless an explicit interval is set."""
+        self.prefill_decode_balancer: Optional[PrefillDecodeBalancer] = None
+        if (
+            self.prefill_decode_interval
+            or self.dllm_config is not None
+            or get_parallel().pp_size > 1
+        ):
+            return
+        self.prefill_decode_balancer = PrefillDecodeBalancer(
+            burst_tokens=self.chunked_prefill_size,
+            consensus_elapsed=rank0_consensus(self.attn_tp_cpu_group),
+        )
+
+    def maybe_init_eviction_throttle(self) -> None:
+        """Hold back conversations whose admission would thrash the prefix cache."""
+        self.eviction_throttle: Optional[EvictionThrottle] = None
+        if (
+            self.prefill_decode_balancer is None
+            or self.disaggregation_mode != DisaggregationMode.NULL
+            or self.tree_cache.disable
+        ):
+            return
+        cache_controller = (
+            self.tree_cache.cache_controller if self.enable_hierarchical_cache else None
+        )
+        host_tokens = (
+            cache_controller.mem_pool_host.size if cache_controller is not None else 0
+        )
+        self.eviction_throttle = EvictionThrottle(
+            device_tokens=self.token_to_kv_pool_allocator.size_full,
+            host_tokens=host_tokens,
+            prefill_seconds_per_token=lambda: (
+                self.prefill_decode_balancer.prefill_seconds_per_token
+            ),
+            consensus=rank0_verdict_consensus(self.attn_tp_cpu_group),
+        )
+
+    def _should_defer_prefill(self, running_batch: ScheduleBatch) -> bool:
+        if self.prefill_decode_balancer is not None:
+            return self.prefill_decode_balancer.should_defer_prefill(
+                prefill_pending=bool(self.waiting_queue)
+                or self.chunked_req is not None,
+                decode_runnable=not running_batch.is_empty()
+                and not running_batch.is_prefill_only,
+                continues_chunk=self.chunked_req is not None,
+            )
         if self._prefill_decode_interval_remaining == 0:
             return False
 
         self._prefill_decode_interval_remaining -= 1
         return True
 
+    def _eviction_throttle_holds(self, adder: PrefillAdder, req: Req) -> Optional[bool]:
+        """None to hold ``req`` back; otherwise whether admitting it evicts."""
+        if self.eviction_throttle is None:
+            return False
+        if not self.policy.waiting_queue_prefix_matched(self.waiting_queue):
+            # Otherwise prefix_indices is stale, empty for a new request.
+            match_prefix_for_req(self.tree_cache, req, include_req=True)
+        total_tokens = adder.admission_tokens(req)
+        would_evict = adder.needs_eviction(total_tokens)
+        if self.eviction_throttle.should_hold(
+            rid=req.rid,
+            input_len=len(req.origin_input_ids),
+            device_hit=len(req.prefix_indices),
+            total_tokens=total_tokens,
+            would_evict=would_evict,
+            queued_at=req.time_stats.wait_queue_entry_time,
+        ):
+            return None
+        return would_evict
+
+    def _present_rids(self, running_batch: ScheduleBatch) -> Set[str]:
+        batches = [running_batch, self.last_batch]
+        rids = {req.rid for req in self.waiting_queue}
+        rids.update(req.rid for b in batches if b is not None for req in b.reqs)
+        if self.chunked_req is not None:
+            rids.add(self.chunked_req.rid)
+        return rids
+
+    def _prefill_token_budget(self) -> Optional[int]:
+        if self.prefill_decode_balancer is None:
+            return None
+        return self.prefill_decode_balancer.prefill_token_budget(
+            continues_chunk=self.chunked_req is not None
+        )
+
     def _arm_prefill_decode_interval(self, batch: Optional[ScheduleBatch]) -> None:
+        if self.prefill_decode_balancer is not None:
+            if batch is not None:
+                decode_rows = (
+                    len(batch.decoding_reqs)
+                    if batch.forward_mode.is_mixed() and batch.decoding_reqs
+                    else 0
+                )
+                self.prefill_decode_balancer.on_batch_launched(
+                    is_prefill=batch_class(batch.forward_mode),
+                    num_tokens=batch.extend_num_tokens or 0,
+                    num_decode_rows=decode_rows,
+                )
+            return
         if self.prefill_decode_interval == 0 or batch is None:
             return
 
@@ -3264,6 +3372,10 @@ class Scheduler(
             self.waiting_queue.append(req)
             req.time_stats.set_wait_queue_entry_time()
             req.arrival_processed_tokens = self.processed_tokens_counter
+            if self.eviction_throttle is not None:
+                self.eviction_throttle.on_request_queued(
+                    rid=req.rid, token_ids=req.origin_input_ids
+                )
         elif self.disaggregation_mode == DisaggregationMode.PREFILL:
             self._prefetch_kvcache(req)
             self.disagg_prefill_bootstrap_queue.add(
@@ -3707,10 +3819,12 @@ class Scheduler(
 
         if self.dllm_config is not None:
             new_batch = self.get_new_batch_dllm(running_batch)
-        elif self._should_defer_prefill():
+        elif self._should_defer_prefill(running_batch):
             new_batch = None
         else:
-            prefill_plan = self.get_new_batch_prefill(running_batch)
+            prefill_plan = self.get_new_batch_prefill(
+                running_batch, prefill_token_budget=self._prefill_token_budget()
+            )
             new_batch = prefill_plan.batch_to_run
             running_batch = prefill_plan.running_batch
 
@@ -3786,7 +3900,12 @@ class Scheduler(
 
         return res
 
-    def get_new_batch_prefill(self, running_batch: ScheduleBatch) -> NextBatchPlan:
+    def get_new_batch_prefill(
+        self,
+        running_batch: ScheduleBatch,
+        *,
+        prefill_token_budget: Optional[int] = None,
+    ) -> NextBatchPlan:
         prefill_delayer_single_pass = None
         if self.prefill_delayer:
             # Get max usage across all pools for prefill delay decision
@@ -3800,6 +3919,7 @@ class Scheduler(
         ret, running_batch = self._get_new_batch_prefill_raw(
             prefill_delayer_single_pass=prefill_delayer_single_pass,
             running_batch=running_batch,
+            prefill_token_budget=prefill_token_budget,
         )
 
         if self.prefill_delayer:
@@ -3817,6 +3937,7 @@ class Scheduler(
         self,
         prefill_delayer_single_pass: Optional[PrefillDelayerSinglePassExecutor],
         running_batch: ScheduleBatch,
+        prefill_token_budget: Optional[int] = None,
     ) -> Tuple[Optional[ScheduleBatch], ScheduleBatch]:
         # Check if the grammar is ready in the grammar queue
         if self.grammar_manager.has_waiting_grammars():
@@ -3880,6 +4001,8 @@ class Scheduler(
             dynamic_size = self.dynamic_chunk_sizer.predict(history_len)
             if dynamic_size is not None:
                 chunked_prefill_size = dynamic_size
+        if prefill_token_budget is not None:
+            chunked_prefill_size = min(chunked_prefill_size, prefill_token_budget)
 
         # Prefill policy
         # Get BLOCK_M from the backend for tile-budget admission logic
@@ -3910,11 +4033,19 @@ class Scheduler(
 
         if self.chunked_req is not None:
             self.chunked_req.init_next_round_input()
-            adder.chunked_req_limit = self.policy.shortest_prefill_chunk_limit(
+            adder.chunked_req_limit = self.policy.cede_chunk_budget(
                 self.chunked_req,
                 self.waiting_queue,
                 adder.rem_chunk_tokens or 0,
                 self.page_size,
+                # The continuation takes one of the allocatable slots itself.
+                max_new_reqs=self.get_num_allocatable_reqs(
+                    running_bs, running_batch=running_batch
+                )
+                - 1,
+                admissible=lambda req: (
+                    adder.admission_tokens(req) < adder.rem_total_tokens
+                ),
             )
             self.chunked_req = adder.add_chunked_req(self.chunked_req)
 
@@ -3935,6 +4066,10 @@ class Scheduler(
         if mamba_allocator is not None:
             mamba_allocator.alloc_group_begin(len(self.waiting_queue))
         buffer_pipeline = self.tree_cache.buffer_pipeline
+        if self.eviction_throttle is not None:
+            self.eviction_throttle.begin_pass(
+                present_rids=self._present_rids(running_batch)
+            )
         # Get requests from the waiting queue to a new prefill batch
         for req in self.waiting_queue:
             if self.enable_lora and not self.can_schedule_lora_req(req, running_loras):
@@ -3990,6 +4125,9 @@ class Scheduler(
                     # marks the staged span below once it is surfaced.
                     req.host_hit_is_storage = False
 
+            would_evict = self._eviction_throttle_holds(adder, req)
+            if would_evict is None:
+                continue
             req.init_next_round_input(self.tree_cache)
             if self.enable_hicache_storage and (
                 self._prefetch_after_device_hit_loss(req)
@@ -4006,6 +4144,12 @@ class Scheduler(
                 has_chunked_req=(self.chunked_req is not None),
                 truncation_align_size=self.truncation_align_size,
             )
+            if (
+                self.eviction_throttle is not None
+                and adder.can_run_list
+                and adder.can_run_list[-1] is req
+            ):
+                self.eviction_throttle.on_admitted(evicted=would_evict)
 
             if self.enable_lora:
                 running_loras.add(req.lora_id)
@@ -4774,6 +4918,16 @@ class Scheduler(
             self.batch_result_processor.process_batch_result_prebuilt(batch)
         elif batch.forward_mode.is_idle():
             self.batch_result_processor.process_batch_result_idle(batch, result)
+        if self.prefill_decode_balancer is not None:
+            self.prefill_decode_balancer.on_batch_finished()
+        if self.eviction_throttle is not None:
+            for req in batch.reqs:
+                if req.finished():
+                    self.eviction_throttle.on_request_finished(
+                        rid=req.rid,
+                        input_ids=req.origin_input_ids,
+                        output_ids=req.output_ids,
+                    )
 
         # Submit this batch's queued host backups before the next scheduler step.
         self.tree_cache.flush_pending_backups()
@@ -6066,6 +6220,8 @@ def run_scheduler_process(
     scheduler = None
     try:
         scheduler = Scheduler(server_args, port_args)
+        if tp_rank == 0 and pp_rank == 0 and not dp_rank:
+            warn_missing_sgl_kernel_ops()
 
         # Send initialization info back to the parent process
         pipe_writer.send(scheduler.get_init_info())

@@ -9,8 +9,8 @@ members = [
 exclude = ["sglang-radix-tree"]
 
 [workspace.metadata.sglang]
-# Extension crates that intentionally cannot share this workspace's dependency
-# graph (sglang-radix-tree currently uses the tch-compatible PyO3 0.22 API).
+# Extension crates built from their own workspace and Cargo.lock rather than
+# this one (sglang-radix-tree links libtorch through tch).
 extension-manifests = ["sglang-radix-tree/Cargo.toml"]
 
 [workspace.package]

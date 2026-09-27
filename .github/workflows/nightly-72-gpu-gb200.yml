@@ -80,8 +80,10 @@ jobs:
     needs: validate-inputs
     # Run if validate-inputs succeeded (dispatch) or was skipped (cron).
     if: |
-      always() && github.repository == 'sgl-project/sglang'
-      && (needs.validate-inputs.result == 'success' || needs.validate-inputs.result == 'skipped')
+      github.repository == 'sgl-project/sglang' && (
+        always() && github.repository == 'sgl-project/sglang'
+        && (needs.validate-inputs.result == 'success' || needs.validate-inputs.result == 'skipped')
+      )
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
@@ -216,9 +218,11 @@ jobs:
   prepare-image:
     needs: [setup, build-image]
     if: |
-      always() && github.repository == 'sgl-project/sglang'
-      && needs.setup.result == 'success'
-      && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped')
+      github.repository == 'sgl-project/sglang' && (
+        always() && github.repository == 'sgl-project/sglang'
+        && needs.setup.result == 'success'
+        && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped')
+      )
     environment: ${{ github.event_name == 'workflow_dispatch' && 'gb200-ci' || '' }}
     runs-on: 72-gpu-gb200
     outputs:
@@ -270,9 +274,11 @@ jobs:
     # (e.g. build-image when neither pr_number nor sglang_branch is set) does
     # not propagate a skip to this job. Direct deps must still have succeeded.
     if: |
-      always() && github.repository == 'sgl-project/sglang'
-      && needs.setup.result == 'success'
-      && needs.prepare-image.result == 'success'
+      github.repository == 'sgl-project/sglang' && (
+        always() && github.repository == 'sgl-project/sglang'
+        && needs.setup.result == 'success'
+        && needs.prepare-image.result == 'success'
+      )
     runs-on: 72-gpu-gb200
     strategy:
       fail-fast: false
@@ -427,7 +433,7 @@ jobs:
   # ---------------------------------------------------------------------------
   cleanup-image:
     needs: [build-image, nightly-gb200-benchmark]
-    if: always() && needs.build-image.result == 'success'
+    if: github.repository == 'sgl-project/sglang' && (always() && needs.build-image.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Prune old staging tags on Docker Hub

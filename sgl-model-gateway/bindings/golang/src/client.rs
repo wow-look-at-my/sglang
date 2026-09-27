@@ -1,28 +1,26 @@
 //! Client SDK FFI functions
 
+use once_cell::sync::Lazy;
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char};
+use std::os::raw::c_char;
 use std::ptr;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use once_cell::sync::Lazy;
 use uuid::Uuid;
 
+use super::error::{set_error_message, SglErrorCode};
+use super::grpc_converter::sgl_grpc_response_converter_create;
+use super::router_utils::{generate_tool_constraints, process_chat_messages};
+use super::stream::SglangStreamHandle;
+use super::tokenizer::TokenizerHandle;
+use smg::protocols::chat::ChatCompletionRequest;
 use smg::tokenizer::create_tokenizer_from_file;
 use smg::tokenizer::traits::Tokenizer;
 use smg_grpc_client::sglang_scheduler::SglangSchedulerClient;
-use smg::protocols::chat::ChatCompletionRequest;
-use smg::routers::grpc::utils::{process_chat_messages, generate_tool_constraints};
-
-use super::error::{SglErrorCode, set_error_message};
-use super::grpc_converter::sgl_grpc_response_converter_create;
-use super::tokenizer::TokenizerHandle;
-use super::stream::SglangStreamHandle;
 
 /// Global tokio runtime for async operations
-static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    Runtime::new().expect("Failed to create tokio runtime for client FFI")
-});
+static RUNTIME: Lazy<Runtime> =
+    Lazy::new(|| Runtime::new().expect("Failed to create tokio runtime for client FFI"));
 
 /// Handle for complete client SDK (gRPC client + tokenizer)
 /// This handle manages the connection to sglang and provides a complete SDK interface
@@ -46,6 +44,10 @@ pub struct StreamRequestState {
 ///
 /// # Returns
 /// * Pointer to SglangClientHandle on success, null on failure
+///
+/// # Safety
+/// `endpoint` and `tokenizer_path` must be valid NUL-terminated UTF-8 strings;
+/// `error_out` must be null or a writable `char**`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_create(
     endpoint: *const c_char,
@@ -83,23 +85,23 @@ pub unsafe extern "C" fn sgl_client_create(
     };
 
     // Create gRPC client
-    let client = match RUNTIME.block_on(async {
-        SglangSchedulerClient::connect(endpoint_str).await
-    }) {
-        Ok(c) => Arc::new(c),
-        Err(e) => {
-            set_error_message(error_out, &format!("Failed to connect to endpoint: {}", e));
-            return ptr::null_mut();
-        }
-    };
+    let client =
+        match RUNTIME.block_on(async { SglangSchedulerClient::connect(endpoint_str).await }) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                set_error_message(error_out, &format!("Failed to connect to endpoint: {}", e));
+                return ptr::null_mut();
+            }
+        };
 
-    Box::into_raw(Box::new(SglangClientHandle {
-        client,
-        tokenizer,
-    }))
+    Box::into_raw(Box::new(SglangClientHandle { client, tokenizer }))
 }
 
 /// Free a client handle
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by `sgl_client_create` that has
+/// not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_free(handle: *mut SglangClientHandle) {
     if !handle.is_null() {
@@ -117,6 +119,10 @@ pub unsafe extern "C" fn sgl_client_free(handle: *mut SglangClientHandle) {
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `client_handle` must be live; `request_json` must be NUL-terminated UTF-8;
+/// `stream_handle_out` and `error_out` must be null or writable pointers.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_chat_completion_stream(
     client_handle: *mut SglangClientHandle,
@@ -172,10 +178,15 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
     // Generate tool constraints if needed
     let tool_constraint = if let Some(tools) = chat_request.tools.as_ref() {
         match generate_tool_constraints(tools, &chat_request.tool_choice, &chat_request.model) {
-            Ok(Some((constraint_type, constraint_value))) => Some((constraint_type, constraint_value)),
+            Ok(Some((constraint_type, constraint_value))) => {
+                Some((constraint_type, constraint_value))
+            }
             Ok(None) => None,
             Err(e) => {
-                set_error_message(error_out, &format!("Failed to generate tool constraints: {}", e));
+                set_error_message(
+                    error_out,
+                    &format!("Failed to generate tool constraints: {}", e),
+                );
                 return SglErrorCode::ParsingError;
             }
         }
@@ -195,15 +206,16 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
     ) {
         Ok(req) => req,
         Err(e) => {
-            set_error_message(error_out, &format!("Failed to build generate request: {}", e));
+            set_error_message(
+                error_out,
+                &format!("Failed to build generate request: {}", e),
+            );
             return SglErrorCode::ParsingError;
         }
     };
 
     // Send request and get stream
-    let stream = match RUNTIME.block_on(async {
-        client.generate(proto_request).await
-    }) {
+    let stream = match RUNTIME.block_on(async { client.generate(proto_request).await }) {
         Ok(s) => s,
         Err(e) => {
             set_error_message(error_out, &format!("Failed to send request: {}", e));
@@ -212,16 +224,24 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
     };
 
     // Create response converter
-    let tools_json = chat_request.tools.as_ref()
+    let tools_json = chat_request
+        .tools
+        .as_ref()
         .and_then(|t| serde_json::to_string(t).ok())
         .map(|s| CString::new(s).unwrap().into_raw());
-    let tool_choice_json = chat_request.tool_choice.as_ref()
+    let tool_choice_json = chat_request
+        .tool_choice
+        .as_ref()
         .and_then(|tc| serde_json::to_string(tc).ok())
         .map(|s| CString::new(s).unwrap().into_raw());
-    let stop_json = chat_request.stop.as_ref()
+    let stop_json = chat_request
+        .stop
+        .as_ref()
         .and_then(|s| serde_json::to_string(s).ok())
         .map(|s| CString::new(s).unwrap().into_raw());
-    let stop_token_ids_json = chat_request.stop_token_ids.as_ref()
+    let stop_token_ids_json = chat_request
+        .stop_token_ids
+        .as_ref()
         .and_then(|ids| serde_json::to_string(ids).ok())
         .map(|s| CString::new(s).unwrap().into_raw());
 
@@ -238,7 +258,12 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
         tool_choice_json.unwrap_or(ptr::null_mut()),
         stop_json.unwrap_or(ptr::null_mut()),
         stop_token_ids_json.unwrap_or(ptr::null_mut()),
-        if chat_request.skip_special_tokens { 1 } else { 0 },
+        if chat_request.skip_special_tokens {
+            1
+        } else {
+            0
+        },
+        prompt_tokens,
         error_out,
     );
 
@@ -263,9 +288,8 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
         let _ = CString::from_raw(ptr);
     }
 
-    // Create converter handle and set initial_prompt_tokens immediately
-    let mut converter_handle = *Box::from_raw(converter);
-    converter_handle.initial_prompt_tokens = Some(prompt_tokens);
+    // Take ownership of the converter so the stream handle can free it
+    let converter_handle = *Box::from_raw(converter);
 
     // Create stream handle with prompt_tokens
     *stream_handle_out = Box::into_raw(Box::new(SglangStreamHandle {

@@ -129,6 +129,31 @@ class TestHFTransformersLoading(unittest.TestCase):
         self.assertEqual(get_context_length(text), 1024)
         self.assertEqual(config.vision_config.patch_size, 14)
 
+    def test_nested_yarn_override_extends_derived_context_length(self):
+        """A YaRN rope_parameters override on text_config must raise the derived
+        context length to original_max_position_embeddings * factor."""
+        self.write_multimodal_config()
+
+        config = get_config(
+            self.model_path,
+            trust_remote_code=False,
+            local_files_only=True,
+            model_override_args={
+                "text_config": {
+                    "rope_parameters": {
+                        "rope_type": "yarn",
+                        "rope_theta": 10000.0,
+                        "factor": 2.0,
+                        "original_max_position_embeddings": 512,
+                    }
+                }
+            },
+        )
+        text = get_hf_text_config(config)
+
+        self.assertEqual(text.max_position_embeddings, 512)
+        self.assertEqual(get_context_length(text), 1024)
+
     def test_tokenizer_loading_preserves_batch_special_tokens_and_chat(self):
         self.write_config(self.text_config())
         self.make_tokenizer().save_pretrained(self.model_path)

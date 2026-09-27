@@ -38,6 +38,10 @@ from sglang.srt.mem_cache.buffer_mode.storage_existence_cache import (
     StorageExistenceCache,
 )
 from sglang.srt.mem_cache.common import RetractionBackup
+from sglang.srt.mem_cache.hicache_auto import (
+    AutoHiCacheAttachGate,
+    HiCacheAttachAborted,
+)
 from sglang.srt.mem_cache.hicache_storage import PoolName, PoolTransfer, SidecarPoolSpec
 from sglang.srt.mem_cache.hybrid_cache.hybrid_cache_controller import (
     HybridCacheController,
@@ -402,8 +406,18 @@ class UnifiedRadixCache(BasePrefixCache):
 
         self.tree_core.kv_events.record_all_cleared()
 
-    def init_hicache(self, server_args: ServerArgs, params: CacheInitParams) -> None:
-        """Initialize HiCache infrastructure."""
+    def init_hicache(
+        self,
+        server_args: ServerArgs,
+        params: CacheInitParams,
+        *,
+        attach_gate: Optional[AutoHiCacheAttachGate] = None,
+    ) -> None:
+        """Initialize HiCache infrastructure.
+
+        With ``attach_gate`` an aborted attach raises HiCacheAttachAborted and
+        leaves the cache without a host tier.
+        """
         self.host_memory_mode = get_memory().hicache_host_memory_mode
         if self.host_memory_mode == "buffer_only":
             # TODO(Jialin): Extend buffer-only state handoff to Mamba in a
@@ -452,15 +466,20 @@ class UnifiedRadixCache(BasePrefixCache):
             )
         )
 
-        attach_hybrid_pool_to_unified_cache(
-            self,
-            params,
-            server_args,
-            load_cache_event=self.load_cache_event,
-            storage_backend=storage_backend,
-            storage_extra_config=storage_extra_config,
-            storage_prefetch_threshold=storage_prefetch_threshold,
-        )
+        try:
+            attach_hybrid_pool_to_unified_cache(
+                self,
+                params,
+                server_args,
+                load_cache_event=self.load_cache_event,
+                storage_backend=storage_backend,
+                storage_extra_config=storage_extra_config,
+                storage_prefetch_threshold=storage_prefetch_threshold,
+                attach_gate=attach_gate,
+            )
+        except HiCacheAttachAborted:
+            self._storage_attachment = None
+            raise
         # Tag HiCache enablement on the TreeCore.
         if self.cache_controller is not None:
             self.tree_core.set_hicache_enabled()
@@ -1496,7 +1515,7 @@ class UnifiedRadixCache(BasePrefixCache):
                 self.cache_controller._move_write_operation(operation)
             )
             completion = self.cache_controller.l2_transfer_engine.submit_device_to_host(
-                self.cache_controller._l2_transfers(
+                self.cache_controller._l2_write_transfers(
                     write_host, write_device, write_pools
                 )
             )

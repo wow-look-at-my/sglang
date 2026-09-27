@@ -5,6 +5,7 @@ import logging
 import math
 import mmap
 import os
+import sys
 import uuid
 import weakref
 
@@ -34,14 +35,18 @@ try:
 except OSError:
     _libc = None
 
-# MAP_POPULATE is in Python's mmap module only since 3.11.
-_MAP_POPULATE = getattr(mmap, "MAP_POPULATE", 0x08000)
+# MAP_POPULATE and MADV_POPULATE_WRITE are Linux-only; the fallbacks are their
+# Linux values for Pythons whose mmap module omits the names. Elsewhere both are
+# 0, meaning "no such flag": 0x08000 is MAP_32BIT on Darwin, where OR-ing it
+# into a mapping makes mmap fail with ENOMEM.
+_IS_LINUX = sys.platform.startswith("linux")
+_MAP_POPULATE = getattr(mmap, "MAP_POPULATE", 0x08000 if _IS_LINUX else 0)
 # MAP_HUGETLB and MAP_HUGE_* are Linux-specific and not in Python's mmap module.
 _MAP_HUGETLB = 0x40000
 _MAP_HUGE_2MB = 21 << 26  # 0x1400000
 _MAP_HUGE_1GB = 30 << 26  # 0x78000000
 _MAP_FAILED = ctypes.c_void_p(-1).value
-_MADV_POPULATE_WRITE = getattr(mmap, "MADV_POPULATE_WRITE", 23)
+_MADV_POPULATE_WRITE = getattr(mmap, "MADV_POPULATE_WRITE", 23 if _IS_LINUX else 0)
 _PROT_RW = mmap.PROT_READ | mmap.PROT_WRITE
 
 
@@ -52,6 +57,8 @@ def _has_madv_populate_write() -> bool:
     Probed once on a single page. Probing on the real allocation is not an
     option: the answer decides how that allocation gets pre-faulted.
     """
+    if not _MADV_POPULATE_WRITE:
+        return False
     try:
         probe = mmap.mmap(
             -1,
@@ -70,6 +77,13 @@ def _has_madv_populate_write() -> bool:
         probe.close()
 
 
+def _touch_every_page(mm: mmap.mmap) -> None:
+    """Write one byte per page so the kernel backs the whole mapping."""
+    stride = mmap.PAGESIZE
+    npages = -(-len(mm) // stride)
+    mm[::stride] = bytes(npages)
+
+
 def _mmap_prefaulted(fileno: int, alloc_bytes: int, flags: int) -> mmap.mmap:
     """mmap `alloc_bytes` with every page already faulted in and writable.
 
@@ -77,14 +91,20 @@ def _mmap_prefaulted(fileno: int, alloc_bytes: int, flags: int) -> mmap.mmap:
     never be handed back lazily. MAP_POPULATE and MADV_POPULATE_WRITE each give
     that guarantee on their own, but asking for both makes the kernel walk the
     whole mapping twice. Prefer the madvise, which additionally reports a
-    failure (e.g. ENOMEM) instead of leaving pages quietly unpopulated, and fall
-    back to MAP_POPULATE only where the kernel lacks it.
+    failure (e.g. ENOMEM) instead of leaving pages quietly unpopulated, then
+    MAP_POPULATE where the kernel lacks it, and otherwise touch each page.
     """
     if _has_madv_populate_write():
         mm = mmap.mmap(fileno, alloc_bytes, flags=flags, prot=_PROT_RW)
         mm.madvise(_MADV_POPULATE_WRITE)
         return mm
-    return mmap.mmap(fileno, alloc_bytes, flags=flags | _MAP_POPULATE, prot=_PROT_RW)
+    if _MAP_POPULATE:
+        return mmap.mmap(
+            fileno, alloc_bytes, flags=flags | _MAP_POPULATE, prot=_PROT_RW
+        )
+    mm = mmap.mmap(fileno, alloc_bytes, flags=flags, prot=_PROT_RW)
+    _touch_every_page(mm)
+    return mm
 
 
 def _alloc_hugepage(n_bytes: int, alloc_bytes: int, extra_flags: int) -> ctypes.Array:

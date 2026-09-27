@@ -10,6 +10,7 @@ from sglang.srt.mem_cache.base_swa_memory_pool import BaseSWAKVPool
 from sglang.srt.mem_cache.memory_pool import (
     HybridLinearKVPool,
     HybridReqToTokenPool,
+    MambaPool,
     MHATokenToKVPool,
     MiniMaxSparseKVPool,
     MLATokenToKVPool,
@@ -19,6 +20,8 @@ from sglang.srt.mem_cache.pool_host.base import (
     host_memory_budget_scope,
     ranks_per_host,
 )
+from sglang.srt.mem_cache.pool_host.qsa import qsa_compressed_bytes
+from sglang.srt.mem_cache.qsa_kv_pool import QSATokenToKVPool
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.runtime_context import get_context, get_memory, get_parallel
 
@@ -44,8 +47,13 @@ _SIZEABLE_POOLS = (
 def _pool_bytes(pool) -> int:
     if isinstance(pool, SWAKVPool):
         return _pool_bytes(pool.full_kv_pool) + _pool_bytes(pool.swa_kv_pool)
+    if isinstance(pool, QSATokenToKVPool):
+        # The compressed-K sidecar mirrors per full-KV slot; its pending ring does not.
+        return _pool_bytes(pool.full_kv_pool) + qsa_compressed_bytes(pool)
     if isinstance(pool, HybridLinearKVPool):
         return _pool_bytes(pool.full_kv_pool)
+    if isinstance(pool, MambaPool):
+        return pool.host_mirrored_bytes()
     sizes = getattr(pool, "host_capacity_bytes", None)
     if sizes is None:
         sizes = pool.get_kv_size_bytes()

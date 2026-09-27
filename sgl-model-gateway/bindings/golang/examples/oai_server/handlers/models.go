@@ -33,7 +33,7 @@ func (h *ModelsHandler) List(ctx *fasthttp.RequestCtx) {
 			{
 				"id":       "default",
 				"object":   "model",
-				"created": 1677610602,
+				"created":  1677610602,
 				"owned_by": "sglang",
 			},
 		},
@@ -51,15 +51,15 @@ func (h *ModelsHandler) GetModelInfo(ctx *fasthttp.RequestCtx) {
 
 	// Return model info compatible with SGLang RuntimeEndpoint expectations
 	response := map[string]interface{}{
-		"model_path": h.tokenizerPath, // Use tokenizer path as model path
-		"tokenizer_path": h.tokenizerPath,
-		"is_generation": true,
+		"model_path":                h.tokenizerPath, // Use tokenizer path as model path
+		"tokenizer_path":            h.tokenizerPath,
+		"is_generation":             true,
 		"preferred_sampling_params": "",
-		"weight_version": "",
-		"has_image_understanding": false,
-		"has_audio_understanding": false,
-		"model_type": "",
-		"architectures": nil,
+		"weight_version":            "",
+		"has_image_understanding":   false,
+		"has_audio_understanding":   false,
+		"model_type":                "",
+		"architectures":             nil,
 	}
 
 	jsonData, _ := json.Marshal(response)

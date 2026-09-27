@@ -11,6 +11,7 @@ import torch
 from sglang.srt.mem_cache.memory_pool import MambaPool
 from sglang.srt.mem_cache.pool_host.base import (
     HostKVCache,
+    HostMemoryBudgetError,
     host_memory_budget_bytes,
     sync_fixed_hicache_size,
     synchronized,
@@ -107,6 +108,12 @@ class MambaPoolHost(HostKVCache):
         self.conv_dtype = device_pool.mamba_cache.conv[0].dtype
         self.temporal_dtype = device_pool.mamba_cache.temporal.dtype
         self.dtype = self.conv_dtype
+        # Per-slot side states (PLE short-conv window, N-gram context) ride with
+        # the state slot; a host hit without them resumes from zeroed side states.
+        self.sibling_layouts = [
+            (tuple(view.shape[1:]), view.dtype)
+            for view in device_pool.slot_sibling_views()
+        ]
         self.size_per_token = self.get_size_per_token()
 
         device_capacity = getattr(device_pool, "host_capacity_tokens", None)
@@ -134,7 +141,7 @@ class MambaPoolHost(HostKVCache):
         requested_bytes = self.size * self.size_per_token
         available_bytes = host_memory_budget_bytes(requested_bytes)
         if requested_bytes > available_bytes:
-            raise ValueError(
+            raise HostMemoryBudgetError(
                 f"Not enough host memory available. Requesting "
                 f"{requested_bytes / 1e9:.2f} GB but only have "
                 f"{available_bytes / 1e9:.2f} GB free. Please reduce the "
@@ -264,11 +271,24 @@ class MambaPoolHost(HostKVCache):
                         allocator=self.allocator,
                     )
                 )
+        # Slot-major in every layout: [size, *per-slot shape].
+        self.sibling_buffers = [
+            alloc_func(
+                (self.size, *shape),
+                dtype=dtype,
+                device=self.device,
+                pin_memory=self.pin_memory,
+                allocator=self.allocator,
+            )
+            for shape, dtype in self.sibling_layouts
+        ]
         # destroy() unregisters via kv_buffer; without this list the pinned
         # registrations leak past the buffers' mmap. 0-element buffers
         # (conv-only models' temporal state) were never registered.
         return [
-            buf for buf in (self.temporal_buffer, *self.conv_buffer) if buf.numel() > 0
+            buf
+            for buf in (self.temporal_buffer, *self.conv_buffer, *self.sibling_buffers)
+            if buf.numel() > 0
         ]
 
     def _init_write_back_staging_buffers(self):
@@ -295,6 +315,8 @@ class MambaPoolHost(HostKVCache):
             yield self.temporal_buffer[:, index : index + self.page_size]
             for conv_buf in self.conv_buffer:
                 yield conv_buf[:, index : index + self.page_size]
+        for sibling_buf in self.sibling_buffers:
+            yield sibling_buf[index : index + self.page_size]
 
     @staticmethod
     def _flatten_tensor_bytes(tensor: torch.Tensor) -> torch.Tensor:
@@ -343,7 +365,11 @@ class MambaPoolHost(HostKVCache):
             for conv_elem_size in self.conv_state_elem_sizes
         )
         temporal_size = self.temporal_state_elem_size * self.temporal_dtype.itemsize
-        return (conv_total_size + temporal_size) * self.num_mamba_layers
+        sibling_size = sum(
+            int(np.prod(shape)) * dtype.itemsize
+            for shape, dtype in self.sibling_layouts
+        )
+        return (conv_total_size + temporal_size) * self.num_mamba_layers + sibling_size
 
     def get_ksize_per_token(self):
         return self.get_size_per_token()
@@ -609,6 +635,11 @@ class MambaPoolHost(HostKVCache):
         *,
         is_draft: bool = False,
     ):
+        if layer_id == 0:
+            # Readers wait for the first state layer (HybridReqToTokenPool).
+            self._copy_slot_siblings(
+                device_pool, host_indices, device_indices, io_backend, to_host=False
+            )
         if self.layout in ["page_first", "page_first_direct"]:
             if io_backend == "kernel_ascend" and transfer_mamba_state is not None:
                 # NPU: transfer all layers at once via dedicated kernel.
@@ -671,9 +702,31 @@ class MambaPoolHost(HostKVCache):
                     io_backend,
                 )
 
+    def _copy_slot_siblings(
+        self, device_pool, host_indices, device_indices, io_backend, *, to_host: bool
+    ) -> None:
+        views = device_pool.slot_sibling_views()
+        if not views:
+            return
+        if io_backend == "kernel":
+            host_indices = host_indices.to(views[0].device, non_blocking=True)
+            device_indices = device_indices.to(views[0].device, non_blocking=True)
+        for device_view, host_buffer in zip(views, self.sibling_buffers, strict=True):
+            if to_host:
+                self._copy_tensor(
+                    device_view, host_buffer, device_indices, host_indices, io_backend
+                )
+            else:
+                self._copy_tensor(
+                    host_buffer, device_view, host_indices, device_indices, io_backend
+                )
+
     def backup_from_device_all_layer(
         self, device_pool, host_indices, device_indices, io_backend="kernel"
     ):
+        self._copy_slot_siblings(
+            device_pool, host_indices, device_indices, io_backend, to_host=True
+        )
         if self.layout in ["page_first", "page_first_direct"]:
             if io_backend == "kernel" and host_indices.device != device_indices.device:
                 # The mamba JIT kernel wants both index tensors on the device;
@@ -764,6 +817,12 @@ class MambaPoolHost(HostKVCache):
         if self.layout not in ["page_first", "page_first_direct"]:
             raise ValueError(
                 f"Mamba storage zero-copy requires page_first layout, got {self.layout}"
+            )
+        if self.sibling_buffers:
+            # The storage page keys enumerate temporal and conv components only.
+            raise NotImplementedError(
+                "Mamba storage zero-copy does not carry per-slot side states "
+                "(PLE); use a storage backend without zero-copy."
             )
         indices = indices.tolist()
         ptr_list = []

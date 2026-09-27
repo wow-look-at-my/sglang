@@ -6,6 +6,8 @@ from sglang.srt.runtime_context import get_exec
 
 logger = logging.getLogger(__name__)
 
+import dataclasses
+import functools
 from dataclasses import dataclass
 from typing import Optional
 
@@ -21,6 +23,8 @@ class KVCacheBuildResult:
     token_to_kv_pool_allocator: object
     disable_radix_cache: bool
     tree_cache: object
+    # Whether HiCache is attached; an unset flag may resolve either way here.
+    enable_hierarchical_cache: bool
 
 
 from typing import TYPE_CHECKING
@@ -39,6 +43,7 @@ from sglang.srt.managers.mm_schedule import init_mm_embedding_cache
 from sglang.srt.mem_cache.base_swa_memory_pool import BaseSWAKVPool
 from sglang.srt.mem_cache.cache_init_params import CacheInitParams
 from sglang.srt.mem_cache.deepseek_v4_memory_pool import DeepSeekV4TokenToKVPool
+from sglang.srt.mem_cache.hicache_auto import build_tree_cache_with_auto_hicache
 from sglang.srt.mem_cache.hicache_auto_size import auto_size_hicache
 from sglang.srt.mem_cache.memory_pool import HybridLinearKVPool, MHATokenToKVPool
 from sglang.srt.mem_cache.pool_host.base import _WRITE_BACK_STAGING_PAGE_CHUNK
@@ -396,20 +401,36 @@ def build_kv_cache(
         tp_rank=parallel.tp_rank,
         tp_group=tp_group,
     )
-    with auto_size_hicache(
-        params,
-        hicache_draft_plan,
-        enabled=enable_hierarchical_cache or retraction_backup == "host_pool",
-    ):
-        tree_cache = create_tree_cache(tree_context)
+    if enable_hierarchical_cache and get_memory()._enable_hierarchical_cache_auto:
+        tree_cache, enable_hierarchical_cache = build_tree_cache_with_auto_hicache(
+            create_tree_cache=functools.partial(
+                create_tree_cache,
+                dataclasses.replace(tree_context, enable_hierarchical_cache=False),
+            ),
+            attach_hicache=functools.partial(
+                _attach_auto_hicache,
+                server_args=server_args,
+                params=params,
+                tp_worker=tp_worker,
+            ),
+            params=params,
+            draft_plan=hicache_draft_plan,
+        )
+    else:
+        with auto_size_hicache(
+            params,
+            hicache_draft_plan,
+            enabled=enable_hierarchical_cache or retraction_backup == "host_pool",
+        ):
+            tree_cache = create_tree_cache(tree_context)
 
-        if (
-            enable_hierarchical_cache or retraction_backup == "host_pool"
-        ) and hicache_draft_plan is not None:
-            maybe_register_hicache_draft(
-                tree_cache=tree_cache,
-                draft_plan=hicache_draft_plan,
-            )
+            if (
+                enable_hierarchical_cache or retraction_backup == "host_pool"
+            ) and hicache_draft_plan is not None:
+                maybe_register_hicache_draft(
+                    tree_cache=tree_cache,
+                    draft_plan=hicache_draft_plan,
+                )
 
     if retraction_backup == "host_pool":
         if not isinstance(tree_cache, UnifiedRadixCache):
@@ -432,4 +453,19 @@ def build_kv_cache(
         token_to_kv_pool_allocator=token_to_kv_pool_allocator,
         disable_radix_cache=disable_radix_cache,
         tree_cache=tree_cache,
+        enable_hierarchical_cache=enable_hierarchical_cache,
+    )
+
+
+def _attach_auto_hicache(
+    tree_cache: UnifiedRadixCache,
+    attach_gate,
+    *,
+    server_args: ServerArgs,
+    params: CacheInitParams,
+    tp_worker: BaseTpWorker,
+) -> None:
+    tree_cache.init_hicache(server_args, params, attach_gate=attach_gate)
+    tp_worker.register_hicache_layer_transfer_counter(
+        tree_cache.cache_controller.layer_done_counter
     )

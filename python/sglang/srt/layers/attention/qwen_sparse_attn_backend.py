@@ -194,6 +194,12 @@ class QwenSparseAttnBackend(AttentionBackend):
         req_pool = getattr(runner, "req_to_token_pool", None)
         self.req_to_token = getattr(req_pool, "req_to_token", None)
         self.req_to_token_pool = req_pool
+        # Unified pool: req_to_token holds virtual slots, the K/V views take
+        # kernel-facing ids. The compressed keys and the pending ring stay
+        # addressed by virtual slot and request slot, so only K/V reads translate.
+        self.kv_index_translator = (
+            runner.kv_index_translator if runner is not None else None
+        )
         self.forward_metadata: Optional[QwenSparseAttnMetadata] = None
         self._cuda_graph_metadata: Dict[
             Tuple[ForwardMode, int], QwenSparseAttnMetadata
@@ -459,9 +465,11 @@ class QwenSparseAttnBackend(AttentionBackend):
         compress_ratio,
         row_token_starts=None,
         prefix_lens=None,
+        index_slots=None,
     ):
         """Compact per-row block ranges into ``capacity`` write entries,
-        a shape-derived bound (no sync); padding writes the inert reserved slot 0."""
+        a shape-derived bound (no sync); padding writes the inert reserved slot 0.
+        ``index_slots`` is the pool's `qsa_index_slots` (None: the identity)."""
         device = token_slot_table.device
         # The table width is a host-side bound;
         # assert on device so a short table fails loudly without a sync.
@@ -477,9 +485,12 @@ class QwenSparseAttnBackend(AttentionBackend):
         valid = entries < ends[-1] if counts.numel() else entries < 0
         rows = torch.where(valid, rows.clamp_max(max(counts.numel() - 1, 0)), 0)
         blocks = torch.where(valid, start_blocks[rows] + entries - starts[rows], 0)
+        group_first_slots = token_slot_table[rows, blocks * compress_ratio].long()
+        if index_slots is not None:
+            group_first_slots = index_slots(group_first_slots)
         write_locs = torch.where(
             valid,
-            token_slot_table[rows, blocks * compress_ratio].long() // compress_ratio,
+            group_first_slots // compress_ratio,
             torch.zeros_like(blocks),
         ).to(torch.int32)
         group_end_positions = blocks * compress_ratio + (compress_ratio - 1)
@@ -501,6 +512,7 @@ class QwenSparseAttnBackend(AttentionBackend):
         speculative_paged: bool,
         token_slot_table,
         sequence_lengths,
+        row_req_pool_indices,
     ):
         ratio = self.token_to_kv_pool.qsa_compress_ratio
         lengths = sequence_lengths.long()
@@ -509,27 +521,31 @@ class QwenSparseAttnBackend(AttentionBackend):
             # A paged row compresses exactly the block its length completes;
             # its members come from the per-request pending ring.
             start_blocks = end_blocks - (lengths % ratio == 0).long()
-            return self._qsa_write_plan(
+            plan = self._qsa_write_plan(
                 token_slot_table=token_slot_table,
                 start_blocks=start_blocks,
                 end_blocks=end_blocks,
                 capacity=int(lengths.numel()),
                 compress_ratio=ratio,
+                index_slots=self.token_to_kv_pool.qsa_index_slots,
             )
+            return (*plan, None)
         extend_lens = forward_batch.extend_seq_lens
         if extend_lens is None:
             raise ValueError("QSA extend write plan requires extend_seq_lens")
         extend_lens = extend_lens.long()[: lengths.numel()]
         prefix_lens = (lengths - extend_lens).clamp_min(0)
-        # Prefix sharing is page-granular and the page is a ratio
-        # multiple, so a matched prefix always covers whole groups. A
-        # misaligned prefix would leave a shared group half-written.
-        torch._assert_async((prefix_lens % ratio == 0).all())
+        is_mixed = forward_batch.forward_mode.is_mixed()
+        if not is_mixed:
+            # Prefix sharing is page-granular and the page is a ratio
+            # multiple, so a matched prefix always covers whole groups. A
+            # misaligned prefix would leave a shared group half-written.
+            torch._assert_async((prefix_lens % ratio == 0).all())
         # Each row spans at most ceil(extend_len / ratio) blocks, so the
         # token count and row count bound the plan without a sync.
         capacity = int(forward_batch.input_ids.numel()) // ratio + int(lengths.numel())
         row_token_starts = torch.cumsum(extend_lens, 0) - extend_lens
-        return self._qsa_write_plan(
+        write_locs, group_end_positions, rows, member_rows = self._qsa_write_plan(
             token_slot_table=token_slot_table,
             start_blocks=prefix_lens // ratio,
             end_blocks=end_blocks,
@@ -537,7 +553,55 @@ class QwenSparseAttnBackend(AttentionBackend):
             compress_ratio=ratio,
             row_token_starts=row_token_starts,
             prefix_lens=prefix_lens,
+            index_slots=self.token_to_kv_pool.qsa_index_slots,
         )
+        mixed_members = None
+        if is_mixed:
+            mixed_members = self._qsa_mixed_member_plan(
+                rows=rows,
+                group_end_positions=group_end_positions,
+                row_token_starts=row_token_starts,
+                prefix_lens=prefix_lens,
+                row_req_pool_indices=row_req_pool_indices,
+                compress_ratio=ratio,
+            )
+        return write_locs, group_end_positions, rows, member_rows, mixed_members
+
+    @staticmethod
+    def _qsa_mixed_member_plan(
+        *,
+        rows,
+        group_end_positions,
+        row_token_starts,
+        prefix_lens,
+        row_req_pool_indices,
+        compress_ratio,
+    ):
+        """Member locations for groups whose first members predate this forward.
+
+        A mixed batch extends each running request by one token past an
+        unaligned prefix; the group that token completes started in earlier
+        forwards, whose members sit in the request's pending ring. Members are
+        indexed into [ring members of every row; this forward's tokens], with
+        ``compress_ratio - 1`` ring members gathered per row."""
+        prior_width = compress_ratio - 1
+        num_prior = int(prefix_lens.numel()) * prior_width
+        offsets = torch.arange(compress_ratio, device=rows.device, dtype=torch.long)
+        group_starts = group_end_positions.long() - (compress_ratio - 1)
+        positions = group_starts[:, None] + offsets[None, :]
+        row_prefix = prefix_lens[rows][:, None]
+        forward_locs = (
+            num_prior + row_token_starts[rows][:, None] + positions - row_prefix
+        )
+        # Group starts are ratio-aligned, so member j lives at ring slot
+        # req_pool_idx * ratio + j (see build_pending_ring_slots).
+        prior_locs = rows[:, None] * prior_width + offsets[None, :]
+        member_locs = torch.where(positions >= row_prefix, forward_locs, prior_locs)
+        prior_ring_locs = (
+            row_req_pool_indices.long()[:, None] * compress_ratio
+            + offsets[None, :prior_width]
+        ).flatten()
+        return member_locs, prior_ring_locs
 
     def _metadata_from_forward_batch(self, forward_batch) -> QwenSparseAttnMetadata:
         self._require_chain_speculation(
@@ -637,14 +701,20 @@ class QwenSparseAttnBackend(AttentionBackend):
         pending_ring_slots = None
         compress_group_ring_locs = None
         extend_rope_matrix = None
-        write_locs, group_positions, group_sequence_ids, group_member_rows = (
-            self._qsa_build_write_plan(
-                forward_batch=forward_batch,
-                speculative_paged=speculative_paged,
-                token_slot_table=token_slot_table,
-                sequence_lengths=sequence_lengths,
-            )
+        (
+            write_locs,
+            group_positions,
+            group_sequence_ids,
+            group_member_rows,
+            mixed_members,
+        ) = self._qsa_build_write_plan(
+            forward_batch=forward_batch,
+            speculative_paged=speculative_paged,
+            token_slot_table=token_slot_table,
+            sequence_lengths=sequence_lengths,
+            row_req_pool_indices=row_req_pool_indices,
         )
+        compress_member_locs, compress_prior_ring_locs = mixed_members or (None, None)
         decode_like = speculative_paged or forward_batch.forward_mode.is_decode()
         if decode_like:
             decode_logical_positions = (
@@ -668,6 +738,7 @@ class QwenSparseAttnBackend(AttentionBackend):
                     compress_ratio=pool.qsa_compress_ratio,
                     sequence_lengths=sequence_lengths,
                     token_slot_table=token_slot_table,
+                    index_slots=pool.qsa_index_slots,
                 )
             pending_ring_slots = build_pending_ring_slots(
                 token_to_batch_idx=token_to_batch_idx,
@@ -687,6 +758,16 @@ class QwenSparseAttnBackend(AttentionBackend):
                     extend_rope_matrix = build_rope_position_matrix(
                         rope_source, token_to_batch_idx.numel()
                     )
+                    if compress_prior_ring_locs is not None:
+                        # Snapshot before this forward's ring writes can reuse the slots.
+                        extend_rope_matrix = torch.cat(
+                            [
+                                self.token_to_kv_pool.get_qsa_rope_position_buffer(
+                                    compress_prior_ring_locs
+                                ),
+                                extend_rope_matrix,
+                            ]
+                        )
                 else:
                     compress_group_ring_locs = build_group_ring_slots(
                         req_pool_indices=row_req_pool_indices,
@@ -707,6 +788,8 @@ class QwenSparseAttnBackend(AttentionBackend):
             compress_group_positions=group_positions,
             compress_sequence_ids=group_sequence_ids,
             compress_member_rows=group_member_rows,
+            compress_member_locs=compress_member_locs,
+            compress_prior_ring_locs=compress_prior_ring_locs,
             decode_page_table=decode_page_table,
             decode_lengths=decode_lengths,
             decode_logical_positions=decode_logical_positions,
@@ -1075,7 +1158,9 @@ class QwenSparseAttnBackend(AttentionBackend):
         # Boundary rows write their group's slot (last raw slot // ratio);
         # every other row keeps the inert reserved slot 0.
         boundary = (lengths % ratio == 0) & (lengths > 0)
-        last_locs = self.req_to_token[req_indices, current_positions].long()
+        last_locs = pool.qsa_index_slots(
+            self.req_to_token[req_indices, current_positions].long()
+        )
         write_locs = torch.where(
             boundary,
             last_locs // ratio,
@@ -1109,7 +1194,11 @@ class QwenSparseAttnBackend(AttentionBackend):
         row_width_pages = self.req_to_token.shape[1] // full_page
         num_pages = min(max_pages, row_width_pages)
         table = (
-            self.req_to_token[req_indices, : num_pages * full_page : full_page].long()
+            pool.qsa_index_slots(
+                self.req_to_token[
+                    req_indices, : num_pages * full_page : full_page
+                ].long()
+            )
             // full_page
         ).clamp_min(0)
         page_table[:, :num_pages].copy_(table.to(torch.int32))
@@ -1243,6 +1332,30 @@ class QwenSparseAttnBackend(AttentionBackend):
         assert self.forward_metadata is not None
         return self.forward_metadata
 
+    def _kv_read_translation(self) -> dict:
+        """Gather kwargs that translate virtual K/V slots; empty on a plain pool."""
+        translator = self.kv_index_translator
+        if translator is None or not translator.is_translating:
+            return {}
+        assert translator.reads_are_translated, (
+            "QSA does not support decode context parallelism on the unified pool"
+        )
+        return dict(
+            v2p_page_table=translator.full_v2p_table,
+            v2p_page_size=translator.page_size,
+            v2p_page_stride=translator.full_page_stride,
+        )
+
+    def _kernel_kv_ids(self, virtual_slots: torch.Tensor) -> torch.Tensor:
+        """Virtual K/V slots -> ids the per-layer K/V views take; -1 stays -1."""
+        translator = self.kv_index_translator
+        if translator is None or not translator.is_translating:
+            return virtual_slots
+        kernel_ids = translator.translate_full_attn_ids(
+            virtual_slots.clamp(min=0).long()
+        ).to(virtual_slots.dtype)
+        return torch.where(virtual_slots >= 0, kernel_ids, virtual_slots)
+
     @staticmethod
     def _logical_to_physical(
         logical_indices: torch.Tensor, metadata: QwenSparseAttnMetadata
@@ -1295,7 +1408,9 @@ class QwenSparseAttnBackend(AttentionBackend):
             return self._pad_extend_output(output, num_output_rows)
         if not q.is_cuda:
             metadata = self._resolve_metadata(forward_batch)
-            slots = self._logical_to_physical(topk_indices, metadata)
+            slots = self._kernel_kv_ids(
+                self._logical_to_physical(topk_indices, metadata)
+            )
             pool = self.token_to_kv_pool
             output = qsa_sparse_attention(
                 q,
@@ -1335,18 +1450,12 @@ class QwenSparseAttnBackend(AttentionBackend):
         v_buffer = pool.get_value_buffer(layer.layer_id)
         req_to_token = self.req_to_token_pool.req_to_token
         req_indices = forward_batch.req_pool_indices.tolist()
-        k_parts = [
-            k_buffer.index_select(
-                0, req_to_token[req_indices[i], : sequence_lens[i]].long()
-            )
+        kv_ids = [
+            self._kernel_kv_ids(req_to_token[req_indices[i], : sequence_lens[i]].long())
             for i in range(len(sequence_lens))
         ]
-        v_parts = [
-            v_buffer.index_select(
-                0, req_to_token[req_indices[i], : sequence_lens[i]].long()
-            )
-            for i in range(len(sequence_lens))
-        ]
+        k_parts = [k_buffer.index_select(0, ids) for ids in kv_ids]
+        v_parts = [v_buffer.index_select(0, ids) for ids in kv_ids]
         sequence_lens_tensor = torch.tensor(
             sequence_lens, dtype=torch.int32, device=q.device
         )
@@ -1469,6 +1578,7 @@ class QwenSparseAttnBackend(AttentionBackend):
             batch,
             topk,
             zero_fill_cols=stride,
+            **self._kv_read_translation(),
         )
         num_kv_heads = k_buffer.shape[1]
         head_dim = k_buffer.shape[2]
@@ -1530,7 +1640,9 @@ class QwenSparseAttnBackend(AttentionBackend):
         v_buffer = pool.get_value_buffer(layer.layer_id)
         if not q.is_cuda:
             metadata = self._resolve_metadata(forward_batch)
-            slots = self._logical_to_physical(topk_indices, metadata)
+            slots = self._kernel_kv_ids(
+                self._logical_to_physical(topk_indices, metadata)
+            )
             output = qsa_sparse_attention(q, k_buffer, v_buffer, slots, layer.scaling)
             return output.reshape(q.shape[0], -1)
 
@@ -1597,6 +1709,7 @@ class QwenSparseAttnBackend(AttentionBackend):
             packed_v,
             batch,
             topk,
+            **self._kv_read_translation(),
         )
         if is_hip():
             relative_indices = torch.arange(

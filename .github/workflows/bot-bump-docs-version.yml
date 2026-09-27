@@ -44,6 +44,7 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
   bump-docs-version:
+    if: github.repository == 'sgl-project/sglang'
     needs: resolve-version
     runs-on: ubuntu-latest
     steps:

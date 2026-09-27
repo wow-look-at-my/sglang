@@ -112,6 +112,7 @@ docker run --rm \
   -v "${CCACHE_HOST_DIR}:/ccache" \
   -w /sgl-kernel \
   -e ARCH="${ARCH}" \
+  -e CMAKE_ARGS="${CMAKE_ARGS:-}" \
   -e GITHUB_ARTIFACTORY="${GITHUB_ARTIFACTORY_FLAG}" \
   "${DEPS_TAG}" \
   bash -c '
@@ -144,7 +145,12 @@ if [ "'"${ARCH}"'" = "aarch64" ]; then
 elif [ "${BUILD_JOBS}" -gt 0 ] 2>/dev/null; then
   export CMAKE_BUILD_PARALLEL_LEVEL=${BUILD_JOBS}
 else
-  export CMAKE_BUILD_PARALLEL_LEVEL=$(echo "$(( $(nproc) * 2 / 3 )) 64" | awk "{print (\$1 < \$2) ? \$1 : \$2}")
+  # A CUTLASS GEMM translation unit peaks near 10 GB in cicc (two OOM-killed
+  # on a 16 GB runner), so size jobs to RAM + swap as well as to cores.
+  MEM_JOBS=$(awk "/^(MemTotal|SwapTotal):/ {kb += \$2} END {print int(kb / (10 * 1024 * 1024))}" /proc/meminfo)
+  CPU_JOBS=$(( $(nproc) * 2 / 3 ))
+  export CMAKE_BUILD_PARALLEL_LEVEL=$(printf "%s\n" "${CPU_JOBS}" "${MEM_JOBS}" 64 | sort -n | head -1)
+  [ "${CMAKE_BUILD_PARALLEL_LEVEL}" -ge 1 ] || export CMAKE_BUILD_PARALLEL_LEVEL=1
 fi
 
 export CMAKE_ARGS="${CMAKE_ARGS:-} -DSGL_KERNEL_COMPILE_THREADS=${NVCC_THREADS} -DGITHUB_ARTIFACTORY=${GITHUB_ARTIFACTORY}"

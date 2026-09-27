@@ -28,6 +28,7 @@ L1 and L2 are private to a single inference instance; only L3 can be shared. Hos
 
 Notes:
 
+- Leaving `--enable-hierarchical-cache` unset lets SGLang enable the host tier (L2 only) by itself where HiCache is known to mirror every piece of the device cache state (plain MHA/MLA, full attention + Mamba/GDN hybrids, SWA, and Qwen4 QSA models) on a colocated (non-PD) CUDA server with the radix cache on and no other offload backend. It sizes the tier from free host memory (bounded by cgroup limits, 10 GiB reserved, `--hicache-host-memory-fraction` of the rest split across the host's ranks) up to 8x the device cache, stays off below 1.5x, and pins best-effort: if any rank cannot pin its pools, every rank releases them and retries at half the size. The startup log states the decision and its reason. Pass `--no-enable-hierarchical-cache` to opt out, or `--enable-hierarchical-cache` to require HiCache and fail on an unsupported configuration.
 - Besides configuring `--hicache-storage-backend` at startup, SGLang also supports **runtime attach/detach** of the HiCache storage backend (no restart required) via HTTP admin endpoints. See [Runtime Attach/Detach HiCache Storage Backend](./hicache_storage_runtime_attach_detach).
 
 ## Key Configurations with Storage Backends Enabled

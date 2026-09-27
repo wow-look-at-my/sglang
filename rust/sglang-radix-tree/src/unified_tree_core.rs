@@ -372,6 +372,7 @@ pub enum PoolName {
     DeepseekV4C4State,
     DeepseekV4C4IndexerState,
     DeepseekV4C128State,
+    QsaCompressedK,
     Draft,
     DraftIndexer,
     DraftSwa,

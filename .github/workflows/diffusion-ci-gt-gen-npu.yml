@@ -86,8 +86,10 @@ jobs:
   multimodal-diffusion-gen-1npu:
     needs: compute-diffusion-partitions
     if: |
-      needs.compute-diffusion-partitions.result == 'success' &&
-      needs.compute-diffusion-partitions.outputs.matrix-1npu != '{"include":[]}'
+      github.repository == 'sgl-project/sglang' && (
+        needs.compute-diffusion-partitions.result == 'success' &&
+        needs.compute-diffusion-partitions.outputs.matrix-1npu != '{"include":[]}'
+      )
     runs-on: linux-aarch64-a3-800t-2
     strategy:
       fail-fast: false
@@ -158,8 +160,10 @@ jobs:
   multimodal-diffusion-gen-2npu:
     needs: compute-diffusion-partitions
     if: |
-      needs.compute-diffusion-partitions.result == 'success' &&
-      needs.compute-diffusion-partitions.outputs.matrix-2npu != '{"include":[]}'
+      github.repository == 'sgl-project/sglang' && (
+        needs.compute-diffusion-partitions.result == 'success' &&
+        needs.compute-diffusion-partitions.outputs.matrix-2npu != '{"include":[]}'
+      )
     runs-on: linux-aarch64-a3-800t-16
     strategy:
       fail-fast: false

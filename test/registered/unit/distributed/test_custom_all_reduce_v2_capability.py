@@ -67,7 +67,7 @@ def test_topology_capability(
     )
     monkeypatch.setattr(
         custom_all_reduce_v2,
-        "_is_vmm_backed_allocator",
+        "is_vmm_backed_allocator",
         is_vmm_backed,
     )
     monkeypatch.setattr(
