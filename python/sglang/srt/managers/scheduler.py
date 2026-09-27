@@ -1372,9 +1372,11 @@ class Scheduler(
     def maybe_init_eviction_throttle(self) -> None:
         """Hold back conversations whose admission would thrash the prefix cache."""
         self.eviction_throttle: Optional[EvictionThrottle] = None
+        # Runs before init_disaggregation sets self.disaggregation_mode.
         if (
             self.prefill_decode_balancer is None
-            or self.disaggregation_mode != DisaggregationMode.NULL
+            or DisaggregationMode(get_disagg().disaggregation_mode)
+            != DisaggregationMode.NULL
             or self.tree_cache.disable
         ):
             return
