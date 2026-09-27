@@ -332,6 +332,31 @@ class TestGetContextLength(unittest.TestCase):
         cfg = PretrainedConfig()
         self.assertEqual(get_context_length(cfg), 2048)
 
+    def test_yarn_window_beyond_max_position_embeddings(self):
+        """Qwen3-style YaRN: max_position_embeddings keeps the pretrained window,
+        so the derived length must be original * factor, not the raw key."""
+        cfg = PretrainedConfig()
+        cfg.max_position_embeddings = 40960
+        cfg.rope_scaling = {
+            "rope_type": "yarn",
+            "factor": 4.0,
+            "original_max_position_embeddings": 32768,
+        }
+        self.assertEqual(get_context_length(cfg), 131072)
+
+    def test_per_layer_type_rope_parameters(self):
+        cfg = PretrainedConfig()
+        cfg.max_position_embeddings = 8192
+        cfg.rope_parameters = {
+            "sliding_attention": {"rope_type": "linear", "factor": 8.0},
+            "full_attention": {
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 8192,
+            },
+        }
+        self.assertEqual(get_context_length(cfg), 32768)
+
 
 # ---------------------------------------------------------------------------
 # check_gguf_file
