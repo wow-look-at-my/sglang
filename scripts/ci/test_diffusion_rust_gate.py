@@ -29,6 +29,7 @@ class TestDiffusionRustGate(unittest.TestCase):
                     ):
                         expression = jobs[name]["if"]
                         values = {
+                            "github.repository": "sgl-project/sglang",
                             "github.event_name": event,
                             "needs.check-changes.result": "success",
                             "needs.call-gate.result": "success",

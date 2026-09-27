@@ -26,6 +26,7 @@ concurrency:
 jobs:
   # ==================== Check Changes ==================== #
   check-changes:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       changes_exist: ${{ steps.filter.outputs.main_package == 'true' || steps.filter.outputs.multimodal_gen == 'true' || steps.run-mode.outputs.run_all_tests == 'true' }}
@@ -110,14 +111,14 @@ jobs:
   # ==================== PR Gate ==================== #
   pr-gate:
     needs: check-changes
-    if: needs.check-changes.outputs.changes_exist == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.check-changes.outputs.changes_exist == 'true')
     uses: ./.github/workflows/pr-gate.yml
     secrets: inherit
 
   # Runs the entire per-commit XPU test suite in one job (single install, single queue).
   stage-a-test-1-gpu-xpu:
     needs: [check-changes, pr-gate]
-    if: needs.check-changes.outputs.main_package == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.check-changes.outputs.main_package == 'true')
     runs-on: intel-bmg
     env:
       DOCKERHUB_INTEL_USERNAME: ${{ secrets.DOCKERHUB_INTEL_USERNAME }}
@@ -218,7 +219,7 @@ jobs:
   # ==================== Multimodal Gen ==================== #
   multimodal-gen-test-1-gpu-xpu:
     needs: [check-changes, pr-gate]
-    if: needs.check-changes.outputs.multimodal_gen == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.check-changes.outputs.multimodal_gen == 'true')
     runs-on: bmg-multigen-models
     env:
       DOCKERHUB_INTEL_USERNAME: ${{ secrets.DOCKERHUB_INTEL_USERNAME }}
@@ -304,7 +305,7 @@ jobs:
           fi
 
   finish:
-    if: always()
+    if: github.repository == 'sgl-project/sglang' && (always())
     needs: [stage-a-test-1-gpu-xpu, multimodal-gen-test-1-gpu-xpu, pr-gate]
     runs-on: ubuntu-latest
     steps:

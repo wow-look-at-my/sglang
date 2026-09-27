@@ -24,6 +24,7 @@ concurrency:
 jobs:
   # ==================== Check Changes ==================== #
   check-changes:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       changes_exist: ${{ steps.filter.outputs.main_package == 'true'
@@ -56,7 +57,7 @@ jobs:
   # ==================== PR Gate ==================== #
   pr-gate:
     needs: check-changes
-    if: needs.check-changes.outputs.changes_exist == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.check-changes.outputs.changes_exist == 'true')
     uses: ./.github/workflows/pr-gate.yml
     secrets: inherit
 
@@ -65,12 +66,14 @@ jobs:
     # !cancelled() lets dispatch past a skipped pr-gate; the pull_request
     # path still requires pr-gate success, keeping the run-ci gate intact.
     if: |
-      !cancelled() && (
-        (needs.pr-gate.result == 'success' &&
-          (needs.check-changes.outputs.main_package == 'true' ||
-           needs.check-changes.outputs.sgl_kernel == 'true')) ||
-        (github.event_name == 'workflow_dispatch' &&
-         inputs.target_stage == 'stage-a-unit-test-mlx')
+      github.repository == 'sgl-project/sglang' && (
+        !cancelled() && (
+          (needs.pr-gate.result == 'success' &&
+            (needs.check-changes.outputs.main_package == 'true' ||
+             needs.check-changes.outputs.sgl_kernel == 'true')) ||
+          (github.event_name == 'workflow_dispatch' &&
+           inputs.target_stage == 'stage-a-unit-test-mlx')
+        )
       )
     runs-on: macos-26
     timeout-minutes: 60
@@ -123,8 +126,7 @@ jobs:
   stage-b-e2e-test-mlx:
     needs: [check-changes, pr-gate]
     # Manual-only: no self hosted Apple Silicon runner is generally available; hosted runners are too small for e2e.
-    if: |
-      !cancelled() && inputs.target_stage == 'stage-b-e2e-test-mlx'
+    if: github.repository == 'sgl-project/sglang' && (!cancelled() && inputs.target_stage == 'stage-b-e2e-test-mlx')
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 120
     env:
@@ -168,7 +170,7 @@ jobs:
         stage-a-unit-test-mlx,
         stage-b-e2e-test-mlx,
       ]
-    if: always()
+    if: github.repository == 'sgl-project/sglang' && (always())
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses

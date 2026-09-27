@@ -3,8 +3,11 @@ name: Fork CI
 # CI for forks of sgl-project/sglang, on GitHub-hosted runners only. Upstream
 # workflows build on self-hosted pools (x64-kernel-build-node, x64-docker-build-node,
 # GPU runners) and publish with Docker Hub / PyPI secrets that a fork does not
-# have, so most of them are guarded to sgl-project/sglang or never find a runner.
-# This workflow is the fork's replacement and skips every job upstream.
+# have. Every job of those workflows, *-finish aggregators included, starts its
+# `if:` with github.repository == 'sgl-project/sglang', so on a fork they all
+# report skipped. This workflow is the fork's replacement and skips upstream.
+# A new upstream-only job needs the same guard; hosted, secret-free workflows
+# (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded.
 #
 #   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
 #   AOT kernel diff : sglang-kernel CUDA 13 wheels (x86_64 + aarch64), checked
