@@ -11,6 +11,7 @@ name: Fork CI
 #
 #   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
 #                     + model gateway (fmt, clippy, cargo test, sglang-router wheel)
+#                     + gateway Go bindings (native lib, go test, examples)
 #   AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for
 #                     FORK_KERNEL_CUDA_ARCHS (default 120a: RTX PRO 6000 Blackwell), checked
 #                     against the ops this tree calls
@@ -314,6 +315,66 @@ jobs:
           name: sglang-router-wheel-x86_64
           path: sgl-model-gateway/bindings/python/dist/*.whl
           if-no-files-found: error
+
+  # bindings/golang is outside the gateway workspace: own lockfile, cache and target dir.
+  fork-gateway-go-bindings:
+    needs: fork-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: sgl-model-gateway/bindings/golang
+    env:
+      # cgo links the debug build of libsgl_model_gateway_go; the tests load it at run time.
+      CGO_LDFLAGS: -L${{ github.workspace }}/sgl-model-gateway/bindings/golang/target/debug
+      LD_LIBRARY_PATH: ${{ github.workspace }}/sgl-model-gateway/bindings/golang/target/debug
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust, protoc and system deps
+        working-directory: .
+        run: bash scripts/ci/cuda/ci_install_gateway_dependencies.sh
+
+      - name: Resolve dependencies
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sgl-model-gateway/bindings/golang
+          shared-key: fork-gateway-go
+          cache-on-failure: true
+
+      - name: rustfmt
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt
+          cargo +nightly fmt -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build and test the native library
+        run: |
+          cargo build
+          cargo test
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sgl-model-gateway/bindings/golang/go.mod
+          cache-dependency-path: |
+            sgl-model-gateway/bindings/golang/go.sum
+            sgl-model-gateway/bindings/golang/examples/oai_server/go.sum
+
+      - name: Go vet and unit tests
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Build examples
+        run: |
+          go build -o "${RUNNER_TEMP}/go-examples/" ./examples/simple ./examples/streaming
+          cd examples/oai_server
+          go vet ./...
+          go build -o "${RUNNER_TEMP}/go-examples/oai_server" .
 
   # ------------------------------------------------------ sglang-kernel wheel
   fork-sgl-kernel-wheel:
