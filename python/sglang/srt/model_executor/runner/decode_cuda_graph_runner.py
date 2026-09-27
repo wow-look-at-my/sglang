@@ -77,6 +77,7 @@ from sglang.srt.model_executor.forward_batch_info import (
 from sglang.srt.model_executor.forward_context import ForwardContext, forward_context
 from sglang.srt.model_executor.runner.base_cuda_graph_runner import (
     BaseCudaGraphRunner,
+    capture_with_custom_ar_recovery,
     freeze_gc,
     get_batch_sizes_to_capture,
 )
@@ -90,7 +91,7 @@ from sglang.srt.model_executor.runner_backend.breakable_cuda_graph_backend impor
 )
 from sglang.srt.model_executor.runner_backend.utils import resolve_decode_backend
 from sglang.srt.model_executor.runner_backend_utils import (
-    CUDA_GRAPH_CAPTURE_FAILED_MSG,
+    cuda_graph_capture_failed_msg,
 )
 from sglang.srt.model_executor.runner_utils.buffers import (
     DecodeInputBuffers,
@@ -486,13 +487,19 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         self.backend = resolve_decode_backend(self)
 
         # --- capture --------------------------------------------------
+        self._capture_all_graphs(failure_label="Capture cuda graph failed")
+
+    def _capture_all_graphs(self, *, failure_label: str) -> None:
+        """Capture every graph, recapturing when custom all-reduce drops out."""
         try:
             with model_capture_mode():
-                self.capture()
+                capture_with_custom_ar_recovery(
+                    capture=self.capture, discard_graphs=self.backend.cleanup
+                )
         except RuntimeError as e:
             raise Exception(
-                f"Capture cuda graph failed: {e}\n{CUDA_GRAPH_CAPTURE_FAILED_MSG}"
-            )
+                f"{failure_label}: {e}\n{cuda_graph_capture_failed_msg(e)}"
+            ) from e
 
     def _next_token_logits_buffer_capacity_rows(self, max_num_tokens: int) -> int:
         """Rows reserved for the largest shared logits output."""

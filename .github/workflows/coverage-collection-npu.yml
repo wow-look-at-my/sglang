@@ -21,6 +21,7 @@ concurrency:
 
 jobs:
   coverage:
+    if: github.repository == 'sgl-project/sglang'
     uses: ./.github/workflows/pr-test-npu.yml
     with:
       coverage_mode: true

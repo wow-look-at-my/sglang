@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Callable, List, Optional
 import torch
 
 from sglang.srt.compilation.torch_compile_decoration import set_torch_compile_config
+from sglang.srt.distributed.parallel_state import graph_capture
 from sglang.srt.layers.dp_attention import (
     DpPaddingMode,
     set_dp_buffer_len,
@@ -52,12 +53,18 @@ from sglang.srt.model_executor.runner import (
     get_batch_sizes_to_capture,
     model_capture_mode,
 )
+from sglang.srt.model_executor.runner.base_cuda_graph_runner import (
+    capture_with_custom_ar_recovery,
+)
 from sglang.srt.model_executor.runner.flashinfer_autotune import (
     maybe_flashinfer_autotune_speculative_draft,
 )
 from sglang.srt.model_executor.runner_backend.utils import resolve_decode_backend
 from sglang.srt.model_executor.runner_backend_utils import (
-    CUDA_GRAPH_CAPTURE_FAILED_MSG,
+    cuda_graph_capture_failed_msg,
+)
+from sglang.srt.model_executor.runner_utils.pool import (
+    get_or_create_global_graph_capture_stream,
 )
 from sglang.srt.runtime_context import (
     get_disagg,
@@ -216,13 +223,7 @@ class MultiLayerEagleDraftExtendCudaGraphRunner(DecodeCudaGraphRunner):
 
         self.backend = resolve_decode_backend(self)
 
-        try:
-            with model_capture_mode():
-                self.capture()
-        except RuntimeError as e:
-            raise Exception(
-                f"Capture cuda graph failed: {e}\n{CUDA_GRAPH_CAPTURE_FAILED_MSG}"
-            )
+        self._capture_all_graphs(failure_label="Capture cuda graph failed")
 
     def _replay_graph(self, shape_key, forward_batch):
         return self.backend.replay(shape_key, forward_batch)
@@ -944,19 +945,32 @@ class OneGraphMultiLayerEagleMultiStepDraftExtendCudaGraphRunner(
         )
         try:
             with model_capture_mode():
-                for bs in reversed(first.capture_bs):
-                    self._capture_one_graph(bs, runners)
+                capture_with_custom_ar_recovery(
+                    capture=lambda: self._capture_all_graphs(runners),
+                    discard_graphs=first.backend.cleanup,
+                )
         except RuntimeError as e:
             raise Exception(
                 f"Capture single-CG draft extend failed: {e}\n"
-                f"{CUDA_GRAPH_CAPTURE_FAILED_MSG}"
-            )
+                f"{cuda_graph_capture_failed_msg(e)}"
+            ) from e
         after_mem = get_available_gpu_memory(self.device, self.gpu_id)
         logger.info(
             "Capture single-CG draft extend end. "
             f"elapsed={time.perf_counter() - tic:.2f} s, "
             f"mem usage={(before_mem - after_mem):.2f} GB, avail mem={after_mem:.2f} GB."
         )
+
+    def _capture_all_graphs(self, runners) -> None:
+        first = runners[0]
+        # graph_capture() IPC-registers the captured custom all-reduce buffers on
+        # exit, which those all-reduces need before their first replay.
+        with graph_capture(
+            stream=get_or_create_global_graph_capture_stream()
+        ) as graph_capture_context:
+            with first.backend.capture_session(graph_capture_context.stream):
+                for bs in reversed(first.capture_bs):
+                    self._capture_one_graph(bs, runners)
 
     def _capture_one_graph(self, bs: int, runners):
         buffers = self.buffers

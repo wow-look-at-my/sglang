@@ -127,6 +127,12 @@ def _ceil_div(value: int, divisor: int) -> int:
     return -(-value // divisor)
 
 
+# Queue length past which per-step prefix matching of every waiting request
+# is too slow for the scheduler loop.
+_PREFIX_MATCH_QUEUE_LIMIT = 128
+_CEDE_SCAN_LIMIT = _PREFIX_MATCH_QUEUE_LIMIT
+
+
 def estimate_prefill_extend_tile_metrics(
     extend_lens: List[int], block_m: int
 ) -> Dict[str, Union[int, float, List[int], None]]:
@@ -334,7 +340,7 @@ class SchedulePolicy:
                 CacheAwarePolicy.LPM,
                 CacheAwarePolicy.HRRN,
             )
-            and len(waiting_queue) > 128
+            and len(waiting_queue) > _PREFIX_MATCH_QUEUE_LIMIT
         ):
             # Turn off the expensive prefix matching and sorting when the #queue is large.
             return CacheAgnosticPolicy.FCFS
@@ -448,27 +454,49 @@ class SchedulePolicy:
             )
         )
 
-    def shortest_prefill_chunk_limit(
+    def cede_chunk_budget(
         self, chunked_req: Req, waiting_queue: List[Req], budget: int, page_size: int
     ) -> Optional[int]:
-        """Cap the active prefill chunk to reserve tokens for shorter waiting requests."""
-        if (
-            self.policy != CacheAwarePolicy.SHORTEST_PREFILL_FIRST
-            or budget < 2 * page_size
-        ):
+        """Cap the in-progress chunk so shorter waiting requests prefill beside it.
+
+        A waiting request with less uncached work than the chunked request has
+        left is moved ahead of the rest of the queue (in place) and its work is
+        reserved from this step's budget; the returned limit is what the chunked
+        request may still take. Without this, one long prompt holds every chunk
+        until it finishes, and a follow-up turn needing a few hundred tokens
+        waits behind hundreds of thousands. Outside shortest-prefill-first the
+        reservation is capped at half the budget, so the long prompt keeps at
+        least half of every step while short ones keep arriving.
+        """
+        if budget < 2 * page_size or not waiting_queue:
             return None
+        is_shortest_first = self.policy == CacheAwarePolicy.SHORTEST_PREFILL_FIRST
+        max_reserved = (
+            budget - page_size
+            if is_shortest_first
+            else budget // 2 // page_size * page_size
+        )
+        # Only policies that sort by prefix match keep the match fresh.
+        refresh_match = not self.waiting_queue_prefix_matched(waiting_queue)
         remaining = len(chunked_req.full_untruncated_fill_ids) - len(
             chunked_req.prefix_indices
         )
+        shorter: List[Req] = []
         reserved = 0
-        for req in waiting_queue:
+        for req in waiting_queue[:_CEDE_SCAN_LIMIT]:
+            if reserved + page_size > max_reserved:
+                break
+            if refresh_match:
+                match_prefix_for_req(self.tree_cache, req, include_req=True)
             work = self._shortest_prefill_work(req)
             charge = _ceil_div(work, page_size) * page_size
-            if work >= remaining or reserved + charge > budget - page_size:
-                break
-            reserved += charge
+            if work < remaining and reserved + charge <= max_reserved:
+                shorter.append(req)
+                reserved += charge
         if not reserved:
             return None
+        chosen = set(map(id, shorter))
+        waiting_queue[:] = shorter + [r for r in waiting_queue if id(r) not in chosen]
         # Page alignment keeps continuation boundaries allocator-compatible.
         return (budget - reserved) // page_size * page_size
 
@@ -1427,10 +1455,7 @@ class PrefillAdder:
                 return AddReqResult.OTHER
             max_new_tokens = 0
         elif chunk_tokens_limit is not None and chunk_fit_tokens > chunk_tokens_limit:
-            if (
-                has_chunked_req
-                and get_schedule().schedule_policy == "shortest-prefill-first"
-            ):
+            if has_chunked_req:
                 # Only one unfinished chunked request can be tracked.
                 return AddReqResult.OTHER
             if self.exact_chunk_fill:

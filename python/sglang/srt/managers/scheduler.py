@@ -266,6 +266,11 @@ from sglang.srt.managers.scheduler_components.output_streamer import (
 from sglang.srt.managers.scheduler_components.pool_stats_observer import (
     SchedulerPoolStatsObserver,
 )
+from sglang.srt.managers.scheduler_components.prefill_decode_balancer import (
+    PrefillDecodeBalancer,
+    batch_class,
+    rank0_consensus,
+)
 from sglang.srt.managers.scheduler_components.profiler_manager import (
     SchedulerProfilerManager,
 )
@@ -359,6 +364,7 @@ from sglang.srt.utils.hf_transformers_utils import (
 )
 from sglang.srt.utils.msgspec_utils import msgspec_to_builtins
 from sglang.srt.utils.numa_utils import get_numa_node_if_available, numa_bind_to_node
+from sglang.srt.utils.sgl_kernel_ops import warn_missing_sgl_kernel_ops
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.utils.weight_versions import (
     compute_weight_version_spans,
@@ -636,6 +642,7 @@ class Scheduler(
 
         # Init diffusion LLM
         self.init_diffusion_llm()
+        self.maybe_init_prefill_decode_balancer()
 
         self.init_metrics_reporter()
         self.scheduler_stage_metrics = self.metrics_reporter.scheduler_stage_metrics
@@ -1341,7 +1348,27 @@ class Scheduler(
         if sizer.profile_and_fit():
             self.dynamic_chunk_sizer = sizer
 
-    def _should_defer_prefill(self) -> bool:
+    def maybe_init_prefill_decode_balancer(self) -> None:
+        """Time-share prefill and decode unless an explicit interval is set."""
+        self.prefill_decode_balancer: Optional[PrefillDecodeBalancer] = None
+        if (
+            self.prefill_decode_interval
+            or self.dllm_config is not None
+            or get_parallel().pp_size > 1
+        ):
+            return
+        self.prefill_decode_balancer = PrefillDecodeBalancer(
+            consensus_elapsed=rank0_consensus(self.attn_tp_cpu_group)
+        )
+
+    def _should_defer_prefill(self, running_batch: ScheduleBatch) -> bool:
+        if self.prefill_decode_balancer is not None:
+            return self.prefill_decode_balancer.should_defer_prefill(
+                prefill_pending=bool(self.waiting_queue)
+                or self.chunked_req is not None,
+                decode_runnable=not running_batch.is_empty()
+                and not running_batch.is_prefill_only,
+            )
         if self._prefill_decode_interval_remaining == 0:
             return False
 
@@ -1349,6 +1376,10 @@ class Scheduler(
         return True
 
     def _arm_prefill_decode_interval(self, batch: Optional[ScheduleBatch]) -> None:
+        if self.prefill_decode_balancer is not None:
+            if batch is not None:
+                self.prefill_decode_balancer.on_batch_launched()
+            return
         if self.prefill_decode_interval == 0 or batch is None:
             return
 
@@ -3707,7 +3738,7 @@ class Scheduler(
 
         if self.dllm_config is not None:
             new_batch = self.get_new_batch_dllm(running_batch)
-        elif self._should_defer_prefill():
+        elif self._should_defer_prefill(running_batch):
             new_batch = None
         else:
             prefill_plan = self.get_new_batch_prefill(running_batch)
@@ -3910,7 +3941,7 @@ class Scheduler(
 
         if self.chunked_req is not None:
             self.chunked_req.init_next_round_input()
-            adder.chunked_req_limit = self.policy.shortest_prefill_chunk_limit(
+            adder.chunked_req_limit = self.policy.cede_chunk_budget(
                 self.chunked_req,
                 self.waiting_queue,
                 adder.rem_chunk_tokens or 0,
@@ -4774,6 +4805,10 @@ class Scheduler(
             self.batch_result_processor.process_batch_result_prebuilt(batch)
         elif batch.forward_mode.is_idle():
             self.batch_result_processor.process_batch_result_idle(batch, result)
+        if self.prefill_decode_balancer is not None:
+            self.prefill_decode_balancer.on_batch_finished(
+                batch_class(batch.forward_mode)
+            )
 
         # Submit this batch's queued host backups before the next scheduler step.
         self.tree_cache.flush_pending_backups()
@@ -6066,6 +6101,8 @@ def run_scheduler_process(
     scheduler = None
     try:
         scheduler = Scheduler(server_args, port_args)
+        if tp_rank == 0 and pp_rank == 0 and not dp_rank:
+            warn_missing_sgl_kernel_ops()
 
         # Send initialization info back to the parent process
         pipe_writer.send(scheduler.get_init_info())

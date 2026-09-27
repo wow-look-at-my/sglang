@@ -23,7 +23,7 @@ from sglang.srt.distributed.device_communicators.cuda_wrapper import CudaRTLibra
 from sglang.srt.distributed.parallel_state import in_the_same_node_as
 from sglang.srt.environ import envs as sglang_envs
 from sglang.srt.utils import is_cuda, is_hip, is_musa
-from sglang.srt.utils.cuda_vmm_utils import _gpu_fabric_clique
+from sglang.srt.utils.cuda_vmm_utils import _gpu_fabric_clique, is_vmm_pointer
 
 logger = logging.getLogger(__name__)
 
@@ -437,6 +437,28 @@ def can_p2p(rank: int, world_size: int) -> bool:
         if not gpu_p2p_access_check(rank, i):
             return False
     return True
+
+
+class CustomAllreduceGraphRegistrationError(RuntimeError):
+    """CUDA-graph buffers could not be IPC-registered on some rank of the group.
+
+    Raised identically on every rank of the group, after the communicator has
+    disabled itself there; graphs captured with it must be discarded and recaptured.
+    """
+
+
+def graph_registration_failure_message(error: str) -> str:
+    return (
+        "Custom all-reduce could not IPC-register its CUDA-graph buffers "
+        f"({' '.join(error.split())}); it is now disabled for this group and "
+        "all-reduce falls back to NCCL."
+    )
+
+
+def is_vmm_backed_allocator(device: torch.device) -> bool:
+    """Check whether expandable-segments VMM backs the caching allocator."""
+    probe = torch.empty(1, dtype=torch.uint8, device=device)
+    return is_vmm_pointer(probe.data_ptr())
 
 
 def can_use_custom_all_reduce_with_nvlink(

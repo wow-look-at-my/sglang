@@ -2,7 +2,7 @@
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import (
@@ -112,7 +112,7 @@ class TestSchedulerHiCacheEvents(unittest.TestCase):
         self.assertIsNone(plan.batch_to_run)
         s.get_new_batch_prefill.assert_not_called()
         self.assertEqual(
-            self.calls.mock_calls, [call.drain(), call.retry(), call.defer()]
+            self.calls.mock_calls, [call.drain(), call.retry(), call.defer(ANY)]
         )
 
     def test_pp_prefill_drains_before_admission(self):

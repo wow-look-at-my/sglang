@@ -283,6 +283,7 @@ class QSAIndexer(MultiPlatformOp):
         metadata,
         state_slots: torch.Tensor | None = None,
         state_stored: bool = False,
+        prior_keys: torch.Tensor | None = None,
     ) -> None:
         """Store the pending-group ring and compress each completed group."""
 
@@ -313,7 +314,23 @@ class QSAIndexer(MultiPlatformOp):
             return
         group_end_positions = metadata.compress_group_positions.long()
         compressed_locs = metadata.write_locs
-        if is_extend:
+        if is_extend and metadata.compress_member_locs is not None:
+            # Mixed batch: a decode tail's group began in the pending ring;
+            # prior_keys was gathered before this forward's ring writes.
+            group_locs = metadata.compress_member_locs
+            source_keys = torch.cat([prior_keys.to(token_k.dtype), token_k])
+            group_locs = group_locs.clamp_max(source_keys.shape[0] - 1)
+            source_rope = metadata.extend_rope_matrix
+            if source_rope is None:
+                source_rope = torch.cat(
+                    [
+                        pool.get_qsa_rope_position_buffer(
+                            metadata.compress_prior_ring_locs
+                        ),
+                        build_rope_position_matrix(rope_positions, token_k.shape[0]),
+                    ]
+                )
+        elif is_extend:
             # Extend chunks are group-aligned; each planned group lies in this forward,
             # so read its members from the packed chunk tensors.
             member_rows = metadata.compress_member_rows.long()
@@ -581,6 +598,11 @@ class QSAIndexer(MultiPlatformOp):
                 logical_positions,
                 indexer_metadata.compress_member_rows is not None,
             )
+        prior_keys = None
+        if indexer_metadata.compress_prior_ring_locs is not None:
+            prior_keys = indexer_metadata.token_to_kv_pool.get_qsa_key_state_buffer(
+                self.layer_id
+            )[indexer_metadata.compress_prior_ring_locs]
         q, token_k, state_stored = self.project_qk(
             hidden_states,
             positions,
@@ -600,6 +622,7 @@ class QSAIndexer(MultiPlatformOp):
             indexer_metadata,
             state_slots=state_slots,
             state_stored=state_stored,
+            prior_keys=prior_keys,
         )
         if forward_mode.is_decode() or is_target_verify or is_draft_extend:
             compressed_cache, page_table, compressed_lengths, max_model_len = (

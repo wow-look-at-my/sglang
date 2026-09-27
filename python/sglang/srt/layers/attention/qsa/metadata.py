@@ -75,6 +75,10 @@ class QSAIndexerMetadata(msgspec.Struct, frozen=True):
     compress_group_positions: Optional[torch.Tensor] = None
     compress_sequence_ids: Optional[torch.Tensor] = None
     compress_member_rows: Optional[torch.Tensor] = None
+    # Mixed batches only: [groups, ratio] member indices into
+    # [pending-ring members at compress_prior_ring_locs; this forward's tokens].
+    compress_member_locs: Optional[torch.Tensor] = None
+    compress_prior_ring_locs: Optional[torch.Tensor] = None
     is_cuda_graph: bool = False
     graph_write_locs: Optional[torch.Tensor] = None
     graph_compressed_page_table: Optional[torch.Tensor] = None

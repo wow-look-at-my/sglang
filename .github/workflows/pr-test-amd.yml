@@ -153,12 +153,12 @@ concurrency:
 
 jobs:
   call-gate:
-    if: github.event_name != 'schedule'
+    if: github.repository == 'sgl-project/sglang' && (github.event_name != 'schedule')
     uses: ./.github/workflows/pr-gate.yml
     secrets: inherit
   check-changes:
     needs: [call-gate]
-    if: always()
+    if: github.repository == 'sgl-project/sglang' && (always())
     runs-on: ubuntu-latest
     outputs:
       main_package: ${{ steps.filter.outputs.main_package || steps.run-mode.outputs.run_all_tests }}
@@ -261,8 +261,10 @@ jobs:
     name: call-pr-test-amd-extra
     needs: [check-changes]
     if: |
-      (github.event_name == 'schedule' || inputs.run_all_tests == true) &&
-      !(inputs.target_stage || inputs.target_stage_select)
+      github.repository == 'sgl-project/sglang' && (
+        (github.event_name == 'schedule' || inputs.run_all_tests == true) &&
+        !(inputs.target_stage || inputs.target_stage_select)
+      )
     strategy:
       fail-fast: false
       matrix:
@@ -286,13 +288,15 @@ jobs:
         rocm_version: ${{ fromJson(needs.check-changes.outputs.rocm_versions) }}
     needs: [check-changes, call-gate]
     if: |
-      always() && !cancelled() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',sgl-kernel-unit-test-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() && !cancelled() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
-          needs.check-changes.outputs.sgl_kernel == 'true'
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',sgl-kernel-unit-test-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
+            needs.check-changes.outputs.sgl_kernel == 'true'
+          )
         )
       )
     runs-on: ${{ format('linux-{0}-1gpu-sglang', inputs.runner_arch || 'mi300') }}
@@ -348,13 +352,15 @@ jobs:
         rocm_version: ${{ fromJson(needs.check-changes.outputs.rocm_versions) }}
     needs: [check-changes, call-gate]
     if: |
-      always() && !cancelled() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',sgl-kernel-unit-test-2-gpu-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() && !cancelled() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
-          needs.check-changes.outputs.sgl_kernel == 'true'
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',sgl-kernel-unit-test-2-gpu-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
+            needs.check-changes.outputs.sgl_kernel == 'true'
+          )
         )
       )
     runs-on: ${{ format('linux-{0}-2gpu-sglang', inputs.runner_arch || 'mi300') }}
@@ -393,13 +399,15 @@ jobs:
         rocm_version: ${{ fromJson(needs.check-changes.outputs.rocm_versions) }}
     needs: [check-changes, call-gate]
     if: |
-      always() && !cancelled() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-a-test-1-gpu-small-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() && !cancelled() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-a-test-1-gpu-small-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     runs-on: ${{ format('linux-{0}-1gpu-sglang', inputs.runner_arch || 'mi300') }}
@@ -434,13 +442,15 @@ jobs:
         rocm_version: ${{ fromJson(needs.check-changes.outputs.rocm_versions) }}
     needs: [check-changes, call-gate]
     if: |
-      always() && !cancelled() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',jit-kernel-unit-test-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() && !cancelled() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
-          needs.check-changes.outputs.jit_kernel == 'true'
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',jit-kernel-unit-test-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
+            needs.check-changes.outputs.jit_kernel == 'true'
+          )
         )
       )
     runs-on: ${{ format('linux-{0}-1gpu-sglang', inputs.runner_arch || 'mi300') }}
@@ -475,13 +485,15 @@ jobs:
         rocm_version: ${{ fromJson(needs.check-changes.outputs.rocm_versions) }}
     needs: [check-changes, call-gate]
     if: |
-      always() && !cancelled() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',jit-kernel-benchmark-test-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() && !cancelled() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
-          needs.check-changes.outputs.jit_kernel == 'true'
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',jit-kernel-benchmark-test-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
+            needs.check-changes.outputs.jit_kernel == 'true'
+          )
         )
       )
     runs-on: ${{ format('linux-{0}-1gpu-sglang', inputs.runner_arch || 'mi300') }}
@@ -517,12 +529,14 @@ jobs:
     name: wait-for-stage-a-amd
     needs: [check-changes, call-gate]
     if: |
-      always() &&
-      !cancelled() &&
-      github.event_name == 'pull_request' &&
-      !(inputs.target_stage || inputs.target_stage_select) &&
-      (needs.check-changes.outputs.main_package == 'true' || needs.check-changes.outputs.sgl_kernel == 'true') &&
-      (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
+        !cancelled() &&
+        github.event_name == 'pull_request' &&
+        !(inputs.target_stage || inputs.target_stage_select) &&
+        (needs.check-changes.outputs.main_package == 'true' || needs.check-changes.outputs.sgl_kernel == 'true') &&
+        (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
+      )
     runs-on: ubuntu-latest
     outputs:
       stage_a_result: ${{ steps.wait.outputs.result }}
@@ -539,13 +553,15 @@ jobs:
     name: ${{ format('stage-b-test-1-gpu-small-amd ({0}, linux-{1}-1gpu-sglang, {2})', matrix.rocm_version, inputs.runner_arch || 'mi300', matrix.part) }}
     needs: [check-changes, wait-for-stage-a-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-1-gpu-small-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-1-gpu-small-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     strategy:
@@ -585,13 +601,15 @@ jobs:
         rocm_version: ${{ fromJson(needs.check-changes.outputs.rocm_versions) }}
     needs: [check-changes, wait-for-stage-a-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-1-gpu-small-amd-nondeterministic,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-1-gpu-small-amd-nondeterministic,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     runs-on: ${{ format('linux-{0}-1gpu-sglang', inputs.runner_arch || 'mi300') }}
@@ -621,13 +639,15 @@ jobs:
     name: ${{ format('stage-b-test-1-gpu-small-amd-mi35x ({0}, {1})', matrix.rocm_version, matrix.runner) }}
     needs: [check-changes, wait-for-stage-a-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-1-gpu-small-amd-mi35x,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-1-gpu-small-amd-mi35x,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     strategy:
@@ -662,13 +682,15 @@ jobs:
     name: ${{ format('stage-b-test-1-gpu-large-amd ({0}, linux-{1}-1gpu-sglang, {2})', matrix.rocm_version, inputs.runner_arch || 'mi300', matrix.part) }}
     needs: [check-changes, wait-for-stage-a-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-1-gpu-large-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-1-gpu-large-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     strategy:
@@ -704,13 +726,15 @@ jobs:
     name: ${{ format('stage-b-test-2-gpu-large-amd ({0}, linux-{1}-2gpu-sglang, {2})', matrix.rocm_version, inputs.runner_arch || 'mi300', matrix.part) }}
     needs: [check-changes, wait-for-stage-a-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-2-gpu-large-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-2-gpu-large-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     strategy:
@@ -746,13 +770,15 @@ jobs:
     name: ${{ format('multimodal-gen-test-1-gpu-amd ({0}, linux-{1}-1gpu-sglang, {2})', matrix.rocm_version, inputs.runner_arch || 'mi300', matrix.part) }}
     needs: [check-changes, call-gate]
     if: |
-      always() && !cancelled() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',multimodal-gen-test-1-gpu-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() && !cancelled() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
-          needs.check-changes.outputs.multimodal_gen == 'true'
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',multimodal-gen-test-1-gpu-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
+            needs.check-changes.outputs.multimodal_gen == 'true'
+          )
         )
       )
     strategy:
@@ -896,13 +922,15 @@ jobs:
     name: ${{ format('multimodal-gen-test-2-gpu-amd ({0}, linux-{1}-2gpu-sglang, {2})', matrix.rocm_version, inputs.runner_arch || 'mi300', matrix.part) }}
     needs: [check-changes, call-gate]
     if: |
-      always() && !cancelled() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',multimodal-gen-test-2-gpu-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() && !cancelled() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
-          needs.check-changes.outputs.multimodal_gen == 'true'
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',multimodal-gen-test-2-gpu-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
+            needs.check-changes.outputs.multimodal_gen == 'true'
+          )
         )
       )
     strategy:
@@ -1032,13 +1060,15 @@ jobs:
     name: wait-for-stage-b-amd
     needs: [check-changes, call-gate, wait-for-stage-a-amd]
     if: |
-      always() &&
-      !cancelled() &&
-      github.event_name == 'pull_request' &&
-      !(inputs.target_stage || inputs.target_stage_select) &&
-      (needs.check-changes.outputs.main_package == 'true' || needs.check-changes.outputs.sgl_kernel == 'true') &&
-      (needs.wait-for-stage-a-amd.result == 'success' || needs.wait-for-stage-a-amd.result == 'skipped') &&
-      (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
+        !cancelled() &&
+        github.event_name == 'pull_request' &&
+        !(inputs.target_stage || inputs.target_stage_select) &&
+        (needs.check-changes.outputs.main_package == 'true' || needs.check-changes.outputs.sgl_kernel == 'true') &&
+        (needs.wait-for-stage-a-amd.result == 'success' || needs.wait-for-stage-a-amd.result == 'skipped') &&
+        (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
+      )
     runs-on: ubuntu-latest
     outputs:
       stage_b_result: ${{ steps.wait.outputs.result }}
@@ -1060,13 +1090,15 @@ jobs:
     name: ${{ format('stage-c-test-4-gpu-amd ({0}, linux-{1}-4gpu-sglang, {2})', matrix.rocm_version, inputs.runner_arch || 'mi300', matrix.part) }}
     needs: [check-changes, call-gate, wait-for-stage-b-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-test-4-gpu-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-test-4-gpu-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     strategy:
@@ -1117,13 +1149,15 @@ jobs:
     name: ${{ format('stage-c-test-large-8-gpu-amd ({0}, linux-{1}-8gpu-sglang, {2})', matrix.rocm_version, inputs.runner_arch || 'mi300', matrix.part) }}
     needs: [check-changes, call-gate, wait-for-stage-b-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-test-large-8-gpu-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-test-large-8-gpu-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     env:
@@ -1167,13 +1201,15 @@ jobs:
     name: ${{ format('stage-c-test-large-8-gpu-amd-mi35x ({0}, {1}, {2})', matrix.rocm_version, matrix.runner, matrix.part) }}
     needs: [check-changes, call-gate, wait-for-stage-b-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-test-large-8-gpu-amd-mi35x,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-test-large-8-gpu-amd-mi35x,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     strategy:
@@ -1212,13 +1248,15 @@ jobs:
     name: ${{ format('stage-c-dsv4-flash-fp4-fp8-amd-mi35x ({0}, {1})', matrix.rocm_version, matrix.runner) }}
     needs: [check-changes, call-gate, wait-for-stage-b-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-dsv4-flash-fp4-fp8-amd-mi35x,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-dsv4-flash-fp4-fp8-amd-mi35x,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     strategy:
@@ -1268,13 +1306,15 @@ jobs:
     name: ${{ format('stage-c-dsv4-pro-fp4-amd-mi35x ({0}, {1})', matrix.rocm_version, matrix.runner) }}
     needs: [check-changes, call-gate, wait-for-stage-b-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-dsv4-pro-fp4-amd-mi35x,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-c-dsv4-pro-fp4-amd-mi35x,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     strategy:
@@ -1325,13 +1365,15 @@ jobs:
     name: ${{ format('stage-b-test-large-8-gpu-mi35x-disaggregation-amd ({0}, {1})', matrix.rocm_version, matrix.runner) }}
     needs: [check-changes, wait-for-stage-a-amd]
     if: |
-      always() &&
-      (
-        (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-large-8-gpu-mi35x-disaggregation-amd,')) ||
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
         (
-          !(inputs.target_stage || inputs.target_stage_select) &&
-          ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
-          ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',stage-b-test-large-8-gpu-mi35x-disaggregation-amd,')) ||
+          (
+            !(inputs.target_stage || inputs.target_stage_select) &&
+            ((github.event_name == 'schedule') || (!failure() && !cancelled())) &&
+            ((needs.check-changes.outputs.main_package == 'true') || (needs.check-changes.outputs.sgl_kernel == 'true'))
+          )
         )
       )
     strategy:
@@ -1486,7 +1528,7 @@ jobs:
         stage-c-dsv4-flash-fp4-fp8-amd-mi35x,
         stage-c-dsv4-pro-fp4-amd-mi35x,
       ]
-    if: always()
+    if: github.repository == 'sgl-project/sglang' && (always())
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses
