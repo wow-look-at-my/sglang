@@ -1,7 +1,7 @@
 ---
 name: compute-mamba-ratio
 description: Compute the optimal --mamba-full-memory-ratio (or --max-mamba-cache-size pin) for a hybrid attention + linear-attention (Mamba / GDN / KDA) model's two serving memory pools, from the workload and serving config. Use when a user asks what ratio to set, why concurrency is clamped, or how to size the state vs KV pools for a hybrid model.
---- 
+---
 
 # Optimal hybrid dual-pool ratio (`--mamba-full-memory-ratio`)
 
