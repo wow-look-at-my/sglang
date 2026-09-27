@@ -103,9 +103,10 @@ def test_replacement_pool_runs_after_real_worker_exit(monkeypatch):
 
     try:
         with pytest.raises(BrokenProcessPool):
-            failed_executor.submit(_exit_worker_process).result(timeout=5)
+            # The first submit starts the fork server, which imports sglang once.
+            failed_executor.submit(_exit_worker_process).result(timeout=60)
         processor._replace_broken_cpu_executor(failed_executor)
-        assert processor.cpu_executor.submit(abs, -1).result(timeout=5) == 1
+        assert processor.cpu_executor.submit(abs, -1).result(timeout=60) == 1
     finally:
         processor.cpu_executor.shutdown(wait=True, cancel_futures=True)
 
