@@ -359,6 +359,12 @@ jobs:
           shared-key: fork-gateway-golang
           cache-on-failure: true
 
+      # No pre-commit hook covers Go, so this is the only thing holding the two
+      # trees this fork adds to the formatting the rest of them already uses.
+      - name: gofmt
+        working-directory: .
+        run: test -z "$(gofmt -l sgl-model-gateway/bindings/golang tools/sglang-simulator/schedsim)"
+
       # Stable rustfmt: imports_granularity and group_imports in
       # sgl-model-gateway/rustfmt.toml are nightly-only, so stable does not check
       # import grouping. Run `cargo +nightly fmt --all` before widening this.
