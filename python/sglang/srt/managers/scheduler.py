@@ -220,6 +220,7 @@ from sglang.srt.managers.schedule_policy import (
     AddReqResult,
     PrefillAdder,
     SchedulePolicy,
+    match_prefix_for_req,
 )
 from sglang.srt.managers.scheduler_components.batch_result_processor import (
     SchedulerBatchResultProcessor,
@@ -1411,6 +1412,9 @@ class Scheduler(
         """None to hold ``req`` back; otherwise whether admitting it evicts."""
         if self.eviction_throttle is None:
             return False
+        if not self.policy.waiting_queue_prefix_matched(self.waiting_queue):
+            # Otherwise prefix_indices is stale, empty for a new request.
+            match_prefix_for_req(self.tree_cache, req, include_req=True)
         total_tokens = adder.admission_tokens(req)
         would_evict = adder.needs_eviction(total_tokens)
         if self.eviction_throttle.should_hold(
