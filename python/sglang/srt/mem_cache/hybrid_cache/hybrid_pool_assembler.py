@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import functools
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional
 
+from sglang.srt.mem_cache.hicache_auto import (
+    AutoHiCacheAttachGate,
+    HiCacheAttachAborted,
+)
 from sglang.srt.mem_cache.hicache_storage import (
     PoolHitPolicy,
     PoolName,
@@ -2324,13 +2329,20 @@ def attach_hybrid_pool_to_unified_cache(
     storage_backend: Optional[str] = None,
     storage_extra_config: Optional[dict] = None,
     storage_prefetch_threshold: int = 256,
+    attach_gate: Optional[AutoHiCacheAttachGate] = None,
 ) -> None:
-    """Attach HostPoolGroup + HybridCacheController to UnifiedRadixCache."""
+    """Attach HostPoolGroup + HybridCacheController to UnifiedRadixCache.
+
+    With ``attach_gate``, every rank builds its pools and the gate commits
+    them only when all succeeded; otherwise it raises HiCacheAttachAborted
+    before anything is applied to ``cache``.
+    """
     try:
         kvcache = params.token_to_kv_pool_allocator.get_kvcache()
         components = set(cache.components.keys())
         strategy = _select_strategy(kvcache, components)
-        result = strategy.build(
+        build = functools.partial(
+            strategy.build,
             cache=cache,
             kvcache=kvcache,
             params=params,
@@ -2342,7 +2354,10 @@ def attach_hybrid_pool_to_unified_cache(
             model_name=get_serving().served_model_name,
             enable_storage_metrics=cache._enable_metrics_flag,
         )
+        result = build() if attach_gate is None else attach_gate.run(build)
         _apply_stack_result(cache, kvcache, params, result)
+    except HiCacheAttachAborted:
+        raise
     except Exception:
         logger.exception("attach_hybrid_pool_to_unified_cache failed")
         raise

@@ -65,6 +65,7 @@ _OVERRIDABLE_HOOKS: FrozenSet[str] = frozenset(
         "handle_multi_item_scoring",
         "handle_prefill_only_disable_kv_cache",
         "handle_hicache",
+        "handle_hicache_auto",
         "handle_data_parallelism",
         "handle_load_balance_method",
         "handle_context_parallelism",
