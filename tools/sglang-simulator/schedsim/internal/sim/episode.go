@@ -31,7 +31,7 @@ type Episode struct {
 	// MixedNewSeq, MixedNewTokens and MixedHit describe the batch that finished
 	// C1, which the log printed.
 	MixedNewSeq, MixedNewTokens, MixedHit int
-	MixedLine int
+	MixedLine                             int
 
 	// ChunkSeconds is the log's measured duration of each of C1's chunks. The
 	// first chunk's gap includes the idle time before the prompt arrived, so the

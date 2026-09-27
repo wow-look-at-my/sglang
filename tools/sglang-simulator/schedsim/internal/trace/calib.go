@@ -44,8 +44,8 @@ type DecodeCost struct {
 	PerTokenCtx float64
 	// MeanCtx is the context of the steady single-request lines the base term was
 	// solved at, so a term can be re-scaled without moving the fitted step time.
-	MeanCtx     float64
-	NumDraft    int
+	MeanCtx  float64
+	NumDraft int
 	// Accept carries the accepted-token counts the log reported per step; a run
 	// draws a per-request acceptance rate from it.
 	Accept     []float64

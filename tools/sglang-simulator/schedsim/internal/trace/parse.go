@@ -203,7 +203,7 @@ type Metrics struct {
 	// LowGenLines counts pre-collapse decode lines reporting under 100 tok/s and
 	// LowGenNearPrefill how many of those sit within a line or two of a prefill
 	// line, which is the signature of a log window that swallowed a chunk.
-	LowGenLines      int
+	LowGenLines       int
 	LowGenNearPrefill int
 }
 

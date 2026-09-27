@@ -24,8 +24,8 @@ type Metrics struct {
 	// its chunk carried, which is what a per-token claim compares against.
 	ITLp99, ITLp999 float64
 	// 7: output tokens per second over the window, and full-prefix recomputes.
-	OutputTokS   float64
-	Recomputes   int
+	OutputTokS float64
+	Recomputes int
 
 	// Supporting columns.
 	StallFrac1s    float64

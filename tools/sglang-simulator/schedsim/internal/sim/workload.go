@@ -10,9 +10,9 @@ import (
 // tool output to the context, asks for 200-800 tokens back, and returns 1-5 s
 // later.
 type AgentParams struct {
-	NewMin, NewMax       int
-	OutMin, OutMax       int
-	ThinkMin, ThinkMax   float64
+	NewMin, NewMax     int
+	OutMin, OutMax     int
+	ThinkMin, ThinkMax float64
 }
 
 // DefaultAgent is the agent turn model the scenarios are built on.

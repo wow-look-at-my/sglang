@@ -120,9 +120,9 @@ func SweepVariants(linear trace.PrefillCost) []Variant {
 // SweepRow is one variant measured on the swept scenario B and, unless the variant
 // only makes sense against a steady agent mix, on scenario A as well.
 type SweepRow struct {
-	Name    string
-	B       [NumModes]Metrics
-	A       [NumModes]Metrics
+	Name   string
+	B      [NumModes]Metrics
+	A      [NumModes]Metrics
 	SweptA bool
 	// Breaks lists the seven-metric cells where NEW is worse than the policy
 	// named, so the sweep reports where the contract does not hold rather than
@@ -233,4 +233,3 @@ func WriteSweep(w io.Writer, rows []SweepRow) {
 func triple(m [NumModes]Metrics, f func(Metrics) string) string {
 	return f(m[0]) + " / " + f(m[1]) + " / " + f(m[2])
 }
-
