@@ -25,7 +25,6 @@ concurrency:
 
 jobs:
   check-changes:
-    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       main_package: ${{ steps.filter.outputs.main_package || steps.run-mode.outputs.run_all_tests}}
@@ -62,13 +61,13 @@ jobs:
 
   pr-gate:
     needs: check-changes
-    if: github.repository == 'sgl-project/sglang' && (needs.check-changes.outputs.main_package == 'true')
+    if: needs.check-changes.outputs.main_package == 'true'
     uses: ./.github/workflows/pr-gate.yml
     secrets: inherit
 
   build-test:
     needs: [check-changes, pr-gate]
-    if: github.repository == 'sgl-project/sglang' && (needs.check-changes.outputs.main_package == 'true')
+    if: needs.check-changes.outputs.main_package == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout repository

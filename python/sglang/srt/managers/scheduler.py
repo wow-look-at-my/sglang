@@ -649,7 +649,6 @@ class Scheduler(
         # Init diffusion LLM
         self.init_diffusion_llm()
         self.maybe_init_prefill_decode_balancer()
-        self.maybe_init_eviction_throttle()
 
         self.init_metrics_reporter()
         self.scheduler_stage_metrics = self.metrics_reporter.scheduler_stage_metrics
@@ -674,6 +673,7 @@ class Scheduler(
 
         # Init prefill-decodedisaggregation
         self.init_disaggregation()
+        self.maybe_init_eviction_throttle()
 
         # Init overlap schedule
         self.init_overlap()

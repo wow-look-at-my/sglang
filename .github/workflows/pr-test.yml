@@ -72,7 +72,6 @@ permissions:
 jobs:
   # =============================================== check changes ====================================================
   check-changes:
-    if: github.repository == 'sgl-project/sglang'
     uses: ./.github/workflows/_pr-test-check-changes.yml
     with:
       git_ref: ${{ inputs.git_ref || '' }}
@@ -96,15 +95,14 @@ jobs:
   wait-for-base-a:
     needs: [check-changes, call-gate]
     if: |
-      github.repository == 'sgl-project/sglang' && (
-        always() &&
-        !cancelled() &&
-        needs.check-changes.result == 'success' &&
-        github.event_name == 'pull_request' &&
-        inputs.test_parallel_dispatch != true &&
-        (needs.check-changes.outputs.main_package == 'true' || needs.check-changes.outputs.sgl_kernel == 'true') &&
-        (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
-      )
+      github.repository == 'sgl-project/sglang' &&
+      always() &&
+      !cancelled() &&
+      needs.check-changes.result == 'success' &&
+      github.event_name == 'pull_request' &&
+      inputs.test_parallel_dispatch != true &&
+      (needs.check-changes.outputs.main_package == 'true' || needs.check-changes.outputs.sgl_kernel == 'true') &&
+      (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
     runs-on: ubuntu-latest
     outputs:
       base_a_result: ${{ steps.wait.outputs.result }}
@@ -127,16 +125,15 @@ jobs:
   wait-for-base-b:
     needs: [check-changes, call-gate, wait-for-base-a]
     if: |
-      github.repository == 'sgl-project/sglang' && (
-        always() &&
-        !cancelled() &&
-        needs.check-changes.result == 'success' &&
-        github.event_name == 'pull_request' &&
-        inputs.test_parallel_dispatch != true &&
-        (needs.check-changes.outputs.main_package == 'true' || needs.check-changes.outputs.sgl_kernel == 'true') &&
-        (needs.wait-for-base-a.result == 'success' || needs.wait-for-base-a.result == 'skipped') &&
-        (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
-      )
+      github.repository == 'sgl-project/sglang' &&
+      always() &&
+      !cancelled() &&
+      needs.check-changes.result == 'success' &&
+      github.event_name == 'pull_request' &&
+      inputs.test_parallel_dispatch != true &&
+      (needs.check-changes.outputs.main_package == 'true' || needs.check-changes.outputs.sgl_kernel == 'true') &&
+      (needs.wait-for-base-a.result == 'success' || needs.wait-for-base-a.result == 'skipped') &&
+      (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
     runs-on: ubuntu-latest
     outputs:
       base_b_result: ${{ steps.wait.outputs.result }}
@@ -163,16 +160,14 @@ jobs:
     needs: check-changes
     # Skip for scheduled runs (they run all tests)
     if: |
-      github.repository == 'sgl-project/sglang' && (
-        github.event_name != 'schedule' &&
-        inputs.test_parallel_dispatch != true &&
-        (
-          needs.check-changes.outputs.main_package == 'true' ||
-          needs.check-changes.outputs.sgl_kernel == 'true' ||
-          needs.check-changes.outputs.jit_kernel == 'true' ||
-          needs.check-changes.outputs.multimodal_gen == 'true' ||
-          needs.check-changes.outputs.renderer == 'true'
-        )
+      github.event_name != 'schedule' &&
+      inputs.test_parallel_dispatch != true &&
+      (
+        needs.check-changes.outputs.main_package == 'true' ||
+        needs.check-changes.outputs.sgl_kernel == 'true' ||
+        needs.check-changes.outputs.jit_kernel == 'true' ||
+        needs.check-changes.outputs.multimodal_gen == 'true' ||
+        needs.check-changes.outputs.renderer == 'true'
       )
     uses: ./.github/workflows/pr-gate.yml
     secrets: inherit
@@ -231,16 +226,14 @@ jobs:
     # !cancelled() so a skipped call-gate does not take this job with it, since a
     # docs-only PR still installs sglang in every stage.
     if: |
-      github.repository == 'sgl-project/sglang' && (
-        !cancelled() &&
-        needs.check-changes.result == 'success' &&
-        (github.event_name != 'pull_request' ||
-         needs.check-changes.outputs.multimodal_gen != 'true' ||
-         needs.check-changes.outputs.main_package == 'true' ||
-         needs.check-changes.outputs.jit_kernel == 'true' ||
-         needs.check-changes.outputs.sgl_kernel == 'true') &&
-        (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
-      )
+      !cancelled() &&
+      needs.check-changes.result == 'success' &&
+      (github.event_name != 'pull_request' ||
+       needs.check-changes.outputs.multimodal_gen != 'true' ||
+       needs.check-changes.outputs.main_package == 'true' ||
+       needs.check-changes.outputs.jit_kernel == 'true' ||
+       needs.check-changes.outputs.sgl_kernel == 'true') &&
+      (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
     uses: ./.github/workflows/_pr-test-rust-ext-build.yml
     with:
       runs_on: ubuntu-22.04
@@ -255,16 +248,14 @@ jobs:
     # Same gate as rust-ext-build: every main-ref run has to seed the cache, and a
     # docs-only PR still installs sglang on gb300.
     if: |
-      github.repository == 'sgl-project/sglang' && (
-        !cancelled() &&
-        needs.check-changes.result == 'success' &&
-        (github.event_name != 'pull_request' ||
-         needs.check-changes.outputs.multimodal_gen != 'true' ||
-         needs.check-changes.outputs.main_package == 'true' ||
-         needs.check-changes.outputs.jit_kernel == 'true' ||
-         needs.check-changes.outputs.sgl_kernel == 'true') &&
-        (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
-      )
+      !cancelled() &&
+      needs.check-changes.result == 'success' &&
+      (github.event_name != 'pull_request' ||
+       needs.check-changes.outputs.multimodal_gen != 'true' ||
+       needs.check-changes.outputs.main_package == 'true' ||
+       needs.check-changes.outputs.jit_kernel == 'true' ||
+       needs.check-changes.outputs.sgl_kernel == 'true') &&
+      (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
     uses: ./.github/workflows/_pr-test-rust-ext-build.yml
     with:
       runs_on: ubuntu-22.04-arm
@@ -349,11 +340,9 @@ jobs:
   base-a-test-cpu:
     needs: [check-changes, call-gate, rust-ext-build]
     if: |
-      github.repository == 'sgl-project/sglang' && (
-        always() &&
-        needs.check-changes.result == 'success' &&
-        ((github.event_name == 'schedule' || inputs.test_parallel_dispatch == true) || (!failure() && !cancelled()))
-      )
+      always() &&
+      needs.check-changes.result == 'success' &&
+      ((github.event_name == 'schedule' || inputs.test_parallel_dispatch == true) || (!failure() && !cancelled()))
     uses: ./.github/workflows/_pr-test-stage-cpu.yml
     with:
       self_name: base-a-test-cpu
@@ -504,7 +493,7 @@ jobs:
         base-c-test,
         base-c-test-aarch64,
       ]
-    if: github.repository == 'sgl-project/sglang' && (always())
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses

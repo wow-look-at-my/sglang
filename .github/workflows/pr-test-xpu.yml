@@ -26,7 +26,6 @@ concurrency:
 jobs:
   # ==================== Check Changes ==================== #
   check-changes:
-    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       changes_exist: ${{ steps.filter.outputs.main_package == 'true' || steps.filter.outputs.multimodal_gen == 'true' || steps.run-mode.outputs.run_all_tests == 'true' }}
@@ -111,7 +110,7 @@ jobs:
   # ==================== PR Gate ==================== #
   pr-gate:
     needs: check-changes
-    if: github.repository == 'sgl-project/sglang' && (needs.check-changes.outputs.changes_exist == 'true')
+    if: needs.check-changes.outputs.changes_exist == 'true'
     uses: ./.github/workflows/pr-gate.yml
     secrets: inherit
 
@@ -305,7 +304,7 @@ jobs:
           fi
 
   finish:
-    if: github.repository == 'sgl-project/sglang' && (always())
+    if: always()
     needs: [stage-a-test-1-gpu-xpu, multimodal-gen-test-1-gpu-xpu, pr-gate]
     runs-on: ubuntu-latest
     steps:

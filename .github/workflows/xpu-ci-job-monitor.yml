@@ -30,11 +30,10 @@ jobs:
     name: Fetch Actions Snapshot
     # Skip fork PRs entirely, and require the `run-ci` label on same-repo PRs.
     # schedule and workflow_dispatch always run.
-    if: |
-      github.repository == 'sgl-project/sglang' && (
-        github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository &&
-         contains(github.event.pull_request.labels.*.name, 'run-ci'))
-      )
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'run-ci'))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -80,7 +79,7 @@ jobs:
   # Single job filter mode
   custom-report:
     name: Custom Job Report
-    if: github.repository == 'sgl-project/sglang' && (inputs.job_filter)
+    if: ${{ inputs.job_filter }}
     needs: fetch-actions-data
     runs-on: ubuntu-latest
     steps:
@@ -115,7 +114,7 @@ jobs:
   # Parse workflow files to get job names dynamically
   parse-workflows:
     name: Parse Workflow Jobs
-    if: github.repository == 'sgl-project/sglang' && (!inputs.job_filter)
+    if: ${{ !inputs.job_filter }}
     runs-on: ubuntu-latest
     outputs:
       pr_jobs: ${{ steps.parse.outputs.pr_jobs }}
@@ -147,7 +146,7 @@ jobs:
   pr-ci-reports:
     name: PR - ${{ matrix.job_name }}
     needs: [parse-workflows, fetch-actions-data]
-    if: github.repository == 'sgl-project/sglang' && (!inputs.job_filter)
+    if: ${{ !inputs.job_filter }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -186,7 +185,7 @@ jobs:
   nightly-reports:
     name: Nightly - ${{ matrix.job_name }}
     needs: [parse-workflows, fetch-actions-data]
-    if: github.repository == 'sgl-project/sglang' && (!inputs.job_filter)
+    if: ${{ !inputs.job_filter }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -224,7 +223,7 @@ jobs:
   # Runner fleet report - cross-workflow runner analytics in a single pass
   runner-fleet-report:
     name: Runner Fleet Report
-    if: github.repository == 'sgl-project/sglang' && (!inputs.job_filter)
+    if: ${{ !inputs.job_filter }}
     needs: fetch-actions-data
     runs-on: ubuntu-latest
     steps:
@@ -260,7 +259,7 @@ jobs:
   # Success-rate thresholds: >=90% healthy, >=70% degraded, else critical.
   nightly-xpu-status-dashboard:
     name: Nightly XPU Status Dashboard
-    if: github.repository == 'sgl-project/sglang' && (!inputs.job_filter)
+    if: ${{ !inputs.job_filter }}
     needs: [fetch-actions-data, nightly-reports]
     runs-on: ubuntu-latest
     env:
@@ -414,11 +413,10 @@ jobs:
     name: Intel(XPU) Nightly report
     # Fork PRs don't get secrets and can't read cross-workflow artifacts;
     # rest is same gating as the fetch-actions-data job above.
-    if: |
-      github.repository == 'sgl-project/sglang' && (
-        github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository &&
-         contains(github.event.pull_request.labels.*.name, 'run-ci'))
-      )
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'run-ci'))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

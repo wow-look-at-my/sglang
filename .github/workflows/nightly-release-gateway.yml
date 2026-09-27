@@ -10,7 +10,6 @@ on:
 
 jobs:
   build:
-    if: github.repository == 'sgl-project/sglang'
     name: build on ${{ matrix.platform || matrix.os }} (${{ matrix.target }} - ${{ matrix.manylinux || 'auto' }})
     runs-on: ${{ matrix.os }}-latest
     strategy:
@@ -132,7 +131,6 @@ jobs:
           path: bindings/python/dist/
 
   build-sdist:
-    if: github.repository == 'sgl-project/sglang'
     name: Build SDist
     runs-on: ubuntu-latest
     steps:

@@ -38,7 +38,6 @@ concurrency:
 jobs:
   # ==================== Check Changes ==================== #
   check-changes:
-    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       changes_exist: ${{ steps.filter.outputs.main_package == 'true' || steps.filter.outputs.multimodal_gen == 'true' || steps.run-mode.outputs.run_all_tests == 'true'}}
@@ -99,15 +98,11 @@ jobs:
   # ==================== PR Gate ==================== #
   pr-gate:
     needs: check-changes
-    if: |
-      github.repository == 'sgl-project/sglang' && (
-        inputs.coverage_mode != true && needs.check-changes.outputs.changes_exist == 'true'
-      )
+    if: ${{ inputs.coverage_mode != true && needs.check-changes.outputs.changes_exist == 'true' }}
     uses: ./.github/workflows/pr-gate.yml
     secrets: inherit
 
   set-image-config:
-    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       CANN_image_a3: ${{ steps.set-vars.outputs.CANN_image_a3 }}
@@ -122,10 +117,7 @@ jobs:
   # torch_npu / sgl_kernel_npu before importing, so a hosted runner suffices.
   base-a-test-npu:
     needs: [check-changes, pr-gate]
-    if: |
-      github.repository == 'sgl-project/sglang' && (
-        !failure() && !cancelled() && inputs.coverage_mode != true && needs.check-changes.outputs.main_package == 'true'
-      )
+    if: ${{ !failure() && !cancelled() && inputs.coverage_mode != true && needs.check-changes.outputs.main_package == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -479,10 +471,7 @@ jobs:
     name: Recommend tests from coverage
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: |
-      github.repository == 'sgl-project/sglang' && (
-        !cancelled() && github.event_name == 'pull_request' && inputs.coverage_mode != true
-      )
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && inputs.coverage_mode != true }}
     outputs:
       coverage_paths: ${{ steps.export-paths.outputs.coverage_paths }}
     env:
@@ -586,7 +575,7 @@ jobs:
 
         recommend-tests-from-coverage,
       ]
-    if: github.repository == 'sgl-project/sglang' && (!cancelled() && inputs.coverage_mode != true)
+    if: ${{ !cancelled() && inputs.coverage_mode != true }}
     uses: ./.github/workflows/_npu-analyze-failure.yml
     with:
       log_artifact_pattern: selected-test-logs-*
@@ -749,7 +738,7 @@ jobs:
 
         setup-covstub,
       ]
-    if: github.repository == 'sgl-project/sglang' && (always())
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses

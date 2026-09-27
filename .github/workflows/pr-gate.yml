@@ -27,7 +27,8 @@ jobs:
     #    or executes PR code, so it is safe for pull_request_target callers.
     runs-on: ubuntu-latest
     env:
-      IS_PR_EVENT: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
+      # The label and rate-limit checks ration upstream's self-hosted runners; forks have none to ration.
+      IS_PR_EVENT: ${{ github.repository == 'sgl-project/sglang' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') }}
     steps:
       - name: Fetch latest PR info
         if: env.IS_PR_EVENT == 'true'

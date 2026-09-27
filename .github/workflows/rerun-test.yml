@@ -87,7 +87,6 @@ permissions:
 
 jobs:
   prepare-partitions:
-    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -348,7 +347,7 @@ jobs:
   rerun-test-cpu:
     name: rerun-test-cpu (partition ${{ matrix.partition }})
     needs: prepare-partitions
-    if: github.repository == 'sgl-project/sglang' && (inputs.mode == 'cpu')
+    if: inputs.mode == 'cpu'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare-partitions.outputs.matrix) }}
@@ -463,10 +462,7 @@ jobs:
 
   write-back-result:
     needs: [prepare-partitions, rerun-test-cuda, rerun-test-multimodal-gen, rerun-test-cpu]
-    if: |
-      github.repository == 'sgl-project/sglang' && (
-        always() && inputs.reply_comment_id != '' && inputs.reply_marker != ''
-      )
+    if: always() && inputs.reply_comment_id != '' && inputs.reply_marker != ''
     runs-on: ubuntu-latest
     permissions:
       issues: write
