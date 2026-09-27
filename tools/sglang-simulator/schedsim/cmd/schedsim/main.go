@@ -74,6 +74,28 @@ func main() {
 		in.Params.RunningReqs = work.RunningReqs
 	}
 
+	// The revised balancer at the queue the log shows when the cold prompt
+	// starts, at its peak inside the window, and with a longer queue.
+	var revisedRes sched.Result
+	for _, q := range []struct {
+		label   string
+		pending int
+	}{
+		{"#queue-req at cold start", 1 + metrics.QueueAtCold},
+		{"#queue-req peak in window", 1 + metrics.QueuePeakInCold},
+		{"two more cold prompts queued", 3},
+	} {
+		p := work.Params(sched.PolicyQueueBalance)
+		p.PendingPrefill = q.pending
+		p.DecodePerReqFraction = *decodePerReq
+		p.PrefillInterference = *interference
+		r := sched.Simulate(work, p, metrics.QueueAtCold)
+		if len(in.Revised) == 0 {
+			revisedRes = r
+		}
+		in.Revised = append(in.Revised, report.RevisedRun{PendingPrefill: q.pending, Label: q.label, Result: r})
+	}
+
 	if *sweep {
 		for _, n := range []int{1, 2, 4, 8, 16} {
 			p := work.Params(sched.PolicyFixedInterval)
@@ -92,7 +114,7 @@ func main() {
 
 	report.Write(os.Stdout, in)
 	fmt.Fprintln(os.Stdout)
-	report.Summary(os.Stdout, oldRes, newRes)
+	report.Summary(os.Stdout, oldRes, newRes, revisedRes)
 }
 
 func splitLines(s string) []string {

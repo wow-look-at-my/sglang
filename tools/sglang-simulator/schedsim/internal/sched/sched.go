@@ -23,6 +23,11 @@ const (
 	// PolicyTimeBalance splits contended GPU time between prefill and decode by
 	// measured batch duration, which is the shipped balancer.
 	PolicyTimeBalance
+	// PolicyQueueBalance is the revised balancer: each pending prefill request
+	// and the decode batch get equal time (prefill seconds are charged divided
+	// by the number of pending prefill requests), and at most one chunk budget
+	// of prefill tokens runs between two points where decode has caught up.
+	PolicyQueueBalance
 )
 
 func (p Policy) String() string {
@@ -31,6 +36,8 @@ func (p Policy) String() string {
 		return "prefill-priority (old)"
 	case PolicyFixedInterval:
 		return "fixed-interval"
+	case PolicyQueueBalance:
+		return "queue-balance (revised)"
 	default:
 		return "time-balance (new)"
 	}
@@ -67,6 +74,11 @@ type Params struct {
 	// Assumed: unmeasurable from a single-request log. 0 keeps each class's
 	// measured cost intact and lets the time split alone decide.
 	PrefillInterference float64
+
+	// PendingPrefill is how many prefill requests are pending, the cold one
+	// included, under PolicyQueueBalance. The model does not serve the others;
+	// they only weigh the split, as the scheduler's waiting queue does.
+	PendingPrefill int
 }
 
 // Chunk is one cold-prefill batch as the log measured it.
@@ -153,8 +165,8 @@ type Result struct {
 
 	// DecodeSteps is how many decode steps ran before the cold prefill finished,
 	// which is the window the collapse was measured in.
-	DecodeSteps      int
-	GeneratedTokens  float64
+	DecodeSteps     int
+	GeneratedTokens float64
 
 	// WindowSeconds is wall time from the first batch to prefill completion.
 	WindowSeconds     float64
@@ -191,12 +203,14 @@ func Simulate(w Workload, p Params, queueAtStart int) Result {
 		FirstChunkInputTPS: w.Chunks[0].InputTPS,
 		LastChunkInputTPS:  w.Chunks[len(w.Chunks)-1].InputTPS,
 	}
-	run := &runner{r: &r, w: w, p: p}
+	run := &runner{r: &r, w: w, p: p, prefillDivisor: 1}
 	switch p.Policy {
 	case PolicyPrefillPriority:
 		run.prefillPriority()
 	case PolicyFixedInterval:
 		run.fixedInterval()
+	case PolicyQueueBalance:
+		run.queueBalance()
 	default:
 		run.timeBalance()
 	}
@@ -213,6 +227,10 @@ type runner struct {
 	lastDecodeWall float64
 	lastCharge     float64
 	hasLastCharge  bool
+
+	// prefillDivisor scales a prefill batch's charge; 1 except under
+	// PolicyQueueBalance, where it is the number of pending prefill requests.
+	prefillDivisor float64
 }
 
 // prefillPriority is the old rule: a prefill batch wins the step whenever one is
@@ -260,6 +278,41 @@ func (x *runner) timeBalance() {
 	}
 }
 
+// queueBalance implements the revised balancer
+// (python/sglang/srt/managers/scheduler_components/prefill_decode_balancer.py).
+// Prefill seconds are charged divided by the number of pending prefill
+// requests, so a queue of n prompts gets n/(n+1) of contended time and one
+// prompt gets half, as under timeBalance. burst counts prefill tokens since
+// decode last caught up; a chunk continuation runs only once it is zero, and
+// no batch runs once it reaches a chunk. This model is sequential (no overlap),
+// so nothing is in flight at a decision and the chunks are whole: the stall
+// bound matches timeBalance here, and only the queue weighting changes the
+// outcome.
+func (x *runner) queueBalance() {
+	x.prefillDivisor = float64(max(x.p.PendingPrefill, 1))
+	var debt float64
+	burst := 0
+	for i := 0; i < len(x.w.Chunks); {
+		x.settle(&debt)
+		if x.p.RunningReqs <= 0 || x.decodeSeconds() <= 0 {
+			// No contention: the balancer resets and never defers.
+			debt, burst = 0, 0
+		}
+		if debt == 0 {
+			burst = 0
+		}
+		continuesChunk := i > 0
+		exhausted := burst >= x.w.ChunkSize || (continuesChunk && burst > 0)
+		if exhausted && x.p.RunningReqs > 0 && x.decodeSeconds() > 0 {
+			x.decode(1)
+			continue
+		}
+		x.prefill(x.w.Chunks[i])
+		burst += x.w.Chunks[i].Tokens
+		i++
+	}
+}
+
 // settle folds the last completed batch's measured duration into the balance,
 // which is what the balancer does at the next decision after a completion.
 func (x *runner) settle(debt *float64) {
@@ -277,7 +330,7 @@ func (x *runner) prefill(c Chunk) {
 	secs := c.Seconds * (1 + x.p.PrefillInterference)
 	x.wall += secs
 	x.r.Trace = append(x.r.Trace, Event{IsPrefill: true, Tokens: c.Tokens, Seconds: secs, Wall: x.wall})
-	x.lastCharge = secs
+	x.lastCharge = secs / x.prefillDivisor
 	x.hasLastCharge = true
 	x.noteGap()
 }

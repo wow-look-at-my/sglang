@@ -50,6 +50,16 @@ type Input struct {
 	// first and last chunk, so the report can point a reader at the evidence.
 	ColdFirstLine int
 	ColdLastLine  int
+
+	// Revised holds the revised balancer's runs, one per pending-queue size.
+	Revised []RevisedRun
+}
+
+// RevisedRun is one queue-balance run and the pending prefill count it used.
+type RevisedRun struct {
+	PendingPrefill int
+	Label          string
+	Result         sched.Result
 }
 
 // SweepPoint is one row of the decode-interval sensitivity table.
@@ -137,6 +147,19 @@ func Write(w io.Writer, in Input) {
 		in.New.WindowSeconds, in.Old.WindowSeconds, in.New.WindowSeconds/in.Old.WindowSeconds)
 	fmt.Fprintf(w, "  the GPU is the trade the balancer makes, and the share knob sets it.\n\n")
 
+	if len(in.Revised) > 0 {
+		fmt.Fprintf(w, "REVISED BALANCER (queue-weighted share)\n")
+		fmt.Fprintf(w, "  each pending prefill request and the decode batch get equal time, so n\n")
+		fmt.Fprintf(w, "  pending prompts get n/(n+1); one prompt is the 50/50 split above. The\n")
+		fmt.Fprintf(w, "  queued requests only weigh the split here; the model does not serve them.\n")
+		fmt.Fprintf(w, "  %-30s %8s %14s %12s %14s\n", "", "pending", "decode steps", "gen (tok/s)", "prefill (s)")
+		for _, rv := range in.Revised {
+			fmt.Fprintf(w, "  %-30s %8d %14d %12.1f %14.1f\n", rv.Label, rv.PendingPrefill,
+				rv.Result.DecodeSteps, rv.Result.EffectiveGenTPS, rv.Result.WindowSeconds)
+		}
+		fmt.Fprintf(w, "\n")
+	}
+
 	if len(in.Sweep) > 0 {
 		fmt.Fprintf(w, "FIXED-INTERVAL ALTERNATIVE (--prefill-decode-interval N)\n")
 		fmt.Fprintf(w, "  %10s %14s %16s %18s\n", "N", "decode steps", "gen (tok/s)", "prefill done (s)")
@@ -209,10 +232,10 @@ func DefaultFidelities(m trace.Metrics) []Fidelity {
 }
 
 // Summary prints the one-line-per-model digest.
-func Summary(w io.Writer, old, nw sched.Result) {
+func Summary(w io.Writer, results ...sched.Result) {
 	fmt.Fprintf(w, "SUMMARY\n")
-	fmt.Fprintf(w, "  %s: %d decode steps, %.1f tok/s over %.1f s, prefill done=%v\n",
-		strings.TrimSpace(old.Policy), old.DecodeSteps, old.EffectiveGenTPS, old.WindowSeconds, old.PrefillCompleted)
-	fmt.Fprintf(w, "  %s: %d decode steps, %.1f tok/s over %.1f s, prefill done=%v\n",
-		strings.TrimSpace(nw.Policy), nw.DecodeSteps, nw.EffectiveGenTPS, nw.WindowSeconds, nw.PrefillCompleted)
+	for _, r := range results {
+		fmt.Fprintf(w, "  %s: %d decode steps, %.1f tok/s over %.1f s, prefill done=%v\n",
+			strings.TrimSpace(r.Policy), r.DecodeSteps, r.EffectiveGenTPS, r.WindowSeconds, r.PrefillCompleted)
+	}
 }

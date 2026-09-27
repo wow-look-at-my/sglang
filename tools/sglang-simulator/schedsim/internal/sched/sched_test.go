@@ -247,6 +247,54 @@ func TestPerRequestDecodeCostDividesGeneration(t *testing.T) {
 	}
 }
 
+// With one prompt pending the revised balancer's queue weighting is 1, so it
+// must reproduce the shipped 50/50 balancer batch for batch.
+func TestQueueBalanceWithOnePromptIsTheEvenSplit(t *testing.T) {
+	w, _ := workload(t)
+
+	even := Simulate(w, w.Params(PolicyTimeBalance), 0)
+	p := w.Params(PolicyQueueBalance)
+	p.PendingPrefill = 1
+	revised := Simulate(w, p, 0)
+
+	if revised.DecodeSteps != even.DecodeSteps || revised.WindowSeconds != even.WindowSeconds {
+		t.Fatalf("one pending prompt: %d steps over %.3f s, shipped balancer %d over %.3f s",
+			revised.DecodeSteps, revised.WindowSeconds, even.DecodeSteps, even.WindowSeconds)
+	}
+}
+
+// A queue of prompts must earn a growing share, so the cold prefill drains
+// sooner, while decode still runs after every chunk and keeps 1/(n+1).
+func TestQueueBalanceGivesAPromptQueueItsShare(t *testing.T) {
+	w, _ := workload(t)
+
+	even := Simulate(w, w.Params(PolicyTimeBalance), 0)
+	p := w.Params(PolicyQueueBalance)
+	p.PendingPrefill = 3
+	r := Simulate(w, p, 0)
+
+	var prefillSecs, decodeSecs float64
+	var longestChunk float64
+	for _, e := range r.Trace {
+		if e.IsPrefill {
+			prefillSecs += e.Seconds
+			longestChunk = max(longestChunk, e.Seconds)
+		} else {
+			decodeSecs += e.Seconds
+		}
+	}
+	share := prefillSecs / (prefillSecs + decodeSecs)
+	if share < 0.7 || share > 0.8 {
+		t.Fatalf("three pending prompts got %.1f%% of contended time, want ~75%%", share*100)
+	}
+	if !r.PrefillCompleted || r.WindowSeconds >= even.WindowSeconds {
+		t.Fatalf("window %.2f s, shipped balancer %.2f s", r.WindowSeconds, even.WindowSeconds)
+	}
+	if r.LongestDecodeGap > longestChunk+1e-9 {
+		t.Fatalf("decode gap %.3f s exceeds one chunk %.3f s", r.LongestDecodeGap, longestChunk)
+	}
+}
+
 // Every chunk the workload carries must be a step the log actually contains.
 func TestWorkloadChunksComeFromTheLog(t *testing.T) {
 	w, m := workload(t)
