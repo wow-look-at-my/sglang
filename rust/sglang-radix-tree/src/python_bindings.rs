@@ -93,8 +93,10 @@ fn component_type_to_u8(component_type: ComponentType) -> u8 {
 /// pointers (inlined from pyo3-tch, MIT/Apache-2.0, by Laurent Mazare).
 pub struct PyTensor(pub Tensor);
 
-impl<'py> FromPyObject<'py> for PyTensor {
-    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+impl<'a, 'py> FromPyObject<'a, 'py> for PyTensor {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         let ptr = ob.as_ptr() as *mut tch::python::CPyObject;
         match unsafe { Tensor::pyobject_unpack(ptr) } {
             Ok(Some(tensor)) => Ok(PyTensor(tensor)),
