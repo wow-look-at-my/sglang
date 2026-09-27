@@ -646,8 +646,6 @@ class TestGoldenModelOverrides(_IsolatedPublish):
                 with self.subTest(mode=mode):
                     self._construct(*qwen4, disaggregation_mode=mode)
 
-            with self.assertRaisesRegex(ValueError, "enable-unified-memory"):
-                self._construct(*qwen4, enable_unified_memory=True)
             with self.assertRaisesRegex(ValueError, "MORI requires --pp-size 1"):
                 self._construct(
                     *qwen4,
@@ -655,6 +653,38 @@ class TestGoldenModelOverrides(_IsolatedPublish):
                     disaggregation_transfer_backend="mori",
                     pp_size=2,
                 )
+
+    def test_qwen4_qsa_mtp_resolves_unified_memory_and_hicache_together(self):
+        """The deployed QSA recipe (TP, built-in MTP chain draft, flags unset)
+        resolves both the unified pool and the HiCache host tier on."""
+        qwen4 = ("Qwen4ExpForConditionalGeneration", "qwen4_exp")
+        qsa_hybrid = {
+            "num_hidden_layers": 4,
+            "layer_types": ["linear_attention"] * 3 + ["full_attention"],
+            "head_dim": 16,
+            "indexer_n_heads": 4,
+            "indexer_kv_heads": 1,
+            "indexer_head_dim": 16,
+            "indexer_budget": 2048,
+            "indexer_compress_ratio": 4,
+        }
+        platforms = {
+            "cuda": dict(is_cuda=True),
+            "sm120": dict(is_cuda=True, is_blackwell=True, is_sm120=True),
+        }
+        for name, facts in platforms.items():
+            with self.subTest(name), override_platform(**facts):
+                sa = self._construct(
+                    *qwen4,
+                    config_extra=qsa_hybrid,
+                    tp_size=2,
+                    speculative_algorithm="NEXTN",
+                    speculative_num_steps=3,
+                    speculative_eagle_topk=1,
+                    speculative_num_draft_tokens=4,
+                )
+                self.assertIs(self._resolved(sa, "enable_unified_memory"), True)
+                self.assertIs(self._resolved(sa, "enable_hierarchical_cache"), True)
 
     def test_qwen4_ple_file_requires_offload(self):
         qwen4 = ("Qwen4ExpForConditionalGeneration", "qwen4_exp")

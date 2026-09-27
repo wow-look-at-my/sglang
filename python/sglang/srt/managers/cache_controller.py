@@ -828,7 +828,7 @@ class HiCacheController:
         self.write_queue.clear()
 
         completion = self.l2_transfer_engine.submit_device_to_host(
-            self._l2_transfers(host_indices, device_indices, pool_transfers)
+            self._l2_write_transfers(host_indices, device_indices, pool_transfers)
         )
 
         self.ack_write_queue.append(
@@ -942,6 +942,14 @@ class HiCacheController:
         return transfers
 
     def _l2_load_transfers(
+        self,
+        host_indices: torch.Tensor,
+        device_indices: torch.Tensor,
+        pool_transfers: Optional[List[PoolTransfer]] = None,
+    ) -> list[L2Transfer]:
+        return self._l2_transfers(host_indices, device_indices, pool_transfers)
+
+    def _l2_write_transfers(
         self,
         host_indices: torch.Tensor,
         device_indices: torch.Tensor,
