@@ -28,6 +28,8 @@ type Recorder struct {
 	End         float64
 	Stuck       bool
 	Retractions int
+	// Drained is true when the run went on until every request finished.
+	Drained bool
 
 	PrefillSeconds, DecodeSeconds float64
 	spans                         []span
@@ -92,6 +94,10 @@ type Metrics struct {
 	ITLp999  float64
 	// Throughput is output tokens per second over the run.
 	Throughput float64
+	// Tokens are the output tokens delivered by the end of the run.
+	Tokens float64
+	// Drained is true when the run went on until every request finished.
+	Drained bool
 	// Recomputes counts returning turns whose cached context was lost.
 	Recomputes int
 
@@ -182,6 +188,8 @@ func (rc *Recorder) Metrics() Metrics {
 	if end > 0 {
 		m.Throughput = total / end
 	}
+	m.Tokens = total
+	m.Drained = rc.Drained
 	m.ITLp99 = quantile(gaps, 0.99)
 	m.ITLp999 = quantile(gaps, 0.999)
 	m.Gaps = float64(len(gaps))
@@ -212,6 +220,8 @@ func Mean(runs []Metrics) Metrics {
 		m.ITLp99 += r.ITLp99 / n
 		m.ITLp999 += r.ITLp999 / n
 		m.Throughput += r.Throughput / n
+		m.Tokens += r.Tokens / n
+		m.Drained = r.Drained
 		m.Recomputes += r.Recomputes
 		m.TurnTTFTp50 += r.TurnTTFTp50 / n
 		m.TurnTTFTp99 += r.TurnTTFTp99 / n

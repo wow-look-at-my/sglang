@@ -149,6 +149,7 @@ func (e *Engine) Run(w Workload, horizon float64) {
 	e.Rec.End = math.Min(e.now, horizon)
 	if math.IsInf(horizon, 1) {
 		e.Rec.End = e.now
+		e.Rec.Drained = !e.Rec.Stuck
 	}
 }
 

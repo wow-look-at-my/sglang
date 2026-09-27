@@ -42,12 +42,15 @@ var tails = map[string]float64{"ITL p99 ms": 0.99, "ITL p99.9 ms": 0.999}
 // boundCovered reports whether OLD's edge in this cell is the price of decoding
 // during a cold prompt, which TestColdPromptBound checks instead.
 func boundCovered(m Metric, r Row, base sim.Config) bool {
-	if _, ok := BoundFor(r.Scenario, base, r.Results[2]); !ok {
+	b, ok := BoundFor(r.Scenario, base, r.Results[2])
+	if !ok {
 		return false
 	}
 	_, tail := tails[m.Name]
-	return tail || m.Name == "cold TTFT s"
+	return tail || m.Name == "cold TTFT s" || m.Name == throughput && b.Throughput > 0
 }
+
+const throughput = "throughput tok/s"
 
 func TestNewIsNotWorseThanPrevAnywhere(t *testing.T) {
 	rows, _ := everyRow()
@@ -87,6 +90,14 @@ func TestColdPromptBound(t *testing.T) {
 			// The GPU is never idle while a cold prompt waits, so NEW's TTFT.
 			assert.Lessf(t, b.Idle, 0.005, "%s: NEW idles %.2f%% of the cold windows", name, 100*b.Idle)
 			assert.GreaterOrEqualf(t, nw.ColdTTFT, b.TTFT-0.05, "%s: NEW's cold TTFT is under its own bound", name)
+			if b.Throughput > 0 {
+				assert.LessOrEqualf(t, nw.Throughput, b.Throughput+0.05, "%s: NEW's throughput is over its own bound", name)
+				if nw.Throughput < old.Throughput {
+					assert.Lessf(t, b.Throughput, old.Throughput,
+						"%s: NEW %.1f < OLD %.1f tok/s, and decoding as long as NEW while the colds wait still allows %.1f",
+						name, nw.Throughput, old.Throughput, b.Throughput)
+				}
+			}
 			for _, m := range Metrics {
 				q, tail := tails[m.Name]
 				if !tail || notWorse(t, m, r.Results[2], r.Results[0]) || notWorse(t, m, nw, old) {

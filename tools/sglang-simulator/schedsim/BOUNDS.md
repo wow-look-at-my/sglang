@@ -26,6 +26,14 @@ Here `streams` is the mean number of requests decoding in the cold windows and `
 
 A quantile is a property of one run, and the mean of per-seed quantiles is not the quantile of anything. So the test derives the tail bound per seed, from that seed's NEW run, and compares it with that seed's OLD run. It checks a seed only when the seed-mean quantile of NEW is worse than OLD's and that seed's NEW is worse than its OLD.
 
+## Throughput of a drained run
+
+A run that goes on until every request finishes (A) has a throughput of its output tokens over its makespan. Before the last cold prompt's first token, the GPU runs every cold prompt's chunks, `sum(P)`. It also runs the decode time `D` spent while a cold prompt waits (`WindowDecode`). After that token, the prompt still decodes its other `n - 1` output tokens. A step gives at most `accept` tokens and costs at least a one-request step at the prompt's length, `step(1, prompt)`. So a schedule that decodes for `D` while the cold prompts wait has:
+
+    makespan >= sum(P) + D + ceil((n - 1) / accept) x step(1, prompt)
+
+Its throughput is at most the output tokens over that makespan. The test takes the smallest decode tail over the cold prompts. Per seed, the test checks that NEW is under this bound. Where NEW is under OLD, it also checks that the bound is under OLD. OLD's makespan does not contain `D`, and no schedule that decodes for `D` during the cold prompts gets it back. A run that stops at a horizon has no makespan. This bound does not apply to it.
+
 ## Numbers
 
 Cells are OLD / NEW, each the mean of 16 workload seeds. Device pool 1397211 tokens, host tier 2794422 tokens.
