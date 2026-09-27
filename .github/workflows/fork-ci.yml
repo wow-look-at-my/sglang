@@ -499,7 +499,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.fork-plan.outputs.kernel_version }}
-          KERNEL_CHANGED: ${{ needs.fork-plan.outputs.kernel_changed }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -517,13 +516,22 @@ jobs:
             exit 0
           fi
           EXISTING=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          # Compare with the release's build commit, not the last push: a revert and re-apply changes nothing.
+          BUILT_FROM=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)
+          SOURCE_CHANGED=true
+          if FILES=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BUILT_FROM}...${GITHUB_SHA}" --jq '.files[].filename') \
+             && [ "$(printf '%s\n' "$FILES" | grep -c .)" -lt 300 ] \
+             && ! printf '%s\n' "$FILES" | grep -q '^python/sglang/kernels/aot/'; then
+            SOURCE_CHANGED=false
+          fi
+          echo "kernel source changed since ${BUILT_FROM}: ${SOURCE_CHANGED}"
           for WHEEL in "${WHEELS[@]}"; do
             NAME=$(basename "$WHEEL")
             if ! printf '%s\n' "$EXISTING" | grep -qxF "$NAME"; then
               echo "::error::release $TAG is published without $NAME and cannot take new assets; bump the kernel version (scripts/release/bump_kernel_version.py)"
               exit 1
             fi
-            if [ "$KERNEL_CHANGED" = true ]; then
+            if [ "$SOURCE_CHANGED" = true ]; then
               # One version must mean one op set: a wheel already published under
               # this version would silently lack whatever this change adds.
               echo "::error::$NAME is already published; bump the kernel version (scripts/release/bump_kernel_version.py, then bump_kernel_version_to_sglang.py) to ship a changed kernel"
