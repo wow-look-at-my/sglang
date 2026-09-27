@@ -10,6 +10,7 @@ pub mod inventory;
 pub mod manager;
 pub mod oauth;
 pub mod proxy;
+pub mod sse_transport;
 pub mod tool_args;
 
 // Re-export types used outside this module

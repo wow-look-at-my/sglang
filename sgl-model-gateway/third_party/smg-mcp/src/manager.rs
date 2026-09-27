@@ -16,14 +16,14 @@ use dashmap::DashMap;
 use openai_protocol::responses::{ResponseTool, ResponseToolType};
 use rmcp::{
     model::{
-        CallToolRequestParam, CallToolResult, GetPromptRequestParam, GetPromptResult,
-        ReadResourceRequestParam, ReadResourceResult, SubscribeRequestParam,
-        UnsubscribeRequestParam,
+        CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult,
+        ReadResourceRequestParams, ReadResourceResult, SubscribeRequestParams,
+        UnsubscribeRequestParams,
     },
     service::RunningService,
     transport::{
-        sse_client::SseClientConfig, streamable_http_client::StreamableHttpClientTransportConfig,
-        ConfigureCommandExt, SseClientTransport, StreamableHttpClientTransport, TokioChildProcess,
+        streamable_http_client::StreamableHttpClientTransportConfig, ConfigureCommandExt,
+        StreamableHttpClientTransport, TokioChildProcess,
     },
     RoleClient, ServiceExt,
 };
@@ -31,10 +31,11 @@ use serde_json::Map;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    config::{McpConfig, McpProxyConfig, McpServerConfig, McpTransport, Prompt, RawResource, Tool},
+    config::{McpConfig, McpProxyConfig, McpServerConfig, McpTransport, Prompt, Resource, Tool},
     connection_pool::McpConnectionPool,
     error::{McpError, McpResult},
     inventory::ToolInventory,
+    sse_transport::SseClientTransport,
     tool_args::ToolArgs,
 };
 
@@ -327,10 +328,8 @@ impl McpManager {
             .ok_or_else(|| McpError::ServerNotFound(server_name.clone()))?;
 
         // Call the tool
-        let request = CallToolRequestParam {
-            name: Cow::Owned(tool_name.to_string()),
-            arguments: args_map,
-        };
+        let mut request = CallToolRequestParams::new(Cow::Owned(tool_name.to_string()));
+        request.arguments = args_map;
 
         client
             .call_tool(request)
@@ -364,10 +363,8 @@ impl McpManager {
             .ok_or_else(|| McpError::ServerNotFound(server_name.clone()))?;
 
         // Get the prompt
-        let request = GetPromptRequestParam {
-            name: prompt_name.to_string(),
-            arguments: args,
-        };
+        let mut request = GetPromptRequestParams::new(prompt_name);
+        request.arguments = args;
 
         client
             .get_prompt(request)
@@ -399,9 +396,7 @@ impl McpManager {
             .ok_or_else(|| McpError::ServerNotFound(server_name.clone()))?;
 
         // Read the resource
-        let request = ReadResourceRequestParam {
-            uri: uri.to_string(),
-        };
+        let request = ReadResourceRequestParams::new(uri);
 
         client
             .read_resource(request)
@@ -410,7 +405,7 @@ impl McpManager {
     }
 
     /// List all available resources
-    pub fn list_resources(&self) -> Vec<RawResource> {
+    pub fn list_resources(&self) -> Vec<Resource> {
         self.inventory
             .list_resources()
             .into_iter()
@@ -482,7 +477,7 @@ impl McpManager {
     }
 
     /// Get resource info by URI
-    pub fn get_resource_info(&self, uri: &str) -> Option<RawResource> {
+    pub fn get_resource_info(&self, uri: &str) -> Option<Resource> {
         self.inventory.get_resource(uri).map(|(_server, info)| info)
     }
 
@@ -500,13 +495,14 @@ impl McpManager {
 
         debug!("Subscribing to '{}' on '{}'", uri, server_name);
 
-        client
+        // resources/subscribe is deprecated only from protocol 2026-07-28;
+        // rmcp negotiates 2025-11-25 (ProtocolVersion::LATEST), where it is current.
+        #[expect(deprecated)]
+        let result = client
             .peer()
-            .subscribe(SubscribeRequestParam {
-                uri: uri.to_string(),
-            })
-            .await
-            .map_err(|e| McpError::ToolExecution(format!("Failed to subscribe: {}", e)))
+            .subscribe(SubscribeRequestParams::new(uri))
+            .await;
+        result.map_err(|e| McpError::ToolExecution(format!("Failed to subscribe: {}", e)))
     }
 
     /// Unsubscribe from resource changes
@@ -523,13 +519,12 @@ impl McpManager {
 
         debug!("Unsubscribing from '{}' on '{}'", uri, server_name);
 
-        client
+        #[expect(deprecated)]
+        let result = client
             .peer()
-            .unsubscribe(UnsubscribeRequestParam {
-                uri: uri.to_string(),
-            })
-            .await
-            .map_err(|e| McpError::ToolExecution(format!("Failed to unsubscribe: {}", e)))
+            .unsubscribe(UnsubscribeRequestParams::new(uri))
+            .await;
+        result.map_err(|e| McpError::ToolExecution(format!("Failed to unsubscribe: {}", e)))
     }
 
     /// List all connected servers (static + dynamic)
@@ -640,7 +635,7 @@ impl McpManager {
             Ok(rs) => {
                 info!("Discovered {} resources from '{}'", rs.len(), server_key);
                 for r in rs {
-                    inventory.insert_resource(r.uri.clone(), server_key.to_string(), r.raw);
+                    inventory.insert_resource(r.uri.clone(), server_key.to_string(), r);
                 }
             }
             Err(e) => debug!("No resources or failed to list on '{}': {}", server_key, e),
@@ -679,7 +674,7 @@ impl McpManager {
                 info!("Discovered {} resources from '{}'", rs.len(), server_name);
                 for r in rs {
                     self.inventory
-                        .insert_resource(r.uri.clone(), server_name.to_string(), r.raw);
+                        .insert_resource(r.uri.clone(), server_name.to_string(), r);
                 }
             }
             Err(e) => debug!("No resources or failed to list on '{}': {}", server_name, e),
@@ -824,12 +819,7 @@ impl McpManager {
                     crate::proxy::create_http_client(proxy_config)?
                 };
 
-                let cfg = SseClientConfig {
-                    sse_endpoint: url.clone().into(),
-                    ..Default::default()
-                };
-
-                let transport = SseClientTransport::start_with_client(client, cfg)
+                let transport = SseClientTransport::start(client, url)
                     .await
                     .map_err(|e| McpError::Transport(format!("create SSE transport: {}", e)))?;
 
@@ -940,10 +930,8 @@ impl RequestMcpContext {
             .get(&server_key)
             .ok_or_else(|| McpError::ServerNotFound(server_key.clone()))?;
 
-        let request = CallToolRequestParam {
-            name: Cow::Owned(tool_name.to_string()),
-            arguments: args_map,
-        };
+        let mut request = CallToolRequestParams::new(Cow::Owned(tool_name.to_string()));
+        request.arguments = args_map;
 
         client
             .call_tool(request)
@@ -1021,15 +1009,7 @@ mod tests {
     }
 
     fn test_tool(name: &str) -> Tool {
-        Tool {
-            name: Cow::Owned(name.to_string()),
-            title: None,
-            description: None,
-            input_schema: Arc::new(Map::new()),
-            output_schema: None,
-            annotations: None,
-            icons: None,
-        }
+        Tool::new_with_raw(Cow::Owned(name.to_string()), None, Arc::new(Map::new()))
     }
 
     #[tokio::test]

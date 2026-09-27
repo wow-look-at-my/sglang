@@ -1,4 +1,14 @@
 // tests/common/mock_mcp_server.rs - Mock MCP server for testing
+use std::{collections::HashMap, convert::Infallible, sync::Arc};
+
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::sse::{Event, Sse},
+    routing::{get, post},
+    Json,
+};
+use futures::{channel::mpsc, Stream, StreamExt};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
@@ -7,7 +17,7 @@ use rmcp::{
     transport::streamable_http_server::{
         session::local::LocalSessionManager, StreamableHttpService,
     },
-    ErrorData as McpError, RoleServer, ServerHandler,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
 };
 use tokio::net::TcpListener;
 
@@ -15,7 +25,12 @@ use tokio::net::TcpListener;
 pub struct MockMCPServer {
     pub port: u16,
     pub server_handle: Option<tokio::task::JoinHandle<()>>,
+    path: &'static str,
 }
+
+// Legacy SSE sessions: sessionId to the sender feeding that session's rmcp server.
+type SseSessions =
+    Arc<parking_lot::Mutex<HashMap<String, mpsc::UnboundedSender<ClientJsonRpcMessage>>>>;
 
 /// Simple test server with mock search tools
 #[derive(Clone)]
@@ -46,7 +61,7 @@ impl MockSearchServer {
             .get("query")
             .and_then(|v| v.as_str())
             .unwrap_or("test");
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Mock search results for: {}",
             query
         ))]))
@@ -57,7 +72,7 @@ impl MockSearchServer {
         &self,
         Parameters(_params): Parameters<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             "Mock local search results",
         )]))
     }
@@ -65,18 +80,15 @@ impl MockSearchServer {
 
 #[tool_handler]
 impl ServerHandler for MockSearchServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some("Mock server for testing".to_string()),
-        }
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+            .with_instructions("Mock server for testing")
     }
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        _request: InitializeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         Ok(self.get_info())
@@ -111,12 +123,38 @@ impl MockMCPServer {
         Ok(MockMCPServer {
             port,
             server_handle: Some(server_handle),
+            path: "/mcp",
+        })
+    }
+
+    /// Start a mock server speaking the legacy HTTP+SSE transport (protocol 2024-11-05):
+    /// `GET /sse` opens the event stream, `POST /message?sessionId=..` carries requests.
+    pub async fn start_sse() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+
+        let sessions: SseSessions = Arc::default();
+        let app = axum::Router::new()
+            .route("/sse", get(sse_connect))
+            .route("/message", post(sse_post_message))
+            .with_state(sessions);
+
+        let server_handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("Mock SSE MCP server failed to start");
+        });
+
+        Ok(MockMCPServer {
+            port,
+            server_handle: Some(server_handle),
+            path: "/sse",
         })
     }
 
     /// Get the full URL for this mock server
     pub fn url(&self) -> String {
-        format!("http://127.0.0.1:{}/mcp", self.port)
+        format!("http://127.0.0.1:{}{}", self.port, self.path)
     }
 
     /// Stop the mock server
@@ -126,6 +164,52 @@ impl MockMCPServer {
             // Wait a moment for cleanup
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
+    }
+}
+
+async fn sse_connect(
+    State(sessions): State<SseSessions>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let (to_server, from_client) = mpsc::unbounded::<ClientJsonRpcMessage>();
+    let (to_client, from_server) = mpsc::unbounded::<ServerJsonRpcMessage>();
+    sessions.lock().insert(session_id.clone(), to_server);
+
+    tokio::spawn(async move {
+        if let Ok(running) = MockSearchServer::new()
+            .serve((to_client, from_client))
+            .await
+        {
+            let _ = running.waiting().await;
+        }
+    });
+
+    let endpoint = Event::default()
+        .event("endpoint")
+        .data(format!("/message?sessionId={session_id}"));
+    let messages = from_server.map(|message| {
+        Event::default()
+            .event("message")
+            .data(serde_json::to_string(&message).expect("serialize server message"))
+    });
+    Sse::new(
+        futures::stream::once(async { endpoint })
+            .chain(messages)
+            .map(Ok),
+    )
+}
+
+async fn sse_post_message(
+    State(sessions): State<SseSessions>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(message): Json<ClientJsonRpcMessage>,
+) -> StatusCode {
+    let sender = query
+        .get("sessionId")
+        .and_then(|id| sessions.lock().get(id).cloned());
+    match sender {
+        Some(sender) if sender.unbounded_send(message).is_ok() => StatusCode::ACCEPTED,
+        _ => StatusCode::NOT_FOUND,
     }
 }
 

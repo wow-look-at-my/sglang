@@ -4,7 +4,7 @@
 
 use std::{collections::HashMap, fmt};
 
-pub use rmcp::model::{Prompt, RawResource, Tool};
+pub use rmcp::model::{Prompt, Resource, Tool};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

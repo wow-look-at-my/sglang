@@ -10,7 +10,7 @@ use axum::{
     routing::get,
     Router,
 };
-use rmcp::transport::auth::OAuthState;
+use rmcp::transport::auth::{AuthorizationRequest, OAuthState};
 use serde::Deserialize;
 use tokio::sync::{oneshot, Mutex};
 
@@ -20,14 +20,16 @@ use crate::error::{McpError, McpResult};
 #[derive(Debug, Deserialize)]
 struct CallbackParams {
     code: String,
-    #[allow(dead_code)]
     state: Option<String>,
 }
+
+// Carries (authorization code, CSRF state) from the callback handler.
+type CallbackSender = oneshot::Sender<(String, String)>;
 
 /// State for the callback server
 #[derive(Clone)]
 struct CallbackState {
-    code_receiver: Arc<Mutex<Option<oneshot::Sender<String>>>>,
+    code_receiver: Arc<Mutex<Option<CallbackSender>>>,
 }
 
 /// HTML page returned after successful OAuth callback
@@ -95,8 +97,10 @@ impl OAuthHelper {
             .await
             .map_err(|e| McpError::Auth(format!("Failed to initialize OAuth: {}", e)))?;
 
+        let request =
+            AuthorizationRequest::new(&self.redirect_uri).with_scopes(scopes.iter().copied());
         oauth_state
-            .start_authorization(scopes, &self.redirect_uri, None)
+            .start_authorization(request)
             .await
             .map_err(|e| McpError::Auth(format!("Failed to start authorization: {}", e)))?;
 
@@ -109,11 +113,11 @@ impl OAuthHelper {
         tracing::info!("OAuth authorization URL: {}", auth_url);
 
         // Start callback server and wait for code
-        let auth_code = self.start_callback_server().await?;
+        let (auth_code, csrf_state) = self.start_callback_server().await?;
 
         // Exchange code for token
         oauth_state
-            .handle_callback(&auth_code, "")
+            .handle_callback(&auth_code, &csrf_state)
             .await
             .map_err(|e| McpError::Auth(format!("Failed to handle OAuth callback: {}", e)))?;
 
@@ -124,8 +128,8 @@ impl OAuthHelper {
     }
 
     /// Start a local HTTP server to receive the OAuth callback
-    async fn start_callback_server(&self) -> McpResult<String> {
-        let (code_sender, code_receiver) = oneshot::channel::<String>();
+    async fn start_callback_server(&self) -> McpResult<(String, String)> {
+        let (code_sender, code_receiver) = oneshot::channel::<(String, String)>();
 
         let state = CallbackState {
             code_receiver: Arc::new(Mutex::new(Some(code_sender))),
@@ -170,7 +174,7 @@ impl OAuthHelper {
 
         // Send code to waiting task
         if let Some(sender) = state.code_receiver.lock().await.take() {
-            let _ = sender.send(params.code);
+            let _ = sender.send((params.code, params.state.unwrap_or_default()));
         }
 
         Html(CALLBACK_HTML.to_string())
