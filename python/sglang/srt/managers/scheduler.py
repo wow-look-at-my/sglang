@@ -266,6 +266,10 @@ from sglang.srt.managers.scheduler_components.output_streamer import (
 from sglang.srt.managers.scheduler_components.pool_stats_observer import (
     SchedulerPoolStatsObserver,
 )
+from sglang.srt.managers.scheduler_components.eviction_throttle import (
+    EvictionThrottle,
+    rank0_verdict_consensus,
+)
 from sglang.srt.managers.scheduler_components.prefill_decode_balancer import (
     PrefillDecodeBalancer,
     batch_class,
@@ -644,6 +648,7 @@ class Scheduler(
         # Init diffusion LLM
         self.init_diffusion_llm()
         self.maybe_init_prefill_decode_balancer()
+        self.maybe_init_eviction_throttle()
 
         self.init_metrics_reporter()
         self.scheduler_stage_metrics = self.metrics_reporter.scheduler_stage_metrics
@@ -1363,6 +1368,30 @@ class Scheduler(
             consensus_elapsed=rank0_consensus(self.attn_tp_cpu_group),
         )
 
+    def maybe_init_eviction_throttle(self) -> None:
+        """Hold back conversations whose admission would thrash the prefix cache."""
+        self.eviction_throttle: Optional[EvictionThrottle] = None
+        if (
+            self.prefill_decode_balancer is None
+            or self.disaggregation_mode != DisaggregationMode.NULL
+            or self.tree_cache.disable
+        ):
+            return
+        cache_controller = (
+            self.tree_cache.cache_controller if self.enable_hierarchical_cache else None
+        )
+        host_tokens = (
+            cache_controller.mem_pool_host.size if cache_controller is not None else 0
+        )
+        self.eviction_throttle = EvictionThrottle(
+            device_tokens=self.token_to_kv_pool_allocator.size_full,
+            host_tokens=host_tokens,
+            prefill_seconds_per_token=lambda: (
+                self.prefill_decode_balancer.prefill_seconds_per_token
+            ),
+            consensus=rank0_verdict_consensus(self.attn_tp_cpu_group),
+        )
+
     def _should_defer_prefill(self, running_batch: ScheduleBatch) -> bool:
         if self.prefill_decode_balancer is not None:
             return self.prefill_decode_balancer.should_defer_prefill(
@@ -1378,6 +1407,46 @@ class Scheduler(
         self._prefill_decode_interval_remaining -= 1
         return True
 
+    def _eviction_throttle_holds(self, adder: PrefillAdder, req: Req) -> Optional[bool]:
+        """None to hold ``req`` back; otherwise whether admitting it evicts."""
+        if self.eviction_throttle is None:
+            return False
+        total_tokens = adder.admission_tokens(req)
+        would_evict = adder.needs_eviction(total_tokens)
+        if self.eviction_throttle.should_hold(
+            rid=req.rid,
+            input_len=len(req.origin_input_ids),
+            device_hit=len(req.prefix_indices),
+            total_tokens=total_tokens,
+            would_evict=would_evict,
+            queued_at=req.time_stats.wait_queue_entry_time,
+        ):
+            return None
+        return would_evict
+
+    def _present_rids(self, running_batch: ScheduleBatch) -> Set[str]:
+        batches = [running_batch, self.last_batch]
+        rids = {req.rid for req in self.waiting_queue}
+        rids.update(req.rid for b in batches if b is not None for req in b.reqs)
+        if self.chunked_req is not None:
+            rids.add(self.chunked_req.rid)
+        return rids
+
+    def _balancer_class(self, batch: ScheduleBatch) -> Optional[bool]:
+        """How the balancer charges ``batch``: a mixed batch is decode service
+        unless it rebuilds a prefix its conversation lost to eviction."""
+        is_prefill = batch_class(batch.forward_mode)
+        if (
+            batch.forward_mode.is_mixed()
+            and self.eviction_throttle is not None
+            and batch.decoding_reqs is not None
+        ):
+            decoding = {req.rid for req in batch.decoding_reqs}
+            is_prefill = self.eviction_throttle.rebuilds_lost_prefix(
+                [req.rid for req in batch.reqs if req.rid not in decoding]
+            )
+        return is_prefill
+
     def _prefill_token_budget(self) -> Optional[int]:
         if self.prefill_decode_balancer is None:
             return None
@@ -1387,7 +1456,7 @@ class Scheduler(
         if self.prefill_decode_balancer is not None:
             if batch is not None:
                 self.prefill_decode_balancer.on_batch_launched(
-                    is_prefill=batch_class(batch.forward_mode),
+                    is_prefill=self._balancer_class(batch),
                     num_tokens=batch.extend_num_tokens or 0,
                     num_reqs=len(batch.reqs),
                 )
@@ -3307,6 +3376,10 @@ class Scheduler(
             self.waiting_queue.append(req)
             req.time_stats.set_wait_queue_entry_time()
             req.arrival_processed_tokens = self.processed_tokens_counter
+            if self.eviction_throttle is not None:
+                self.eviction_throttle.on_request_queued(
+                    rid=req.rid, token_ids=req.origin_input_ids
+                )
         elif self.disaggregation_mode == DisaggregationMode.PREFILL:
             self._prefetch_kvcache(req)
             self.disagg_prefill_bootstrap_queue.add(
@@ -3974,6 +4047,9 @@ class Scheduler(
                     running_bs, running_batch=running_batch
                 )
                 - 1,
+                admissible=lambda req: (
+                    adder.admission_tokens(req) < adder.rem_total_tokens
+                ),
             )
             self.chunked_req = adder.add_chunked_req(self.chunked_req)
 
@@ -3994,6 +4070,10 @@ class Scheduler(
         if mamba_allocator is not None:
             mamba_allocator.alloc_group_begin(len(self.waiting_queue))
         buffer_pipeline = self.tree_cache.buffer_pipeline
+        if self.eviction_throttle is not None:
+            self.eviction_throttle.begin_pass(
+                present_rids=self._present_rids(running_batch)
+            )
         # Get requests from the waiting queue to a new prefill batch
         for req in self.waiting_queue:
             if self.enable_lora and not self.can_schedule_lora_req(req, running_loras):
@@ -4049,6 +4129,10 @@ class Scheduler(
                     # marks the staged span below once it is surfaced.
                     req.host_hit_is_storage = False
 
+            would_evict = self._eviction_throttle_holds(adder, req)
+            if would_evict is None:
+                continue
+            cached = len(req.prefix_indices) + req.host_hit_length
             req.init_next_round_input(self.tree_cache)
             if self.enable_hicache_storage and (
                 self._prefetch_after_device_hit_loss(req)
@@ -4065,6 +4149,17 @@ class Scheduler(
                 has_chunked_req=(self.chunked_req is not None),
                 truncation_align_size=self.truncation_align_size,
             )
+            if (
+                self.eviction_throttle is not None
+                and adder.can_run_list
+                and adder.can_run_list[-1] is req
+            ):
+                self.eviction_throttle.on_admitted(
+                    rid=req.rid,
+                    input_len=len(req.origin_input_ids),
+                    cached=cached,
+                    evicted=would_evict,
+                )
 
             if self.enable_lora:
                 running_loras.add(req.lora_id)
@@ -4835,6 +4930,14 @@ class Scheduler(
             self.batch_result_processor.process_batch_result_idle(batch, result)
         if self.prefill_decode_balancer is not None:
             self.prefill_decode_balancer.on_batch_finished()
+        if self.eviction_throttle is not None:
+            for req in batch.reqs:
+                if req.finished():
+                    self.eviction_throttle.on_request_finished(
+                        rid=req.rid,
+                        input_ids=req.origin_input_ids,
+                        output_ids=req.output_ids,
+                    )
 
         # Submit this batch's queued host backups before the next scheduler step.
         self.tree_cache.flush_pending_backups()

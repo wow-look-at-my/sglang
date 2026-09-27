@@ -262,7 +262,8 @@ class TestShortestPrefillFirst(CustomTestCase):
         self.assertGreaterEqual(own, ceded)
 
     def test_reserves_only_for_requests_that_can_be_admitted(self):
-        """A reservation for a request with no free slot shrinks the long
+        """A reservation for a request with no free slot, or whose context
+        memory cannot hold, shrinks the long
         chunk for nothing."""
         continuation = self.make_req("continuation", 16384)
         waiting = [self.make_req("a", 512), self.make_req("b", 1024)]
@@ -276,6 +277,17 @@ class TestShortestPrefillFirst(CustomTestCase):
                 continuation, waiting, 4096, 256, max_new_reqs=1
             ),
             3584,
+        )
+        # A follow-up whose context memory cannot hold is not reserved for.
+        self.assertEqual(
+            self.policy.cede_chunk_budget(
+                continuation,
+                waiting,
+                4096,
+                256,
+                admissible=lambda req: req.rid != "a",
+            ),
+            3072,
         )
 
 

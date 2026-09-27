@@ -5,7 +5,9 @@ from collections import deque
 
 from sglang.srt.managers.scheduler_components.prefill_decode_balancer import (
     PrefillDecodeBalancer,
+    batch_class,
 )
+from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=5, suite="base-a-test-cpu")
@@ -27,7 +29,16 @@ def _balancer(clock, **kwargs):
     return PrefillDecodeBalancer(burst_tokens=CHUNK_TOKENS, clock=clock, **kwargs)
 
 
-def _run(balancer, clock, *, steps, overlap, prefill_pending=True, reqs_per_prefill=1):
+def _run(
+    balancer,
+    clock,
+    *,
+    steps,
+    overlap,
+    prefill_pending=True,
+    reqs_per_prefill=1,
+    prefill_class=True,
+):
     """Drive the scheduler loop shape with a long chunked prompt pending, each
     prefill batch serving ``reqs_per_prefill`` requests; returns the launched
     classes in order.
@@ -45,7 +56,7 @@ def _run(balancer, clock, *, steps, overlap, prefill_pending=True, reqs_per_pref
         )
         is_prefill = prefill_pending and not defer
         balancer.on_batch_launched(
-            is_prefill=is_prefill,
+            is_prefill=prefill_class if is_prefill else False,
             num_tokens=CHUNK_TOKENS if is_prefill else 0,
             num_reqs=reqs_per_prefill if is_prefill else 5,
         )
@@ -112,6 +123,32 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         )
         self.assertAlmostEqual(_prefill_time_share(launched), 0.75, delta=0.05)
         self.assertEqual(_longest_prefill_run(launched), 1)
+
+    def test_mixed_chunks_are_decode_service(self):
+        """A mixed batch decodes every running request inside the chunk, so a
+        long prompt must prefill at full speed rather than be deferred as if
+        the streams were waiting."""
+        self.assertIs(batch_class(ForwardMode.MIXED), False)
+        self.assertIs(batch_class(ForwardMode.EXTEND), True)
+        self.assertIs(batch_class(ForwardMode.DECODE), False)
+        clock = _Clock()
+        launched = _run(
+            _balancer(clock),
+            clock,
+            steps=500,
+            overlap=True,
+            prefill_class=batch_class(ForwardMode.MIXED),
+        )
+        self.assertEqual(launched.count(False), 0)
+
+    def test_measures_prefill_seconds_per_token(self):
+        clock = _Clock()
+        balancer = _balancer(clock)
+        self.assertEqual(balancer.prefill_seconds_per_token, 0.0)
+        _run_one(balancer, clock, is_prefill=True, seconds=0.5, num_tokens=1000)
+        _run_one(balancer, clock, is_prefill=False, seconds=0.02)
+        _run_one(balancer, clock, is_prefill=False, seconds=0.3, num_tokens=500)
+        self.assertAlmostEqual(balancer.prefill_seconds_per_token, 0.8 / 1500)
 
     def test_short_prefills_share_one_chunk_budget_before_decode_repays(self):
         """A short prefill arriving right after another must not wait out a

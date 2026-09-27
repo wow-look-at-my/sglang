@@ -15,6 +15,7 @@ import msgspec.structs
 import sglang.srt.server_args as server_args_module
 from sglang.srt.arg_groups import (
     hicache_hook,
+    mixed_chunk_hook,
     parallel_hook,
     pd_disaggregation_hook,
     serving_hook,
@@ -36,6 +37,10 @@ from sglang.srt.arg_groups.hicache_hook import (
     handle_hicache,
     handle_hicache_auto,
     handle_hicache_ratio_default,
+)
+from sglang.srt.arg_groups.mixed_chunk_hook import (
+    auto_mixed_chunk_blocker,
+    handle_mixed_chunk_auto,
 )
 from sglang.srt.arg_groups.hisparse_hook import (
     validate_hisparse_dsa_backend,
@@ -2232,6 +2237,94 @@ class TestHiCacheArgs(CustomTestCase):
         )
 
         handle_cache_compatibility(args)
+
+
+class TestMixedChunkAutoResolution(CustomTestCase):
+    """An unset --enable-mixed-chunk resolves per configuration."""
+
+    @staticmethod
+    def _make_args(**overrides) -> ServerArgs:
+        fields = {"chunked_prefill_size": 4096, **overrides}
+        cuda_graph_config = fields.pop("cuda_graph_config", None)
+        args = ServerArgs(model_path="dummy", **fields)
+        declare_resolution(
+            args,
+            "test",
+            cuda_graph_config=cuda_graph_config
+            or with_phase(
+                default_cuda_graph_config(), Phase.PREFILL, backend=Backend.BREAKABLE
+            ),
+        )
+        return args
+
+    def test_unset_flag_follows_the_blocker(self):
+        for blocker, expected in ((None, True), ("a reason", False)):
+            with self.subTest(blocker=blocker):
+                args = self._make_args()
+                with patch.object(
+                    mixed_chunk_hook, "auto_mixed_chunk_blocker", return_value=blocker
+                ):
+                    handle_mixed_chunk_auto(args)
+                self.assertIs(resolution_result(args, "enable_mixed_chunk"), expected)
+
+    def test_explicit_flag_is_never_second_guessed(self):
+        for explicit in (True, False):
+            with self.subTest(explicit=explicit):
+                args = self._make_args(enable_mixed_chunk=explicit)
+                with patch.object(
+                    mixed_chunk_hook,
+                    "auto_mixed_chunk_blocker",
+                    side_effect=AssertionError("explicit flag consulted the auto path"),
+                ):
+                    handle_mixed_chunk_auto(args)
+                self.assertIs(resolution_result(args, "enable_mixed_chunk"), explicit)
+
+    def test_cli_flag_is_tri_state(self):
+        parser = argparse.ArgumentParser()
+        ServerArgs.add_cli_args(parser)
+        for argv, expected in (
+            ([], None),
+            (["--enable-mixed-chunk"], True),
+            (["--no-enable-mixed-chunk"], False),
+        ):
+            with self.subTest(argv=argv):
+                parsed = parser.parse_args(["--model-path", "dummy", *argv])
+                self.assertIs(parsed.enable_mixed_chunk, expected)
+
+    def test_each_incompatible_configuration_keeps_mixed_chunk_off(self):
+        """Every configuration a hook would reject mixed chunk for, or that a
+        runner asserts against, must block the automatic enable."""
+        with patch("sglang.srt.runtime_context.get_platform") as platform:
+            platform.return_value.is_cuda = True
+            self.assertIsNone(
+                auto_mixed_chunk_blocker(resolving_view(self._make_args()))
+            )
+            self.assertIsNone(
+                auto_mixed_chunk_blocker(
+                    resolving_view(self._make_args(speculative_algorithm="EAGLE"))
+                )
+            )
+            tc_piecewise = with_phase(
+                default_cuda_graph_config(), Phase.PREFILL, backend=Backend.TC_PIECEWISE
+            )
+            blocked = {
+                "chunked prefill off": {"chunked_prefill_size": -1},
+                "ngram speculation": {"speculative_algorithm": "NGRAM"},
+                "dllm": {"dllm_algorithm": "LowConfidence"},
+                "pipeline parallel": {"pp_size": 2},
+                "dp attention": {"enable_dp_attention": True},
+                "PD disaggregation": {"disaggregation_mode": "prefill"},
+                "lora": {"enable_lora": True},
+                "tc_piecewise prefill graph": {"cuda_graph_config": tc_piecewise},
+            }
+            for name, overrides in blocked.items():
+                with self.subTest(name):
+                    cfg = resolving_view(self._make_args(**overrides))
+                    self.assertIsNotNone(auto_mixed_chunk_blocker(cfg))
+            platform.return_value.is_cuda = False
+            self.assertIsNotNone(
+                auto_mixed_chunk_blocker(resolving_view(self._make_args()))
+            )
 
 
 class TestMambaRatioExplicitlySet(CustomTestCase):

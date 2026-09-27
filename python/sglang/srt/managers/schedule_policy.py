@@ -37,7 +37,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import lru_cache
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Union
 
 import torch
 
@@ -467,6 +467,7 @@ class SchedulePolicy:
         page_size: int,
         *,
         max_new_reqs: Optional[int] = None,
+        admissible: Optional[Callable[[Req], bool]] = None,
     ) -> Optional[int]:
         """Cap the in-progress chunk so shorter waiting requests prefill beside it.
 
@@ -475,7 +476,8 @@ class SchedulePolicy:
         reserved from this step's budget; the returned limit is what the chunked
         request may still take. Without this, one long prompt holds every chunk
         until it finishes, and a follow-up turn waits behind hundreds of
-        thousands of tokens. At most ``max_new_reqs`` requests are reserved for,
+        thousands of tokens. Only requests ``admissible`` accepts (memory can
+        hold them) are reserved for, at most ``max_new_reqs`` of them,
         since a reservation nobody can take is budget wasted.
 
         Outside shortest-prefill-first the long prompt keeps at least half of
@@ -510,7 +512,11 @@ class SchedulePolicy:
                 match_prefix_for_req(self.tree_cache, req, include_req=True)
             work = self._shortest_prefill_work(req)
             charge = _ceil_div(work, page_size) * page_size
-            if work < remaining and reserved + charge <= max_reserved:
+            if (
+                work < remaining
+                and reserved + charge <= max_reserved
+                and (admissible is None or admissible(req))
+            ):
                 shorter.append(req)
                 reserved += charge
         if not reserved:
@@ -1323,6 +1329,19 @@ class PrefillAdder:
             )
 
         return self.budget_state()
+
+    def admission_tokens(self, req: Req) -> int:
+        """What add_one_req reserves for ``req`` given its current prefix match."""
+        max_new = min(
+            max(req.sampling_params.max_new_tokens - len(req.output_ids), 0),
+            CLIP_MAX_NEW_TOKENS,
+        )
+        extend = len(req.origin_input_ids) + len(req.output_ids)
+        return extend - len(req.prefix_indices) + max_new + self.page_size
+
+    def needs_eviction(self, total_tokens: int) -> bool:
+        """Whether reserving ``total_tokens`` must reclaim cached prefixes."""
+        return total_tokens >= self.memory_budget.remaining_without_eviction
 
     def add_one_req(
         self, req: Req, has_chunked_req: bool, truncation_align_size: Optional[int]

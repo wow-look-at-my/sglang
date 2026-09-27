@@ -27,6 +27,12 @@ There is nothing to tune:
   instead of each waiting out a decode slice, as they would have shared one
   batch had they arrived together. A chunked prompt's next chunk waits for
   decode to catch up rather than taking a sliver of the leftover.
+* **Mixed batches are decode service.** With mixed chunked prefill every
+  running request decodes a token inside each prefill chunk, so a mixed batch
+  already bounds the stall to one chunk and is charged as decode: a long
+  prompt then prefills at full speed. The exception is a batch that rebuilds a
+  prefix its conversation lost to eviction, which is overhead rather than new
+  work and stays time-shared with decode (the caller classifies the batch).
 * Decode never banks credit (the balance is floored at zero), so when a
   prefill could not run anyway (memory, batch full) no burst follows later.
 
@@ -68,15 +74,25 @@ class PrefillDecodeBalancer:
         self._unsettled_decode = 0.0
         # Gates the consensus call on an event count every rank shares, not a float.
         self._unsettled_batches = 0
-        # (batch class, requests in the batch) per launched, unfinished batch.
-        self._in_flight: Deque[Tuple[Optional[bool], int]] = deque()
+        # (batch class, requests, extend tokens) per launched, unfinished batch.
+        self._in_flight: Deque[Tuple[Optional[bool], int, int]] = deque()
         self._busy_since = 0.0
         # Prefill tokens launched since decode last caught up.
         self._burst_used = 0
+        # Local GPU seconds and tokens of every batch that extended tokens.
+        self._extend_seconds = 0.0
+        self._extend_tokens = 0
 
     @property
     def debt(self) -> float:
         return self._debt
+
+    @property
+    def prefill_seconds_per_token(self) -> float:
+        """Measured prefill cost so far; 0 before any prefill finished."""
+        if self._extend_tokens == 0:
+            return 0.0
+        return self._extend_seconds / self._extend_tokens
 
     @property
     def prefill_token_budget(self) -> Optional[int]:
@@ -119,11 +135,12 @@ class PrefillDecodeBalancer:
     def on_batch_launched(
         self, *, is_prefill: Optional[bool], num_tokens: int, num_reqs: int
     ) -> None:
-        """``is_prefill`` is ``batch_class`` of the batch; ``num_tokens`` and
-        ``num_reqs`` its new prefill tokens and requests, used for a prefill."""
+        """``is_prefill`` is how the batch is charged (``batch_class``, or True
+        for a mixed batch rebuilding a lost prefix); ``num_tokens`` and
+        ``num_reqs`` its extend tokens and requests."""
         if not self._in_flight:
             self._busy_since = self._clock()
-        self._in_flight.append((is_prefill, num_reqs))
+        self._in_flight.append((is_prefill, num_reqs, num_tokens))
         if is_prefill:
             self._burst_used += num_tokens
 
@@ -135,7 +152,10 @@ class PrefillDecodeBalancer:
         now = self._clock()
         elapsed = now - self._busy_since
         self._busy_since = now
-        is_prefill, num_reqs = self._in_flight.popleft()
+        is_prefill, num_reqs, num_tokens = self._in_flight.popleft()
+        if num_tokens > 0:
+            self._extend_seconds += elapsed
+            self._extend_tokens += num_tokens
         if is_prefill is None:
             return
         if is_prefill:
@@ -145,15 +165,16 @@ class PrefillDecodeBalancer:
         self._unsettled_batches += 1
 
     def _prefill_in_flight(self) -> bool:
-        return any(is_prefill for is_prefill, _ in self._in_flight)
+        return any(is_prefill for is_prefill, _, _ in self._in_flight)
 
 
 def batch_class(forward_mode) -> Optional[bool]:
-    """True for prefill, False for decode, None for anything else."""
+    """True for prefill, False for decode (a mixed batch included, since its
+    decode rows serve every running request), None for anything else."""
+    if forward_mode.is_mixed() or forward_mode.is_decode():
+        return False
     if forward_mode.is_extend():
         return True
-    if forward_mode.is_decode():
-        return False
     return None
 
 

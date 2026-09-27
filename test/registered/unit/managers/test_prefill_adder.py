@@ -201,6 +201,23 @@ class TestPrefillAdder(CustomTestCase):
             self.create_running_batch(), page_size=256, rem_chunk_tokens=chunk_tokens
         )
 
+    def test_needs_eviction_exactly_when_free_tokens_do_not_cover_admission(self):
+        """The eviction throttle asks whether admitting a request reclaims
+        cached prefixes; that must agree with the reservation add_one_req
+        makes and with the free (not evictable) tokens."""
+        self.mock_tree_cache.supports_mamba.return_value = False
+        self.mock_tree_cache.evictable_size.return_value = 5000
+        self.mock_token_allocator.available_size.return_value = 1000
+        adder = self.create_adder(self.create_running_batch())
+        req = self.create_mock_req("r", priority=0, max_new_tokens=100)
+        req.origin_input_ids = list(range(900))
+        req.prefix_indices = list(range(200))
+        # 700 uncached + 100 reserved output + one page.
+        self.assertEqual(adder.admission_tokens(req), 801)
+        self.assertFalse(adder.needs_eviction(999))
+        self.assertTrue(adder.needs_eviction(1000))
+        self.assertLess(1000, adder.rem_total_tokens)
+
     def test_shortest_prefill_reserves_space_for_complete_waiting_requests(self):
         adder = self.create_shortest_prefill_adder()
         policy = SchedulePolicy(
