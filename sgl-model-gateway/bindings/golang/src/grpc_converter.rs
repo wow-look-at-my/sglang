@@ -17,6 +17,7 @@ use smg::tokenizer::stop::StopSequenceDecoder;
 use smg_grpc_client::sglang_proto as proto;
 
 use super::error::{SglErrorCode, set_error_message, clear_error_message};
+use super::router_utils::create_stop_decoder;
 use super::tokenizer::TokenizerHandle;
 use super::utils::generate_tool_call_id;
 
@@ -66,10 +67,15 @@ pub struct GrpcResponseConverterHandle {
 /// * `stop` - Optional stop sequences (JSON array)
 /// * `stop_token_ids` - Optional stop token IDs (JSON array)
 /// * `skip_special_tokens` - Whether to skip special tokens
+/// * `initial_prompt_tokens` - Prompt token count for this request; negative means unknown
 /// * `error_out` - Optional pointer to receive error message
 ///
 /// # Returns
 /// * Pointer to GrpcResponseConverterHandle on success, null on failure
+///
+/// # Safety
+/// `tokenizer_handle` must be live; `model` and `request_id` must be
+/// NUL-terminated UTF-8; the optional JSON arguments must be null or valid C strings.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_create(
     tokenizer_handle: *mut TokenizerHandle,
@@ -80,6 +86,7 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
     stop: *const c_char,
     stop_token_ids: *const c_char,
     skip_special_tokens: c_int,
+    initial_prompt_tokens: c_int,
     error_out: *mut *mut c_char,
 ) -> *mut GrpcResponseConverterHandle {
     if tokenizer_handle.is_null() || model.is_null() || request_id.is_null() {
@@ -151,7 +158,7 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
     // Create stop decoder if needed
     let stop_decoder = if stop.is_some() || stop_token_ids.is_some() {
         Some(Arc::new(tokio::sync::Mutex::new(
-            smg::routers::grpc::utils::create_stop_decoder(
+            create_stop_decoder(
                 &tokenizer,
                 stop.as_ref(),
                 stop_token_ids.as_ref(),
@@ -194,7 +201,11 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
         is_first_chunk: HashMap::new(),
         prompt_tokens: HashMap::new(),
         completion_tokens: HashMap::new(),
-        initial_prompt_tokens: None, // Will be set from stream handle
+        initial_prompt_tokens: if initial_prompt_tokens >= 0 {
+            Some(initial_prompt_tokens)
+        } else {
+            None
+        },
         skip_special_tokens: skip_special_tokens != 0,
     }))
 }
@@ -209,6 +220,10 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `response_json` must be NUL-terminated UTF-8;
+/// `result_json_out` must be writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_convert_chunk(
     handle: *mut GrpcResponseConverterHandle,
@@ -426,7 +441,7 @@ pub(crate) async fn convert_proto_chunk_to_openai(
                 let mut decoder_guard = stop_decoder.lock().await;
                 let mut text = String::new();
                 for &token_id in &chunk.token_ids {
-                    match decoder_guard.process_token(token_id).unwrap_or_else(|_| {
+                    match decoder_guard.process_token(token_id).unwrap_or({
                         smg::tokenizer::stop::SequenceDecoderOutput::Held
                     }) {
                         smg::tokenizer::stop::SequenceDecoderOutput::Text(t) => {
@@ -447,7 +462,7 @@ pub(crate) async fn convert_proto_chunk_to_openai(
                 // Use incremental decoder to handle multi-byte character boundaries
                 let decode_stream = handle.decode_streams.entry(index).or_insert_with(|| {
                     DecodeStream::new(
-                        Arc::clone(&tokenizer),
+                        Arc::clone(tokenizer),
                         &[], // No prompt tokens for completion
                         handle.skip_special_tokens,
                     )
@@ -497,7 +512,7 @@ pub(crate) async fn convert_proto_chunk_to_openai(
             stream_buffer.push_str(&chunk_text);
 
             // Handle tool calls if tools are provided
-            if let (Some(ref tools), Some(ref tool_parser)) = (handle.tools.as_ref(), handle.tool_parser.as_ref()) {
+            if let (Some(tools), Some(tool_parser)) = (handle.tools.as_ref(), handle.tool_parser.as_ref()) {
                 let tool_choice_enabled = !matches!(
                     handle.tool_choice,
                     Some(ToolChoice::Value(ToolChoiceValue::None))
@@ -750,6 +765,10 @@ pub(crate) async fn convert_proto_chunk_to_openai(
 }
 
 /// Free a gRPC response converter handle
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by
+/// `sgl_grpc_response_converter_create` that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_free(handle: *mut GrpcResponseConverterHandle) {
     if !handle.is_null() {

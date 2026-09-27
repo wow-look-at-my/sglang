@@ -12,9 +12,8 @@ use smg::tokenizer::create_tokenizer_from_file;
 use smg::tokenizer::traits::Tokenizer;
 use smg_grpc_client::sglang_scheduler::SglangSchedulerClient;
 use smg::protocols::chat::ChatCompletionRequest;
-use smg::routers::grpc::utils::{process_chat_messages, generate_tool_constraints};
-
 use super::error::{SglErrorCode, set_error_message};
+use super::router_utils::{generate_tool_constraints, process_chat_messages};
 use super::grpc_converter::sgl_grpc_response_converter_create;
 use super::tokenizer::TokenizerHandle;
 use super::stream::SglangStreamHandle;
@@ -46,6 +45,10 @@ pub struct StreamRequestState {
 ///
 /// # Returns
 /// * Pointer to SglangClientHandle on success, null on failure
+///
+/// # Safety
+/// `endpoint` and `tokenizer_path` must be valid NUL-terminated UTF-8 strings;
+/// `error_out` must be null or a writable `char**`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_create(
     endpoint: *const c_char,
@@ -100,6 +103,10 @@ pub unsafe extern "C" fn sgl_client_create(
 }
 
 /// Free a client handle
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by `sgl_client_create` that has
+/// not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_free(handle: *mut SglangClientHandle) {
     if !handle.is_null() {
@@ -117,6 +124,10 @@ pub unsafe extern "C" fn sgl_client_free(handle: *mut SglangClientHandle) {
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `client_handle` must be live; `request_json` must be NUL-terminated UTF-8;
+/// `stream_handle_out` and `error_out` must be null or writable pointers.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_chat_completion_stream(
     client_handle: *mut SglangClientHandle,
@@ -239,6 +250,7 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
         stop_json.unwrap_or(ptr::null_mut()),
         stop_token_ids_json.unwrap_or(ptr::null_mut()),
         if chat_request.skip_special_tokens { 1 } else { 0 },
+        prompt_tokens,
         error_out,
     );
 
@@ -263,9 +275,8 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
         let _ = CString::from_raw(ptr);
     }
 
-    // Create converter handle and set initial_prompt_tokens immediately
-    let mut converter_handle = *Box::from_raw(converter);
-    converter_handle.initial_prompt_tokens = Some(prompt_tokens);
+    // Take ownership of the converter so the stream handle can free it
+    let converter_handle = *Box::from_raw(converter);
 
     // Create stream handle with prompt_tokens
     *stream_handle_out = Box::into_raw(Box::new(SglangStreamHandle {

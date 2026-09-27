@@ -14,20 +14,10 @@ use std::os::raw::c_uint;
 
 use smg::tokenizer::create_tokenizer_from_file;
 use smg::protocols::chat::ChatCompletionRequest;
-use smg::routers::grpc::utils::{process_chat_messages, generate_tool_constraints};
-
 use super::error::{SglErrorCode, set_error_message};
+use super::router_utils::{generate_tool_constraints, process_chat_messages};
 use super::memory::{sgl_free_string, sgl_free_token_ids};
 use super::tokenizer::TokenizerHandle;
-
-/// Handle for preprocessed request
-#[repr(C)]
-pub struct PreprocessedRequestHandle {
-    pub(crate) prompt_text: CString,
-    pub(crate) token_ids: Vec<i32>,
-    pub(crate) tool_constraints_json: Option<CString>,
-    pub(crate) prompt_tokens: i32,
-}
 
 /// Preprocess a chat completion request
 ///
@@ -48,6 +38,10 @@ pub struct PreprocessedRequestHandle {
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `request_json` and `tokenizer_path` must be NUL-terminated UTF-8; the
+/// non-optional out pointers must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_preprocess_chat_request(
     request_json: *const c_char,
@@ -134,8 +128,11 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request(
     // Generate tool constraints if tools are present
     let tool_constraints_json = if let Some(tools) = chat_request.tools.as_ref() {
         match generate_tool_constraints(tools, &chat_request.tool_choice, &chat_request.model) {
-            Ok(Some(constraints)) => {
-                match serde_json::to_string(&constraints) {
+            Ok(Some((constraint_type, constraint_value))) => {
+                // Object keyed by constraint type: the Go caller picks the proto
+                // SamplingParams.constraint oneof field by this name.
+                let constraint = serde_json::json!({ constraint_type: constraint_value });
+                match serde_json::to_string(&constraint) {
                     Ok(json_str) => Some(CString::new(json_str).unwrap()),
                     Err(e) => {
                         set_error_message(
@@ -213,6 +210,10 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `request_json` must be NUL-terminated UTF-8; `tokenizer_handle` must be
+/// live; the non-optional out pointers must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_preprocess_chat_request_with_tokenizer(
     request_json: *const c_char,
@@ -286,8 +287,11 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request_with_tokenizer(
     // Generate tool constraints if tools are present
     let tool_constraints_json = if let Some(tools) = chat_request.tools.as_ref() {
         match generate_tool_constraints(tools, &chat_request.tool_choice, &chat_request.model) {
-            Ok(Some(constraints)) => {
-                match serde_json::to_string(&constraints) {
+            Ok(Some((constraint_type, constraint_value))) => {
+                // Object keyed by constraint type: the Go caller picks the proto
+                // SamplingParams.constraint oneof field by this name.
+                let constraint = serde_json::json!({ constraint_type: constraint_value });
+                match serde_json::to_string(&constraint) {
                     Ok(json_str) => Some(CString::new(json_str).unwrap()),
                     Err(e) => {
                         set_error_message(
@@ -351,6 +355,10 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request_with_tokenizer(
 ///
 /// This function frees the memory allocated by sgl_preprocess_chat_request.
 /// It should be called after the preprocessed data is no longer needed.
+///
+/// # Safety
+/// Each pointer must be null or a buffer handed out by the preprocess
+/// functions, and `token_ids_len` must be the length reported for `token_ids`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_preprocessed_request_free(
     prompt_text: *mut c_char,

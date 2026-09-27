@@ -43,6 +43,10 @@ static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `converter_handle` must be live; `proto_chunk_json` must be NUL-terminated
+/// UTF-8; the out pointers must be null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_postprocess_stream_chunk(
     converter_handle: *mut GrpcResponseConverterHandle,
@@ -233,6 +237,10 @@ pub unsafe extern "C" fn sgl_postprocess_stream_chunk(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `converter_handle` must be live; `proto_chunks_json_array` must be
+/// NUL-terminated UTF-8; the out pointers must be null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_postprocess_stream_chunks_batch(
     converter_handle: *mut GrpcResponseConverterHandle,

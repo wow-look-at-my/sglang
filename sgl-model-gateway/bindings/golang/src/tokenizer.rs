@@ -142,6 +142,10 @@ pub unsafe extern "C" fn sgl_tokenizer_encode(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `messages_json` must be NUL-terminated UTF-8 and
+/// `tools_json` null or UTF-8; `result_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
     handle: *mut TokenizerHandle,
@@ -206,12 +210,12 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
     if let Some(hf_tokenizer) = tokenizer.as_any().downcast_ref::<HuggingFaceTokenizer>() {
         // Apply chat template with tools
         let empty_docs: [Value; 0] = [];
-        let tools_slice = tools.as_ref().map(|t| t.as_slice());
+        let tools_slice = tools.as_deref();
         let params = ChatTemplateParams {
             add_generation_prompt: true,
             tools: tools_slice,
             documents: Some(&empty_docs),
-            template_kwargs: None,
+            ..Default::default()
         };
 
         match hf_tokenizer.apply_chat_template(&messages, params) {
@@ -248,6 +252,10 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `messages_json` must be NUL-terminated UTF-8;
+/// `result_out` must be writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
     handle: *mut TokenizerHandle,
@@ -292,7 +300,7 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
             add_generation_prompt: true,  // Important: tells the model to start generating
             tools: Some(&empty_tools),
             documents: Some(&empty_docs),
-            template_kwargs: None,
+            ..Default::default()
         };
 
         match hf_tokenizer.apply_chat_template(&messages, params) {
@@ -331,6 +339,10 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `token_ids` must point to at least `token_count`
+/// readable `u32`s; `result_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_decode(
     handle: *mut TokenizerHandle,
