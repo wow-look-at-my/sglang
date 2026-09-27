@@ -242,8 +242,17 @@ jobs:
         with:
           submodules: recursive
 
+      # The same kernel source and archs never compile twice, across branches and PRs.
+      - name: Restore a wheel built from this exact source
+        id: wheel_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: python/sglang/kernels/aot/dist
+          key: fork-sgl-kernel-wheel-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ hashFiles('python/sglang/kernels/aot/**') }}
+
       - name: Restore ccache
         id: ccache
+        if: steps.wheel_cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/sgl-kernel/ccache
@@ -252,6 +261,7 @@ jobs:
 
       - name: Build wheel (Python 3.10, CUDA 13.0)
         id: build
+        if: steps.wheel_cache.outputs.cache-hit != 'true'
         timeout-minutes: 320
         env:
           USE_CCACHE: 1
@@ -272,6 +282,12 @@ jobs:
         with:
           path: ~/.cache/sgl-kernel/ccache
           key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ github.run_id }}
+
+      - uses: actions/cache/save@v4
+        if: steps.wheel_cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+        with:
+          path: python/sglang/kernels/aot/dist
+          key: fork-sgl-kernel-wheel-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ hashFiles('python/sglang/kernels/aot/**') }}
 
       - name: Check wheel version and ops
         run: |
