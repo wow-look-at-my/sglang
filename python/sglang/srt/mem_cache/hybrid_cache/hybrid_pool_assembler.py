@@ -26,6 +26,10 @@ from sglang.srt.mem_cache.pool_host.mha import (
     get_mha_host_pool_cls,
 )
 from sglang.srt.mem_cache.pool_host.mla import MLATokenToKVPoolHost
+from sglang.srt.mem_cache.pool_host.qsa import (
+    QSACompressedKPoolHost,
+    qsa_compressed_bytes,
+)
 from sglang.srt.mem_cache.pool_host.unified import UnifiedPageEnvelopeHostPool
 from sglang.srt.mem_cache.unified_cache.component_type import ComponentType
 from sglang.srt.runtime_context import get_memory, get_parallel, get_serving
@@ -176,17 +180,21 @@ def build_kv_host_pool(
     )
 
 
+def _device_pool_bytes(kv_pool: Any) -> int:
+    size_bytes = getattr(kv_pool, "host_capacity_bytes", None)
+    if size_bytes is None:
+        size_bytes = kv_pool.get_kv_size_bytes()
+    return sum(size_bytes) if isinstance(size_bytes, tuple) else size_bytes
+
+
 def _split_hicache_size(
     hicache_size: int, kv_pools: tuple[Any, ...]
 ) -> tuple[float, ...]:
-    device_pool_sizes = []
-    for kv_pool in kv_pools:
-        size_bytes = getattr(kv_pool, "host_capacity_bytes", None)
-        if size_bytes is None:
-            size_bytes = kv_pool.get_kv_size_bytes()
-        device_pool_sizes.append(
-            sum(size_bytes) if isinstance(size_bytes, tuple) else size_bytes
-        )
+    """Split a fixed host budget by device bytes; an ``int`` entry is a byte count."""
+    device_pool_sizes = [
+        kv_pool if isinstance(kv_pool, int) else _device_pool_bytes(kv_pool)
+        for kv_pool in kv_pools
+    ]
     total_device_pool_size = sum(device_pool_sizes)
     return tuple(
         hicache_size * size_bytes / total_device_pool_size
@@ -1115,6 +1123,20 @@ def build_deepseek_v4_hicache_stack(
     return host_pool_group, cache_controller
 
 
+def _qsa_draft_device_pools(draft_pools: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Packed MTP drafts whose QSA compressed keys ride the target's sidecar."""
+    from sglang.srt.mem_cache.qsa_kv_pool import QSATokenToKVPool
+
+    qsa_drafts = tuple(p for p in draft_pools if isinstance(p, QSATokenToKVPool))
+    if qsa_drafts and len(qsa_drafts) != len(draft_pools):
+        # Draft depth d is host layer target_layers + d in every packed pool.
+        raise NotImplementedError(
+            "HiCache packs MTP drafts by depth; a mix of QSA and non-QSA draft "
+            "pools cannot share that layout."
+        )
+    return qsa_drafts
+
+
 def build_hybrid_mamba_stack(
     *,
     params: CacheInitParams,
@@ -1131,6 +1153,7 @@ def build_hybrid_mamba_stack(
     model_name: Optional[str] = None,
     storage_backend_extra_config: Optional[dict] = None,
     enable_storage_metrics: bool = False,
+    qsa_pool: Any = None,
 ) -> tuple[HostPoolGroup, HybridCacheController]:
     transfer_layer_id_max = (
         max(full_layer_mapping.keys() | mamba_layer_mapping.keys()) + 1
@@ -1142,11 +1165,24 @@ def build_hybrid_mamba_stack(
         pool.full_kv_pool if isinstance(pool, HybridLinearKVPool) else pool
         for pool in params.mtp_draft_device_pools
     )
+    qsa_draft_device_pools = (
+        _qsa_draft_device_pools(params.mtp_draft_device_pools)
+        if qsa_pool is not None
+        else ()
+    )
     kv_host_size, mamba_host_size = None, 0
     if get_memory().hicache_size > 0:
+        split_pools = (kv_pool, mamba_pool)
+        if qsa_pool is not None:
+            # The QSA sidecar has the anchor's slot count, so KV and QSA share one split.
+            kv_bytes = _device_pool_bytes(kv_pool)
+            qsa_bytes = qsa_compressed_bytes(qsa_pool)
+            split_pools = (kv_bytes + qsa_bytes, mamba_pool)
         kv_host_size, mamba_host_size = _split_hicache_size(
-            get_memory().hicache_size, (kv_pool, mamba_pool)
+            get_memory().hicache_size, split_pools
         )
+        if qsa_pool is not None:
+            kv_host_size *= kv_bytes / (kv_bytes + qsa_bytes)
     kv_host_pool = build_kv_host_pool(
         kv_pool=kv_pool,
         page_size=params.page_size,
@@ -1199,6 +1235,26 @@ def build_hybrid_mamba_stack(
             device_free_fn=mamba_allocator.free,
         ),
     ]
+    if qsa_pool is not None:
+        # Same transfer-ID -> dense full-attention-layer mapping as KV: the
+        # compressed cache is one buffer per full-attention layer, drafts packed after.
+        entries.append(
+            build_pool_entry(
+                name=PoolName.QSA_COMPRESSED_K,
+                host_pool=QSACompressedKPoolHost(
+                    qsa_pool,
+                    kv_host_pool,
+                    get_memory().hicache_mem_layout,
+                    mtp_draft_device_pools=qsa_draft_device_pools,
+                    allocator_type=_get_allocator_type(),
+                ),
+                device_pool=qsa_pool,
+                layer_mapping=full_layer_mapping,
+                transfer_layer_id_max=transfer_layer_id_max
+                + len(qsa_draft_device_pools),
+                packed_draft_device_pools=qsa_draft_device_pools,
+            )
+        )
     host_pool_group = HostPoolGroup(entries)
     cache_controller = HybridCacheController(
         params.token_to_kv_pool_allocator,
@@ -1791,6 +1847,9 @@ class _MambaStrategy(StackStrategy):
             ComponentType.MAMBA,
         }
 
+    def _qsa_pool(self, kvcache) -> Any:
+        return None
+
     def build(
         self,
         *,
@@ -1805,6 +1864,7 @@ class _MambaStrategy(StackStrategy):
         model_name=None,
         enable_storage_metrics=False,
     ):
+        qsa_pool = self._qsa_pool(kvcache)
         full_layer_mapping = _stage_local_layer_mapping(
             kvcache.full_attention_layer_id_mapping, kvcache.start_layer
         )
@@ -1826,7 +1886,18 @@ class _MambaStrategy(StackStrategy):
             model_name=model_name,
             storage_backend_extra_config=storage_backend_extra_config,
             enable_storage_metrics=enable_storage_metrics,
+            qsa_pool=qsa_pool,
         )
+        sidecars = []
+        pools_desc = "KV + MAMBA"
+        if qsa_pool is not None:
+            sidecars.append(
+                SidecarPoolSpec(
+                    pool_name=PoolName.QSA_COMPRESSED_K,
+                    indices_from_pool=PoolName.KV,
+                )
+            )
+            pools_desc = "KV + MAMBA + QSA_COMPRESSED_K"
         return StackBuildResult(
             host_pool_group=host_pool_group,
             cache_controller=cache_controller,
@@ -1834,9 +1905,29 @@ class _MambaStrategy(StackStrategy):
                 ComponentType.FULL: host_pool_group.get_pool(PoolName.KV),
                 ComponentType.MAMBA: host_pool_group.get_pool(PoolName.MAMBA),
             },
+            sidecars=sidecars,
             register_req_to_token_counter=True,
-            pools_desc="KV + MAMBA",
+            pools_desc=pools_desc,
         )
+
+
+class _QsaMambaStrategy(_MambaStrategy):
+    """FULL + MAMBA plus the QSA compressed-K cache, a KV-indexed sidecar.
+
+    The per-request pending ring needs no mirror: radix and host hits are
+    page-aligned and pages are whole compress groups, so a request resuming
+    from a hit starts on a group boundary and refills the ring itself.
+    """
+
+    def matches(self, kvcache, components):
+        from sglang.srt.mem_cache.qsa_kv_pool import QSATokenToKVPool
+
+        return isinstance(kvcache, QSATokenToKVPool) and super().matches(
+            kvcache, components
+        )
+
+    def _qsa_pool(self, kvcache) -> Any:
+        return kvcache
 
 
 def _swa_layer_mappings(kvcache) -> tuple[dict[int, int], dict[int, int]]:
@@ -2168,6 +2259,7 @@ class _PlainKvStrategy(StackStrategy):
 # Resolved first-to-last; _PlainKvStrategy is the catch-all fallback.
 _STRATEGIES: list[StackStrategy] = [
     _DeepSeekV4Strategy(),
+    _QsaMambaStrategy(),
     _MambaStrategy(),
     _SwaStrategy(),
     _MambaSwaStrategy(),
