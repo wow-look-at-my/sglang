@@ -27,11 +27,11 @@ import torch
 from sglang.srt.distributed.device_communicators.custom_all_reduce_utils import (
     CustomAllreduceGraphRegistrationError,
 )
-from sglang.srt.distributed.parallel_state import get_world_group
 from sglang.srt.model_executor.runner.base_runner import BaseRunner
 from sglang.srt.runtime_context import (
     get_exec,
     get_flags,
+    get_parallel,
 )
 from sglang.srt.utils import (
     get_cuda_graph_batch_size_alignment,
@@ -72,7 +72,9 @@ def any_rank_needs_recapture(needs_recapture: bool) -> bool:
     # yet every rank must recapture together or the capture collectives hang.
     flag = torch.tensor([int(needs_recapture)], dtype=torch.int32)
     torch.distributed.all_reduce(
-        flag, op=torch.distributed.ReduceOp.MAX, group=get_world_group().cpu_group
+        flag,
+        op=torch.distributed.ReduceOp.MAX,
+        group=get_parallel().world_group.cpu_group,
     )
     return bool(flag.item())
 

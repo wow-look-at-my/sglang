@@ -30,6 +30,9 @@ class _FakeGraph:
 def _load_npu_graph_runner():
     # Load shared modules before stubbing torch_npu so platform detection stays on CPU.
     importlib.import_module("sglang.srt.multimodal.vit_cuda_graph_runner")
+    # patch.dict drops modules first imported inside it; keep the parent package
+    # so later patch() targets can still reach the submodule through it.
+    importlib.import_module("sglang.srt.hardware_backend.npu.graph_runner")
     torch_npu = SimpleNamespace()
     with patch.dict(
         sys.modules,
