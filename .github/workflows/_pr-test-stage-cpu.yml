@@ -31,7 +31,7 @@ on:
       python_version:
         description: 'Interpreter for the tests; the downloaded rust-ext modules must include it.'
         type: string
-        default: '3.10'
+        default: '3.12'
       rust_ext_artifact:
         description: 'Artifact of prebuilt Rust extension modules, from rust-ext-build. Empty, or a download that fails, falls back to the cache; a miss there compiles during install.'
         type: string
@@ -93,7 +93,7 @@ jobs:
 
       # This stage compiled the workspace too - 7+ minutes per partition on
       # billable hosted minutes. rust-ext-build's modules need an older glibc than
-      # this runner has, which is the safe direction, and both pin Python 3.10.
+      # this runner has, which is the safe direction, and both pin Python 3.12.
       - uses: ./.github/actions/download-rust-ext
         id: rust_ext
         with:
