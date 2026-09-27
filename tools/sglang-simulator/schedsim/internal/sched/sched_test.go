@@ -247,80 +247,59 @@ func TestPerRequestDecodeCostDividesGeneration(t *testing.T) {
 	}
 }
 
-// Chunks that serve only the cold prompt are charged in full, and requests
-// queued behind it cannot join the batch, so they must not weigh the split:
-// the revised balancer reproduces the shipped 50/50 run batch for batch.
+// Requests queued behind the chunk cannot join it, so they must not weigh the
+// split: the revised balancer gives decode the shipped 50/50 share whatever
+// the queue, carrying at most one decode step of overshoot per chunk.
 func TestQueueBalanceIgnoresRequestsThatCannotRun(t *testing.T) {
 	w, _ := workload(t)
 
 	even := Simulate(w, w.Params(PolicyTimeBalance), 0)
 	p := w.Params(PolicyQueueBalance)
-	p.ReqsPerChunk = 1
-	revised := Simulate(w, p, 3)
+	alone := Simulate(w, p, 0)
+	queued := Simulate(w, p, 3)
 
-	if revised.DecodeSteps != even.DecodeSteps || revised.WindowSeconds != even.WindowSeconds {
-		t.Fatalf("queued behind the chunk: %d steps over %.3f s, shipped balancer %d over %.3f s",
-			revised.DecodeSteps, revised.WindowSeconds, even.DecodeSteps, even.WindowSeconds)
+	if queued.DecodeSteps != alone.DecodeSteps || queued.WindowSeconds != alone.WindowSeconds {
+		t.Fatalf("queue changed the run: %d steps over %.3f s, alone %d over %.3f s",
+			queued.DecodeSteps, queued.WindowSeconds, alone.DecodeSteps, alone.WindowSeconds)
+	}
+	if d := even.DecodeSteps - alone.DecodeSteps; d < 0 || d > len(w.Chunks) {
+		t.Fatalf("revised %d decode steps, shipped %d: more than one step of carry per chunk",
+			alone.DecodeSteps, even.DecodeSteps)
 	}
 }
 
-// A chunk that also serves two short requests counts as three parties, so
-// admitted work drains sooner while decode still runs after every chunk.
-func TestQueueBalanceGivesSharedChunksTheirShare(t *testing.T) {
+// Mixed-chunk tokens ride on top of decode's half and never replace it: a
+// chunk that gives each running request one token is still followed by pure
+// decode worth its own time, so no stream collapses to a token per chunk.
+func TestMixedChunkRidesOnTopOfDecodeHalf(t *testing.T) {
 	w, _ := workload(t)
 
-	even := Simulate(w, w.Params(PolicyTimeBalance), 0)
 	p := w.Params(PolicyQueueBalance)
-	p.ReqsPerChunk = 3
+	p.RunningReqs = 5
+	plain := Simulate(w, p, 0)
+	p.MixedChunk = true
 	r := Simulate(w, p, 0)
 
-	var prefillSecs, decodeSecs float64
-	var longestChunk float64
+	var chunkSecs, decodeSecs, longest float64
+	for _, c := range w.Chunks {
+		chunkSecs += c.Seconds
+	}
 	for _, e := range r.Trace {
-		if e.IsPrefill {
-			prefillSecs += e.Seconds
-			longestChunk = max(longestChunk, e.Seconds)
-		} else {
+		longest = max(longest, e.Seconds)
+		if !e.IsPrefill {
 			decodeSecs += e.Seconds
 		}
 	}
-	share := prefillSecs / (prefillSecs + decodeSecs)
-	if share < 0.7 || share > 0.8 {
-		t.Fatalf("chunks serving three requests got %.1f%% of contended time, want ~75%%", share*100)
+	// The window ends with the last chunk, which decode has not yet repaid.
+	owed := chunkSecs - w.Chunks[len(w.Chunks)-1].Seconds
+	if decodeSecs < owed-p.DecodeStepSeconds {
+		t.Fatalf("pure decode %.2f s against %.2f s of chunks: rows replaced decode's half", decodeSecs, owed)
 	}
-	if !r.PrefillCompleted || r.WindowSeconds >= even.WindowSeconds {
-		t.Fatalf("window %.2f s, shipped balancer %.2f s", r.WindowSeconds, even.WindowSeconds)
-	}
-	if r.LongestDecodeGap > longestChunk+1e-9 {
-		t.Fatalf("decode gap %.3f s exceeds one chunk %.3f s", r.LongestDecodeGap, longestChunk)
-	}
-}
-
-// With mixed chunks the cold prefill runs at prefill-priority speed plus only
-// the decode rows' extend cost, while every chunk still delivers a token to
-// each running request, so no stall exceeds one chunk.
-func TestMixedChunkKeepsPrefillSpeedAndBoundsTheStall(t *testing.T) {
-	w, _ := workload(t)
-
-	old := Simulate(w, w.Params(PolicyPrefillPriority), 0)
-	p := w.Params(PolicyQueueBalance)
-	p.MixedChunk = true
-	p.RunningReqs = 5
-	r := Simulate(w, p, 0)
-
-	rows := float64(p.RunningReqs) / float64(w.ChunkSize)
-	if r.WindowSeconds > old.WindowSeconds*(1+rows)+1e-9 {
-		t.Fatalf("mixed window %.3f s, prefill-priority %.3f s", r.WindowSeconds, old.WindowSeconds)
-	}
-	if r.GeneratedTokens != float64(len(w.Chunks)*p.RunningReqs) {
-		t.Fatalf("generated %.0f tokens, want one per running request per chunk", r.GeneratedTokens)
-	}
-	var longest float64
-	for _, e := range r.Trace {
-		longest = max(longest, e.Seconds)
+	if r.GeneratedTokens <= plain.GeneratedTokens {
+		t.Fatalf("mixed generated %.0f tokens, plain %.0f: rows added nothing", r.GeneratedTokens, plain.GeneratedTokens)
 	}
 	if r.LongestDecodeGap > longest+1e-9 {
-		t.Fatalf("gap %.3f s exceeds the longest chunk %.3f s", r.LongestDecodeGap, longest)
+		t.Fatalf("gap %.3f s exceeds the longest batch %.3f s", r.LongestDecodeGap, longest)
 	}
 }
 

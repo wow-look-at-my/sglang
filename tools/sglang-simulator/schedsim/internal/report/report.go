@@ -55,13 +55,11 @@ type Input struct {
 	Revised []RevisedRun
 }
 
-// RevisedRun is one queue-balance run, the requests each chunk served and the
-// queue length behind it.
+// RevisedRun is one queue-balance run and the queue length behind its chunks.
 type RevisedRun struct {
-	ReqsPerChunk int
-	Queue        int
-	Label        string
-	Result       sched.Result
+	Queue  int
+	Label  string
+	Result sched.Result
 }
 
 // SweepPoint is one row of the decode-interval sensitivity table.
@@ -151,15 +149,14 @@ func Write(w io.Writer, in Input) {
 
 	if len(in.Revised) > 0 {
 		fmt.Fprintf(w, "REVISED SCHEDULER\n")
-		fmt.Fprintf(w, "  mixed chunk (the resolved default): every chunk carries each running\n")
-		fmt.Fprintf(w, "  request's decode row, so the prompt prefills at prefill-priority speed and\n")
-		fmt.Fprintf(w, "  no request waits more than a chunk. Without it, the balancer:\n")
-		fmt.Fprintf(w, "  each request a prefill batch serves and the decode batch get equal time,\n")
-		fmt.Fprintf(w, "  so a chunk serving k requests gets k/(k+1); a lone chunk is the 50/50\n")
-		fmt.Fprintf(w, "  split above. Requests queued behind the chunk cannot join it and do not count.\n")
-		fmt.Fprintf(w, "  %-34s %6s %6s %14s %12s %14s\n", "", "reqs", "queue", "decode steps", "gen (tok/s)", "prefill (s)")
+		fmt.Fprintf(w, "  prefill and decode get equal time, and at most one chunk runs before\n")
+		fmt.Fprintf(w, "  decode catches up. Requests queued behind the chunk cannot join it and do\n")
+		fmt.Fprintf(w, "  not count. Mixed chunk (the resolved default) adds each running request's\n")
+		fmt.Fprintf(w, "  decode row to every chunk, charged as prefill minus the rows, so those\n")
+		fmt.Fprintf(w, "  tokens come on top of decode's half rather than replacing it.\n")
+		fmt.Fprintf(w, "  %-34s %6s %14s %12s %14s\n", "", "queue", "decode steps", "gen (tok/s)", "prefill (s)")
 		for _, rv := range in.Revised {
-			fmt.Fprintf(w, "  %-34s %6d %6d %14d %12.1f %14.1f\n", rv.Label, rv.ReqsPerChunk, rv.Queue,
+			fmt.Fprintf(w, "  %-34s %6d %14d %12.1f %14.1f\n", rv.Label, rv.Queue,
 				rv.Result.DecodeSteps, rv.Result.EffectiveGenTPS, rv.Result.WindowSeconds)
 		}
 		fmt.Fprintf(w, "\n")

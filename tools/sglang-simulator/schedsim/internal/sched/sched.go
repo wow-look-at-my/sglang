@@ -23,11 +23,10 @@ const (
 	// PolicyTimeBalance splits contended GPU time between prefill and decode by
 	// measured batch duration, which is the shipped balancer.
 	PolicyTimeBalance
-	// PolicyQueueBalance is the revised balancer: each request a prefill batch
-	// serves and the decode batch get equal time (a prefill batch's seconds are
-	// charged divided by its request count), and at most one chunk budget of
-	// prefill tokens runs between two points where decode has caught up.
-	// Waiting requests that cannot join a batch do not weigh the split.
+	// PolicyQueueBalance is the revised balancer: prefill and decode batches get
+	// equal time however many requests a prefill batch serves (decode's floor),
+	// at most one chunk budget of prefill tokens runs between two points where
+	// decode has caught up, and waiting requests that cannot run take nothing.
 	PolicyQueueBalance
 )
 
@@ -76,16 +75,12 @@ type Params struct {
 	// measured cost intact and lets the time split alone decide.
 	PrefillInterference float64
 
-	// ReqsPerChunk is how many requests each cold-prefill batch serves under
-	// PolicyQueueBalance: the cold chunk plus any short requests that ride in
-	// the same batch. The log's cold chunks serve one (#new-seq: 1).
-	ReqsPerChunk int
-
 	// MixedChunk makes every chunk under PolicyQueueBalance carry one decode
 	// row per running request (mixed chunked prefill, resolved on by default):
 	// each row is one more extend token at the chunk's measured per-token cost
 	// and yields one token (speculative decoding degrades to a plain decode
-	// inside a mixed step). The balancer counts such a chunk as decode service.
+	// inside a mixed step). The balancer charges such a chunk as prefill minus
+	// its rows, so pure decode keeps its half and the rows' tokens come on top.
 	MixedChunk bool
 }
 
@@ -211,7 +206,7 @@ func Simulate(w Workload, p Params, queueAtStart int) Result {
 		FirstChunkInputTPS: w.Chunks[0].InputTPS,
 		LastChunkInputTPS:  w.Chunks[len(w.Chunks)-1].InputTPS,
 	}
-	run := &runner{r: &r, w: w, p: p, prefillDivisor: 1}
+	run := &runner{r: &r, w: w, p: p}
 	switch p.Policy {
 	case PolicyPrefillPriority:
 		run.prefillPriority()
@@ -235,10 +230,6 @@ type runner struct {
 	lastDecodeWall float64
 	lastCharge     float64
 	hasLastCharge  bool
-
-	// prefillDivisor scales a prefill batch's charge; 1 except under
-	// PolicyQueueBalance, where it is the batch's request count.
-	prefillDivisor float64
 }
 
 // prefillPriority is the old rule: a prefill batch wins the step whenever one is
@@ -276,7 +267,7 @@ func (x *runner) timeBalance() {
 	weight := x.p.PrefillShare / (1 - x.p.PrefillShare)
 	var debt float64
 	for i := 0; i < len(x.w.Chunks); {
-		x.settle(&debt)
+		x.settle(&debt, 0)
 		if debt > 0 && x.p.RunningReqs > 0 && x.decodeSeconds() > 0 {
 			x.decode(weight)
 			continue
@@ -288,31 +279,23 @@ func (x *runner) timeBalance() {
 
 // queueBalance implements the revised balancer
 // (python/sglang/srt/managers/scheduler_components/prefill_decode_balancer.py).
-// A batch's prefill seconds are charged divided by the requests it serves, so
-// a chunk serving k requests gets k/(k+1) of contended time and a lone chunk
-// half, as under timeBalance; the queue behind it does not count. burst counts
-// prefill tokens since decode last caught up; a chunk continuation runs only
-// once it is zero, and no batch runs once it reaches a chunk. This model is
-// sequential (no overlap), so nothing is in flight at a decision and the
-// chunks are whole: the stall bound matches timeBalance here.
+// A prefill batch's seconds are charged in full (a mixed chunk's minus its
+// decode rows), so decode keeps half of contended time; the queue behind the
+// chunk does not count. burst counts prefill tokens since decode last caught
+// up; a chunk continuation runs only once it is zero, and no batch runs once it
+// reaches a chunk. The balance may go negative by one decode step, the
+// overshoot the balancer carries. This model is sequential (no overlap), so
+// nothing is in flight at a decision and the chunks are whole.
 func (x *runner) queueBalance() {
-	if x.p.MixedChunk && x.p.RunningReqs > 0 {
-		// Every chunk is decode service, so the balance never defers one.
-		for _, c := range x.w.Chunks {
-			x.mixedChunk(c)
-		}
-		return
-	}
-	x.prefillDivisor = float64(max(x.p.ReqsPerChunk, 1))
 	var debt float64
 	burst := 0
 	for i := 0; i < len(x.w.Chunks); {
-		x.settle(&debt)
+		x.settle(&debt, -x.decodeSeconds())
 		if x.p.RunningReqs <= 0 || x.decodeSeconds() <= 0 {
 			// No contention: the balancer resets and never defers.
 			debt, burst = 0, 0
 		}
-		if debt == 0 {
+		if debt <= 0 {
 			burst = 0
 		}
 		continuesChunk := i > 0
@@ -321,7 +304,11 @@ func (x *runner) queueBalance() {
 			x.decode(1)
 			continue
 		}
-		x.prefill(x.w.Chunks[i])
+		if x.p.MixedChunk && x.p.RunningReqs > 0 {
+			x.mixedChunk(x.w.Chunks[i])
+		} else {
+			x.prefill(x.w.Chunks[i])
+		}
 		burst += x.w.Chunks[i].Tokens
 		i++
 	}
@@ -329,11 +316,12 @@ func (x *runner) queueBalance() {
 
 // settle folds the last completed batch's measured duration into the balance,
 // which is what the balancer does at the next decision after a completion.
-func (x *runner) settle(debt *float64) {
+// floor is how far below zero the balance may go.
+func (x *runner) settle(debt *float64, floor float64) {
 	if !x.hasLastCharge {
 		return
 	}
-	*debt = maxFloat(*debt+x.lastCharge, 0)
+	*debt = maxFloat(*debt+x.lastCharge, floor)
 	x.lastCharge = 0
 	x.hasLastCharge = false
 }
@@ -344,7 +332,7 @@ func (x *runner) prefill(c Chunk) {
 	secs := c.Seconds * (1 + x.p.PrefillInterference)
 	x.wall += secs
 	x.r.Trace = append(x.r.Trace, Event{IsPrefill: true, Tokens: c.Tokens, Seconds: secs, Wall: x.wall})
-	x.lastCharge = secs / x.prefillDivisor
+	x.lastCharge = secs
 	x.hasLastCharge = true
 	x.noteGap()
 }
@@ -362,6 +350,8 @@ func (x *runner) mixedChunk(c Chunk) {
 	x.r.GeneratedTokens += rows
 	x.noteGap()
 	x.lastDecodeWall = x.wall
+	x.lastCharge = secs - rowSecs*(1+x.p.PrefillInterference)
+	x.hasLastCharge = true
 }
 
 func (x *runner) decode(weight float64) {
