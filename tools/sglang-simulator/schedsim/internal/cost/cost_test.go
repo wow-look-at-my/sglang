@@ -54,7 +54,7 @@ func TestMixedBatchIsPricedWithinItsLoggedTime(t *testing.T) {
 	cal := calibrated(t)
 	require.Equal(t, 4000, cal.Mixed.Tokens)
 	t.Logf("mixed batch measured %.3f s, predicted %.3f s", cal.Mixed.Measured, cal.Mixed.Predicted)
-	require.Less(t, math.Abs(cal.Mixed.RelErr()), 0.25)
+	require.Less(t, math.Abs(cal.Mixed.RelErr()), 0.15)
 }
 
 func TestDecodeStepAndPoolComeFromTheDecodeLines(t *testing.T) {

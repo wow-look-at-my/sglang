@@ -41,6 +41,12 @@ func (m Model) ExtendSeconds(start, n int) float64 {
 	return m.A*(b-a) + m.B/2*(b*b-a*a) + m.C/3*(b*b*b-a*a*a)
 }
 
+// PrefillBatchSeconds prices an extend batch. HiCache loads layer by layer
+// under the forward, so a reload only costs what the compute does not hide.
+func (m Model) PrefillBatchSeconds(compute float64, reloadTokens int) float64 {
+	return m.BatchOverhead + math.Max(compute, m.ReloadPerToken*float64(reloadTokens))
+}
+
 // DecodeSeconds is one decode step over bs requests holding ctxSum tokens.
 func (m Model) DecodeSeconds(bs int, ctxSum int) float64 {
 	if bs <= 0 {
@@ -134,10 +140,10 @@ func CalibrateSteps(steps []trace.Step) (Calibration, error) {
 		cal.HeldOut = append(cal.HeldOut, ChunkCheck{Line: s.Line, Start: start, Tokens: s.NewTokens,
 			Measured: trace.StepSeconds(s), Predicted: m.BatchOverhead + m.ExtendSeconds(start, s.NewTokens)})
 	}
+	compute := m.ExtendSeconds(firstTotal-tail, tail) + m.ExtendSeconds(mixed.HitTokens, follow) +
+		m.ExtendSeconds(0, secondHead)
 	cal.Mixed = ChunkCheck{Line: mixed.Line, Tokens: mixed.NewTokens, Measured: trace.StepSeconds(mixed),
-		Predicted: m.BatchOverhead + m.ExtendSeconds(firstTotal-tail, tail) +
-			m.ExtendSeconds(mixed.HitTokens, follow) + m.ExtendSeconds(0, secondHead) +
-			m.ReloadPerToken*float64(mixed.HitTokens)}
+		Predicted: m.PrefillBatchSeconds(compute, mixed.HitTokens)}
 
 	if err := fitDecode(&m, &cal, steps); err != nil {
 		return cal, err

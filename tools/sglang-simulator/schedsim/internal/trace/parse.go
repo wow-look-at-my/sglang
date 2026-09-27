@@ -12,6 +12,7 @@ import (
 )
 
 // EmbeddedLog is the operator log the simulation is driven by, kept byte.
+//
 //go:embed live_log.txt
 var EmbeddedLog string
 
