@@ -17,7 +17,6 @@ from sglang.srt.arg_groups.overrides import (
 )
 from sglang.srt.configs.hybrid_arch import mambaish_config
 from sglang.srt.environ import envs
-from sglang.srt.layers.attention.qsa.config import is_qwen_qsa
 from sglang.srt.model_executor.cuda_graph_config import Backend
 from sglang.srt.runtime_context import get_platform
 
@@ -529,16 +528,25 @@ def _unified_memory_auto_blocker(server_args: Any) -> Optional[str]:
     combinations below are only reachable by opting in: they are validated
     for an explicit flag but were not audited as a default.
     """
+    from sglang.srt.layers.attention.qsa.config import is_qwen_qsa
+
     cfg = resolving_view(server_args)
     model_config = model_config_of(server_args)
     if model_config.is_hybrid_swa:
         return "hybrid sliding-window models stay opt-in"
+    if is_qwen_qsa(model_config.hf_config):
+        return (
+            "QSA sparse attention has no unified sub-pool for its compressed "
+            "index-K cache and pending ring"
+        )
     if not get_platform().is_cuda:
         return "not a CUDA platform"
     if cfg.disaggregation_mode != "null":
         return "PD disaggregation needs both peers to opt in"
-    if cfg.speculative_algorithm is not None and not _is_qsa_chain_mtp(server_args):
+    if cfg.speculative_algorithm is not None:
         return "speculative decoding (only DSPARK is supported, by opting in)"
+    if cfg.enable_hierarchical_cache:
+        return "HiCache host tier (supported by opting in)"
     if cfg.pp_size > 1:
         return "pipeline parallelism"
     if cfg.enable_dp_attention:
@@ -636,23 +644,12 @@ def _check_unified_memory_pool(server_args: Any) -> None:
                 "--enable-unified-memory host-pool decode retraction does not "
                 "support hybrid-SWA H2D/D2H transfers yet."
             )
-    assert cfg.speculative_algorithm in (None, "DSPARK") or _is_qsa_chain_mtp(
-        server_args
-    ), (
+    assert cfg.speculative_algorithm in (None, "DSPARK"), (
         "--enable-unified-memory only supports --speculative-algorithm "
-        "DSPARK (chain draft), and the built-in chain MTP draft "
-        "(NEXTN/EAGLE, --speculative-eagle-topk 1) of QSA models; other "
-        "speculative configurations are not yet audited for the unified pool's "
-        "virtual/kernel-facing loc translation. Got "
-        f"--speculative-algorithm={cfg.speculative_algorithm!r}, "
-        f"--speculative-eagle-topk={cfg.speculative_eagle_topk!r}."
+        "DSPARK (chain draft); other speculative algorithms are not yet "
+        "audited for the unified pool's virtual/kernel-facing loc translation. Got "
+        f"--speculative-algorithm={cfg.speculative_algorithm!r}."
     )
-    if cfg.disaggregation_mode != "null":
-        assert not is_qwen_qsa(model_config_of(server_args).hf_config), (
-            "--enable-unified-memory with PD disaggregation does not support "
-            "QSA models: the whole-envelope transfer does not carry QSA's "
-            "per-request pending ring."
-        )
     if cfg.speculative_algorithm == "DSPARK":
         assert cfg.speculative_eagle_topk in (None, 1), (
             "--enable-unified-memory + DSPARK supports a linear draft "
@@ -685,22 +682,6 @@ def _check_unified_memory_pool(server_args: Any) -> None:
     )
     if cfg.dcp_size > 1:
         _validate_unified_memory_dcp(server_args)
-
-
-def _is_qsa_chain_mtp(server_args: Any) -> bool:
-    """A QSA model's built-in MTP draft as a linear chain: the configuration
-    whose target-verify, draft and HiCache paths are audited for the unified pool.
-
-    The draft's K/V and compressed keys share the target's page envelopes, so
-    both runners translate their reads and writes through the one allocator.
-    """
-    cfg = resolving_view(server_args)
-    return (
-        cfg.speculative_algorithm == "EAGLE"
-        and cfg.speculative_eagle_topk in (None, 1)
-        and cfg.speculative_draft_model_path in (None, cfg.model_path)
-        and is_qwen_qsa(model_config_of(server_args).hf_config)
-    )
 
 
 def _full_prefill_cuda_graph_unsupported(server_args: Any) -> bool:

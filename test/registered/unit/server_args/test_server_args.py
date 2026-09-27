@@ -2432,6 +2432,7 @@ class TestHiCacheAutoResolution(CustomTestCase):
             "pipeline parallel": {"pp_size": 2},
             "decode context parallel": {"dcp_size": 2},
             "hisparse": {"enable_hisparse": True},
+            "unified memory": {"enable_unified_memory": True},
             "page-major layout": {"enable_page_major_kv_layout": True},
             "int8 mamba checkpoint": {"enable_int8_mamba_checkpoint": True},
             "fp4 kv cache": {"kv_cache_dtype": "nvfp4"},

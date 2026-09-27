@@ -2,8 +2,7 @@
 
 Compressed addressing is pure arithmetic over the page-aligned full-KV cache:
 a group's compressed slot is any of its raw slots floor-divided by the compress ratio,
-so per-row graph buffers are rebuilt from request lengths and ``req_to_token`` alone
-(plus the live page table on a unified pool, see ``qsa_index_slots``);
+so per-row graph buffers are rebuilt from request lengths and ``req_to_token`` alone;
 accept-dependent speculative lengths never need the host.
 
 Both kernels run once eagerly at capture warmup,
@@ -111,11 +110,8 @@ def _qsa_graph_row_metadata_kernel(
     req_to_token_ptr,
     req_to_token_row_stride,
     max_pages,
-    v2p_ptr,  # unified pool: virtual -> physical full page (TRANSLATE only)
     RATIO: tl.constexpr,
     FULL_PAGE: tl.constexpr,  # full-KV tokens per page
-    INDEX_PAGE_MULTIPLIER: tl.constexpr,  # compressed pages per physical page
-    TRANSLATE: tl.constexpr,
     PAGE_BLOCK: tl.constexpr,
 ):
     row = tl.program_id(0)
@@ -123,15 +119,7 @@ def _qsa_graph_row_metadata_kernel(
     req = tl.load(row_req_pool_ptr + row).to(tl.int64)
     token_row = req * req_to_token_row_stride
     current = tl.maximum(seq_len - 1, 0)
-    last_loc = tl.load(req_to_token_ptr + token_row + current).to(tl.int64)
-    if TRANSLATE:
-        # QSATokenToKVPool.qsa_index_slots: the compressed rows live in the
-        # physical page's envelope, INDEX_PAGE_MULTIPLIER compressed pages apart.
-        last_loc = tl.maximum(last_loc, 0)
-        last_page = tl.maximum(tl.load(v2p_ptr + last_loc // FULL_PAGE), 0)
-        last_loc = (
-            last_page * (FULL_PAGE * INDEX_PAGE_MULTIPLIER) + last_loc % FULL_PAGE
-        )
+    last_loc = tl.load(req_to_token_ptr + token_row + current).to(tl.int32)
 
     compressed = seq_len // RATIO
     tl.store(compressed_lens_ptr + row, compressed)
@@ -140,7 +128,7 @@ def _qsa_graph_row_metadata_kernel(
     # so last_loc // RATIO is the group's compressed slot; slot 0 is the padding slot.
     boundary = (seq_len > 0) & (seq_len % RATIO == 0)
     write_loc = tl.where(boundary, last_loc // RATIO, 0)
-    tl.store(write_locs_ptr + row, write_loc.to(tl.int32))
+    tl.store(write_locs_ptr + row, write_loc)
 
     tl.store(logical_positions_ptr + row, current)
     tl.store(state_slots_ptr + row, req * RATIO + (current % RATIO).to(tl.int64))
@@ -162,13 +150,7 @@ def _qsa_graph_row_metadata_kernel(
         loc = tl.load(
             req_to_token_ptr + token_row + idx * FULL_PAGE, mask=valid, other=0
         )
-        page = tl.maximum(loc // FULL_PAGE, 0)
-        if TRANSLATE:
-            page = (
-                tl.maximum(tl.load(v2p_ptr + page, mask=valid, other=0), 0)
-                * INDEX_PAGE_MULTIPLIER
-            )
-        tl.store(table_row + idx, page.to(tl.int32), mask=valid)
+        tl.store(table_row + idx, tl.maximum(loc // FULL_PAGE, 0), mask=valid)
 
 
 def supports_graph_metadata_kernels(pool, device) -> bool:
@@ -230,11 +212,8 @@ def launch_graph_metadata(
         req_to_token,
         req_to_token.stride(0),
         max_pages,
-        pool.qsa_index_v2p if pool.qsa_index_v2p is not None else req_to_token,
         RATIO=indexer.compress_ratio,
         FULL_PAGE=pool.qsa_compressed_page_size * indexer.compress_ratio,
-        INDEX_PAGE_MULTIPLIER=pool.qsa_index_page_multiplier,
-        TRANSLATE=pool.qsa_index_v2p is not None,
         PAGE_BLOCK=128,
         num_warps=1,
     )

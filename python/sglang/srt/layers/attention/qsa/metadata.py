@@ -6,7 +6,7 @@ contains only fields and transforms consumed by the indexer.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Tuple
+from typing import Optional, Tuple
 
 import msgspec
 import torch
@@ -142,11 +142,9 @@ class QSAIndexerMetadata(msgspec.Struct, frozen=True):
             # compressed slot = first raw slot // ratio; the allocator is page-aligned,
             # so each group is contiguous in one page (see QSATokenToKVPool).
             compressed_locs = (
-                pool.qsa_index_slots(
-                    self.token_slot_table[
-                        sequence_id, : complete_blocks * ratio : ratio
-                    ].long()
-                )
+                self.token_slot_table[
+                    sequence_id, : complete_blocks * ratio : ratio
+                ].long()
                 // ratio
             )
             parts.append(compressed_buffer.index_select(0, compressed_locs))
@@ -216,7 +214,6 @@ class QSAIndexerMetadata(msgspec.Struct, frozen=True):
             compress_ratio=self.compress_ratio,
             sequence_lengths=self.sequence_lengths,
             token_slot_table=self.token_slot_table,
-            index_slots=pool.qsa_index_slots,
         )
         return (
             compressed_cache,
@@ -287,14 +284,12 @@ def compressed_decode_view(
     compress_ratio: int,
     sequence_lengths: torch.Tensor,
     token_slot_table: torch.Tensor,
-    index_slots: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compressed page table and lengths for decode MQA.
 
     Page-table entries are full-KV page ids read off the page-aligned
-    token-slot rows, mapped by ``index_slots`` (`QSATokenToKVPool.qsa_index_slots`)
-    into the compressed cache's slot space; the scoring kernel converts them to
-    compressed slots as page_id * compressed_page_size + block_in_page. Entries
+    token-slot rows; the scoring kernel converts them to compressed
+    slots as page_id * compressed_page_size + block_in_page. Entries
     past a row's compressed length are stale-but-unread (bounded by
     compressed_lengths); clamp keeps them non-negative.
     """
@@ -304,10 +299,11 @@ def compressed_decode_view(
         compress_ratio,
         rounding_mode="floor",
     )
-    page_first_slots = token_slot_table[:, ::full_page].long()
-    if index_slots is not None:
-        page_first_slots = index_slots(page_first_slots)
-    compressed_page_table = (page_first_slots // full_page).clamp_min(0).to(torch.int32)
+    compressed_page_table = (
+        (token_slot_table[:, ::full_page].long() // full_page)
+        .clamp_min(0)
+        .to(torch.int32)
+    )
     return compressed_page_table, compressed_lengths
 
 

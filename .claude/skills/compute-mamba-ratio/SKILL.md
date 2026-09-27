@@ -19,7 +19,7 @@ With no `--mamba-full-memory-ratio`, no `--max-mamba-cache-size` and no per-arch
 - `--max-running-requests N` set (or declared by a hook, e.g. the speculative default of 48): the state pool holds exactly `N · (S+D)` slots plus padding, capped at the old default share `0.9/1.9`.
 - otherwise: the balanced share at `L = context_len`, raised to a floor of 1/8 of the budget so short requests still run concurrently. At long contexts the floor binds.
 
-It is skipped under hybrid SWA and PP > 1, where the old `0.9` default still applies. Unified memory turns on by itself for a supported hybrid Mamba launch (colocated, audited backends, no speculative decoding except a QSA model's built-in chain MTP draft; with or without HiCache). There the split floats at runtime, but the derived split still labels the pools, and the labels size what does not float: the running-request cap, the per-request draft-state scratch, and the host tier's state vs KV share. Use this skill when the workload's `L` is known to differ from `context_len`, or to pin a target concurrency.
+It is skipped under unified memory, hybrid SWA and PP > 1, where the old `0.9` default still applies. Unified memory now turns on by itself for a supported hybrid Mamba launch (colocated, no speculative decoding or HiCache, audited backends; not QSA models); there the split floats at runtime and this ratio only labels the pools, so the static derivation is the fallback when the startup line says `Unified memory pool: off`. Use this skill when the workload's `L` is known to differ from `context_len`, or to pin a target concurrency.
 
 ## The formula
 

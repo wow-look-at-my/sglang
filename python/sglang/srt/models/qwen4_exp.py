@@ -233,13 +233,11 @@ def _prepare_ple_batch(
     else:
         valid_tokens = token_offsets < lengths.index_select(0, req_indices)
 
-    # The side-state pools are indexed by physical state slot, like the GDN state.
-    req_to_token_pool = get_req_to_token_pool()
-    state_indices = req_to_token_pool.translate_mamba_indices(
-        req_to_token_pool.get_mamba_indices(
-            forward_batch.req_pool_indices[:sequence_count]
-        )
-    ).long()
+    state_indices = (
+        get_req_to_token_pool()
+        .get_mamba_indices(forward_batch.req_pool_indices[:sequence_count])
+        .long()
+    )
 
     # CUDA graph padding uses request slot 0, which may belong to a real request.
     # Map padded sequences to the state pools' reserved dummy slot instead.
@@ -364,7 +362,7 @@ def _ple_track_targets(
     Masked-off rows route to reserved slot 0, so the shape stays graph-capturable.
     None when tracking is inactive or its metadata is absent.
     """
-    track_indices = _physical_track_indices(forward_batch)
+    track_indices = forward_batch.mamba_track_indices
     track_mask = forward_batch.mamba_track_mask
     if track_indices is None or track_mask is None:
         return None
@@ -383,19 +381,6 @@ def _ple_track_targets(
         return None
 
     return dst, aligned[:rows].clamp(min=0).minimum(batch.lengths)
-
-
-def _physical_track_indices(forward_batch: ForwardBatch) -> Optional[torch.Tensor]:
-    """Track destinations as physical state slots. Under CUDA graphs the batch
-    field holds the virtual source; the hybrid backend owns the translated copy."""
-    from sglang.srt.layers.attention.hybrid_linear_attn_backend import (
-        HybridLinearAttnBackend,
-    )
-
-    backend = get_attn_backend()
-    if isinstance(backend, HybridLinearAttnBackend):
-        return backend.linear_attn_backend.forward_metadata.mamba_track_indices
-    return forward_batch.mamba_track_indices
 
 
 def _pad_token_rows(x: torch.Tensor, total_tokens: int) -> torch.Tensor:

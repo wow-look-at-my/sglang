@@ -16,7 +16,6 @@ def _qwen4_short_conv_state_kernel(
     x_ptr,
     conv_input_ptr,
     num_tokens,
-    state_slot_stride,  # elements between slots; > CHANNELS * STATE_LEN in a slot envelope
     CHANNELS: tl.constexpr,
     STATE_LEN: tl.constexpr,
     BLOCK_CHANNELS: tl.constexpr,
@@ -28,7 +27,7 @@ def _qwen4_short_conv_state_kernel(
     channel_mask = (token < num_tokens) & (channel < CHANNELS)
     state_mask = channel_mask & (state_col < STATE_LEN)
     state_index = tl.load(state_indices_ptr + token, mask=token < num_tokens, other=0)
-    state_base = state_index.to(tl.int64) * state_slot_stride
+    state_base = state_index * CHANNELS * STATE_LEN
     state_offset = state_base + channel * STATE_LEN + state_col
     output_base = token * CHANNELS * (STATE_LEN + 1)
     output_offset = output_base + channel * (STATE_LEN + 1) + state_col
@@ -70,10 +69,7 @@ def can_fuse_qwen4_short_conv_state(
         state.is_cuda
         and state.dtype in (torch.bfloat16, torch.float16)
         and state.dim() == 3
-        # Rows of one slot are packed; slots may be spaced wider (an envelope).
-        and state.stride(2) == 1
-        and state.stride(1) == state.shape[2]
-        and state.stride(0) >= state.shape[1] * state.shape[2]
+        and state.is_contiguous()
         and 0 < state.shape[2] <= _QWEN4_MAX_SHORT_CONV_STATE_LEN
         and state_indices.is_cuda
         and state_indices.dtype == torch.long
@@ -113,7 +109,6 @@ def fused_qwen4_short_conv_state(
             x,
             conv_input,
             x.shape[0],
-            state.stride(0),
             CHANNELS=state.shape[1],
             STATE_LEN=state_len,
             BLOCK_CHANNELS=block_channels,

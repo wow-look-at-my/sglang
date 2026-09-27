@@ -53,7 +53,6 @@ def _resolve(*, hf_config=None, has_asymmetric_kv=False, prefill_graph=None, **f
         "disaggregation_mode": "null",
         "speculative_algorithm": None,
         "speculative_eagle_topk": None,
-        "speculative_draft_model_path": None,
         "enable_hierarchical_cache": False,
         "enable_lmcache": False,
         "enable_two_batch_overlap": False,
@@ -98,38 +97,8 @@ class TestUnifiedMemoryAuto(CustomTestCase):
     def test_non_hybrid_model_stays_off(self):
         self.assertIs(_resolve(hf_config=LlamaConfig()), False)
 
-    def test_qsa_model_with_its_chain_mtp_draft_turns_it_on(self):
-        """The deployed QSA recipe (built-in MTP draft, linear chain) resolves on,
-        with or without an explicit HiCache host tier: the two now coexist."""
-        qsa = Qwen3NextConfig(**_QSA_FIELDS)
-        mtp = dict(speculative_algorithm="EAGLE", speculative_eagle_topk=1)
-        self.assertIs(_resolve(hf_config=qsa), True)
-        self.assertIs(_resolve(hf_config=qsa, **mtp), True)
-        self.assertIs(
-            _resolve(hf_config=qsa, enable_hierarchical_cache=True, **mtp), True
-        )
-        self.assertIs(_resolve(enable_hierarchical_cache=True), True)
-
-    def test_speculation_outside_the_audited_qsa_chain_stays_off(self):
-        qsa = Qwen3NextConfig(**_QSA_FIELDS)
-        cases = {
-            # Tree verify is not audited for the unified pool.
-            "QSA tree draft": dict(
-                hf_config=qsa, speculative_algorithm="EAGLE", speculative_eagle_topk=4
-            ),
-            # A separate draft checkpoint is not the packed MTP pool.
-            "QSA external draft": dict(
-                hf_config=qsa,
-                speculative_algorithm="EAGLE",
-                speculative_eagle_topk=1,
-                speculative_draft_model_path="some/draft",
-            ),
-        }
-        for name, fields in cases.items():
-            with self.subTest(name):
-                self.assertIs(_resolve(**fields), False)
-
     def test_unsupported_configs_resolve_off_instead_of_failing(self):
+        qsa = Qwen3NextConfig(**_QSA_FIELDS)
         cases = {
             # Rejected by the explicit-flag validators.
             "two-batch overlap": dict(enable_two_batch_overlap=True),
@@ -138,6 +107,8 @@ class TestUnifiedMemoryAuto(CustomTestCase):
             "strided-state linear decode": dict(linear_attn_decode_backend="cutedsl"),
             # Would silently lose FULL prefill CUDA graphs.
             "FULL prefill graphs": dict(prefill_graph=Backend.FULL),
+            # QSA pools have no unified sub-pool; the builder would crash.
+            "QSA": dict(hf_config=qsa),
             "speculative decoding": dict(
                 speculative_algorithm="EAGLE", speculative_eagle_topk=1
             ),
