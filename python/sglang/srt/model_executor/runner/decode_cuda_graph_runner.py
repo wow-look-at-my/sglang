@@ -39,7 +39,11 @@ from torch.profiler import ProfilerActivity, profile
 
 from sglang.srt.compilation import torch_compile_decoration
 from sglang.srt.compilation.torch_compile_decoration import set_torch_compile_config
+from sglang.srt.distributed.device_communicators.custom_all_reduce import (
+    CustomAllreduceGraphRegistrationError,
+)
 from sglang.srt.distributed.parallel_state import (
+    get_world_group,
     graph_capture,
 )
 from sglang.srt.dllm.config import DllmConfig
@@ -90,7 +94,7 @@ from sglang.srt.model_executor.runner_backend.breakable_cuda_graph_backend impor
 )
 from sglang.srt.model_executor.runner_backend.utils import resolve_decode_backend
 from sglang.srt.model_executor.runner_backend_utils import (
-    CUDA_GRAPH_CAPTURE_FAILED_MSG,
+    cuda_graph_capture_failed_msg,
 )
 from sglang.srt.model_executor.runner_utils.buffers import (
     DecodeInputBuffers,
@@ -139,6 +143,16 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from sglang.srt.model_executor.model_runner import ModelRunner
     from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+
+
+def _any_rank_needs_recapture(needs_recapture: bool) -> bool:
+    # A custom all-reduce subgroup (e.g. attention TP) fails only on its own ranks,
+    # yet every rank must recapture together or the capture collectives hang.
+    flag = torch.tensor([int(needs_recapture)], dtype=torch.int32)
+    torch.distributed.all_reduce(
+        flag, op=torch.distributed.ReduceOp.MAX, group=get_world_group().cpu_group
+    )
+    return bool(flag.item())
 
 
 def ragged_verify_compact_graphs_enabled(spec_algorithm: SpeculativeAlgorithm) -> bool:
@@ -486,13 +500,28 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         self.backend = resolve_decode_backend(self)
 
         # --- capture --------------------------------------------------
+        self._capture_all_graphs(failure_label="Capture cuda graph failed")
+
+    def _capture_all_graphs(self, *, failure_label: str) -> None:
+        """Capture every graph, recapturing when custom all-reduce drops out."""
         try:
             with model_capture_mode():
-                self.capture()
+                # Terminates: each registration failure disables one group's
+                # custom all-reduce on all of its ranks for good.
+                while True:
+                    try:
+                        self.capture()
+                        needs_recapture = False
+                    except CustomAllreduceGraphRegistrationError as e:
+                        logger.warning("%s Recapturing CUDA graphs without it.", e)
+                        needs_recapture = True
+                    if not _any_rank_needs_recapture(needs_recapture):
+                        return
+                    self.backend.cleanup()
         except RuntimeError as e:
             raise Exception(
-                f"Capture cuda graph failed: {e}\n{CUDA_GRAPH_CAPTURE_FAILED_MSG}"
-            )
+                f"{failure_label}: {e}\n{cuda_graph_capture_failed_msg(e)}"
+            ) from e
 
     def _next_token_logits_buffer_capacity_rows(self, max_num_tokens: int) -> int:
         """Rows reserved for the largest shared logits output."""

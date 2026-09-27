@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Optional
 import msgspec
 import torch
 
+from sglang.srt.arg_groups.arg_utils import fallbacks_of
+from sglang.srt.arg_groups.fields.schedule import Schedule
 from sglang.srt.arg_groups.overrides import resolving_view
 from sglang.srt.configs.hybrid_arch import (
     hybrid_gdn_config,
@@ -60,6 +62,7 @@ from sglang.srt.mem_cache.deepseek_v4_memory_pool import (
     select_dsv4_kv_layout,
 )
 from sglang.srt.mem_cache.hisparse_memory_pool import HiSparseDSATokenToKVPool
+from sglang.srt.mem_cache.mamba_pool_split import derive_mamba_pool_split
 from sglang.srt.mem_cache.memory_pool import (
     DSATokenToKVPool,
     HybridLinearKVPool,
@@ -2310,7 +2313,9 @@ class KVCacheConfigurator:
             mamba_cap = get_schedule().max_mamba_cache_size // ratio
             if mamba_cap < max_num_reqs:
                 capped_by_mamba = True
-                logger.warning(
+                # Unrequested, the state pool is what sets the default: not a warning.
+                log = logger.info if requested_per_worker is None else logger.warning
+                log(
                     "max_running_requests is capped to %d by the mamba state "
                     "cache (max_mamba_cache_size=%d, %d state slots per "
                     "request). To raise it: increase --mamba-full-memory-ratio "
@@ -2504,6 +2509,22 @@ class KVCacheConfigurator:
             # Use ratio-based calculation to auto-fit available memory
             assert stage_per_req > 0
             per_req = stage_per_req
+            # False only when resolution ran and nobody set the ratio; None is a
+            # dummy launch that never resolved.
+            if (
+                get_schedule()._mamba_full_memory_ratio_explicitly_set is False
+                and self._can_derive_mamba_split()
+            ):
+                self._derive_mamba_full_memory_ratio(
+                    rest_bytes=total_rest_memory * (1 << 30),
+                    slot_bytes=per_req + replayssm_ring_per_slot,
+                    draft_states_per_request=(
+                        get_spec().speculative_num_draft_tokens
+                        if has_spec_dec and not replayssm_active
+                        else 0
+                    ),
+                    replayssm_fixed_bytes=replayssm_fixed_bytes,
+                )
 
             # Solve jointly for max_mamba_cache_size (K), including the pool's
             # +1 padding slot on both buffers (see memory_pool.py):
@@ -2567,6 +2588,79 @@ class KVCacheConfigurator:
             + replayssm_fixed_bytes
         ) / (1 << 30)
         return total_rest_memory - mamba_state_memory
+
+    def _can_derive_mamba_split(self) -> bool:
+        # Unified memory floats the split at runtime; SWA KV per request is
+        # window-bounded; PP stages must agree without a collective.
+        return (
+            not get_memory().enable_unified_memory
+            and not self.is_hybrid_swa
+            and self.pp_size == 1
+            and bool(self.mambaish_config.full_attention_layer_ids)
+        )
+
+    def _kv_bytes_per_logical_token(self) -> float:
+        from sglang.srt.model_executor.pool_configurator import (
+            create_memory_pool_configurator,
+        )
+
+        probe_bytes = 1 << 40
+        rows = (
+            create_memory_pool_configurator(self)
+            .calculate_pool_sizes(probe_bytes, 1)
+            .max_total_num_tokens
+        )
+        return probe_bytes / self.logical_token_capacity(max_total_num_tokens=rows)
+
+    def _derive_mamba_full_memory_ratio(
+        self,
+        *,
+        rest_bytes: float,
+        slot_bytes: int,
+        draft_states_per_request: int,
+        replayssm_fixed_bytes: int,
+    ) -> None:
+        slots_per_request = self._calculate_mamba_ratio()
+        max_running_requests = get_schedule().max_running_requests
+        default_ratio = fallbacks_of(Schedule)["mamba_full_memory_ratio"]
+        split = derive_mamba_pool_split(
+            budget_bytes=rest_bytes,
+            state_bytes_per_request=(
+                (slots_per_request + draft_states_per_request) * slot_bytes
+            ),
+            # Each buffer's padding slot plus one slot of rounding slack.
+            fixed_state_bytes=(2 + draft_states_per_request) * slot_bytes
+            + replayssm_fixed_bytes,
+            kv_bytes_per_token=self._kv_bytes_per_logical_token(),
+            context_len=self.model_config.context_len,
+            max_running_requests=(
+                None
+                if max_running_requests is None
+                else max_running_requests // self.attn_dp_size
+            ),
+            default_share=default_ratio / (1 + default_ratio),
+        )
+        get_context().override(
+            "mamba_pool.derived_split",
+            mamba_full_memory_ratio=split.mamba_full_memory_ratio,
+        )
+        logger.info(
+            "Hybrid state/KV split derived (sized by %s): state pool %.2f GiB "
+            "(%.1f%%, mamba_full_memory_ratio=%.3f) for ~%d running requests "
+            "x %d state slots; KV pool holds ~%.1f requests of context_len=%d "
+            "(both pools fill together at a %.1f%% state share). Pass "
+            "--mamba-full-memory-ratio, --max-mamba-cache-size or "
+            "--max-running-requests to override.",
+            split.sized_by,
+            split.state_share * rest_bytes / (1 << 30),
+            split.state_share * 100,
+            split.mamba_full_memory_ratio,
+            split.state_requests,
+            slots_per_request + draft_states_per_request,
+            split.kv_context_len_requests,
+            self.model_config.context_len,
+            split.balanced_share * 100,
+        )
 
 
 def calculate_mla_kv_cache_dim(

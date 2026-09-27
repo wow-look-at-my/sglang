@@ -28,6 +28,12 @@ import { benchmarks } from "/src/snippets/configs/Qwen/qwen3.8-flash-next-benchm
 
 <Deployment config={config} benchmarks={benchmarks} />
 
+<Accordion title="Long-context workloads (100k+ tokens per request)">
+
+The recipes pin `--max-running-requests` (and on the memory-tight cards `--max-mamba-cache-size`) for chat-length requests: each running request holds a fixed number of recurrent-state slots, and those pins spend the memory budget on state slots rather than KV. For conversations of hundreds of thousands of tokens, drop both flags (and leave `--mamba-full-memory-ratio` unset). SGLang then derives the split from `--context-length`: the state pool gets the share at which the KV pool holds as many context-length requests as the state pool admits, but never less than 1/8 of the budget, so short requests still run concurrently; the startup log line `Hybrid state/KV split derived` reports the result. At 262k context the state pool sits at that 1/8 floor. For example, at TP=2 on two 96 GB cards (bf16 state, ~28 MiB per slot, ~16.6 GiB of pools per GPU) it admits ~18 running requests, and the KV pool gets ~1.27M tokens, room for three 400k-token conversations. The undecided default of 0.9 gave the state pool 47% of the budget, which left the KV pool room for fewer than two. With `--max-running-requests N` alone, the state pool is sized for exactly N requests, up to 47% of the budget.
+
+</Accordion>
+
 <a id="spark-note" />
 
 <Accordion title="DGX Spark notes (1x GB10 with the N-gram table on NVMe, or 2x GB10 TP=2)">

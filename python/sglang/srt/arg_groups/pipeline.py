@@ -134,6 +134,7 @@ def run_resolution_pipeline(server_args: Any) -> None:
         handle_page_major_kv_layout,
         handle_prefill_only_disable_kv_cache,
         handle_unified_memory_pool,
+        resolve_unified_memory_default,
         validate_prefill_only_disable_kv_cache_args,
     )
     from sglang.srt.arg_groups.parallel_hook import (
@@ -308,6 +309,7 @@ def run_resolution_pipeline(server_args: Any) -> None:
 
     run_hook(handle_cache_compatibility, server_args)
 
+    run_hook(resolve_unified_memory_default, server_args)
     run_hook(handle_page_major_kv_layout, server_args)
 
     run_hook(handle_unified_memory_pool, server_args)
