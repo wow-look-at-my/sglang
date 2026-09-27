@@ -5,6 +5,7 @@ import unittest
 
 from sglang.srt.managers.scheduler_components.eviction_throttle import (
     EvictionThrottle,
+    worth_throttling,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 
@@ -77,12 +78,27 @@ class TestEvictionThrottle(unittest.TestCase):
         throttle.begin_pass(present_rids={"a2", "c1"})
         self.assertTrue(_hold(throttle, "c1", input_len=300, queued_at=self.clock.now))
 
-    def test_admitted_once_it_fits_what_host_memory_can_restore(self):
-        throttle = _throttle(self.clock, host_tokens=4 * DEVICE_TOKENS)
+    def test_host_tier_that_mirrors_the_pool_leaves_nothing_to_throttle(self):
+        """With write-through, a host tier as large as the device pool keeps
+        every evicted prefix, which reloads instead of being recomputed;
+        holding requests back then only adds latency."""
+        self.assertFalse(worth_throttling(device_tokens=1000, host_tokens=1000))
+        self.assertTrue(worth_throttling(device_tokens=1000, host_tokens=999))
+        with self.assertRaises(ValueError):
+            _throttle(self.clock, host_tokens=DEVICE_TOKENS)
+
+    def test_aging_waits_to_recompute_only_what_the_host_tier_cannot_mirror(self):
+        throttle = _throttle(self.clock, host_tokens=DEVICE_TOKENS * 3 // 5)
         self._two_live_conversations(throttle)
         throttle.on_request_queued(rid="c1", token_ids=list(range(50_000, 50_300)))
+        queued_at = self.clock.now
+        unmirrored_rebuild = (DEVICE_TOKENS * 2 // 5) * SECONDS_PER_TOKEN
+        self.clock.now = queued_at + 0.9 * unmirrored_rebuild
         throttle.begin_pass(present_rids={"a2", "c1"})
-        self.assertFalse(_hold(throttle, "c1", input_len=300, queued_at=self.clock.now))
+        self.assertTrue(_hold(throttle, "c1", input_len=300, queued_at=queued_at))
+        self.clock.now = queued_at + unmirrored_rebuild
+        throttle.begin_pass(present_rids={"a2", "c1"})
+        self.assertFalse(_hold(throttle, "c1", input_len=300, queued_at=queued_at))
 
     def test_never_holds_without_eviction_or_for_a_resident_conversation(self):
         throttle = _throttle(self.clock)

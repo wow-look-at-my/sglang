@@ -230,40 +230,26 @@ class TestShortestPrefillFirst(CustomTestCase):
         self.assertEqual(limit, 3584)
         self.assertEqual([req.rid for req in queue], ["short", "cold", "over-half"])
 
-    def test_fcfs_follow_up_uses_room_the_long_chunk_banked(self):
-        """A follow-up over half a chunk used to wait for the whole long
-        prompt; once the prompt has run a chunk alone, it fits in one step."""
+    def test_fcfs_long_chunk_keeps_half_of_every_chunk(self):
+        """Ceded room carried across steps let a queue of follow-ups take whole
+        chunks, so the long prompt stalled and its cold TTFT grew; each step
+        cedes at most half, and a follow-up over half a chunk waits."""
         self.policy.policy = CacheAgnosticPolicy.FCFS
-        continuation = self.make_req("continuation", 16384)
-        follow_up = self.make_req("follow-up", 3000)
-        self.assertIsNone(
-            self.policy.cede_chunk_budget(continuation, [follow_up], 4096, 256)
-        )
-        continuation.prefix_indices = list(range(4096))
-        self.assertEqual(
-            self.policy.cede_chunk_budget(continuation, [follow_up], 4096, 256),
-            1024,
-        )
-
-    def test_fcfs_long_chunk_keeps_half_of_the_tokens_under_steady_arrivals(self):
         continuation = self.make_req("continuation", 1 << 20)
-        self.policy.policy = CacheAgnosticPolicy.FCFS
-        own = ceded = 0
-        for step in range(50):
-            limit = self.policy.cede_chunk_budget(
-                continuation, [self.make_req(f"f{step}", 3000)], 4096, 256
+        shorts = [self.make_req(f"s{i}", 512) for i in range(8)]
+        for step in range(4):
+            continuation.prefix_indices = list(range(step * 2048))
+            self.assertEqual(
+                self.policy.cede_chunk_budget(continuation, shorts, 4096, 256), 2048
             )
-            taken = 4096 if limit is None else limit
-            ceded += 4096 - taken
-            own += taken
-            continuation.prefix_indices = list(range(own))
-            self.assertGreaterEqual(own + 4096, ceded)
-        self.assertGreater(ceded, 0)
-        self.assertGreaterEqual(own, ceded)
+            self.assertIsNone(
+                self.policy.cede_chunk_budget(
+                    continuation, [self.make_req("follow-up", 3000)], 4096, 256
+                )
+            )
 
-    def test_reserves_only_for_requests_that_can_be_admitted(self):
-        """A reservation for a request with no free slot, or whose context
-        memory cannot hold, shrinks the long
+    def test_reserves_at_most_one_request_per_free_slot(self):
+        """A reservation for a request with no free slot shrinks the long
         chunk for nothing."""
         continuation = self.make_req("continuation", 16384)
         waiting = [self.make_req("a", 512), self.make_req("b", 1024)]
@@ -277,17 +263,6 @@ class TestShortestPrefillFirst(CustomTestCase):
                 continuation, waiting, 4096, 256, max_new_reqs=1
             ),
             3584,
-        )
-        # A follow-up whose context memory cannot hold is not reserved for.
-        self.assertEqual(
-            self.policy.cede_chunk_budget(
-                continuation,
-                waiting,
-                4096,
-                256,
-                admissible=lambda req: req.rid != "a",
-            ),
-            3072,
         )
 
 

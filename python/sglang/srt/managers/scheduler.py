@@ -232,6 +232,7 @@ from sglang.srt.managers.scheduler_components.dynamic_chunk_sizer import (
 from sglang.srt.managers.scheduler_components.eviction_throttle import (
     EvictionThrottle,
     rank0_verdict_consensus,
+    worth_throttling,
 )
 from sglang.srt.managers.scheduler_components.flush_wrapper import SchedulerFlushWrapper
 from sglang.srt.managers.scheduler_components.idle_sleeper import (
@@ -1365,7 +1366,7 @@ class Scheduler(
         ):
             return
         self.prefill_decode_balancer = PrefillDecodeBalancer(
-            burst_tokens=self.chunked_prefill_size,
+            overlap=self.enable_overlap,
             consensus_elapsed=rank0_consensus(self.attn_tp_cpu_group),
         )
 
@@ -1384,8 +1385,11 @@ class Scheduler(
         host_tokens = (
             cache_controller.mem_pool_host.size if cache_controller is not None else 0
         )
+        device_tokens = self.token_to_kv_pool_allocator.size_full
+        if not worth_throttling(device_tokens=device_tokens, host_tokens=host_tokens):
+            return
         self.eviction_throttle = EvictionThrottle(
-            device_tokens=self.token_to_kv_pool_allocator.size_full,
+            device_tokens=device_tokens,
             host_tokens=host_tokens,
             prefill_seconds_per_token=lambda: (
                 self.prefill_decode_balancer.prefill_seconds_per_token
@@ -1400,7 +1404,6 @@ class Scheduler(
                 or self.chunked_req is not None,
                 decode_runnable=not running_batch.is_empty()
                 and not running_batch.is_prefill_only,
-                continues_chunk=self.chunked_req is not None,
             )
         if self._prefill_decode_interval_remaining == 0:
             return False
@@ -1436,10 +1439,18 @@ class Scheduler(
             rids.add(self.chunked_req.rid)
         return rids
 
-    def _prefill_token_budget(self) -> Optional[int]:
-        if self.prefill_decode_balancer is None:
-            return None
-        return self.prefill_decode_balancer.prefill_token_budget
+    def _mixes_decode_rows(self, chunk_tokens: int) -> bool:
+        """Whether the prefill batch being formed carries the running requests'
+        decode rows; with overlap only the last chunk of a two-chunk burst does."""
+        if not self.is_mixed_chunk:
+            return False
+        if self.prefill_decode_balancer is None or self.chunked_req is None:
+            return True
+        req = self.chunked_req
+        remaining = len(req.full_untruncated_fill_ids) - len(req.prefix_indices)
+        return not self.prefill_decode_balancer.chunk_follows(
+            chunk_continues=remaining > chunk_tokens
+        )
 
     def _arm_prefill_decode_interval(self, batch: Optional[ScheduleBatch]) -> None:
         if self.prefill_decode_balancer is not None:
@@ -3820,9 +3831,7 @@ class Scheduler(
         elif self._should_defer_prefill(running_batch):
             new_batch = None
         else:
-            prefill_plan = self.get_new_batch_prefill(
-                running_batch, prefill_token_budget=self._prefill_token_budget()
-            )
+            prefill_plan = self.get_new_batch_prefill(running_batch)
             new_batch = prefill_plan.batch_to_run
             running_batch = prefill_plan.running_batch
 
@@ -3898,12 +3907,7 @@ class Scheduler(
 
         return res
 
-    def get_new_batch_prefill(
-        self,
-        running_batch: ScheduleBatch,
-        *,
-        prefill_token_budget: Optional[int] = None,
-    ) -> NextBatchPlan:
+    def get_new_batch_prefill(self, running_batch: ScheduleBatch) -> NextBatchPlan:
         prefill_delayer_single_pass = None
         if self.prefill_delayer:
             # Get max usage across all pools for prefill delay decision
@@ -3917,7 +3921,6 @@ class Scheduler(
         ret, running_batch = self._get_new_batch_prefill_raw(
             prefill_delayer_single_pass=prefill_delayer_single_pass,
             running_batch=running_batch,
-            prefill_token_budget=prefill_token_budget,
         )
 
         if self.prefill_delayer:
@@ -3935,7 +3938,6 @@ class Scheduler(
         self,
         prefill_delayer_single_pass: Optional[PrefillDelayerSinglePassExecutor],
         running_batch: ScheduleBatch,
-        prefill_token_budget: Optional[int] = None,
     ) -> Tuple[Optional[ScheduleBatch], ScheduleBatch]:
         # Check if the grammar is ready in the grammar queue
         if self.grammar_manager.has_waiting_grammars():
@@ -3999,8 +4001,7 @@ class Scheduler(
             dynamic_size = self.dynamic_chunk_sizer.predict(history_len)
             if dynamic_size is not None:
                 chunked_prefill_size = dynamic_size
-        if prefill_token_budget is not None:
-            chunked_prefill_size = min(chunked_prefill_size, prefill_token_budget)
+        mix_decode_rows = self._mixes_decode_rows(chunked_prefill_size)
 
         # Prefill policy
         # Get BLOCK_M from the backend for tile-budget admission logic
@@ -4018,7 +4019,7 @@ class Scheduler(
             self.new_token_ratio_tracker.current,
             self.max_prefill_tokens,
             chunked_prefill_size,
-            running_bs if self.is_mixed_chunk else 0,
+            running_bs if mix_decode_rows else 0,
             self.priority_scheduling_preemption_threshold,
             max_prefill_bs=int(self.max_prefill_bs),
             max_running_requests=self.max_running_requests,
@@ -4041,9 +4042,6 @@ class Scheduler(
                     running_bs, running_batch=running_batch
                 )
                 - 1,
-                admissible=lambda req: (
-                    adder.admission_tokens(req) < adder.rem_total_tokens
-                ),
             )
             self.chunked_req = adder.add_chunked_req(self.chunked_req)
 
@@ -4254,7 +4252,7 @@ class Scheduler(
 
         # Mixed-style chunked prefill
         if (
-            self.is_mixed_chunk
+            mix_decode_rows
             and not running_batch.is_empty()
             and not (new_batch.return_logprob or running_batch.return_logprob)
             # mix_with_running cats input_ids but not input_embeds — shapes would mismatch

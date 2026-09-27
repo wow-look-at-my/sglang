@@ -18,16 +18,19 @@ conversations plus it do not fit what the cache can keep. Nothing is tuned:
 * A conversation is live while a request of it is queued or running, or while
   its idle time is within the longest gap between one of its turns finishing
   and the next arriving observed so far.
-* What the cache can keep is the device pool, or the HiCache host tier when
-  larger: write-through mirrors every cached prefix on host, and an evicted
-  prefix reloads with one H2D copy instead of a recompute.
+* Eviction is priced by what refilling costs. HiCache write-through mirrors
+  up to ``host_tokens`` of the device pool on host, and a mirrored prefix
+  reloads with an H2D copy the layer-by-layer load hides under the returning
+  turn's forward. Only the part of the pool the host tier cannot mirror is
+  recomputed, so a host tier at least as large as the pool makes eviction
+  cheap and needs no throttle (``worth_throttling``).
 * A request whose own conversation is resident on device is never held: the
   live set has outgrown the pool and the least recently used must go.
 * Held requests keep their FIFO order. The oldest may evict once it has waited,
   since its arrival or the previous evicting admission, as long as recomputing
-  the whole device pool takes at the measured prefill rate, so rebuilding
-  displaced conversations costs at most 1/K of the GPU (K conversations fit the
-  pool) and nothing waits forever.
+  the unmirrored part of the device pool takes at the measured prefill rate,
+  so rebuilding displaced conversations costs at most 1/K of the GPU (K
+  conversations fit the pool) and nothing waits forever.
 
 Ranks share every input but the clock; each decision that reads the clock is
 rank 0's, broadcast through ``consensus``.
@@ -149,6 +152,12 @@ def _tail(token_ids: Sequence[int], length: int) -> Tuple[int, ...]:
     return tuple(token_ids[max(0, length - _TAIL_TOKENS) : length])
 
 
+def worth_throttling(*, device_tokens: int, host_tokens: int) -> bool:
+    """Whether an evicted prefix can cost a recompute: the host tier mirrors
+    less than the whole device pool."""
+    return host_tokens < device_tokens
+
+
 class EvictionThrottle:
     def __init__(
         self,
@@ -160,12 +169,17 @@ class EvictionThrottle:
         # The scheduler stamps wait-queue entry with perf_counter.
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
+        if not worth_throttling(device_tokens=device_tokens, host_tokens=host_tokens):
+            raise ValueError(
+                f"a host tier of {host_tokens} tokens mirrors the whole "
+                f"{device_tokens}-token device pool; there is nothing to throttle"
+            )
         self._device_tokens = device_tokens
-        self._capacity = max(device_tokens, host_tokens)
+        self._unmirrored_tokens = device_tokens - host_tokens
         self._prefill_seconds_per_token = prefill_seconds_per_token
         self._consensus = consensus
         self._clock = clock
-        self.ledger = ConversationLedger(retained_tokens=self._capacity)
+        self.ledger = ConversationLedger(retained_tokens=device_tokens)
         self._last_evicting_admit = float("-inf")
         self._head_taken = False
 
@@ -218,10 +232,11 @@ class EvictionThrottle:
     def _local_verdict(self, rid: str, total_tokens: int, queued_at: float) -> int:
         now = self._clock()
         conv = self.ledger.conversation_of(rid)
-        if self.ledger.live_tokens(now, exclude=conv) + total_tokens <= self._capacity:
+        live = self.ledger.live_tokens(now, exclude=conv)
+        if live + total_tokens <= self._device_tokens:
             return _ADMIT
         waited = now - max(queued_at, self._last_evicting_admit)
-        if waited < self._device_tokens * self._prefill_seconds_per_token():
+        if waited < self._unmirrored_tokens * self._prefill_seconds_per_token():
             return _HOLD
         return _ADMIT_AGED
 

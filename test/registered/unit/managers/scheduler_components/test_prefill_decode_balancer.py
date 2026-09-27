@@ -25,8 +25,8 @@ class _Clock:
         return self.now
 
 
-def _balancer(clock, **kwargs):
-    return PrefillDecodeBalancer(burst_tokens=CHUNK_TOKENS, clock=clock, **kwargs)
+def _balancer(clock, *, overlap=True, **kwargs):
+    return PrefillDecodeBalancer(overlap=overlap, clock=clock, **kwargs)
 
 
 def _run(
@@ -49,9 +49,7 @@ def _run(
     gpu_free_at = 0.0
     for _ in range(steps):
         defer = balancer.should_defer_prefill(
-            prefill_pending=prefill_pending,
-            decode_runnable=True,
-            continues_chunk=prefill_pending,
+            prefill_pending=prefill_pending, decode_runnable=True
         )
         is_prefill = prefill_pending and not defer
         rows = decode_rows if is_prefill else 0
@@ -94,18 +92,33 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         """Back-to-back prefill chunks used to lock out every running decode;
         each chunk must now be followed by a decode slice of equal GPU time."""
         clock = _Clock()
-        launched = _run(_balancer(clock), clock, steps=2000, overlap=False)
+        launched = _run(
+            _balancer(clock, overlap=False), clock, steps=2000, overlap=False
+        )
         self.assertAlmostEqual(_prefill_time_share(launched), 0.5, delta=0.02)
         self.assertEqual(_longest_prefill_run(launched), 1)
 
-    def test_overlap_scheduler_stalls_decode_for_one_chunk_at_most(self):
+    def test_overlap_scheduler_stalls_decode_for_two_chunks_at_most(self):
         """With overlap, batch N+1 is chosen while N still runs, before N's
-        time is known; a second chunk must not be launched behind the first,
-        which would double every decode stall."""
+        time is charged, so a burst is two chunks; a third would stretch the
+        stall past what the overlap scheduler already imposes."""
         clock = _Clock()
         launched = _run(_balancer(clock), clock, steps=2000, overlap=True)
         self.assertAlmostEqual(_prefill_time_share(launched), 0.5, delta=0.05)
-        self.assertEqual(_longest_prefill_run(launched), 1)
+        self.assertEqual(_longest_prefill_run(launched), 2)
+
+    def test_only_the_last_chunk_of_a_burst_carries_decode_rows(self):
+        """A decode token inside the first chunk of an overlap burst would split
+        one stall into two, doubling the long gaps a stream sees."""
+        clock = _Clock()
+        balancer = _balancer(clock)
+        self.assertTrue(balancer.chunk_follows(chunk_continues=True))
+        self.assertFalse(balancer.chunk_follows(chunk_continues=False))
+        balancer.on_batch_launched(is_prefill=True, num_tokens=CHUNK_TOKENS)
+        self.assertFalse(balancer.chunk_follows(chunk_continues=True))
+        self.assertFalse(
+            _balancer(clock, overlap=False).chunk_follows(chunk_continues=True)
+        )
 
     def test_waiting_requests_that_cannot_be_admitted_take_no_decode_time(self):
         """A long waiting queue whose requests cannot run (no memory, no slot,
@@ -114,24 +127,6 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         clock = _Clock()
         launched = _run(_balancer(clock), clock, steps=4000, overlap=True)
         self.assertAlmostEqual(_prefill_time_share(launched), 0.5, delta=0.05)
-
-    def test_overshoot_of_the_last_decode_batch_counts_toward_prefill(self):
-        """With overlap, one decode batch launches before the balance shows
-        repaid; its overshoot is decode time already served and must shorten
-        the next wait, but nothing beyond one batch may be banked."""
-        clock = _Clock()
-        balancer = _balancer(clock)
-        pending = dict(prefill_pending=True, decode_runnable=True)
-        balancer.should_defer_prefill(continues_chunk=False, **pending)
-        _run_one(balancer, clock, is_prefill=True, seconds=0.8)
-        _run_one(balancer, clock, is_prefill=False, seconds=0.5)
-        _run_one(balancer, clock, is_prefill=False, seconds=0.5)
-        self.assertFalse(balancer.should_defer_prefill(continues_chunk=True, **pending))
-        self.assertAlmostEqual(balancer.debt, -0.2)
-        for _ in range(4):
-            _run_one(balancer, clock, is_prefill=False, seconds=0.5)
-        balancer.should_defer_prefill(continues_chunk=True, **pending)
-        self.assertAlmostEqual(balancer.debt, -0.5)
 
     def test_piggybacked_decode_does_not_replace_the_decode_share(self):
         """A mixed chunk gives each running request one token, far below what
@@ -145,24 +140,20 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
             _balancer(clock), clock, steps=2000, overlap=True, decode_rows=5
         )
         self.assertAlmostEqual(_prefill_time_share(launched), 0.5, delta=0.05)
-        self.assertEqual(_longest_prefill_run(launched), 1)
+        self.assertEqual(_longest_prefill_run(launched), 2)
 
     def test_mixed_batch_is_charged_without_its_decode_rows(self):
         clock = _Clock()
         balancer = _balancer(clock)
         # Measures 1 ms per extend token.
         _run_one(balancer, clock, is_prefill=True, seconds=1.0, num_tokens=1000)
-        balancer.should_defer_prefill(
-            prefill_pending=True, decode_runnable=False, continues_chunk=False
-        )
+        balancer.should_defer_prefill(prefill_pending=True, decode_runnable=False)
         balancer.on_batch_launched(
             is_prefill=True, num_tokens=1500, num_decode_rows=500
         )
         clock.now += 1.5
         balancer.on_batch_finished()
-        balancer.should_defer_prefill(
-            prefill_pending=True, decode_runnable=True, continues_chunk=False
-        )
+        balancer.should_defer_prefill(prefill_pending=True, decode_runnable=True)
         self.assertAlmostEqual(balancer.debt, 1.0)
 
     def test_measures_prefill_seconds_per_token(self):
@@ -174,69 +165,13 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         _run_one(balancer, clock, is_prefill=False, seconds=0.3, num_tokens=500)
         self.assertAlmostEqual(balancer.prefill_seconds_per_token, 0.8 / 1500)
 
-    def test_short_prefills_share_one_chunk_budget_before_decode_repays(self):
-        """A short prefill arriving right after another must not wait out a
-        decode slice; together they may use one chunk's worth of tokens."""
-        clock = _Clock()
-        balancer = _balancer(clock)
-        _run_one(balancer, clock, is_prefill=True, seconds=0.3, num_tokens=1000)
-        self.assertFalse(
-            balancer.should_defer_prefill(
-                prefill_pending=True, decode_runnable=True, continues_chunk=False
-            )
-        )
-        self.assertGreater(balancer.debt, 0.0)
-        self.assertEqual(balancer.prefill_token_budget, CHUNK_TOKENS - 1000)
-        _run_one(
-            balancer,
-            clock,
-            is_prefill=True,
-            seconds=0.9,
-            num_tokens=CHUNK_TOKENS - 1000,
-        )
-        self.assertTrue(
-            balancer.should_defer_prefill(
-                prefill_pending=True, decode_runnable=True, continues_chunk=False
-            )
-        )
-
-    def test_chunked_continuation_waits_for_decode_to_catch_up(self):
-        """Leftover budget after a short prefill must not be spent on a sliver
-        of a long prompt's next chunk; that chunk waits for its full turn."""
-        clock = _Clock()
-        balancer = _balancer(clock)
-        _run_one(balancer, clock, is_prefill=True, seconds=0.3, num_tokens=1000)
-        self.assertTrue(
-            balancer.should_defer_prefill(
-                prefill_pending=True, decode_runnable=True, continues_chunk=True
-            )
-        )
-        _run_one(balancer, clock, is_prefill=False, seconds=0.3)
-        self.assertFalse(
-            balancer.should_defer_prefill(
-                prefill_pending=True, decode_runnable=True, continues_chunk=True
-            )
-        )
-        self.assertIsNone(balancer.prefill_token_budget)
-
-    def test_without_chunked_prefill_defers_on_debt_alone(self):
-        clock = _Clock()
-        balancer = PrefillDecodeBalancer(burst_tokens=None, clock=clock)
-        _run_one(balancer, clock, is_prefill=True, seconds=0.3, num_tokens=1000)
-        self.assertTrue(
-            balancer.should_defer_prefill(
-                prefill_pending=True, decode_runnable=True, continues_chunk=False
-            )
-        )
-        self.assertIsNone(balancer.prefill_token_budget)
-
     def test_never_defers_without_running_decode(self):
         clock = _Clock()
         balancer = _balancer(clock)
         for _ in range(10):
             self.assertFalse(
                 balancer.should_defer_prefill(
-                    prefill_pending=True, decode_runnable=False, continues_chunk=True
+                    prefill_pending=True, decode_runnable=False
                 )
             )
             _run_one(
@@ -248,14 +183,13 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         """Decode that ran while prefill was blocked (e.g. no memory) must not
         buy a later burst of back-to-back prefills."""
         clock = _Clock()
-        balancer = _balancer(clock)
+        balancer = _balancer(clock, overlap=False)
         _run(balancer, clock, steps=100, overlap=False, prefill_pending=False)
         for _ in range(100):
-            balancer.should_defer_prefill(
-                prefill_pending=True, decode_runnable=True, continues_chunk=True
-            )
+            balancer.should_defer_prefill(prefill_pending=True, decode_runnable=True)
             _run_one(balancer, clock, is_prefill=False, seconds=DECODE_SECS)
-        self.assertAlmostEqual(balancer.debt, -DECODE_SECS)
+        balancer.should_defer_prefill(prefill_pending=True, decode_runnable=True)
+        self.assertEqual(balancer.debt, 0.0)
         launched = _run(balancer, clock, steps=50, overlap=False)
         self.assertEqual(_longest_prefill_run(launched), 1)
 
@@ -265,19 +199,15 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         _run_one(balancer, clock, is_prefill=True, seconds=0.5, num_tokens=1)
         clock.now += 60.0  # GPU idle, nothing in flight.
         _run_one(balancer, clock, is_prefill=False, seconds=0.02)
-        balancer.should_defer_prefill(
-            prefill_pending=True, decode_runnable=True, continues_chunk=True
-        )
+        balancer.should_defer_prefill(prefill_pending=True, decode_runnable=True)
         self.assertAlmostEqual(balancer.debt, 0.48)
 
     def test_consensus_value_drives_the_decision(self):
         """Ranks must agree; the balance follows the agreed (rank 0) values."""
         clock = _Clock()
-        balancer = _balancer(clock, consensus_elapsed=lambda _: (0.25, 0.05, 0.05))
+        balancer = _balancer(clock, consensus_elapsed=lambda _: (0.25, 0.05))
         _run_one(balancer, clock, is_prefill=True, seconds=9.0, num_tokens=1)
-        balancer.should_defer_prefill(
-            prefill_pending=True, decode_runnable=True, continues_chunk=True
-        )
+        balancer.should_defer_prefill(prefill_pending=True, decode_runnable=True)
         self.assertAlmostEqual(balancer.debt, 0.20)
 
 

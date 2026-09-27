@@ -75,6 +75,39 @@ class TestPrefillDecodeInterval(unittest.TestCase):
         self.assertEqual(scheduler._prefill_decode_interval_remaining, 1)
 
 
+class TestMixedChunkDecodeRows(unittest.TestCase):
+    def test_only_the_chunk_that_ends_an_overlap_burst_mixes_decode_rows(self):
+        """A decode token inside the first chunk of a two-chunk overlap burst
+        splits one stall into two, doubling the long gaps every stream sees."""
+        from sglang.srt.managers.scheduler_components.prefill_decode_balancer import (
+            PrefillDecodeBalancer,
+        )
+
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.is_mixed_chunk = True
+        scheduler.prefill_decode_balancer = PrefillDecodeBalancer(
+            overlap=True, clock=lambda: 0.0
+        )
+        scheduler.chunked_req = SimpleNamespace(
+            full_untruncated_fill_ids=list(range(10000)),
+            prefix_indices=list(range(2000)),
+        )
+        # 8000 tokens left: the next chunk launches before decode can run.
+        self.assertFalse(scheduler._mixes_decode_rows(4096))
+        scheduler.prefill_decode_balancer.on_batch_launched(
+            is_prefill=True, num_tokens=4096
+        )
+        self.assertTrue(scheduler._mixes_decode_rows(4096))
+
+        scheduler.prefill_decode_balancer = PrefillDecodeBalancer(
+            overlap=True, clock=lambda: 0.0
+        )
+        scheduler.chunked_req.prefix_indices = list(range(6000))
+        self.assertTrue(scheduler._mixes_decode_rows(4096))
+        scheduler.is_mixed_chunk = False
+        self.assertFalse(scheduler._mixes_decode_rows(4096))
+
+
 class TestEvictionThrottlePrefixMatch(unittest.TestCase):
     def test_fcfs_throttle_does_not_hold_a_conversation_resident_on_device(self):
         """Under FCFS nothing matches the waiting queue before admission, so the
