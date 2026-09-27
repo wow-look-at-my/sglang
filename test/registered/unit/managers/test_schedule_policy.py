@@ -226,6 +226,71 @@ class TestShortestPrefillFirst(CustomTestCase):
         queue = [cold, over_half, short]
         limit = self.policy.cede_chunk_budget(
             self.make_req("continuation", 16384), queue, 4096, 256
+<<<<<<< HEAD
+=======
+        )
+        self.assertEqual(limit, 3584)
+        self.assertEqual([req.rid for req in queue], ["short", "cold", "over-half"])
+
+    def test_fcfs_follow_up_uses_room_the_long_chunk_banked(self):
+        """A follow-up over half a chunk used to wait for the whole long
+        prompt; once the prompt has run a chunk alone, it fits in one step."""
+        self.policy.policy = CacheAgnosticPolicy.FCFS
+        continuation = self.make_req("continuation", 16384)
+        follow_up = self.make_req("follow-up", 3000)
+        self.assertIsNone(
+            self.policy.cede_chunk_budget(continuation, [follow_up], 4096, 256)
+        )
+        continuation.prefix_indices = list(range(4096))
+        self.assertEqual(
+            self.policy.cede_chunk_budget(continuation, [follow_up], 4096, 256),
+            1024,
+        )
+
+    def test_fcfs_long_chunk_keeps_half_of_the_tokens_under_steady_arrivals(self):
+        continuation = self.make_req("continuation", 1 << 20)
+        self.policy.policy = CacheAgnosticPolicy.FCFS
+        own = ceded = 0
+        for step in range(50):
+            limit = self.policy.cede_chunk_budget(
+                continuation, [self.make_req(f"f{step}", 3000)], 4096, 256
+            )
+            taken = 4096 if limit is None else limit
+            ceded += 4096 - taken
+            own += taken
+            continuation.prefix_indices = list(range(own))
+            self.assertGreaterEqual(own + 4096, ceded)
+        self.assertGreater(ceded, 0)
+        self.assertGreaterEqual(own, ceded)
+
+    def test_reserves_only_for_requests_that_can_be_admitted(self):
+        """A reservation for a request with no free slot, or whose context
+        memory cannot hold, shrinks the long
+        chunk for nothing."""
+        continuation = self.make_req("continuation", 16384)
+        waiting = [self.make_req("a", 512), self.make_req("b", 1024)]
+        self.assertIsNone(
+            self.policy.cede_chunk_budget(
+                continuation, waiting, 4096, 256, max_new_reqs=0
+            )
+        )
+        self.assertEqual(
+            self.policy.cede_chunk_budget(
+                continuation, waiting, 4096, 256, max_new_reqs=1
+            ),
+            3584,
+        )
+        # A follow-up whose context memory cannot hold is not reserved for.
+        self.assertEqual(
+            self.policy.cede_chunk_budget(
+                continuation,
+                waiting,
+                4096,
+                256,
+                admissible=lambda req: req.rid != "a",
+            ),
+            3072,
+>>>>>>> origin/master
         )
         self.assertEqual(limit, 3584)
         self.assertEqual([req.rid for req in queue], ["short", "cold", "over-half"])

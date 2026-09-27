@@ -15,6 +15,10 @@ import msgspec.structs
 import sglang.srt.server_args as server_args_module
 from sglang.srt.arg_groups import (
     hicache_hook,
+<<<<<<< HEAD
+=======
+    mixed_chunk_hook,
+>>>>>>> origin/master
     parallel_hook,
     pd_disaggregation_hook,
     serving_hook,
@@ -49,6 +53,10 @@ from sglang.srt.arg_groups.kv_cache_hook import (
 )
 from sglang.srt.arg_groups.mamba_hook import handle_mamba_backend
 from sglang.srt.arg_groups.memory_hook import handle_gpu_memory_settings
+from sglang.srt.arg_groups.mixed_chunk_hook import (
+    auto_mixed_chunk_blocker,
+    handle_mixed_chunk_auto,
+)
 from sglang.srt.arg_groups.model_path_hook import handle_load_format
 from sglang.srt.arg_groups.moe_hook import (
     handle_a2a_moe,
@@ -2234,6 +2242,115 @@ class TestHiCacheArgs(CustomTestCase):
         handle_cache_compatibility(args)
 
 
+<<<<<<< HEAD
+=======
+class TestMixedChunkAutoResolution(CustomTestCase):
+    """An unset --enable-mixed-chunk resolves per configuration."""
+
+    @staticmethod
+    def _make_args(**overrides) -> ServerArgs:
+        fields = {"chunked_prefill_size": 4096, **overrides}
+        cuda_graph_config = fields.pop("cuda_graph_config", None)
+        args = ServerArgs(model_path="dummy", **fields)
+        declare_resolution(
+            args,
+            "test",
+            cuda_graph_config=cuda_graph_config
+            or with_phase(
+                default_cuda_graph_config(), Phase.PREFILL, backend=Backend.BREAKABLE
+            ),
+        )
+        return args
+
+    def test_unset_flag_follows_the_blocker(self):
+        for blocker, expected in ((None, True), ("a reason", False)):
+            with self.subTest(blocker=blocker):
+                args = self._make_args()
+                with patch.object(
+                    mixed_chunk_hook, "auto_mixed_chunk_blocker", return_value=blocker
+                ):
+                    handle_mixed_chunk_auto(args)
+                self.assertIs(resolution_result(args, "enable_mixed_chunk"), expected)
+
+    def test_explicit_flag_is_never_second_guessed(self):
+        for explicit in (True, False):
+            with self.subTest(explicit=explicit):
+                args = self._make_args(enable_mixed_chunk=explicit)
+                with patch.object(
+                    mixed_chunk_hook,
+                    "auto_mixed_chunk_blocker",
+                    side_effect=AssertionError("explicit flag consulted the auto path"),
+                ):
+                    handle_mixed_chunk_auto(args)
+                self.assertIs(resolution_result(args, "enable_mixed_chunk"), explicit)
+
+    def test_cli_flag_is_tri_state(self):
+        parser = argparse.ArgumentParser()
+        ServerArgs.add_cli_args(parser)
+        for argv, expected in (
+            ([], None),
+            (["--enable-mixed-chunk"], True),
+            (["--no-enable-mixed-chunk"], False),
+        ):
+            with self.subTest(argv=argv):
+                parsed = parser.parse_args(["--model-path", "dummy", *argv])
+                self.assertIs(parsed.enable_mixed_chunk, expected)
+
+    def test_each_incompatible_configuration_keeps_mixed_chunk_off(self):
+        """Every configuration a hook would reject mixed chunk for, or that a
+        runner asserts against, must block the automatic enable."""
+        with patch("sglang.srt.runtime_context.get_platform") as platform:
+            platform.return_value.is_cuda = True
+            self.assertIsNone(
+                auto_mixed_chunk_blocker(resolving_view(self._make_args()))
+            )
+            self.assertIsNone(
+                auto_mixed_chunk_blocker(
+                    resolving_view(self._make_args(speculative_algorithm="EAGLE"))
+                )
+            )
+            tc_piecewise = with_phase(
+                default_cuda_graph_config(), Phase.PREFILL, backend=Backend.TC_PIECEWISE
+            )
+            blocked = {
+                "chunked prefill off": {"chunked_prefill_size": -1},
+                "ngram speculation": {"speculative_algorithm": "NGRAM"},
+                "dllm": {"dllm_algorithm": "LowConfidence"},
+                "pipeline parallel": {"pp_size": 2},
+                "dp attention": {"enable_dp_attention": True},
+                "PD disaggregation": {"disaggregation_mode": "prefill"},
+                "lora": {"enable_lora": True},
+                "tc_piecewise prefill graph": {"cuda_graph_config": tc_piecewise},
+            }
+            for name, overrides in blocked.items():
+                with self.subTest(name):
+                    cfg = resolving_view(self._make_args(**overrides))
+                    self.assertIsNotNone(auto_mixed_chunk_blocker(cfg))
+            platform.return_value.is_cuda = False
+            self.assertIsNotNone(
+                auto_mixed_chunk_blocker(resolving_view(self._make_args()))
+            )
+
+
+class TestMambaRatioExplicitlySet(CustomTestCase):
+    """The pool sizer derives the state/KV split only when this records False;
+    a model default declared before the cache hook (Inkling's 0.1) must count
+    as set, or the derivation would silently replace it."""
+
+    def _explicitly_set(self, *, declared=None, **fields):
+        args = ServerArgs(model_path="dummy", **fields)
+        if declared is not None:
+            declare_resolution(args, "model", mamba_full_memory_ratio=declared)
+        handle_cache_compatibility(args)
+        return resolution_result(args, "_mamba_full_memory_ratio_explicitly_set")
+
+    def test_what_was_given_counts_as_set(self):
+        self.assertFalse(self._explicitly_set())
+        self.assertTrue(self._explicitly_set(mamba_full_memory_ratio=0.5))
+        self.assertTrue(self._explicitly_set(declared=0.1))
+
+
+>>>>>>> origin/master
 class TestHiCacheAutoResolution(CustomTestCase):
     """An unset --enable-hierarchical-cache resolves per configuration."""
 
@@ -2358,6 +2475,7 @@ class TestHiCacheAutoResolution(CustomTestCase):
                 hf_config = SimpleNamespace(architectures=[arch], index_topk=2048)
                 reason = auto_hicache_model_blocker(cfg, hf_config)
                 self.assertEqual(reason is not None, arch in blocked)
+<<<<<<< HEAD
 class TestMambaRatioExplicitlySet(CustomTestCase):
     """The pool sizer derives the state/KV split only when this records False;
     a model default declared before the cache hook (Inkling's 0.1) must count
@@ -2374,6 +2492,8 @@ class TestMambaRatioExplicitlySet(CustomTestCase):
         self.assertFalse(self._explicitly_set())
         self.assertTrue(self._explicitly_set(mamba_full_memory_ratio=0.5))
         self.assertTrue(self._explicitly_set(declared=0.1))
+=======
+>>>>>>> origin/master
 
 
 class TestNgramExternalSamArgs(CustomTestCase):

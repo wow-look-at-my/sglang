@@ -37,7 +37,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import lru_cache
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Union
 
 import torch
 
@@ -258,6 +258,11 @@ class SchedulePolicy:
         self.schedule_low_priority_values_first = schedule_low_priority_values_first
         self.priority_sign = 1 if schedule_low_priority_values_first else -1
         self._shortest_prefill_calls = 0
+        # Ledger of the chunked request that cede_chunk_budget last saw: its
+        # prefix length then, and the tokens ceded to others since.
+        self._cede_rid: Optional[str] = None
+        self._cede_base_prefix = 0
+        self._ceded_tokens = 0
 
         # It is used to find the matching prefix for in-batch prefix caching.
         self.waiting_queue_radix_tree = RadixCache.create_simulated()
@@ -455,7 +460,18 @@ class SchedulePolicy:
         )
 
     def cede_chunk_budget(
+<<<<<<< HEAD
         self, chunked_req: Req, waiting_queue: List[Req], budget: int, page_size: int
+=======
+        self,
+        chunked_req: Req,
+        waiting_queue: List[Req],
+        budget: int,
+        page_size: int,
+        *,
+        max_new_reqs: Optional[int] = None,
+        admissible: Optional[Callable[[Req], bool]] = None,
+>>>>>>> origin/master
     ) -> Optional[int]:
         """Cap the in-progress chunk so shorter waiting requests prefill beside it.
 
@@ -463,6 +479,7 @@ class SchedulePolicy:
         left is moved ahead of the rest of the queue (in place) and its work is
         reserved from this step's budget; the returned limit is what the chunked
         request may still take. Without this, one long prompt holds every chunk
+<<<<<<< HEAD
         until it finishes, and a follow-up turn needing a few hundred tokens
         waits behind hundreds of thousands. Outside shortest-prefill-first the
         reservation is capped at half the budget, so the long prompt keeps at
@@ -476,6 +493,31 @@ class SchedulePolicy:
             if is_shortest_first
             else budget // 2 // page_size * page_size
         )
+=======
+        until it finishes, and a follow-up turn waits behind hundreds of
+        thousands of tokens. Only requests ``admissible`` accepts (memory can
+        hold them) are reserved for, at most ``max_new_reqs`` of them,
+        since a reservation nobody can take is budget wasted.
+
+        Outside shortest-prefill-first the long prompt keeps at least half of
+        the tokens prefilled since it first ceded, amortized rather than per
+        step: a chunk it ran alone banks room for a follow-up of up to a whole
+        chunk in one step, while a stream of short arrivals still cannot slow
+        it by more than 2x.
+        """
+        if budget < 2 * page_size or not waiting_queue:
+            return None
+        if max_new_reqs is not None and max_new_reqs <= 0:
+            return None
+        self._sync_cede_ledger(chunked_req)
+        if self.policy == CacheAwarePolicy.SHORTEST_PREFILL_FIRST:
+            max_reserved = budget - page_size
+        else:
+            progress = len(chunked_req.prefix_indices) - self._cede_base_prefix
+            # Keeps ceded + reserved <= progress + (budget - reserved).
+            fair_share = (progress - self._ceded_tokens + budget) // 2
+            max_reserved = min(budget - page_size, fair_share // page_size * page_size)
+>>>>>>> origin/master
         # Only policies that sort by prefix match keep the match fresh.
         refresh_match = not self.waiting_queue_prefix_matched(waiting_queue)
         remaining = len(chunked_req.full_untruncated_fill_ids) - len(
@@ -484,21 +526,45 @@ class SchedulePolicy:
         shorter: List[Req] = []
         reserved = 0
         for req in waiting_queue[:_CEDE_SCAN_LIMIT]:
+<<<<<<< HEAD
             if reserved + page_size > max_reserved:
+=======
+            if reserved + page_size > max_reserved or len(shorter) == max_new_reqs:
+>>>>>>> origin/master
                 break
             if refresh_match:
                 match_prefix_for_req(self.tree_cache, req, include_req=True)
             work = self._shortest_prefill_work(req)
             charge = _ceil_div(work, page_size) * page_size
+<<<<<<< HEAD
             if work < remaining and reserved + charge <= max_reserved:
+=======
+            if (
+                work < remaining
+                and reserved + charge <= max_reserved
+                and (admissible is None or admissible(req))
+            ):
+>>>>>>> origin/master
                 shorter.append(req)
                 reserved += charge
         if not reserved:
             return None
+<<<<<<< HEAD
+=======
+        self._ceded_tokens += reserved
+>>>>>>> origin/master
         chosen = set(map(id, shorter))
         waiting_queue[:] = shorter + [r for r in waiting_queue if id(r) not in chosen]
         # Page alignment keeps continuation boundaries allocator-compatible.
         return (budget - reserved) // page_size * page_size
+
+    def _sync_cede_ledger(self, chunked_req: Req) -> None:
+        prefix = len(chunked_req.prefix_indices)
+        # A shorter prefix than recorded means the request was retracted and restarted.
+        if chunked_req.rid != self._cede_rid or prefix < self._cede_base_prefix:
+            self._cede_rid = chunked_req.rid
+            self._cede_base_prefix = prefix
+            self._ceded_tokens = 0
 
     @staticmethod
     def _sort_by_longest_prefix(
@@ -1294,6 +1360,19 @@ class PrefillAdder:
             )
 
         return self.budget_state()
+
+    def admission_tokens(self, req: Req) -> int:
+        """What add_one_req reserves for ``req`` given its current prefix match."""
+        max_new = min(
+            max(req.sampling_params.max_new_tokens - len(req.output_ids), 0),
+            CLIP_MAX_NEW_TOKENS,
+        )
+        extend = len(req.origin_input_ids) + len(req.output_ids)
+        return extend - len(req.prefix_indices) + max_new + self.page_size
+
+    def needs_eviction(self, total_tokens: int) -> bool:
+        """Whether reserving ``total_tokens`` must reclaim cached prefixes."""
+        return total_tokens >= self.memory_budget.remaining_without_eviction
 
     def add_one_req(
         self, req: Req, has_chunked_req: bool, truncation_align_size: Optional[int]

@@ -66,6 +66,10 @@ _OVERRIDABLE_HOOKS: FrozenSet[str] = frozenset(
         "handle_prefill_only_disable_kv_cache",
         "handle_hicache",
         "handle_hicache_auto",
+<<<<<<< HEAD
+=======
+        "handle_mixed_chunk_auto",
+>>>>>>> origin/master
         "handle_data_parallelism",
         "handle_load_balance_method",
         "handle_context_parallelism",

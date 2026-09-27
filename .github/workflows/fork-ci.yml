@@ -10,6 +10,10 @@ name: Fork CI
 # (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded.
 #
 #   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
+<<<<<<< HEAD
+=======
+#                     + model gateway (fmt, clippy, cargo test, sglang-router wheel)
+>>>>>>> origin/master
 #   AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for
 #                     FORK_KERNEL_CUDA_ARCHS (default 120a: RTX PRO 6000 Blackwell), checked
 #                     against the ops this tree calls
@@ -42,7 +46,13 @@ on:
 
 concurrency:
   group: fork-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+<<<<<<< HEAD
   cancel-in-progress: true
+=======
+  # The kernel wheel build outlasts the gap between pushes; cancelling it meant it
+  # never finished. A newer run waits instead (GitHub keeps only the newest one).
+  cancel-in-progress: false
+>>>>>>> origin/master
 
 permissions:
   actions: read
@@ -190,7 +200,11 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
+<<<<<<< HEAD
           python-version: "3.10"
+=======
+          python-version: "3.12"
+>>>>>>> origin/master
 
       - name: Install protoc
         run: sudo bash scripts/ci/utils/install_protoc.sh
@@ -212,10 +226,109 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+<<<<<<< HEAD
           name: sglang-wheel-py3.10-x86_64
           path: python/dist/*.whl
           if-no-files-found: error
 
+=======
+          name: sglang-wheel-py3.12-x86_64
+          path: python/dist/*.whl
+          if-no-files-found: error
+
+  # ----------------------------------------------------------- model gateway
+  # Upstream builds and tests sgl-model-gateway in pr-test-rust.yml, guarded to
+  # sgl-project/sglang. The toolchain comes from sgl-model-gateway/rust-toolchain.toml.
+  fork-gateway-test:
+    needs: fork-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: sgl-model-gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust, protoc and system deps
+        working-directory: .
+        run: bash scripts/ci/cuda/ci_install_gateway_dependencies.sh
+
+      # Cargo.lock is gitignored; resolving it first puts the exact dependency
+      # set into the rust-cache key along with the rustc version.
+      - name: Resolve dependencies
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sgl-model-gateway
+          shared-key: fork-gateway-dev
+          cache-on-failure: true
+
+      - name: rustfmt
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt
+          cargo +nightly fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # smg-mcp (third_party/) is a workspace member but not a default member.
+      - name: cargo test
+        timeout-minutes: 60
+        run: |
+          cargo test
+          cargo test -p smg-mcp
+
+  fork-gateway-wheel:
+    needs: fork-plan
+    # Same as upstream: ubuntu-22.04 keeps the wheel at manylinux_2_35.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: sgl-model-gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Rust, protoc and system deps
+        working-directory: .
+        run: bash scripts/ci/cuda/ci_install_gateway_dependencies.sh
+
+      - name: Resolve dependencies
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sgl-model-gateway
+          shared-key: fork-gateway-wheel
+          cache-on-failure: true
+
+      - name: Build wheel
+        working-directory: sgl-model-gateway/bindings/python
+        run: |
+          python3 -m pip install --upgrade pip maturin
+          maturin build --profile ci --features vendored-openssl --out dist
+
+      - name: Smoke-test and run Python unit tests
+        working-directory: sgl-model-gateway/bindings/python
+        run: |
+          pip install dist/*.whl
+          python3 -c "from sglang_router.sglang_router_rs import Router; print('Rust extension: OK')"
+          python3 -m sglang_router.launch_router --help > /dev/null
+          pip install pytest pytest-cov
+          pytest -q tests --cov=sglang_router --cov-config=.coveragerc --cov-report=term-missing --cov-fail-under=80
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sglang-router-wheel-x86_64
+          path: sgl-model-gateway/bindings/python/dist/*.whl
+          if-no-files-found: error
+
+>>>>>>> origin/master
   # ------------------------------------------------------ sglang-kernel wheel
   fork-sgl-kernel-wheel:
     needs: fork-plan
@@ -242,25 +355,64 @@ jobs:
         with:
           submodules: recursive
 
+<<<<<<< HEAD
       - name: Restore ccache
         id: ccache
+=======
+      # The same kernel source and archs never compile twice, across branches and PRs.
+      - name: Restore a wheel built from this exact source
+        id: wheel_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: python/sglang/kernels/aot/dist
+          key: fork-sgl-kernel-wheel-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ hashFiles('python/sglang/kernels/aot/**') }}
+
+      - name: Restore ccache
+        id: ccache
+        if: steps.wheel_cache.outputs.cache-hit != 'true'
+>>>>>>> origin/master
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/sgl-kernel/ccache
           key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ github.run_id }}
           restore-keys: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-
 
+<<<<<<< HEAD
       - name: Build wheel (Python 3.10, CUDA 13.0)
         id: build
         timeout-minutes: 320
         env:
           USE_CCACHE: 1
           BUILD_JOBS: ${{ vars.FORK_KERNEL_BUILD_JOBS || '2' }}
+=======
+      # Two CUTLASS GEMM compiles at once exceed a 16 GB runner's RAM.
+      - name: Add swap
+        if: steps.wheel_cache.outputs.cache-hit != 'true'
+        run: |
+          sudo fallocate -l 16G /swapfile-kernel-build
+          sudo chmod 600 /swapfile-kernel-build
+          sudo mkswap /swapfile-kernel-build
+          sudo swapon /swapfile-kernel-build
+          free -g
+
+      - name: Build wheel (Python 3.12, CUDA 13.0)
+        id: build
+        if: steps.wheel_cache.outputs.cache-hit != 'true'
+        timeout-minutes: 320
+        env:
+          USE_CCACHE: 1
+          # Empty lets build.sh size jobs to cores and RAM + swap.
+          BUILD_JOBS: ${{ vars.FORK_KERNEL_BUILD_JOBS || '' }}
+>>>>>>> origin/master
           NVCC_THREADS: ${{ vars.FORK_KERNEL_NVCC_THREADS || '2' }}
           CMAKE_ARGS: -DSGL_KERNEL_CUDA_ARCHS=${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}
         run: |
           cd python/sglang/kernels/aot
+<<<<<<< HEAD
           ./build.sh 3.10 13.0
+=======
+          ./build.sh 3.12 13.0
+>>>>>>> origin/master
 
       # The build container writes the cache as root; the save step runs as the runner.
       - name: Save ccache
@@ -273,6 +425,15 @@ jobs:
           path: ~/.cache/sgl-kernel/ccache
           key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ github.run_id }}
 
+<<<<<<< HEAD
+=======
+      - uses: actions/cache/save@v4
+        if: steps.wheel_cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+        with:
+          path: python/sglang/kernels/aot/dist
+          key: fork-sgl-kernel-wheel-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ hashFiles('python/sglang/kernels/aot/**') }}
+
+>>>>>>> origin/master
       - name: Check wheel version and ops
         run: |
           set -euo pipefail

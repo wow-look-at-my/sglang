@@ -235,6 +235,104 @@ class TestAutoHiCacheSizing(CustomTestCase):
         self.assertIsNone(plan.ratio)
         self.assertIn("cgroup", plan.reason)
 
+<<<<<<< HEAD
+=======
+    def test_unreadable_cgroup_turns_off_an_explicitly_sized_tier_too(self):
+        """An explicit --hicache-ratio skips the budget, but the pools still
+        read the cgroup while building; that failure must turn HiCache off
+        before the build rather than abort startup inside it."""
+        with (
+            get_context().override_server_args(
+                enable_hierarchical_cache=True,
+                hicache_ratio=3.0,
+                hicache_host_memory_fraction=None,
+            ),
+            patch.object(
+                base,
+                "available_host_memory_bytes",
+                side_effect=RuntimeError("Cannot locate the process memory cgroup"),
+            ),
+        ):
+            plan = auto.plan_auto_hicache_size(_params(self.pool), None, blocker=None)
+        self.assertIsNone(plan.ratio)
+        self.assertIn("cgroup", plan.reason)
+
+    def test_one_rank_that_cannot_host_the_tier_turns_it_off_everywhere(self):
+        """The MIN across ranks decides: a peer reporting 0 (blocked or too
+        little memory) turns HiCache off on a rank that could host it."""
+        with patch.object(auto, "_all_reduce", side_effect=lambda value, op: 0.0):
+            plan = self._plan(1 << 40)
+        self.assertIsNone(plan.ratio)
+        self.assertIn("another rank", plan.reason)
+
+
+class TestAutoHiCacheRuntimeBlockers(CustomTestCase):
+    """Startup declines what resolution cannot see: pools HiCache would not
+    mirror completely, a separate draft sidecar, unified-memory GPUs, and
+    hosts that cannot pin."""
+
+    def _blocker(self, kvcache, *, draft_plan=None, integrated=False, pin=None):
+        params = _params(kvcache)
+        with (
+            patch.object(torch.cuda, "is_available", return_value=integrated),
+            patch.object(
+                torch.cuda,
+                "get_device_properties",
+                return_value=Mock(is_integrated=integrated),
+            ),
+            patch.object(torch.cuda, "current_device", return_value=0),
+            patch.object(auto, "probe_host_registration", return_value=pin),
+        ):
+            return auto._runtime_blocker(params, draft_plan)
+
+    def test_a_mirrored_pool_on_a_pinnable_discrete_gpu_is_not_blocked(self):
+        self.assertIsNone(self._blocker(_mha_pool()))
+
+    def test_unverified_pool_types_are_blocked(self):
+        class _SubclassWithExtraState(MHATokenToKVPool):
+            pass
+
+        pool = _SubclassWithExtraState.__new__(_SubclassWithExtraState)
+        self.assertIn("not verified", self._blocker(pool))
+
+    def test_separate_draft_sidecar_is_blocked(self):
+        from sglang.srt.speculative.base_spec_worker import HiCacheDraftMode
+
+        plan = Mock(mode=HiCacheDraftMode.SIDECAR, device_pools=())
+        self.assertIn("draft", self._blocker(_mha_pool(), draft_plan=plan))
+
+    def test_integrated_gpu_is_blocked(self):
+        self.assertIn("shares host memory", self._blocker(_mha_pool(), integrated=True))
+
+    def test_unpinnable_host_is_blocked(self):
+        reason = self._blocker(_mha_pool(), pin="cudaHostRegister failed")
+        self.assertIn("cannot be pinned", reason)
+
+
+class TestMambaHostBudget(CustomTestCase):
+    def test_mamba_host_pool_budget_miss_is_recoverable(self):
+        """The auto attach retries on HostMemoryBudgetError only; a Mamba
+        host pool raising a bare ValueError aborted startup instead."""
+        from types import SimpleNamespace
+
+        from sglang.srt.mem_cache.pool_host.mamba import MambaPoolHost
+
+        device_pool = SimpleNamespace(
+            num_mamba_layers=1,
+            size=64,
+            host_capacity_tokens=None,
+            mamba_cache=SimpleNamespace(
+                conv=[torch.zeros(1, 65, 4, 4)],
+                temporal=torch.zeros(1, 65, 2, 8, 8),
+            ),
+        )
+        with base.host_memory_budget_scope(1024):
+            with self.assertRaises(base.HostMemoryBudgetError):
+                MambaPoolHost(
+                    device_pool, 2.0, 0, pin_memory=False, layout="page_first"
+                )
+
+>>>>>>> origin/master
 
 class TestAutoHiCacheAttach(CustomTestCase):
     """Pinning is best-effort: a failed attempt releases every pinned buffer
