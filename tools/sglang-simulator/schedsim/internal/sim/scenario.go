@@ -100,18 +100,9 @@ func ScenarioB(everyMin float64) Scenario {
 		name = "overload: 5 agents + cold 400K every 1 min"
 		note = "prefill demand above half the GPU: cold prompts must queue, decode must not starve forever"
 	}
-	return Scenario{
-		Name: name, Key: "B-" + itoa(int(everyMin)), Note: note,
-		Build: func(seed int64, cost Cost) Workload {
-			return BuildAgentsPlusCold(seed, cost, 5, AgentContextMin, AgentContextMax,
-				everyMin, ColdPromptLen, 900, nil)
-		},
-		Window:     900,
-		HardStop:   1200,
-		MaxRunning: 6,
-		HostMul:    4,
-		Seeds:      []int64{1, 2, 3, 4, 5},
-	}
+	p := DefaultBParams()
+	p.EveryMin = everyMin
+	return ScenarioFromB(p, name, "B-"+itoa(int(everyMin)), note)
 }
 
 // ScenarioC: short chat at a fixed arrival rate, which is where the scheduler is
@@ -135,20 +126,13 @@ func ScenarioC(rate float64, maxRunning int) Scenario {
 // ScenarioD: one cold prompt at t=60 s against five agents, sweeping the cold
 // prompt's length, which is the "how large a prompt is too large" question.
 func ScenarioD(coldLen int) Scenario {
-	return Scenario{
-		Name: "D: one cold prompt, " + itoa(coldLen/1000) + "K",
-		Key:  "D-" + itoa(coldLen),
-		Note: "5 agent streams, a single cold prompt at t=60 s, 420 s",
-		Build: func(seed int64, cost Cost) Workload {
-			return BuildAgentsPlusCold(seed, cost, 5, AgentContextMin, AgentContextMax,
-				0, coldLen, 420, []float64{60})
-		},
-		Window:     420,
-		HardStop:   720,
-		MaxRunning: 6,
-		HostMul:    4,
-		Seeds:      []int64{1, 2, 3, 4, 5},
-	}
+	p := DefaultBParams()
+	p.ColdLen = coldLen
+	p.CadenceOff = true
+	p.ColdTimes = []float64{60}
+	p.Window = 420
+	return ScenarioFromB(p, "D: one cold prompt, "+itoa(coldLen/1000)+"K", "D-"+itoa(coldLen),
+		"5 agent streams, a single cold prompt at t=60 s, 420 s")
 }
 
 // ScenarioThrash: the ten-conversation episode whose working set is far past the

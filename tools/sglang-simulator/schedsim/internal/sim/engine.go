@@ -76,8 +76,11 @@ type Batch struct {
 	ReloadSeconds float64
 	// NewSeq is how many requests the batch prefilled, as #new-seq reports it.
 	NewSeq int
-	Start  float64
-	End    float64
+	// Continuation is the request whose chunk this batch continues, if any: its
+	// own already-computed tokens are not a cache hit in the log's counting.
+	Continuation *Request
+	Start        float64
+	End          float64
 }
 
 // Item is one request's contribution to an extend batch.
@@ -222,6 +225,7 @@ func newEngine(cfg Config, wl Workload) *engine {
 			}
 		}
 	}
+	e.add(wl.Initial())
 	return e
 }
 
@@ -352,6 +356,13 @@ func (e *engine) prefillBatch(policyOn bool) *Batch {
 			return e.waiting[i].Work() < e.waiting[j].Work()
 		})
 	}
+	// The cede compares uncached work, so every candidate's prefix match must be
+	// current before it runs; match_prefix_for_req is the same refresh.
+	chunkedWas := e.chunked
+	for _, r := range e.waiting {
+		devHit, hostHit := e.prefixHit(r)
+		r.Prefix = e.sharedTokens(r) + devHit + hostHit
+	}
 	budget := e.cfg.ChunkSize
 	if policyOn {
 		if limit := e.bal.PrefillTokenBudget(); limit >= 0 && limit < budget {
@@ -445,6 +456,9 @@ func (e *engine) prefillBatch(policyOn bool) *Batch {
 	}
 	e.waiting = rest
 	b := &Batch{IsPrefill: true, Items: items, ReloadSeconds: reload}
+	if chunkedWas != nil && items[0].Req == chunkedWas {
+		b.Continuation = chunkedWas
+	}
 	for _, it := range items {
 		b.NewSeq++
 		b.ExtendTokens += it.Extend
@@ -607,9 +621,18 @@ func (e *engine) finish(b *Batch) {
 		tok, hit := 0, 0
 		for _, it := range b.Items {
 			tok += it.Extend
-			hit += it.PrefixBefore
-			if it.Completes {
-				e.firstToken(it.Req, b.End)
+			// #cached-token counts what a newly added request matched; the
+			// continuation's own chunks are its computed tokens, not a cache hit.
+			if it.Req != b.Continuation {
+				hit += it.PrefixBefore
+			}
+			if !it.Completes {
+				continue
+			}
+			r := it.Req
+			e.firstToken(r, b.End)
+			if r.Finish < 0 {
+				e.running = append(e.running, r)
 			}
 		}
 		for _, r := range b.Rows {
@@ -794,7 +817,7 @@ func ceilPage(n, page int) int {
 	return ceilDiv(n, page) * page
 }
 
-func ceilDiv(a, b int) int { return -(-a / b) }
+func ceilDiv(a, b int) int { return (a + b - 1) / b }
 
 func meanOf(v []float64) float64 {
 	if len(v) == 0 {

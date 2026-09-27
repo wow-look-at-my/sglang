@@ -25,6 +25,7 @@ func main() {
 	sweep := flag.Bool("sweep", true, "print the fixed-interval sensitivity table")
 	decodePerReq := flag.Float64("decode-per-req", 0.0, "ASSUMED: fractional decode cost added per extra running request")
 	interference := flag.Float64("prefill-interference", 0.0, "ASSUMED: fractional prefill slowdown from sharing the GPU with decode")
+	policy := registerPolicyFlags(flag.CommandLine)
 	flag.Parse()
 
 	logName, text := "internal/trace/live_log.txt (embedded)", trace.EmbeddedLog
@@ -118,7 +119,11 @@ func main() {
 	report.Write(os.Stdout, in)
 	fmt.Fprintln(os.Stdout)
 	report.Summary(os.Stdout, oldRes, newRes, revisedRes)
+	printPolicies(os.Stdout, trace.Calibrate(steps, *chunkSize, PageSize), policy)
 }
+
+// PageSize is the deployment's page_size, which the log's server arguments fix at 64.
+const PageSize = 64
 
 func splitLines(s string) []string {
 	var out []string

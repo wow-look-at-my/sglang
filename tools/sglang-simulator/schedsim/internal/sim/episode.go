@@ -76,9 +76,13 @@ func ExtractEpisode(steps []trace.Step, chunkSize int) (Episode, error) {
 	ep.C1Len = steps[first].Pending + steps[first].NewTokens
 
 	k := 0
-	prevPending := 0
 	prevQueue := 0
 	last := first
+	// #pending-token counts C1's remainder plus every queued request's whole
+	// input, so the length of each arrival is the step the residual takes; the
+	// queue-depth counter says which chunk it arrived behind.
+	residualPrev := 0
+	var queued []int
 	for i := first; i < len(steps); i++ {
 		s := steps[i]
 		if s.Kind != trace.Prefill || s.NewTokens != chunkSize || s.HitTokens != 0 {
@@ -86,31 +90,28 @@ func ExtractEpisode(steps []trace.Step, chunkSize int) (Episode, error) {
 		}
 		k++
 		ep.ChunkSeconds = append(ep.ChunkSeconds, trace.StepSeconds(s))
-		if s.QueueReq > prevQueue && prevQueue >= 0 {
-			arrived := s.Pending - (prevPending - chunkSize)
+		left := ep.C1Len - k*chunkSize
+		if delta := s.Pending - left - residualPrev; delta > 0 {
+			queued = append(queued, delta)
+		}
+		residualPrev = s.Pending - left
+		if s.QueueReq > prevQueue {
 			switch s.QueueReq {
 			case 1:
 				ep.R2AfterK = k - 1
 			case 2:
-				ep.R3AfterK, ep.R3Len = k-1, arrived
+				ep.R3AfterK = k - 1
 			case 3:
-				ep.R4AfterK, ep.R4Len = k-1, arrived
-			}
-			if s.QueueReq == 1 {
-				// The queue counter moved before #pending-token counted the new
-				// request, so this line's delta is not its length; the length
-				// comes from the pending sum below.
-				arrived = 0
+				ep.R4AfterK = k - 1
 			}
 		}
-		prevQueue, prevPending, last = s.QueueReq, s.Pending, i
+		prevQueue, last = s.QueueReq, i
 	}
 	ep.C1Chunks = k
-	// Whatever #pending-token still counts at the last chunk is C1's remainder
-	// plus every queued request, so the follow-up's length is what is left once
-	// the two cold prompts and the remainder are subtracted.
-	c1Left := ep.C1Len - k*chunkSize
-	ep.R2Len = steps[last].Pending - c1Left - ep.R3Len - ep.R4Len
+	if len(queued) != 3 {
+		return ep, fmt.Errorf("the cold run queued %d requests, want R2, R3 and R4", len(queued))
+	}
+	ep.R2Len, ep.R3Len, ep.R4Len = queued[0], queued[1], queued[2]
 
 	for i := last + 1; i < len(steps); i++ {
 		s := steps[i]
@@ -119,6 +120,9 @@ func ExtractEpisode(steps []trace.Step, chunkSize int) (Episode, error) {
 		}
 		if s.NewSeq >= 2 {
 			ep.MixedNewSeq, ep.MixedNewTokens, ep.MixedHit, ep.MixedLine = s.NewSeq, s.NewTokens, s.HitTokens, s.Line
+			// The follow-up is the request that matched a prefix in that batch: the
+			// two cold prompts in it matched none, and the cold run's tail is known.
+			ep.R2Cached = s.HitTokens
 			break
 		}
 	}

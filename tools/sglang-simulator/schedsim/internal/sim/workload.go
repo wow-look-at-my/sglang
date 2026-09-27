@@ -175,27 +175,6 @@ func UniInt(rng *rand.Rand, a, b int) int {
 // UniFloat draws a continuous uniform.
 func UniFloat(rng *rand.Rand, a, b float64) float64 { return a + rng.Float64()*(b-a) }
 
-// BuildAgentsPlusCold: n closed-loop conversations plus a cold prompt every
-// everyMin minutes from t=60 s, which is scenario B (and, with a single length
-// and one arrival, scenario D).
-func BuildAgentsPlusCold(seed int64, cost Cost, n, ctxMin, ctxMax int, everyMin float64, coldLen int, window float64, coldTimes []float64) *Mix {
-	m := NewMix(seed, cost, 0)
-	m.StopAt = window
-	for i := 0; i < n; i++ {
-		m.AddStream(UniInt(m.rng, ctxMin, ctxMax), UniFloat(m.rng, 0, 5), DefaultAgent)
-	}
-	times := coldTimes
-	if times == nil && everyMin > 0 {
-		for t := 60.0; t < window; t += everyMin * 60 {
-			times = append(times, t)
-		}
-	}
-	for i, t := range times {
-		m.AddCold(t, coldLen, 400, itoa(i))
-	}
-	return m
-}
-
 // BuildShortChat: Poisson arrivals of short prompts, scenario C.
 func BuildShortChat(seed int64, cost Cost, rate, window float64) *Mix {
 	m := NewMix(seed, cost, 0)

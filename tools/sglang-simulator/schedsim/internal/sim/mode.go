@@ -27,6 +27,9 @@ const (
 	ModeNew
 )
 
+// NumModes is the policy count; Modes must hold exactly this many entries.
+const NumModes = 3
+
 // Modes lists every policy in comparison order.
 var Modes = []Mode{ModeOld, ModePrev, ModeNew}
 
