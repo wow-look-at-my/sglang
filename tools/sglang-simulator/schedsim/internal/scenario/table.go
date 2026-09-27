@@ -12,10 +12,12 @@ import (
 // Policies are the schedulers every scenario compares.
 var Policies = []sim.Policy{sim.Old, sim.Prev, sim.New}
 
-// Row is one scenario's metrics under each policy.
+// Row is one scenario's metrics under each policy: the seed mean, and each
+// seed's run in the order of Seeds.
 type Row struct {
 	Scenario Scenario
 	Results  [3]sim.Metrics
+	Runs     [3][]sim.Metrics
 }
 
 // RunAll simulates every scenario under every policy in parallel.
@@ -29,7 +31,9 @@ func RunAll(scenarios []Scenario, base sim.Config) []Row {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				rows[j.i].Results[j.p] = Run(scenarios[j.i], Policies[j.p], base)
+				runs := Run(scenarios[j.i], Policies[j.p], base)
+				rows[j.i].Runs[j.p] = runs
+				rows[j.i].Results[j.p] = sim.Mean(runs)
 			}
 		}()
 	}

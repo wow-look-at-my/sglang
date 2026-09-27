@@ -77,24 +77,26 @@ func TestNewIsNotWorseThanOldOutsideTheBound(t *testing.T) {
 func TestColdPromptBound(t *testing.T) {
 	rows, base := everyRow()
 	for _, r := range rows {
-		old, nw := r.Results[0], r.Results[2]
-		b, ok := BoundFor(r.Scenario, base, nw)
+		bs, ok := SeedBounds(r, base)
 		if !ok {
 			continue
 		}
-		name := r.Scenario.Name
-		// The GPU is never idle while a cold prompt waits, so NEW's TTFT.
-		assert.Lessf(t, b.Idle, 0.005, "%s: NEW idles %.2f%% of the cold windows", name, 100*b.Idle)
-		assert.GreaterOrEqualf(t, nw.ColdTTFT, b.TTFT-0.05, "%s: NEW's cold TTFT is under its own bound", name)
-		for _, m := range Metrics {
-			q, tail := tails[m.Name]
-			if !tail || notWorse(t, m, nw, old) {
-				continue
+		for i, b := range bs {
+			old, nw := r.Runs[0][i], r.Runs[2][i]
+			name := fmt.Sprintf("%s seed %d", r.Scenario.Name, Seeds[i])
+			// The GPU is never idle while a cold prompt waits, so NEW's TTFT.
+			assert.Lessf(t, b.Idle, 0.005, "%s: NEW idles %.2f%% of the cold windows", name, 100*b.Idle)
+			assert.GreaterOrEqualf(t, nw.ColdTTFT, b.TTFT-0.05, "%s: NEW's cold TTFT is under its own bound", name)
+			for _, m := range Metrics {
+				q, tail := tails[m.Name]
+				if !tail || notWorse(t, m, r.Results[2], r.Results[0]) || notWorse(t, m, nw, old) {
+					continue
+				}
+				assert.Truef(t, b.Forced(q),
+					"%s %s: NEW %v > OLD %v, and stalls at NEW's longest stall need only %.2f%% of gaps",
+					name, m.Name, shown(t, m, nw), shown(t, m, old), 100*b.TailShare)
+				assert.GreaterOrEqualf(t, m.Get(nw), 1000*b.Chunk, "%s %s: NEW is under the cheapest chunk", name, m.Name)
 			}
-			assert.GreaterOrEqualf(t, b.TailShare, 1-q,
-				"%s %s: NEW %v > OLD %v, and stalls at NEW's longest stall need only %.2f%% of gaps",
-				name, m.Name, shown(t, m, nw), shown(t, m, old), 100*b.TailShare)
-			assert.GreaterOrEqualf(t, m.Get(nw), 1000*b.Chunk, "%s %s: NEW is under the cheapest chunk", name, m.Name)
 		}
 	}
 }

@@ -101,7 +101,7 @@ type Metrics struct {
 
 	// Gaps counts inter-token gaps over all streams.
 	Gaps float64
-	// Cold TTFT windows: length, decode and prefill seconds inside, mean streams.
+	// Cold TTFT windows: length, decode and prefill seconds inside.
 	WindowSeconds, WindowDecode, WindowPrefill, WindowStreams float64
 }
 
@@ -144,7 +144,7 @@ func (rc *Recorder) Metrics() Metrics {
 	windows = mergeWindows(windows)
 
 	var gaps []float64
-	var total, streamTokens, streamSecs float64
+	var total, streamTokens, streamSecs, decodeSecs float64
 	for _, l := range rc.order {
 		for _, d := range l.deliveries {
 			if d.t <= end {
@@ -165,6 +165,7 @@ func (rc *Recorder) Metrics() Metrics {
 			// A stream still waiting at the end is stalled until then.
 			m.Stall = math.Max(m.Stall, end-l.req.lastToken)
 		}
+		decodeSecs += overlap(windows, l.firstToken, stop)
 		if l.req.Kind == Cold {
 			continue
 		}
@@ -195,7 +196,7 @@ func (rc *Recorder) Metrics() Metrics {
 				m.WindowDecode += overlap(windows, s.start, s.end)
 			}
 		}
-		m.WindowStreams = streamSecs / m.WindowSeconds
+		m.WindowStreams = decodeSecs / m.WindowSeconds
 	}
 	return m
 }

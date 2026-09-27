@@ -61,18 +61,55 @@ func BoundFor(s Scenario, base sim.Config, newRun sim.Metrics) (Bound, bool) {
 	return b, true
 }
 
+// SeedBounds derives the bound from each of NEW's seed runs of r. A quantile
+// is a property of one run, so the tail bound is too.
+func SeedBounds(r Row, base sim.Config) ([]Bound, bool) {
+	out := make([]Bound, len(r.Runs[2]))
+	for i, run := range r.Runs[2] {
+		b, ok := BoundFor(r.Scenario, base, run)
+		if !ok {
+			return nil, false
+		}
+		out[i] = b
+	}
+	return out, len(out) > 0
+}
+
+// Forced reports whether a stall at NEW's longest stall must fall in more.
+func (b Bound) Forced(q float64) bool { return b.TailShare >= 1-q }
+
 // WriteBounds prints each cold-prompt scenario's bound beside OLD and NEW.
+// Bound columns are seed means; the forced columns count the seeds whose
+// quantile the bound holds at or above the cheapest chunk.
 func WriteBounds(w io.Writer, rows []Row, base sim.Config) {
-	fmt.Fprintln(w, "| scenario | prefill alone s | NEW decode share | TTFT bound s | TTFT OLD / NEW s | NEW idle | cheapest chunk ms | tail share | ITL p99 OLD / NEW ms | ITL p99.9 OLD / NEW ms |")
-	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|---|")
+	fmt.Fprintln(w, "| scenario | prefill alone s | NEW decode share | TTFT bound s | TTFT OLD / NEW s | NEW idle | cheapest chunk ms | tail share | p99 forced | ITL p99 OLD / NEW ms | p99.9 forced | ITL p99.9 OLD / NEW ms |")
+	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rows {
 		old, nw := r.Results[0], r.Results[2]
-		b, ok := BoundFor(r.Scenario, base, nw)
+		bs, ok := SeedBounds(r, base)
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(w, "| %s | %.1f | %.3f | %.1f | %.1f / %.1f | %.2f%% | %.0f | %.2f%% | %.0f / %.0f | %.0f / %.0f |\n",
+		var b Bound
+		forced99, forced999 := 0, 0
+		n := float64(len(bs))
+		for _, s := range bs {
+			b.Prefill += s.Prefill / n
+			b.DecodeShare += s.DecodeShare / n
+			b.TTFT += s.TTFT / n
+			b.Idle = math.Max(b.Idle, s.Idle)
+			b.Chunk = s.Chunk
+			b.TailShare += s.TailShare / n
+			if s.Forced(0.99) {
+				forced99++
+			}
+			if s.Forced(0.999) {
+				forced999++
+			}
+		}
+		fmt.Fprintf(w, "| %s | %.1f | %.3f | %.1f | %.1f / %.1f | %.2f%% | %.0f | %.2f%% | %d/%d | %.0f / %.0f | %d/%d | %.0f / %.0f |\n",
 			r.Scenario.Name, b.Prefill, b.DecodeShare, b.TTFT, old.ColdTTFT, nw.ColdTTFT, 100*b.Idle,
-			1000*b.Chunk, 100*b.TailShare, 1000*old.ITLp99, 1000*nw.ITLp99, 1000*old.ITLp999, 1000*nw.ITLp999)
+			1000*b.Chunk, 100*b.TailShare, forced99, len(bs), 1000*old.ITLp99, 1000*nw.ITLp99,
+			forced999, len(bs), 1000*old.ITLp999, 1000*nw.ITLp999)
 	}
 }

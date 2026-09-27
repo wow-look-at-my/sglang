@@ -33,8 +33,8 @@ var Seeds = func() []int64 {
 	return s
 }()
 
-// Run simulates one scenario under one policy, averaged over Seeds.
-func Run(s Scenario, p sim.Policy, base sim.Config) sim.Metrics {
+// Run simulates one scenario under one policy, once per seed in Seeds.
+func Run(s Scenario, p sim.Policy, base sim.Config) []sim.Metrics {
 	cfg := base
 	cfg.Policy = p
 	if s.Adjust != nil {
@@ -47,7 +47,7 @@ func Run(s Scenario, p sim.Policy, base sim.Config) sim.Metrics {
 		e.Run(w, horizon)
 		runs[i] = e.Rec.Metrics()
 	}
-	return sim.Mean(runs)
+	return runs
 }
 
 var (

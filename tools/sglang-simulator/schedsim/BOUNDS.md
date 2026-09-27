@@ -22,7 +22,9 @@ A stream that decodes during a cold prompt must stop for every prefill batch it 
 
     tail share = streams x sum(ceil(P / S)) / gaps
 
-Here `streams` is the mean number of streams decoding in the cold windows and `gaps` is the count of inter-token gaps. If the tail share is at least `1 - q`, then at least that share of gaps contains a stall. A stall contains at least one chunk, so the ITL q-quantile is at least the cheapest chunk. When the tail share is below `1 - q`, the derivation does not force the quantile up. The test then demands NEW be no worse than OLD.
+Here `streams` is the mean number of requests decoding in the cold windows and `gaps` is the count of inter-token gaps. A cold prompt that already has its first token counts as a stream: its gaps are in `gaps`. It sits through the next cold prompt like any other request. If the tail share is at least `1 - q`, then at least that share of gaps contains a stall. A stall contains at least one chunk, so the ITL q-quantile is at least the cheapest chunk. When the tail share is below `1 - q`, the derivation does not force the quantile up. The test then demands NEW be no worse than OLD.
+
+A quantile is a property of one run, and the mean of per-seed quantiles is not the quantile of anything. So the test derives the tail bound per seed, from that seed's NEW run, and compares it with that seed's OLD run. It checks a seed only when the seed-mean quantile of NEW is worse than OLD's and that seed's NEW is worse than its OLD.
 
 ## Numbers
 
