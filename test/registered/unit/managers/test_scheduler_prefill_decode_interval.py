@@ -117,7 +117,9 @@ class TestEvictionThrottlePrefixMatch(unittest.TestCase):
             # 600 of the request's tokens are cached on device.
             r.prefix_indices = torch.arange(600)
 
-        with mock.patch.object(scheduler_module, "match_prefix_for_req", resident_match):
+        with mock.patch.object(
+            scheduler_module, "match_prefix_for_req", resident_match
+        ):
             verdict = scheduler._eviction_throttle_holds(adder, req)
 
         self.assertIsNotNone(verdict, "a resident conversation was held back")
