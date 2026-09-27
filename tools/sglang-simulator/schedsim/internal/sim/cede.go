@@ -1,7 +1,5 @@
 package sim
 
-import "github.com/wow-look-at-my/go-containers/set"
-
 // cedeScanLimit mirrors _CEDE_SCAN_LIMIT in schedule_policy.py.
 const cedeScanLimit = 128
 
@@ -34,6 +32,7 @@ func (e *Engine) cedeBudget(budget int) (int, bool) {
 		maxReserved = budget - page
 	}
 	var shorter []*Request
+	chosen := make([]bool, len(e.waiting))
 	reserved := 0
 	for i, w := range e.waiting {
 		if i >= cedeScanLimit || reserved+page > maxReserved || len(shorter) == maxNewReqs {
@@ -43,19 +42,16 @@ func (e *Engine) cedeBudget(budget int) (int, bool) {
 		charge := ceilDiv(work, page) * page
 		if work < remaining && reserved+charge <= maxReserved {
 			shorter = append(shorter, w)
+			chosen[i] = true
 			reserved += charge
 		}
 	}
 	if reserved == 0 {
 		return 0, false
 	}
-	chosen := set.New[*Request]()
-	for _, w := range shorter {
-		chosen.Add(w)
-	}
 	reordered := append([]*Request(nil), shorter...)
-	for _, w := range e.waiting {
-		if !chosen.Contains(w) {
+	for i, w := range e.waiting {
+		if !chosen[i] {
 			reordered = append(reordered, w)
 		}
 	}
