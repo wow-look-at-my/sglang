@@ -596,6 +596,7 @@ class Scheduler(
         self.token_to_kv_pool_allocator = result.token_to_kv_pool_allocator
         self.disable_radix_cache = result.disable_radix_cache
         self.tree_cache = result.tree_cache
+        self.enable_hierarchical_cache = result.enable_hierarchical_cache
         if self.enable_hierarchical_cache:
             cache_controller = self.tree_cache.cache_controller
             if cache_controller is not None:
