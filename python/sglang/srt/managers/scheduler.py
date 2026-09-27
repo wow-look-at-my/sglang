@@ -1366,8 +1366,8 @@ class Scheduler(
     def _should_defer_prefill(self, running_batch: ScheduleBatch) -> bool:
         if self.prefill_decode_balancer is not None:
             return self.prefill_decode_balancer.should_defer_prefill(
-                num_prefill_pending=len(self.waiting_queue)
-                + (self.chunked_req is not None),
+                prefill_pending=bool(self.waiting_queue)
+                or self.chunked_req is not None,
                 decode_runnable=not running_batch.is_empty()
                 and not running_batch.is_prefill_only,
                 continues_chunk=self.chunked_req is not None,
@@ -1389,6 +1389,7 @@ class Scheduler(
                 self.prefill_decode_balancer.on_batch_launched(
                     is_prefill=batch_class(batch.forward_mode),
                     num_tokens=batch.extend_num_tokens or 0,
+                    num_reqs=len(batch.reqs),
                 )
             return
         if self.prefill_decode_interval == 0 or batch is None:

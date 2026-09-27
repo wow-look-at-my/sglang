@@ -12,13 +12,13 @@ completion, and keeps a running balance, ``debt``, accumulated only while the
 two classes contend (a prefill is pending *and* running requests can decode).
 There is nothing to tune:
 
-* **Share.** Every pending prefill request and the decode batch as a whole
-  get equal GPU time: prefill seconds are charged divided by the number of
-  pending prefill requests, decode seconds in full. One cold prompt against
-  running streams is a 50/50 split, so neither is slowed more than 2x. Prefill
-  requests are served one after another while one decode step advances every
-  running request, so a growing prefill queue earns a growing share and
-  drains instead of queueing without bound; decode keeps ``1 / (n + 1)``.
+* **Share.** Each request a prefill batch serves and the decode batch as a
+  whole get equal GPU time: a prefill batch's seconds are charged divided by
+  the number of requests in it, decode seconds in full. A chunk of one long
+  prompt against running streams is a 50/50 split, so neither is slowed more
+  than 2x. Only requests that were actually admitted count: a queue blocked on
+  memory, request slots or the one-unfinished-chunk rule forms one-request
+  batches and never takes decode below half.
 * **Stall bound.** Between two points where decode has caught up (balance
   repaid, no prefill in flight), at most ``chunked_prefill_size`` prefill
   tokens are launched: the stall chunked prefill already promises. With the
@@ -36,8 +36,8 @@ the overlap scheduler, which picks batch N+1 while batch N still runs.
 Decisions must be identical on every rank that shares a batch. Measured times
 differ slightly per rank, so the caller supplies ``consensus_elapsed``, which
 maps the local (prefill, decode) seconds to one agreed pair (rank 0's). Every
-other input is replicated scheduler state: queue lengths, batch classes and
-their token counts.
+other input is replicated scheduler state: batch classes, their request and
+token counts.
 """
 
 from __future__ import annotations
@@ -62,13 +62,14 @@ class PrefillDecodeBalancer:
         self._consensus_elapsed = consensus_elapsed
         self._clock = clock
         self._debt = 0.0
-        # GPU seconds finished since the last decision, per class.
+        # GPU seconds finished since the last decision, per class; prefill
+        # seconds already divided by their batch's request count.
         self._unsettled_prefill = 0.0
         self._unsettled_decode = 0.0
         # Gates the consensus call on an event count every rank shares, not a float.
         self._unsettled_batches = 0
-        # Class of each launched, unfinished batch, oldest first.
-        self._in_flight: Deque[Optional[bool]] = deque()
+        # (batch class, requests in the batch) per launched, unfinished batch.
+        self._in_flight: Deque[Tuple[Optional[bool], int]] = deque()
         self._busy_since = 0.0
         # Prefill tokens launched since decode last caught up.
         self._burst_used = 0
@@ -87,11 +88,11 @@ class PrefillDecodeBalancer:
     def should_defer_prefill(
         self,
         *,
-        num_prefill_pending: int,
+        prefill_pending: bool,
         decode_runnable: bool,
         continues_chunk: bool,
     ) -> bool:
-        if not (num_prefill_pending and decode_runnable):
+        if not (prefill_pending and decode_runnable):
             # No contention: whichever class has work runs at full speed.
             self._debt = 0.0
             self._unsettled_prefill = self._unsettled_decode = 0.0
@@ -103,12 +104,10 @@ class PrefillDecodeBalancer:
             prefill_s, decode_s = self._consensus_elapsed(
                 (self._unsettled_prefill, self._unsettled_decode)
             )
-            self._debt = max(
-                self._debt + prefill_s / num_prefill_pending - decode_s, 0.0
-            )
+            self._debt = max(self._debt + prefill_s - decode_s, 0.0)
             self._unsettled_prefill = self._unsettled_decode = 0.0
             self._unsettled_batches = 0
-        if self._debt == 0.0 and True not in self._in_flight:
+        if self._debt == 0.0 and not self._prefill_in_flight():
             self._burst_used = 0
 
         if self._burst_tokens is None:
@@ -117,12 +116,14 @@ class PrefillDecodeBalancer:
             return self._burst_used > 0
         return self._burst_used >= self._burst_tokens
 
-    def on_batch_launched(self, *, is_prefill: Optional[bool], num_tokens: int) -> None:
-        """``is_prefill`` is ``batch_class`` of the batch; ``num_tokens`` its
-        new prefill tokens, ignored unless it is a prefill."""
+    def on_batch_launched(
+        self, *, is_prefill: Optional[bool], num_tokens: int, num_reqs: int
+    ) -> None:
+        """``is_prefill`` is ``batch_class`` of the batch; ``num_tokens`` and
+        ``num_reqs`` its new prefill tokens and requests, used for a prefill."""
         if not self._in_flight:
             self._busy_since = self._clock()
-        self._in_flight.append(is_prefill)
+        self._in_flight.append((is_prefill, num_reqs))
         if is_prefill:
             self._burst_used += num_tokens
 
@@ -134,14 +135,17 @@ class PrefillDecodeBalancer:
         now = self._clock()
         elapsed = now - self._busy_since
         self._busy_since = now
-        is_prefill = self._in_flight.popleft()
+        is_prefill, num_reqs = self._in_flight.popleft()
         if is_prefill is None:
             return
         if is_prefill:
-            self._unsettled_prefill += elapsed
+            self._unsettled_prefill += elapsed / max(num_reqs, 1)
         else:
             self._unsettled_decode += elapsed
         self._unsettled_batches += 1
+
+    def _prefill_in_flight(self) -> bool:
+        return any(is_prefill for is_prefill, _ in self._in_flight)
 
 
 def batch_class(forward_mode) -> Optional[bool]:

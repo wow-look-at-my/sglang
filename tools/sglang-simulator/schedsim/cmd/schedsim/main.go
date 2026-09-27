@@ -74,26 +74,28 @@ func main() {
 		in.Params.RunningReqs = work.RunningReqs
 	}
 
-	// The revised balancer at the queue the log shows when the cold prompt
-	// starts, at its peak inside the window, and with a longer queue.
+	// The revised balancer with the log's one-request chunks, with the log's
+	// peak queue behind them (which cannot join a chunk and so does not count),
+	// and with each chunk also serving two short requests.
 	var revisedRes sched.Result
 	for _, q := range []struct {
-		label   string
-		pending int
+		label string
+		reqs  int
+		queue int
 	}{
-		{"#queue-req at cold start", 1 + metrics.QueueAtCold},
-		{"#queue-req peak in window", 1 + metrics.QueuePeakInCold},
-		{"two more cold prompts queued", 3},
+		{"log: chunk serves 1 request", 1, metrics.QueueAtCold},
+		{"same, #queue-req at its peak", 1, metrics.QueuePeakInCold},
+		{"chunk shared with 2 requests", 3, metrics.QueueAtCold},
 	} {
 		p := work.Params(sched.PolicyQueueBalance)
-		p.PendingPrefill = q.pending
+		p.ReqsPerChunk = q.reqs
 		p.DecodePerReqFraction = *decodePerReq
 		p.PrefillInterference = *interference
-		r := sched.Simulate(work, p, metrics.QueueAtCold)
+		r := sched.Simulate(work, p, q.queue)
 		if len(in.Revised) == 0 {
 			revisedRes = r
 		}
-		in.Revised = append(in.Revised, report.RevisedRun{PendingPrefill: q.pending, Label: q.label, Result: r})
+		in.Revised = append(in.Revised, report.RevisedRun{ReqsPerChunk: q.reqs, Queue: q.queue, Label: q.label, Result: r})
 	}
 
 	if *sweep {

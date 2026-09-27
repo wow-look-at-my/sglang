@@ -23,10 +23,11 @@ const (
 	// PolicyTimeBalance splits contended GPU time between prefill and decode by
 	// measured batch duration, which is the shipped balancer.
 	PolicyTimeBalance
-	// PolicyQueueBalance is the revised balancer: each pending prefill request
-	// and the decode batch get equal time (prefill seconds are charged divided
-	// by the number of pending prefill requests), and at most one chunk budget
-	// of prefill tokens runs between two points where decode has caught up.
+	// PolicyQueueBalance is the revised balancer: each request a prefill batch
+	// serves and the decode batch get equal time (a prefill batch's seconds are
+	// charged divided by its request count), and at most one chunk budget of
+	// prefill tokens runs between two points where decode has caught up.
+	// Waiting requests that cannot join a batch do not weigh the split.
 	PolicyQueueBalance
 )
 
@@ -75,10 +76,10 @@ type Params struct {
 	// measured cost intact and lets the time split alone decide.
 	PrefillInterference float64
 
-	// PendingPrefill is how many prefill requests are pending, the cold one
-	// included, under PolicyQueueBalance. The model does not serve the others;
-	// they only weigh the split, as the scheduler's waiting queue does.
-	PendingPrefill int
+	// ReqsPerChunk is how many requests each cold-prefill batch serves under
+	// PolicyQueueBalance: the cold chunk plus any short requests that ride in
+	// the same batch. The log's cold chunks serve one (#new-seq: 1).
+	ReqsPerChunk int
 }
 
 // Chunk is one cold-prefill batch as the log measured it.
@@ -229,7 +230,7 @@ type runner struct {
 	hasLastCharge  bool
 
 	// prefillDivisor scales a prefill batch's charge; 1 except under
-	// PolicyQueueBalance, where it is the number of pending prefill requests.
+	// PolicyQueueBalance, where it is the batch's request count.
 	prefillDivisor float64
 }
 
@@ -280,16 +281,15 @@ func (x *runner) timeBalance() {
 
 // queueBalance implements the revised balancer
 // (python/sglang/srt/managers/scheduler_components/prefill_decode_balancer.py).
-// Prefill seconds are charged divided by the number of pending prefill
-// requests, so a queue of n prompts gets n/(n+1) of contended time and one
-// prompt gets half, as under timeBalance. burst counts prefill tokens since
-// decode last caught up; a chunk continuation runs only once it is zero, and
-// no batch runs once it reaches a chunk. This model is sequential (no overlap),
-// so nothing is in flight at a decision and the chunks are whole: the stall
-// bound matches timeBalance here, and only the queue weighting changes the
-// outcome.
+// A batch's prefill seconds are charged divided by the requests it serves, so
+// a chunk serving k requests gets k/(k+1) of contended time and a lone chunk
+// half, as under timeBalance; the queue behind it does not count. burst counts
+// prefill tokens since decode last caught up; a chunk continuation runs only
+// once it is zero, and no batch runs once it reaches a chunk. This model is
+// sequential (no overlap), so nothing is in flight at a decision and the
+// chunks are whole: the stall bound matches timeBalance here.
 func (x *runner) queueBalance() {
-	x.prefillDivisor = float64(max(x.p.PendingPrefill, 1))
+	x.prefillDivisor = float64(max(x.p.ReqsPerChunk, 1))
 	var debt float64
 	burst := 0
 	for i := 0; i < len(x.w.Chunks); {

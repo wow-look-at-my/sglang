@@ -27,9 +27,10 @@ def _balancer(clock, **kwargs):
     return PrefillDecodeBalancer(burst_tokens=CHUNK_TOKENS, clock=clock, **kwargs)
 
 
-def _run(balancer, clock, *, steps, overlap, num_prefill_pending=1):
-    """Drive the scheduler loop shape with one long chunked prompt pending;
-    returns the launched classes in order.
+def _run(balancer, clock, *, steps, overlap, prefill_pending=True, reqs_per_prefill=1):
+    """Drive the scheduler loop shape with a long chunked prompt pending, each
+    prefill batch serving ``reqs_per_prefill`` requests; returns the launched
+    classes in order.
 
     The GPU runs batches back to back. With overlap the loop picks and launches
     batch N+1 before waiting on batch N's result, as event_loop_overlap does."""
@@ -38,13 +39,15 @@ def _run(balancer, clock, *, steps, overlap, num_prefill_pending=1):
     gpu_free_at = 0.0
     for _ in range(steps):
         defer = balancer.should_defer_prefill(
-            num_prefill_pending=num_prefill_pending,
+            prefill_pending=prefill_pending,
             decode_runnable=True,
-            continues_chunk=num_prefill_pending > 0,
+            continues_chunk=prefill_pending,
         )
-        is_prefill = num_prefill_pending > 0 and not defer
+        is_prefill = prefill_pending and not defer
         balancer.on_batch_launched(
-            is_prefill=is_prefill, num_tokens=CHUNK_TOKENS if is_prefill else 0
+            is_prefill=is_prefill,
+            num_tokens=CHUNK_TOKENS if is_prefill else 0,
+            num_reqs=reqs_per_prefill if is_prefill else 5,
         )
         start = max(clock.now, gpu_free_at)
         gpu_free_at = start + (PREFILL_SECS if is_prefill else DECODE_SECS)
@@ -57,7 +60,7 @@ def _run(balancer, clock, *, steps, overlap, num_prefill_pending=1):
 
 
 def _run_one(balancer, clock, *, is_prefill, seconds, num_tokens=0):
-    balancer.on_batch_launched(is_prefill=is_prefill, num_tokens=num_tokens)
+    balancer.on_batch_launched(is_prefill=is_prefill, num_tokens=num_tokens, num_reqs=1)
     clock.now += seconds
     balancer.on_batch_finished()
 
@@ -92,13 +95,20 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         self.assertAlmostEqual(_prefill_time_share(launched), 0.5, delta=0.05)
         self.assertEqual(_longest_prefill_run(launched), 1)
 
-    def test_prefill_share_grows_with_the_prefill_queue(self):
-        """Each pending prefill request and the decode batch get equal time, so
-        a queue of three prompts gets 3/4 of the GPU and drains instead of
-        growing without bound under a fixed 50/50 split."""
+    def test_waiting_requests_that_cannot_be_admitted_take_no_decode_time(self):
+        """A long waiting queue whose requests cannot run (no memory, no slot,
+        or behind the one unfinished chunk) must not shrink decode's half: the
+        prefill batches it leaves each serve one request."""
+        clock = _Clock()
+        launched = _run(_balancer(clock), clock, steps=4000, overlap=True)
+        self.assertAlmostEqual(_prefill_time_share(launched), 0.5, delta=0.05)
+
+    def test_batch_serving_three_requests_gets_three_quarters(self):
+        """Each request a prefill batch serves weighs as much as the whole
+        decode batch, so admitted work that shares a batch drains faster."""
         clock = _Clock()
         launched = _run(
-            _balancer(clock), clock, steps=4000, overlap=True, num_prefill_pending=3
+            _balancer(clock), clock, steps=4000, overlap=True, reqs_per_prefill=3
         )
         self.assertAlmostEqual(_prefill_time_share(launched), 0.75, delta=0.05)
         self.assertEqual(_longest_prefill_run(launched), 1)
@@ -111,7 +121,7 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         _run_one(balancer, clock, is_prefill=True, seconds=0.3, num_tokens=1000)
         self.assertFalse(
             balancer.should_defer_prefill(
-                num_prefill_pending=1, decode_runnable=True, continues_chunk=False
+                prefill_pending=True, decode_runnable=True, continues_chunk=False
             )
         )
         self.assertGreater(balancer.debt, 0.0)
@@ -125,7 +135,7 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         )
         self.assertTrue(
             balancer.should_defer_prefill(
-                num_prefill_pending=1, decode_runnable=True, continues_chunk=False
+                prefill_pending=True, decode_runnable=True, continues_chunk=False
             )
         )
 
@@ -137,13 +147,13 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         _run_one(balancer, clock, is_prefill=True, seconds=0.3, num_tokens=1000)
         self.assertTrue(
             balancer.should_defer_prefill(
-                num_prefill_pending=1, decode_runnable=True, continues_chunk=True
+                prefill_pending=True, decode_runnable=True, continues_chunk=True
             )
         )
         _run_one(balancer, clock, is_prefill=False, seconds=0.3)
         self.assertFalse(
             balancer.should_defer_prefill(
-                num_prefill_pending=1, decode_runnable=True, continues_chunk=True
+                prefill_pending=True, decode_runnable=True, continues_chunk=True
             )
         )
         self.assertIsNone(balancer.prefill_token_budget)
@@ -154,7 +164,7 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         _run_one(balancer, clock, is_prefill=True, seconds=0.3, num_tokens=1000)
         self.assertTrue(
             balancer.should_defer_prefill(
-                num_prefill_pending=1, decode_runnable=True, continues_chunk=False
+                prefill_pending=True, decode_runnable=True, continues_chunk=False
             )
         )
         self.assertIsNone(balancer.prefill_token_budget)
@@ -165,7 +175,7 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         for _ in range(10):
             self.assertFalse(
                 balancer.should_defer_prefill(
-                    num_prefill_pending=1, decode_runnable=False, continues_chunk=True
+                    prefill_pending=True, decode_runnable=False, continues_chunk=True
                 )
             )
             _run_one(
@@ -178,10 +188,10 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         buy a later burst of back-to-back prefills."""
         clock = _Clock()
         balancer = _balancer(clock)
-        _run(balancer, clock, steps=100, overlap=False, num_prefill_pending=0)
+        _run(balancer, clock, steps=100, overlap=False, prefill_pending=False)
         for _ in range(100):
             balancer.should_defer_prefill(
-                num_prefill_pending=1, decode_runnable=True, continues_chunk=True
+                prefill_pending=True, decode_runnable=True, continues_chunk=True
             )
             _run_one(balancer, clock, is_prefill=False, seconds=DECODE_SECS)
         self.assertEqual(balancer.debt, 0.0)
@@ -195,7 +205,7 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         clock.now += 60.0  # GPU idle, nothing in flight.
         _run_one(balancer, clock, is_prefill=False, seconds=0.02)
         balancer.should_defer_prefill(
-            num_prefill_pending=1, decode_runnable=True, continues_chunk=True
+            prefill_pending=True, decode_runnable=True, continues_chunk=True
         )
         self.assertAlmostEqual(balancer.debt, 0.48)
 
@@ -205,7 +215,7 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         balancer = _balancer(clock, consensus_elapsed=lambda pair: (0.25, 0.05))
         _run_one(balancer, clock, is_prefill=True, seconds=9.0, num_tokens=1)
         balancer.should_defer_prefill(
-            num_prefill_pending=1, decode_runnable=True, continues_chunk=True
+            prefill_pending=True, decode_runnable=True, continues_chunk=True
         )
         self.assertAlmostEqual(balancer.debt, 0.20)
 

@@ -247,30 +247,31 @@ func TestPerRequestDecodeCostDividesGeneration(t *testing.T) {
 	}
 }
 
-// With one prompt pending the revised balancer's queue weighting is 1, so it
-// must reproduce the shipped 50/50 balancer batch for batch.
-func TestQueueBalanceWithOnePromptIsTheEvenSplit(t *testing.T) {
+// Chunks that serve only the cold prompt are charged in full, and requests
+// queued behind it cannot join the batch, so they must not weigh the split:
+// the revised balancer reproduces the shipped 50/50 run batch for batch.
+func TestQueueBalanceIgnoresRequestsThatCannotRun(t *testing.T) {
 	w, _ := workload(t)
 
 	even := Simulate(w, w.Params(PolicyTimeBalance), 0)
 	p := w.Params(PolicyQueueBalance)
-	p.PendingPrefill = 1
-	revised := Simulate(w, p, 0)
+	p.ReqsPerChunk = 1
+	revised := Simulate(w, p, 3)
 
 	if revised.DecodeSteps != even.DecodeSteps || revised.WindowSeconds != even.WindowSeconds {
-		t.Fatalf("one pending prompt: %d steps over %.3f s, shipped balancer %d over %.3f s",
+		t.Fatalf("queued behind the chunk: %d steps over %.3f s, shipped balancer %d over %.3f s",
 			revised.DecodeSteps, revised.WindowSeconds, even.DecodeSteps, even.WindowSeconds)
 	}
 }
 
-// A queue of prompts must earn a growing share, so the cold prefill drains
-// sooner, while decode still runs after every chunk and keeps 1/(n+1).
-func TestQueueBalanceGivesAPromptQueueItsShare(t *testing.T) {
+// A chunk that also serves two short requests counts as three parties, so
+// admitted work drains sooner while decode still runs after every chunk.
+func TestQueueBalanceGivesSharedChunksTheirShare(t *testing.T) {
 	w, _ := workload(t)
 
 	even := Simulate(w, w.Params(PolicyTimeBalance), 0)
 	p := w.Params(PolicyQueueBalance)
-	p.PendingPrefill = 3
+	p.ReqsPerChunk = 3
 	r := Simulate(w, p, 0)
 
 	var prefillSecs, decodeSecs float64
@@ -285,7 +286,7 @@ func TestQueueBalanceGivesAPromptQueueItsShare(t *testing.T) {
 	}
 	share := prefillSecs / (prefillSecs + decodeSecs)
 	if share < 0.7 || share > 0.8 {
-		t.Fatalf("three pending prompts got %.1f%% of contended time, want ~75%%", share*100)
+		t.Fatalf("chunks serving three requests got %.1f%% of contended time, want ~75%%", share*100)
 	}
 	if !r.PrefillCompleted || r.WindowSeconds >= even.WindowSeconds {
 		t.Fatalf("window %.2f s, shipped balancer %.2f s", r.WindowSeconds, even.WindowSeconds)

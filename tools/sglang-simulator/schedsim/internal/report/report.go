@@ -55,11 +55,13 @@ type Input struct {
 	Revised []RevisedRun
 }
 
-// RevisedRun is one queue-balance run and the pending prefill count it used.
+// RevisedRun is one queue-balance run, the requests each chunk served and the
+// queue length behind it.
 type RevisedRun struct {
-	PendingPrefill int
-	Label          string
-	Result         sched.Result
+	ReqsPerChunk int
+	Queue        int
+	Label        string
+	Result       sched.Result
 }
 
 // SweepPoint is one row of the decode-interval sensitivity table.
@@ -148,13 +150,13 @@ func Write(w io.Writer, in Input) {
 	fmt.Fprintf(w, "  the GPU is the trade the balancer makes, and the share knob sets it.\n\n")
 
 	if len(in.Revised) > 0 {
-		fmt.Fprintf(w, "REVISED BALANCER (queue-weighted share)\n")
-		fmt.Fprintf(w, "  each pending prefill request and the decode batch get equal time, so n\n")
-		fmt.Fprintf(w, "  pending prompts get n/(n+1); one prompt is the 50/50 split above. The\n")
-		fmt.Fprintf(w, "  queued requests only weigh the split here; the model does not serve them.\n")
-		fmt.Fprintf(w, "  %-30s %8s %14s %12s %14s\n", "", "pending", "decode steps", "gen (tok/s)", "prefill (s)")
+		fmt.Fprintf(w, "REVISED BALANCER (per-request share of admitted work)\n")
+		fmt.Fprintf(w, "  each request a prefill batch serves and the decode batch get equal time,\n")
+		fmt.Fprintf(w, "  so a chunk serving k requests gets k/(k+1); a lone chunk is the 50/50\n")
+		fmt.Fprintf(w, "  split above. Requests queued behind the chunk cannot join it and do not count.\n")
+		fmt.Fprintf(w, "  %-30s %6s %6s %14s %12s %14s\n", "", "reqs", "queue", "decode steps", "gen (tok/s)", "prefill (s)")
 		for _, rv := range in.Revised {
-			fmt.Fprintf(w, "  %-30s %8d %14d %12.1f %14.1f\n", rv.Label, rv.PendingPrefill,
+			fmt.Fprintf(w, "  %-30s %6d %6d %14d %12.1f %14.1f\n", rv.Label, rv.ReqsPerChunk, rv.Queue,
 				rv.Result.DecodeSteps, rv.Result.EffectiveGenTPS, rv.Result.WindowSeconds)
 		}
 		fmt.Fprintf(w, "\n")
