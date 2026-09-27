@@ -1359,16 +1359,18 @@ class Scheduler(
         ):
             return
         self.prefill_decode_balancer = PrefillDecodeBalancer(
-            consensus_elapsed=rank0_consensus(self.attn_tp_cpu_group)
+            burst_tokens=self.chunked_prefill_size,
+            consensus_elapsed=rank0_consensus(self.attn_tp_cpu_group),
         )
 
     def _should_defer_prefill(self, running_batch: ScheduleBatch) -> bool:
         if self.prefill_decode_balancer is not None:
             return self.prefill_decode_balancer.should_defer_prefill(
-                prefill_pending=bool(self.waiting_queue)
-                or self.chunked_req is not None,
+                num_prefill_pending=len(self.waiting_queue)
+                + (self.chunked_req is not None),
                 decode_runnable=not running_batch.is_empty()
                 and not running_batch.is_prefill_only,
+                continues_chunk=self.chunked_req is not None,
             )
         if self._prefill_decode_interval_remaining == 0:
             return False
@@ -1376,10 +1378,18 @@ class Scheduler(
         self._prefill_decode_interval_remaining -= 1
         return True
 
+    def _prefill_token_budget(self) -> Optional[int]:
+        if self.prefill_decode_balancer is None:
+            return None
+        return self.prefill_decode_balancer.prefill_token_budget
+
     def _arm_prefill_decode_interval(self, batch: Optional[ScheduleBatch]) -> None:
         if self.prefill_decode_balancer is not None:
             if batch is not None:
-                self.prefill_decode_balancer.on_batch_launched()
+                self.prefill_decode_balancer.on_batch_launched(
+                    is_prefill=batch_class(batch.forward_mode),
+                    num_tokens=batch.extend_num_tokens or 0,
+                )
             return
         if self.prefill_decode_interval == 0 or batch is None:
             return
@@ -3742,7 +3752,9 @@ class Scheduler(
         elif self._should_defer_prefill(running_batch):
             new_batch = None
         else:
-            prefill_plan = self.get_new_batch_prefill(running_batch)
+            prefill_plan = self.get_new_batch_prefill(
+                running_batch, prefill_token_budget=self._prefill_token_budget()
+            )
             new_batch = prefill_plan.batch_to_run
             running_batch = prefill_plan.running_batch
 
@@ -3818,7 +3830,12 @@ class Scheduler(
 
         return res
 
-    def get_new_batch_prefill(self, running_batch: ScheduleBatch) -> NextBatchPlan:
+    def get_new_batch_prefill(
+        self,
+        running_batch: ScheduleBatch,
+        *,
+        prefill_token_budget: Optional[int] = None,
+    ) -> NextBatchPlan:
         prefill_delayer_single_pass = None
         if self.prefill_delayer:
             # Get max usage across all pools for prefill delay decision
@@ -3832,6 +3849,7 @@ class Scheduler(
         ret, running_batch = self._get_new_batch_prefill_raw(
             prefill_delayer_single_pass=prefill_delayer_single_pass,
             running_batch=running_batch,
+            prefill_token_budget=prefill_token_budget,
         )
 
         if self.prefill_delayer:
@@ -3849,6 +3867,7 @@ class Scheduler(
         self,
         prefill_delayer_single_pass: Optional[PrefillDelayerSinglePassExecutor],
         running_batch: ScheduleBatch,
+        prefill_token_budget: Optional[int] = None,
     ) -> Tuple[Optional[ScheduleBatch], ScheduleBatch]:
         # Check if the grammar is ready in the grammar queue
         if self.grammar_manager.has_waiting_grammars():
@@ -3912,6 +3931,8 @@ class Scheduler(
             dynamic_size = self.dynamic_chunk_sizer.predict(history_len)
             if dynamic_size is not None:
                 chunked_prefill_size = dynamic_size
+        if prefill_token_budget is not None:
+            chunked_prefill_size = min(chunked_prefill_size, prefill_token_budget)
 
         # Prefill policy
         # Get BLOCK_M from the backend for tile-budget admission logic
@@ -3947,6 +3968,11 @@ class Scheduler(
                 self.waiting_queue,
                 adder.rem_chunk_tokens or 0,
                 self.page_size,
+                # The continuation takes one of the allocatable slots itself.
+                max_new_reqs=self.get_num_allocatable_reqs(
+                    running_bs, running_batch=running_batch
+                )
+                - 1,
             )
             self.chunked_req = adder.add_chunked_req(self.chunked_req)
 
@@ -4807,9 +4833,7 @@ class Scheduler(
         elif batch.forward_mode.is_idle():
             self.batch_result_processor.process_batch_result_idle(batch, result)
         if self.prefill_decode_balancer is not None:
-            self.prefill_decode_balancer.on_batch_finished(
-                batch_class(batch.forward_mode)
-            )
+            self.prefill_decode_balancer.on_batch_finished()
 
         # Submit this batch's queued host backups before the next scheduler step.
         self.tree_cache.flush_pending_backups()
