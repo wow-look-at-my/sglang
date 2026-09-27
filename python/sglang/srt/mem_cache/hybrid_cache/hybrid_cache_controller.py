@@ -764,6 +764,31 @@ class HybridCacheController(BaseHiCacheController):
                 )
         return transfers
 
+    def _l2_write_transfers(
+        self,
+        host_indices: torch.Tensor,
+        device_indices: torch.Tensor,
+        pool_transfers: Optional[list[PoolTransfer]] = None,
+    ) -> list[L2Transfer]:
+        """Backups, plus one transfer per packed MTP draft its host pool does not
+        copy along with the target (see `packs_draft_backup`)."""
+        from sglang.srt.mem_cache.pool_host.mha import MHATokenToKVPoolHost
+
+        transfers = self._l2_transfers(host_indices, device_indices, pool_transfers)
+        for target_transfer in tuple(transfers):
+            host_pool = target_transfer.host_pool
+            if (
+                not isinstance(host_pool, MHATokenToKVPoolHost)
+                or not host_pool.mtp_draft_device_pools
+                or host_pool.packs_draft_backup
+            ):
+                continue
+            transfers.extend(
+                target_transfer._replace(device_pool=draft_pool, is_draft=True)
+                for draft_pool in host_pool.mtp_draft_device_pools
+            )
+        return transfers
+
     def _num_tokens_by_pool(self, op: CacheOperation) -> dict[str, int]:
         """Per-pool token counts for a merged transfer op (anchor + extra
         pools), shared by D->H write and H->D load acks; sidecar transfers

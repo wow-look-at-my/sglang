@@ -295,6 +295,10 @@ class UnifiedSWAAllocatorBase(SWATokenToKVPoolAllocator):
         return self.full_attn_allocator.kernel_page_multiplier
 
     @property
+    def kernel_page_stride(self) -> int:
+        return self.full_attn_allocator.kernel_page_stride
+
+    @property
     def full_v2p_page_table(self) -> torch.Tensor:
         """Page-level virtual->physical table of the full sub-pool."""
         return self.full_attn_allocator.virtual_to_physical
@@ -406,6 +410,10 @@ class UnifiedSWAAllocatorBase(SWATokenToKVPoolAllocator):
     @property
     def swa_kernel_page_multiplier(self) -> int:
         return self.swa_attn_allocator.kernel_page_multiplier
+
+    @property
+    def swa_kernel_page_stride(self) -> int:
+        return self.swa_attn_allocator.kernel_page_stride
 
     @property
     def swa_v2p_page_table(self) -> torch.Tensor:

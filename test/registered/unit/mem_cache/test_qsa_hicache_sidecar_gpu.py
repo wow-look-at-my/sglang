@@ -205,5 +205,188 @@ class TestQsaCompressedHiCacheGpu(CustomTestCase):
                 self._run(io_backend, layout)
 
 
+class TestUnifiedTargetHostTransfersGpu(CustomTestCase):
+    """The unified pool's host paths through the real transfer kernels."""
+
+    def setUp(self):
+        if not (torch.cuda.is_available() and is_cuda()):
+            self.skipTest("CUDA is required for the HiCache transfer kernels.")
+
+    def _kv_pool(self, layer_num, seed):
+        from sglang.srt.mem_cache.memory_pool import MHATokenToKVPool
+
+        pool = MHATokenToKVPool(
+            size=8 * PAGE_SIZE,
+            page_size=PAGE_SIZE,
+            dtype=torch.bfloat16,
+            head_num=2,
+            head_dim=64,
+            layer_num=layer_num,
+            device="cuda",
+            enable_memory_saver=False,
+        )
+        generator = torch.Generator(device="cuda").manual_seed(seed)
+        for buf in (*pool.k_buffer, *pool.v_buffer):
+            buf.copy_(torch.randn(buf.shape, generator=generator, device="cuda"))
+        return pool
+
+    def test_drafts_back_up_with_their_own_ids_on_every_layout(self):
+        """Behind a translating target, a packed MTP draft layer outside the
+        target's page envelopes must be backed up from the untranslated ids,
+        one inside them (sharing the target's translate) from the resolved
+        ids, and target layers from resolved ones."""
+        from sglang.srt.mem_cache.pool_host.mha import MHATokenToKVPoolHost
+
+        for io_backend, layout, draft_shares_translate in (
+            ("kernel", "layer_first", False),
+            ("kernel", "page_first", False),
+            ("direct", "layer_first", False),
+            ("kernel", "layer_first", True),
+            ("kernel", "page_first", True),
+            ("direct", "layer_first", True),
+        ):
+            with self.subTest(
+                io_backend=io_backend,
+                layout=layout,
+                draft_shares_translate=draft_shares_translate,
+            ):
+                target, draft = self._kv_pool(2, seed=0), self._kv_pool(1, seed=1)
+                target.host_transfer_translate = lambda ids: (
+                    (ids + 3 * PAGE_SIZE) % (8 * PAGE_SIZE)
+                )
+                if draft_shares_translate:
+                    draft.host_transfer_translate = target.host_transfer_translate
+                with host_memory_budget_scope(1 << 40):
+                    host = MHATokenToKVPoolHost(
+                        target,
+                        2.0,
+                        0,
+                        PAGE_SIZE,
+                        layout,
+                        mtp_draft_device_pools=(draft,),
+                    )
+                self.addCleanup(host.destroy)
+                controller = SimpleNamespace(
+                    mem_pool_host=SimpleNamespace(
+                        anchor_entry=SimpleNamespace(
+                            host_pool=host, device_pool=target, layer_mapper=None
+                        ),
+                        entry_map={},
+                    )
+                )
+                controller._l2_transfers = partial(
+                    HybridCacheController._l2_transfers, controller
+                )
+                index_device = "cuda" if io_backend == "kernel" else "cpu"
+                device_ids = _token_indices([1, 6], index_device)
+                host_ids = _token_indices([2, 5], index_device)
+                L2TransferEngine(io_backend).submit_device_to_host(
+                    HybridCacheController._l2_write_transfers(
+                        controller, host_ids, device_ids
+                    )
+                )
+                torch.cuda.synchronize()
+                resolved = target.host_transfer_translate(device_ids.cuda())
+                host_rows = host_ids.cpu()
+                for layer in range(2):
+                    torch.testing.assert_close(
+                        host.k_data_refs[layer][host_rows],
+                        target.k_buffer[layer][resolved].cpu(),
+                    )
+                draft_ids = resolved if draft_shares_translate else device_ids.cuda()
+                self.assertEqual(host.packs_draft_backup, draft_shares_translate)
+                torch.testing.assert_close(
+                    host.k_data_refs[2][host_rows], draft.k_buffer[0][draft_ids].cpu()
+                )
+                torch.testing.assert_close(
+                    host.v_data_refs[2][host_rows], draft.v_buffer[0][draft_ids].cpu()
+                )
+
+    def test_ple_side_states_round_trip_through_the_kernels(self):
+        """The PLE short-conv window (hundreds of KiB per slot) and the N-gram
+        context (16 B per slot) ride the state slot through host memory, both
+        as their own tensors and inside a unified pool's slot envelopes."""
+        for enveloped in (False, True):
+            with self.subTest(enveloped=enveloped):
+                self._ple_round_trip(enveloped=enveloped)
+
+    def _ple_round_trip(self, *, enveloped: bool):
+        from sglang.srt.mem_cache.layout.page_major import build_slot_sibling_views
+        from sglang.srt.mem_cache.ple_state_pool import NGramPool, ShortConvPool
+        from sglang.srt.mem_cache.pool_host.mamba import MambaPoolHost
+
+        slots = 8
+        conv_view = context_view = None
+        if enveloped:
+            # A state envelope of 4 KiB ahead of the side states, as in the pool.
+            state_bytes, side_bytes = 4096, 2 * 8 + 640 * 9 * 2
+            entry = state_bytes + side_bytes + 8
+            raw = torch.zeros((slots + 1) * entry, dtype=torch.uint8, device="cuda")
+            context_view, conv_view = build_slot_sibling_views(
+                raw,
+                layouts=(((2,), torch.int64), ((1, 640, 9), torch.bfloat16)),
+                entry_bytes=entry,
+                first_offset_bytes=state_bytes,
+                max_slots=slots + 1,
+            )
+            conv_view = conv_view.transpose(0, 1)
+        short_conv = ShortConvPool(
+            size=slots,
+            state_shape=(640, 9),
+            layer_ids=[1],
+            dtype=torch.bfloat16,
+            device="cuda",
+            conv_state=conv_view,
+        )
+        ngram = NGramPool(
+            size=slots,
+            context_len=2,
+            eos_token_id=7,
+            device="cuda",
+            context=context_view,
+        )
+        short_conv.conv_state.copy_(torch.randn(short_conv.conv_state.shape))
+        ngram.context.copy_(
+            torch.arange(ngram.context.numel(), device="cuda").view_as(ngram.context)
+        )
+        views = short_conv.slot_major_views() + ngram.slot_major_views()
+        device_pool = SimpleNamespace(
+            num_mamba_layers=1,
+            size=slots,
+            host_capacity_tokens=None,
+            device="cuda",
+            mamba_cache=SimpleNamespace(
+                conv=[torch.zeros(1, slots + 1, 64, 3, device="cuda")],
+                temporal=torch.zeros(1, slots + 1, 2, 16, 16, device="cuda"),
+            ),
+            slot_sibling_views=lambda: views,
+        )
+        for io_backend, layout in (
+            ("kernel", "page_first"),
+            ("direct", "page_first_direct"),
+        ):
+            with self.subTest(io_backend=io_backend, layout=layout):
+                with host_memory_budget_scope(1 << 40):
+                    host = MambaPoolHost(device_pool, 2.0, 0, layout=layout)
+                self.addCleanup(host.destroy)
+                src = torch.tensor([1, 2], device="cuda")
+                dst = torch.tensor([5, 6], device="cuda")
+                host_slots = torch.tensor([3, 4], device="cuda")
+                if io_backend == "direct":
+                    host_slots = host_slots.cpu()
+                conv_before = short_conv.conv_state[:, src].clone()
+                context_before = ngram.context[src].clone()
+                host.backup_from_device_all_layer(
+                    device_pool, host_slots, src, io_backend
+                )
+                torch.cuda.synchronize()
+                host.load_to_device_per_layer(
+                    device_pool, host_slots, dst, 0, io_backend
+                )
+                torch.cuda.synchronize()
+                torch.testing.assert_close(short_conv.conv_state[:, dst], conv_before)
+                torch.testing.assert_close(ngram.context[dst], context_before)
+
+
 if __name__ == "__main__":
     unittest.main()
