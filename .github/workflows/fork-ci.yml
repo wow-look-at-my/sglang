@@ -12,6 +12,7 @@ name: Fork CI
 #   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
 #                     + model gateway (fmt, clippy, cargo test, sglang-router wheel)
 #                     + gateway Go bindings (native lib, go test, examples)
+#                     + scheduler simulator requirement tests (go-toolchain)
 #   AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for
 #                     FORK_KERNEL_CUDA_ARCHS (default 120a: RTX PRO 6000 Blackwell), checked
 #                     against the ops this tree calls
@@ -376,14 +377,24 @@ jobs:
           go vet ./...
           go build -o "${RUNNER_TEMP}/go-examples/oai_server" .
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: tools/sglang-simulator/schedsim/go.mod
-          cache-dependency-path: tools/sglang-simulator/schedsim/go.sum
+  # go.mod pins org modules at the v0.0.0 placeholder; only go-toolchain resolves it.
+  fork-schedsim:
+    needs: fork-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: write
+      actions: read
+      checks: read
+      deployments: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Scheduler simulator tests
-        working-directory: tools/sglang-simulator/schedsim
-        run: go test ./...
+      - uses: wow-look-at-my/go-toolchain@master
+        with:
+          working-directory: tools/sglang-simulator/schedsim
 
   # ------------------------------------------------------ sglang-kernel wheel
   fork-sgl-kernel-wheel:
