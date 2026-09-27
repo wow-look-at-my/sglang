@@ -190,7 +190,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: Install protoc
         run: sudo bash scripts/ci/utils/install_protoc.sh
@@ -212,7 +212,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sglang-wheel-py3.10-x86_64
+          name: sglang-wheel-py3.12-x86_64
           path: python/dist/*.whl
           if-no-files-found: error
 
@@ -259,7 +259,7 @@ jobs:
           key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ github.run_id }}
           restore-keys: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-
 
-      - name: Build wheel (Python 3.10, CUDA 13.0)
+      - name: Build wheel (Python 3.12, CUDA 13.0)
         id: build
         if: steps.wheel_cache.outputs.cache-hit != 'true'
         timeout-minutes: 320
@@ -270,7 +270,7 @@ jobs:
           CMAKE_ARGS: -DSGL_KERNEL_CUDA_ARCHS=${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}
         run: |
           cd python/sglang/kernels/aot
-          ./build.sh 3.10 13.0
+          ./build.sh 3.12 13.0
 
       # The build container writes the cache as root; the save step runs as the runner.
       - name: Save ccache
