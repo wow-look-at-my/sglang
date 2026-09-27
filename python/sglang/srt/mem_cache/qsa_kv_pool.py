@@ -13,9 +13,8 @@ from typing import List, Optional
 
 import torch
 
-from sglang.kernels.ops.memory.virtual_slot import write_loc_to_kernel_ids
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE
-from sglang.srt.mem_cache.memory_pool import GB, HybridLinearKVPool, KVCache, MambaPool
+from sglang.srt.mem_cache.memory_pool import GB, HybridLinearKVPool, MambaPool
 
 # State layer IDs are serialized as uint32 by the disaggregation protocols.
 # Reserve the value below PLE's request-wide sentinel for QSA's request-wide
@@ -35,13 +34,6 @@ class QSATokenToKVPool(HybridLinearKVPool):
     # lifecycle rides the full-KV allocator and radix tree.
     # Full slot 0 is the reserved padding slot; compressed slot 0 is the inert dump.
     index_state_dtype = torch.bfloat16
-    # Set when the compressed rows live in the full-KV page envelopes of a
-    # unified pool: full page p's rows then start at compressed page
-    # ``v2p[p] * qsa_index_page_multiplier`` (see `qsa_index_slots`).
-    qsa_index_v2p: Optional[torch.Tensor] = None
-    qsa_index_page_multiplier: int = 1
-    # Host-tier weight of the compressed cache when its views alias a shared buffer.
-    qsa_host_capacity_bytes: Optional[int] = None
 
     @classmethod
     def qsa_bytes_per_token(
@@ -76,8 +68,6 @@ class QSATokenToKVPool(HybridLinearKVPool):
         full_kv_pool_class: Optional[type] = None,
         quant_method=None,
         post_capture_active: bool = False,
-        full_kv_pool: Optional[KVCache] = None,
-        compressed_k_views: Optional[List[torch.Tensor]] = None,
     ):
         if page_size <= 1 or page_size % qsa_compress_ratio != 0:
             raise ValueError(
@@ -109,7 +99,6 @@ class QSATokenToKVPool(HybridLinearKVPool):
             full_kv_pool_class=full_kv_pool_class,
             quant_method=quant_method,
             post_capture_active=post_capture_active,
-            full_kv_pool=full_kv_pool,
         )
         if (
             min(
@@ -132,11 +121,7 @@ class QSATokenToKVPool(HybridLinearKVPool):
         # Compressed slots mirror the full-KV slot space 1:ratio; the "page"
         # seen by the scoring kernels is one full-KV page's worth of groups.
         self.qsa_compressed_page_size = page_size // self.qsa_compress_ratio
-        self.qsa_compressed_capacity = (
-            -(state_size // -self.qsa_compress_ratio)
-            if compressed_k_views is None
-            else compressed_k_views[0].shape[0]
-        )
+        self.qsa_compressed_capacity = -(state_size // -self.qsa_compress_ratio)
         # Pre-compression index-K state is a per-request ring, not a per-token cache:
         # only the pending group's ``ratio`` members must survive a forward,
         # addressed as ``req_pool_idx * ratio + position % ratio``.
@@ -178,35 +163,26 @@ class QSATokenToKVPool(HybridLinearKVPool):
             self.qsa_rope_position_buffer = torch.zeros(
                 (ring_slots, 3), dtype=torch.int64, device=device
             )
-            if compressed_k_views is None:
-                # One contiguous allocation behind per-layer views: every layer's
-                # compressed pages are addressable from a single base pointer.
-                self.qsa_compressed_flat = torch.zeros(
-                    (
-                        len(full_attention_layer_ids),
-                        self.qsa_compressed_capacity
-                        * self.qsa_index_kv_heads
-                        * self.qsa_index_head_dim,
-                    ),
-                    dtype=self.index_state_dtype,
-                    device=device,
-                )
-        if compressed_k_views is None:
-            self.qsa_compressed_k_buffer_pool = [
-                self.qsa_compressed_flat[layer_offset].view(
-                    self.qsa_compressed_capacity,
-                    self.qsa_index_kv_heads,
-                    self.qsa_index_head_dim,
-                )
-                for layer_offset in range(len(full_attention_layer_ids))
-            ]
-        else:
-            if len(compressed_k_views) != len(full_attention_layer_ids):
-                raise ValueError(
-                    f"{len(compressed_k_views)} compressed-K views for "
-                    f"{len(full_attention_layer_ids)} full-attention layers"
-                )
-            self.qsa_compressed_k_buffer_pool = list(compressed_k_views)
+            # One contiguous allocation behind per-layer views: every layer's
+            # compressed pages are addressable from a single base pointer.
+            self.qsa_compressed_flat = torch.zeros(
+                (
+                    len(full_attention_layer_ids),
+                    self.qsa_compressed_capacity
+                    * self.qsa_index_kv_heads
+                    * self.qsa_index_head_dim,
+                ),
+                dtype=self.index_state_dtype,
+                device=device,
+            )
+        self.qsa_compressed_k_buffer_pool = [
+            self.qsa_compressed_flat[layer_offset].view(
+                self.qsa_compressed_capacity,
+                self.qsa_index_kv_heads,
+                self.qsa_index_head_dim,
+            )
+            for layer_offset in range(len(full_attention_layer_ids))
+        ]
         k_size, v_size = self.get_kv_size_bytes()
         self.mem_usage = (k_size + v_size) / GB
 
@@ -249,20 +225,6 @@ class QSATokenToKVPool(HybridLinearKVPool):
     ) -> None:
         buffer = self.get_qsa_compressed_k_buffer(layer_id)
         buffer[loc.long()] = compressed_k.to(buffer.dtype)
-
-    def qsa_index_slots(self, full_slots: torch.Tensor) -> torch.Tensor:
-        """Full-KV slot ids (as ``req_to_token`` stores them) -> the slot space
-        the compressed cache is laid over: ``slot // ratio`` is a compressed row
-        and ``slot // page_size`` a compressed page id. The identity unless the
-        rows live in a unified pool's page envelopes."""
-        if self.qsa_index_v2p is None:
-            return full_slots
-        return write_loc_to_kernel_ids(
-            loc=full_slots.contiguous(),
-            v2p=self.qsa_index_v2p,
-            page_size=self.page_size,
-            stride=self.page_size * self.qsa_index_page_multiplier,
-        )
 
     @staticmethod
     def _get_paged_state_buf_infos(tensors, page_size: int):

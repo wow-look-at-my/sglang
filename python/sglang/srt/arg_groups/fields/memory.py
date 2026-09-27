@@ -86,10 +86,9 @@ class Memory(msgspec.Struct):
             "linear-attention, PD-disaggregation and speculative-decoding "
             "configurations are validated at startup. Unset, it turns on by "
             "itself for a hybrid Mamba/linear-attention model when every one of "
-            "those checks passes (colocated, CUDA, and no speculative decoding "
-            "except a QSA model's built-in chain MTP draft); it composes with "
-            "the HiCache host tier. The startup log says which way it went and "
-            "why. Use --no-enable-unified-memory to keep the static split.",
+            "those checks passes (colocated, no speculative decoding, no HiCache, "
+            "CUDA); the startup log says which way it went and why. Use "
+            "--no-enable-unified-memory to keep the static split.",
             action=argparse.BooleanOptionalAction,
             resolvable=True,
             fallback=False,

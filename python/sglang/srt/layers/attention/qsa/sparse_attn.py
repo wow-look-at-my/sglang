@@ -435,7 +435,6 @@ def _compact_kv(
     cu_k,
     out_k,
     out_v,
-    v2p,
     topk: tl.constexpr,
     heads: tl.constexpr,
     dim: tl.constexpr,
@@ -445,9 +444,6 @@ def _compact_kv(
     BLOCK_TOPK: tl.constexpr,
     BLOCK_D: tl.constexpr,
     ZERO_FILL: tl.constexpr,
-    TRANSLATE: tl.constexpr,
-    V2P_PAGE_SIZE: tl.constexpr,
-    V2P_PAGE_STRIDE: tl.constexpr,
 ):
     batch, head, block = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     cols = block * BLOCK_TOPK + tl.arange(0, BLOCK_TOPK)
@@ -462,12 +458,7 @@ def _compact_kv(
         req_to_token + req * req_stride + tl.where(valid, positions, 0),
         mask=valid,
         other=0,
-    ).to(tl.int64)
-    if TRANSLATE:
-        # Unified pool: req_to_token holds virtual slots; the K/V views take
-        # kernel-facing ids, v2p[page] * V2P_PAGE_STRIDE + slot % V2P_PAGE_SIZE.
-        pages = tl.load(v2p + slots // V2P_PAGE_SIZE, mask=valid, other=0)
-        slots = tl.maximum(pages, 0) * V2P_PAGE_STRIDE + slots % V2P_PAGE_SIZE
+    )
     # 64-bit element offsets: slot * heads * dim exceeds int32 once the pool holds
     # more than 2^31 / (heads * dim) tokens (~4.2M for 2 x 256), which an FP8 pool
     # on one GPU does reach.
@@ -529,16 +520,8 @@ def qwen_sparse_kv_extraction_compact_triton(
     batch,
     topk,
     zero_fill_cols: int = 0,
-    v2p_page_table: torch.Tensor | None = None,
-    v2p_page_size: int = 1,
-    v2p_page_stride: int = 1,
 ):
     """Gather the selected K/V rows into ``out_k``/``out_v``.
-
-    ``v2p_page_table`` (unified pool): ``req_to_token`` holds virtual slots and
-    ``k``/``v`` are per-layer views addressed by kernel-facing ids
-    ``v2p[slot // v2p_page_size] * v2p_page_stride + slot % v2p_page_size``; the
-    gather reads the live table, so a page moved by compaction is found where it is.
 
     ``zero_fill_cols`` > 0 selects the strided (page-aligned) layout used by the paged
     decode kernel: row ``b`` owns ``[cu_k[b], cu_k[b] + zero_fill_cols)`` and every slot
@@ -568,7 +551,6 @@ def qwen_sparse_kv_extraction_compact_triton(
         cu_k,
         out_k,
         out_v,
-        v2p_page_table if v2p_page_table is not None else req_to_token,
         topk,
         heads,
         dim,
@@ -578,9 +560,6 @@ def qwen_sparse_kv_extraction_compact_triton(
         BLOCK_TOPK=block_topk,
         BLOCK_D=triton.next_power_of_2(dim),
         ZERO_FILL=zero_fill,
-        TRANSLATE=v2p_page_table is not None,
-        V2P_PAGE_SIZE=v2p_page_size,
-        V2P_PAGE_STRIDE=v2p_page_stride,
         num_warps=8,
     )
 

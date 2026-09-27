@@ -194,12 +194,6 @@ class QwenSparseAttnBackend(AttentionBackend):
         req_pool = getattr(runner, "req_to_token_pool", None)
         self.req_to_token = getattr(req_pool, "req_to_token", None)
         self.req_to_token_pool = req_pool
-        # Unified pool: req_to_token holds virtual slots, the K/V views take
-        # kernel-facing ids. The compressed keys and the pending ring stay
-        # addressed by virtual slot and request slot, so only K/V reads translate.
-        self.kv_index_translator = (
-            runner.kv_index_translator if runner is not None else None
-        )
         self.forward_metadata: Optional[QwenSparseAttnMetadata] = None
         self._cuda_graph_metadata: Dict[
             Tuple[ForwardMode, int], QwenSparseAttnMetadata
@@ -465,11 +459,9 @@ class QwenSparseAttnBackend(AttentionBackend):
         compress_ratio,
         row_token_starts=None,
         prefix_lens=None,
-        index_slots=None,
     ):
         """Compact per-row block ranges into ``capacity`` write entries,
-        a shape-derived bound (no sync); padding writes the inert reserved slot 0.
-        ``index_slots`` is the pool's `qsa_index_slots` (None: the identity)."""
+        a shape-derived bound (no sync); padding writes the inert reserved slot 0."""
         device = token_slot_table.device
         # The table width is a host-side bound;
         # assert on device so a short table fails loudly without a sync.
@@ -485,12 +477,9 @@ class QwenSparseAttnBackend(AttentionBackend):
         valid = entries < ends[-1] if counts.numel() else entries < 0
         rows = torch.where(valid, rows.clamp_max(max(counts.numel() - 1, 0)), 0)
         blocks = torch.where(valid, start_blocks[rows] + entries - starts[rows], 0)
-        group_first_slots = token_slot_table[rows, blocks * compress_ratio].long()
-        if index_slots is not None:
-            group_first_slots = index_slots(group_first_slots)
         write_locs = torch.where(
             valid,
-            group_first_slots // compress_ratio,
+            token_slot_table[rows, blocks * compress_ratio].long() // compress_ratio,
             torch.zeros_like(blocks),
         ).to(torch.int32)
         group_end_positions = blocks * compress_ratio + (compress_ratio - 1)
@@ -527,7 +516,6 @@ class QwenSparseAttnBackend(AttentionBackend):
                 end_blocks=end_blocks,
                 capacity=int(lengths.numel()),
                 compress_ratio=ratio,
-                index_slots=self.token_to_kv_pool.qsa_index_slots,
             )
             return (*plan, None)
         extend_lens = forward_batch.extend_seq_lens
@@ -553,7 +541,6 @@ class QwenSparseAttnBackend(AttentionBackend):
             compress_ratio=ratio,
             row_token_starts=row_token_starts,
             prefix_lens=prefix_lens,
-            index_slots=self.token_to_kv_pool.qsa_index_slots,
         )
         mixed_members = None
         if is_mixed:
@@ -738,7 +725,6 @@ class QwenSparseAttnBackend(AttentionBackend):
                     compress_ratio=pool.qsa_compress_ratio,
                     sequence_lengths=sequence_lengths,
                     token_slot_table=token_slot_table,
-                    index_slots=pool.qsa_index_slots,
                 )
             pending_ring_slots = build_pending_ring_slots(
                 token_to_batch_idx=token_to_batch_idx,
@@ -1158,9 +1144,7 @@ class QwenSparseAttnBackend(AttentionBackend):
         # Boundary rows write their group's slot (last raw slot // ratio);
         # every other row keeps the inert reserved slot 0.
         boundary = (lengths % ratio == 0) & (lengths > 0)
-        last_locs = pool.qsa_index_slots(
-            self.req_to_token[req_indices, current_positions].long()
-        )
+        last_locs = self.req_to_token[req_indices, current_positions].long()
         write_locs = torch.where(
             boundary,
             last_locs // ratio,
@@ -1194,11 +1178,7 @@ class QwenSparseAttnBackend(AttentionBackend):
         row_width_pages = self.req_to_token.shape[1] // full_page
         num_pages = min(max_pages, row_width_pages)
         table = (
-            pool.qsa_index_slots(
-                self.req_to_token[
-                    req_indices, : num_pages * full_page : full_page
-                ].long()
-            )
+            self.req_to_token[req_indices, : num_pages * full_page : full_page].long()
             // full_page
         ).clamp_min(0)
         page_table[:, :num_pages].copy_(table.to(torch.int32))
@@ -1332,30 +1312,6 @@ class QwenSparseAttnBackend(AttentionBackend):
         assert self.forward_metadata is not None
         return self.forward_metadata
 
-    def _kv_read_translation(self) -> dict:
-        """Gather kwargs that translate virtual K/V slots; empty on a plain pool."""
-        translator = self.kv_index_translator
-        if translator is None or not translator.is_translating:
-            return {}
-        assert translator.reads_are_translated, (
-            "QSA does not support decode context parallelism on the unified pool"
-        )
-        return dict(
-            v2p_page_table=translator.full_v2p_table,
-            v2p_page_size=translator.page_size,
-            v2p_page_stride=translator.full_page_stride,
-        )
-
-    def _kernel_kv_ids(self, virtual_slots: torch.Tensor) -> torch.Tensor:
-        """Virtual K/V slots -> ids the per-layer K/V views take; -1 stays -1."""
-        translator = self.kv_index_translator
-        if translator is None or not translator.is_translating:
-            return virtual_slots
-        kernel_ids = translator.translate_full_attn_ids(
-            virtual_slots.clamp(min=0).long()
-        ).to(virtual_slots.dtype)
-        return torch.where(virtual_slots >= 0, kernel_ids, virtual_slots)
-
     @staticmethod
     def _logical_to_physical(
         logical_indices: torch.Tensor, metadata: QwenSparseAttnMetadata
@@ -1408,9 +1364,7 @@ class QwenSparseAttnBackend(AttentionBackend):
             return self._pad_extend_output(output, num_output_rows)
         if not q.is_cuda:
             metadata = self._resolve_metadata(forward_batch)
-            slots = self._kernel_kv_ids(
-                self._logical_to_physical(topk_indices, metadata)
-            )
+            slots = self._logical_to_physical(topk_indices, metadata)
             pool = self.token_to_kv_pool
             output = qsa_sparse_attention(
                 q,
@@ -1450,12 +1404,18 @@ class QwenSparseAttnBackend(AttentionBackend):
         v_buffer = pool.get_value_buffer(layer.layer_id)
         req_to_token = self.req_to_token_pool.req_to_token
         req_indices = forward_batch.req_pool_indices.tolist()
-        kv_ids = [
-            self._kernel_kv_ids(req_to_token[req_indices[i], : sequence_lens[i]].long())
+        k_parts = [
+            k_buffer.index_select(
+                0, req_to_token[req_indices[i], : sequence_lens[i]].long()
+            )
             for i in range(len(sequence_lens))
         ]
-        k_parts = [k_buffer.index_select(0, ids) for ids in kv_ids]
-        v_parts = [v_buffer.index_select(0, ids) for ids in kv_ids]
+        v_parts = [
+            v_buffer.index_select(
+                0, req_to_token[req_indices[i], : sequence_lens[i]].long()
+            )
+            for i in range(len(sequence_lens))
+        ]
         sequence_lens_tensor = torch.tensor(
             sequence_lens, dtype=torch.int32, device=q.device
         )
@@ -1578,7 +1538,6 @@ class QwenSparseAttnBackend(AttentionBackend):
             batch,
             topk,
             zero_fill_cols=stride,
-            **self._kv_read_translation(),
         )
         num_kv_heads = k_buffer.shape[1]
         head_dim = k_buffer.shape[2]
@@ -1640,9 +1599,7 @@ class QwenSparseAttnBackend(AttentionBackend):
         v_buffer = pool.get_value_buffer(layer.layer_id)
         if not q.is_cuda:
             metadata = self._resolve_metadata(forward_batch)
-            slots = self._kernel_kv_ids(
-                self._logical_to_physical(topk_indices, metadata)
-            )
+            slots = self._logical_to_physical(topk_indices, metadata)
             output = qsa_sparse_attention(q, k_buffer, v_buffer, slots, layer.scaling)
             return output.reshape(q.shape[0], -1)
 
@@ -1709,7 +1666,6 @@ class QwenSparseAttnBackend(AttentionBackend):
             packed_v,
             batch,
             topk,
-            **self._kv_read_translation(),
         )
         if is_hip():
             relative_indices = torch.arange(

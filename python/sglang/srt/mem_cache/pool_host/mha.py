@@ -270,9 +270,6 @@ class MHATokenToKVPoolHost(HostKVCache):
         self.can_use_write_back_jit = False
         if self.layout != "page_first":
             return
-        if self.mtp_draft_device_pools and not self.packs_draft_backup:
-            # The staged kernel copies every host layer from one index list.
-            return
         page_capacity = min(self.page_num, _WRITE_BACK_STAGING_PAGE_CHUNK)
         staging = prepare_mha_write_back_staging(
             self.device_pool,
@@ -437,24 +434,8 @@ class MHATokenToKVPoolHost(HostKVCache):
         else:
             raise ValueError(f"Unsupported IO backend: {io_backend}")
 
-    @property
-    def packs_draft_backup(self) -> bool:
-        """Whether one all-layer backup also copies the packed MTP draft layers.
-
-        Only when every draft resolves device ids the way the target does: a
-        unified target's kernel-facing ids address a draft only when its layers
-        share the target's page envelopes (and so its translate).
-        """
-        if not self.mtp_draft_device_pools:
-            return False
-        target_translate = self.device_pool.host_transfer_translate
-        return all(
-            draft.host_transfer_translate == target_translate
-            for draft in self.mtp_draft_device_pools
-        )
-
     def _resolve_device_transfer_buffers(self, device_pool):
-        if self.packs_draft_backup:
+        if self.mtp_draft_device_pools:
             return (
                 self.packed_device_k_data_ptrs,
                 self.packed_device_v_data_ptrs,
@@ -467,61 +448,6 @@ class MHATokenToKVPoolHost(HostKVCache):
             device_pool.k_buffer,
             device_pool.v_buffer,
         )
-
-    def _draft_depth(self, device_pool) -> int | None:
-        for depth, draft_pool in enumerate(self.mtp_draft_device_pools):
-            if draft_pool is device_pool:
-                return depth
-        return None
-
-    def _backup_draft_layer(
-        self, draft_pool, host_indices, device_indices, io_backend, *, host_layer_id
-    ) -> None:
-        """Copy one packed MTP draft layer (device layer 0) into its host layer."""
-        if (
-            io_backend == "kernel"
-            and self.can_use_jit
-            and self.layout in ("layer_first", "page_first")
-        ):
-            # A page_first per-layer view is strided; the JIT copy takes strides.
-            jit_transfer_hicache_one_layer(
-                page_size=self.page_size,
-                k_cache_dst=self.k_data_refs[host_layer_id],
-                v_cache_dst=self.v_data_refs[host_layer_id],
-                k_cache_src=draft_pool.k_buffer[0],
-                v_cache_src=draft_pool.v_buffer[0],
-                indices_dst=host_indices,
-                indices_src=device_indices,
-                element_dim=self.element_dim,
-            )
-        elif io_backend == "kernel" and self.layout == "layer_first":
-            transfer_kv_per_layer(
-                src_k=draft_pool.k_buffer[0],
-                dst_k=self.k_buffer[host_layer_id],
-                src_v=draft_pool.v_buffer[0],
-                dst_v=self.v_buffer[host_layer_id],
-                src_indices=device_indices,
-                dst_indices=host_indices,
-                item_size=self.token_stride_size,
-            )
-        elif io_backend == "direct" and self.layout == "layer_first":
-            transfer_kv_direct(
-                src_layers=[draft_pool.k_buffer[0], draft_pool.v_buffer[0]],
-                dst_layers=[
-                    self.k_buffer[host_layer_id],
-                    self.v_buffer[host_layer_id],
-                ],
-                src_indices=device_indices,
-                dst_indices=host_indices,
-                page_size=self.page_size,
-            )
-        else:
-            raise ValueError(
-                "Backing up MTP draft layers apart from a unified target needs a "
-                "per-layer device-to-host copy, which layout "
-                f"{self.layout!r} with IO backend {io_backend!r} does not have "
-                f"without the JIT kernel."
-            )
 
     def _npu_transfer_buffers(self, target_device_pool):
         layer_start = 0
@@ -539,23 +465,6 @@ class MHATokenToKVPoolHost(HostKVCache):
     def backup_from_device_all_layer(
         self, device_pool, host_indices, device_indices, io_backend
     ):
-        draft_depth = self._draft_depth(device_pool)
-        if draft_depth is not None:
-            self._backup_draft_layer(
-                device_pool,
-                host_indices,
-                device_indices,
-                io_backend,
-                host_layer_id=self.target_layer_num + draft_depth,
-            )
-            return
-        # Host layers this call fills: the target's alone when the drafts are
-        # backed up by their own transfers.
-        num_layers = (
-            self.layer_num
-            if self.packs_draft_backup or not self.mtp_draft_device_pools
-            else self.target_layer_num
-        )
         if io_backend == "kernel_ascend":
             # NPU pools use contiguous multi-layer tensors and intentionally do
             # not build the CUDA-style k_data_ptrs/v_data_ptrs arrays.
@@ -573,8 +482,8 @@ class MHATokenToKVPoolHost(HostKVCache):
                 if self.can_use_jit:
                     jit_transfer_hicache_all_layer(
                         page_size=self.page_size,
-                        k_ptr_dst=self.k_data_ptrs[:num_layers],
-                        v_ptr_dst=self.v_data_ptrs[:num_layers],
+                        k_ptr_dst=self.k_data_ptrs,
+                        v_ptr_dst=self.v_data_ptrs,
                         indices_dst=host_indices,
                         k_ptr_src=device_k_data_ptrs,
                         v_ptr_src=device_v_data_ptrs,
@@ -586,13 +495,13 @@ class MHATokenToKVPoolHost(HostKVCache):
                 else:
                     transfer_kv_all_layer(
                         src_k_layers=device_k_data_ptrs,
-                        dst_k_layers=self.k_data_ptrs[:num_layers],
+                        dst_k_layers=self.k_data_ptrs,
                         src_v_layers=device_v_data_ptrs,
-                        dst_v_layers=self.v_data_ptrs[:num_layers],
+                        dst_v_layers=self.v_data_ptrs,
                         src_indices=device_indices,
                         dst_indices=host_indices,
                         item_size=self.token_stride_size,
-                        num_layers=num_layers,
+                        num_layers=self.layer_num,
                     )
             elif self.layout == "page_first":
                 if self.can_use_write_back_jit:
@@ -617,7 +526,7 @@ class MHATokenToKVPoolHost(HostKVCache):
                         dst_indices=host_indices,
                         item_size=self.token_stride_size,
                         dst_layout_dim=self.layout_dim,
-                        num_layers=num_layers,
+                        num_layers=self.layer_num,
                     )
             elif self.layout == "page_head":
                 transfer_kv_all_layer_lf_ph(
@@ -629,7 +538,7 @@ class MHATokenToKVPoolHost(HostKVCache):
                     dst_indices=host_indices,
                     item_size=self.token_stride_size,
                     dst_layout_dim=self.layout_dim,
-                    num_layers=num_layers,
+                    num_layers=self.layer_num,
                     page_size=self.page_size,
                     head_num=self.head_num,
                 )
@@ -639,9 +548,7 @@ class MHATokenToKVPoolHost(HostKVCache):
             if self.layout == "layer_first":
                 transfer_kv_direct(
                     src_layers=device_kv_buffers,
-                    dst_layers=(
-                        self.k_data_refs[:num_layers] + self.v_data_refs[:num_layers]
-                    ),
+                    dst_layers=self.host_kv_data_refs,
                     src_indices=device_indices,
                     dst_indices=host_indices,
                     page_size=self.page_size,

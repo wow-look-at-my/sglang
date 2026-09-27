@@ -160,7 +160,6 @@ class TestHiCacheHostRegister(unittest.TestCase):
                 pool.conv_state_shapes = [(7,), (2, 2)]
                 pool.temporal_dtype = torch.float16
                 pool.conv_dtype = torch.float32
-                pool.sibling_layouts = []
                 pool.device_pool = SimpleNamespace(device="cuda")
                 pool.device = "cpu"
                 pool.pin_memory = True

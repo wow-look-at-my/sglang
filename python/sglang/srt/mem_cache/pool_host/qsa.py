@@ -27,9 +27,7 @@ def qsa_compressed_page_views(pool: QSATokenToKVPool) -> list[torch.Tensor]:
 
     Row ``p`` is full-KV page ``p``'s compressed keys: compressed slot is
     ``full_slot // ratio`` and a full page is a whole number of groups, so
-    the page's ``page_size // ratio`` compressed rows are contiguous. On a
-    unified pool the rows live in the page envelopes, and the pool's
-    ``host_transfer_translate`` (`qsa_index_slots`) lands a page on its row.
+    the page's ``page_size // ratio`` compressed rows are contiguous.
     """
     rows_per_page = pool.qsa_compressed_page_size
     views = []
@@ -43,8 +41,6 @@ def qsa_compressed_page_views(pool: QSATokenToKVPool) -> list[torch.Tensor]:
 
 def qsa_compressed_bytes(pool: QSATokenToKVPool) -> int:
     """Device bytes of the compressed-K cache (the pending ring is per request)."""
-    if pool.qsa_host_capacity_bytes is not None:
-        return pool.qsa_host_capacity_bytes
     return sum(buffer.nbytes for buffer in pool.qsa_compressed_k_buffer_pool)
 
 

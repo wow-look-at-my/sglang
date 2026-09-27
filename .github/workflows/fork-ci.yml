@@ -55,11 +55,7 @@ permissions:
 
 jobs:
   fork-plan:
-    # A same-repo PR's commits already run on push; only fork PRs need this event.
-    if: >-
-      github.repository != 'sgl-project/sglang' &&
-      !(github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.repository != 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       kernel_version: ${{ steps.plan.outputs.kernel_version }}
@@ -113,11 +109,11 @@ jobs:
             ON_DEFAULT=true
           fi
 
-          # The image installs only this fork's kernel build, so a PyPI wheel of
-          # the same version does not count: it lacks the fork's ops and archs.
+          # A wheel for the pinned version must exist somewhere before the image
+          # can install it: PyPI (upstream releases) or this fork's release.
           KERNEL_AVAILABLE=false
-          if gh release view "sglang-kernel-v${KERNEL_VERSION}" --repo "$GITHUB_REPOSITORY" \
-               --json assets --jq ".assets[].name" 2>/dev/null | grep -q "_x86_64\.whl$"; then
+          if curl -fsS --max-time 15 --retry 3 -o /dev/null "https://pypi.org/pypi/sglang-kernel/${KERNEL_VERSION}/json" \
+             || gh release view "sglang-kernel-v${KERNEL_VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             KERNEL_AVAILABLE=true
           fi
 
@@ -440,34 +436,28 @@ jobs:
             echo "::error::no sglang-kernel wheel was built"; exit 1
           fi
           TAG="sglang-kernel-v${VERSION}"
-          # Releases here are immutable once published, so a release is created
-          # with its wheels in one call and never gets assets added later.
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" "${WHEELS[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "sglang-kernel ${VERSION}" \
               --notes "sglang-kernel ${VERSION} built from ${GITHUB_SHA}. Install: pip install sglang-kernel==${VERSION} --find-links https://github.com/${GITHUB_REPOSITORY}/releases/expanded_assets/${TAG}"
-            exit 0
           fi
           EXISTING=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           for WHEEL in "${WHEELS[@]}"; do
             NAME=$(basename "$WHEEL")
-            if ! printf '%s\n' "$EXISTING" | grep -qxF "$NAME"; then
-              echo "::error::release $TAG is published without $NAME and cannot take new assets; bump the kernel version (scripts/release/bump_kernel_version.py)"
-              exit 1
+            if printf '%s\n' "$EXISTING" | grep -qxF "$NAME"; then
+              if [ "$KERNEL_CHANGED" = true ]; then
+                # One version must mean one op set: a wheel already published under
+                # this version would silently lack whatever this change adds.
+                echo "::error::$NAME is already published; bump the kernel version (scripts/release/bump_kernel_version.py, then bump_kernel_version_to_sglang.py) to ship a changed kernel"
+                exit 1
+              fi
+              echo "$NAME already published; keeping it"
+            else
+              gh release upload "$TAG" "$WHEEL" --repo "$GITHUB_REPOSITORY"
             fi
-            if [ "$KERNEL_CHANGED" = true ]; then
-              # One version must mean one op set: a wheel already published under
-              # this version would silently lack whatever this change adds.
-              echo "::error::$NAME is already published; bump the kernel version (scripts/release/bump_kernel_version.py, then bump_kernel_version_to_sglang.py) to ship a changed kernel"
-              exit 1
-            fi
-            echo "$NAME already published; keeping it"
           done
 
   # ------------------------------------------------------------ serving image
-  # Built for the fork's deployment only: x86_64, CUDA 13, FORK_KERNEL_CUDA_ARCHS
-  # (default 120a), served with sglang.launch_server, so the image leaves out the
-  # sm90-only hpc-ops kernels and the sgl-model-gateway router.
   fork-docker-image:
     needs: [fork-plan, fork-sgl-kernel-wheel]
     if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' }}
@@ -485,46 +475,9 @@ jobs:
     steps:
       - name: Free disk space
         run: |
-          df -h / /mnt || true
-          sudo swapoff -a || true
-          sudo rm -f /mnt/swapfile /swapfile || true
-          sudo rm -rf \
-            /usr/share/dotnet /usr/share/swift /usr/share/miniconda /usr/share/az_* \
-            /usr/local/lib/android /usr/local/lib/node_modules /usr/local/share/boost \
-            /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/vcpkg \
-            /usr/local/.ghcup /usr/local/julia* /usr/local/aws-cli /usr/local/aws-sam-cli \
-            /usr/lib/jvm /usr/lib/google-cloud-sdk /usr/lib/firefox /usr/lib/mono \
-            /opt/ghc /opt/hostedtoolcache /opt/az /opt/microsoft /opt/google /opt/pipx \
-            /opt/mssql-tools /opt/pipx_bin /opt/actionarchivecache || true
-          docker system prune -af --volumes || true
-          sudo apt-get clean || true
-          df -h / /mnt || true
-
-      # BuildKit's snapshots and the swap file go on separate disks, the larger
-      # one (usually the /mnt scratch disk) holding the snapshots.
-      - name: Move Docker to the larger disk and add swap
-        run: |
-          set -euo pipefail
-          ROOT_AVAIL=$(df --output=avail -B1 / | tail -1)
-          MNT_AVAIL=$(df --output=avail -B1 /mnt 2>/dev/null | tail -1 || echo 0)
-          SWAP_DIR=/mnt
-          if [ "${MNT_AVAIL:-0}" -gt "$ROOT_AVAIL" ]; then
-            sudo systemctl stop docker docker.socket
-            sudo mkdir -p /mnt/docker
-            CONF=/etc/docker/daemon.json
-            if sudo test -s "$CONF"; then sudo cat "$CONF"; else echo '{}'; fi \
-              | jq '. + {"data-root": "/mnt/docker"}' > "${RUNNER_TEMP}/daemon.json"
-            sudo install -m 644 "${RUNNER_TEMP}/daemon.json" "$CONF"
-            sudo systemctl start docker
-            SWAP_DIR=""
-          fi
-          sudo fallocate -l 16G "${SWAP_DIR}/swapfile-docker-build"
-          sudo chmod 600 "${SWAP_DIR}/swapfile-docker-build"
-          sudo mkswap "${SWAP_DIR}/swapfile-docker-build"
-          sudo swapon "${SWAP_DIR}/swapfile-docker-build"
-          docker info --format 'Docker root: {{.DockerRootDir}}'
-          free -g
-          df -h / /mnt || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost /usr/local/.ghcup || true
+          docker system prune -af || true
+          df -h /
 
       - uses: actions/checkout@v4
 
@@ -534,8 +487,6 @@ jobs:
           name: sgl-kernel-wheel-${{ matrix.arch }}
           path: ${{ runner.temp }}/sgl-kernel-wheels
 
-      # The image carries this fork's kernel build and nothing else: the version
-      # python/pyproject.toml pins may never have been published upstream.
       - name: Collect the sglang-kernel wheel
         env:
           GH_TOKEN: ${{ github.token }}
@@ -543,15 +494,17 @@ jobs:
         run: |
           set -euo pipefail
           DIR="${RUNNER_TEMP}/sgl-kernel-wheels"
-          PATTERN="sglang_kernel-${VERSION}+*_${{ matrix.arch }}.whl"
           mkdir -p "$DIR"
-          if ! compgen -G "$DIR/$PATTERN" >/dev/null; then
+          if ! ls "$DIR"/*_${{ matrix.arch }}.whl >/dev/null 2>&1; then
             gh release download "sglang-kernel-v${VERSION}" --repo "$GITHUB_REPOSITORY" \
-              --pattern "$PATTERN" --dir "$DIR" || true
+              --pattern "*_${{ matrix.arch }}.whl" --dir "$DIR" || true
           fi
-          ls -alh "$DIR"
-          if ! compgen -G "$DIR/$PATTERN" >/dev/null; then
-            echo "::error::no ${PATTERN}: not built in this run and not in release sglang-kernel-v${VERSION}; dispatch with build_kernel"
+          if ls "$DIR"/*_${{ matrix.arch }}.whl >/dev/null 2>&1; then
+            ls -alh "$DIR"
+          elif curl -fsS --max-time 15 --retry 3 -o /dev/null "https://pypi.org/pypi/sglang-kernel/${VERSION}/json"; then
+            echo "Using sglang-kernel ${VERSION} from PyPI"
+          else
+            echo "::error::no sglang-kernel ${VERSION} wheel for ${{ matrix.arch }}: not built in this run, not in release sglang-kernel-v${VERSION}, not on PyPI"
             exit 1
           fi
 
@@ -563,25 +516,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # The layer cache lives next to the image on ghcr.io: the image is far
-      # larger than the 10 GB Actions cache, which also holds the kernel caches.
       - name: Build and push ${{ matrix.platform }}
         env:
           IMAGE_TAGS: ${{ needs.fork-plan.outputs.image_tags }}
-          KERNEL_VERSION: ${{ needs.fork-plan.outputs.kernel_version }}
-          GPU_ARCHS: ${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang"
-          CACHE="${IMAGE}:buildcache-${{ matrix.suffix }}"
           TAG_ARGS=()
           for TAG in $IMAGE_TAGS; do TAG_ARGS+=(-t "${IMAGE}:${TAG}-${{ matrix.suffix }}"); done
-          # Same bound as python/sglang/kernels/aot/build.sh: a CUDA or CUTLASS
-          # translation unit can peak near 10 GB, so jobs <= (RAM + swap) / 10 GB.
-          MEM_JOBS=$(awk '/^(MemTotal|SwapTotal):/ {kb += $2} END {print int(kb / (10 * 1024 * 1024))}' /proc/meminfo)
-          BUILD_JOBS=$(printf '%s\n' "$(nproc)" "$MEM_JOBS" | sort -n | head -1)
-          [ "$BUILD_JOBS" -ge 1 ] || BUILD_JOBS=1
-          echo "BUILD_JOBS=${BUILD_JOBS} GPU_ARCHS=${GPU_ARCHS} sglang-kernel ${KERNEL_VERSION}"
           docker buildx build \
             --target framework_final \
             --platform ${{ matrix.platform }} \
@@ -590,26 +532,13 @@ jobs:
             --build-arg BUILD_TYPE=all \
             --build-arg BRANCH_TYPE=local \
             --build-arg INSTALL_FLASHINFER_JIT_CACHE=1 \
-            --build-arg GPU_ARCHS="${GPU_ARCHS}" \
-            --build-arg BUILD_JOBS="${BUILD_JOBS}" \
-            --build-arg INSTALL_GATEWAY=0 \
-            --build-arg SGL_KERNEL_VERSION="${KERNEL_VERSION}" \
-            --build-arg SGL_KERNEL_WHEEL_REQUIRED=1 \
-            --build-arg SGLANG_BUILD_COMMIT="${GITHUB_SHA}" \
+            --build-arg CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
             --build-context sgl_kernel_wheels="${RUNNER_TEMP}/sgl-kernel-wheels" \
-            --cache-from "type=registry,ref=${CACHE}" \
-            --cache-to "type=registry,ref=${CACHE},mode=max,ignore-error=true" \
             --label org.opencontainers.image.source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
             --label org.opencontainers.image.revision="${GITHUB_SHA}" \
             "${TAG_ARGS[@]}" \
             --push \
             .
-
-      - name: Disk and memory after the build
-        if: always()
-        run: |
-          df -h / /mnt || true
-          free -g || true
 
   fork-docker-manifest:
     needs: [fork-plan, fork-docker-image]

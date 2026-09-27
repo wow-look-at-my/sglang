@@ -15,7 +15,7 @@ no allocator/ownership state. ``anchor_bytes`` is the byte offset of the
 pool's region inside the raw buffer (0 for a standalone pool).
 """
 
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 import torch
 
@@ -47,12 +47,8 @@ def build_mha_views(
     page_size: int,
     num_pages: int,
     anchor_bytes: int = 0,
-    page_rows: Optional[int] = None,
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     """Per-layer K/V views over ``raw`` for uniform-row MHA.
-
-    ``page_rows`` is the page envelope in K/V rows when it holds more than the
-    K/V blocks (default ``2 * layer_num * ps``); ids then step by it per page.
 
     The page envelope ``[L0_K*ps | L0_V*ps | L1_K*ps | ...]`` is a uniform
     array of ``2*layer_num`` row-blocks when K and V rows are equally wide, so
@@ -76,11 +72,8 @@ def build_mha_views(
     row_elems = head_num * head_dim
     row_bytes = row_elems * itemsize
     blocks = 2 * layer_num
-    if page_rows is None:
-        page_rows = blocks * page_size
-    assert page_rows >= blocks * page_size
-    page_bytes = page_rows * row_bytes
-    n_rows = num_pages * page_rows
+    page_bytes = page_size * blocks * row_bytes
+    n_rows = num_pages * blocks * page_size
     assert anchor_bytes % itemsize == 0
     last_view_end = (
         anchor_bytes + (blocks - 1) * page_size * row_bytes + n_rows * row_bytes
@@ -179,86 +172,6 @@ def build_mla_views(
     return views
 
 
-def build_row_block_views(
-    raw: torch.Tensor,
-    *,
-    block_offsets_bytes: Sequence[int],
-    row_shape: Sequence[int],
-    dtype: torch.dtype,
-    page_bytes: int,
-    num_pages: int,
-    anchor_bytes: int = 0,
-) -> List[torch.Tensor]:
-    """Contiguous ``(num_pages * page_bytes / row_bytes, *row_shape)`` views, one
-    per block of rows at ``block_offsets_bytes`` inside every page envelope.
-
-    A row of page ``P`` at in-block row ``r`` has id ``P * page_bytes / row_bytes
-    + r``; like the K/V views, the views overlap and each id resolves inside its
-    own block, so ``raw`` needs one page envelope of tail pad.
-    """
-    itemsize = dtype.itemsize
-    row_elems = _prod(row_shape)
-    row_bytes = row_elems * itemsize
-    assert page_bytes % row_bytes == 0, (
-        f"page envelope of {page_bytes} B is not a whole number of {row_bytes} B rows"
-    )
-    n_rows = num_pages * page_bytes // row_bytes
-    as_dtype_view = raw.view(dtype)
-    views = []
-    for offset in block_offsets_bytes:
-        base_bytes = anchor_bytes + offset
-        assert base_bytes % itemsize == 0
-        assert base_bytes + n_rows * row_bytes <= raw.numel() * raw.itemsize, (
-            "build_row_block_views: allocate one page envelope of tail pad"
-        )
-        strides = [1]
-        for size in reversed(list(row_shape)[1:]):
-            strides.insert(0, strides[0] * int(size))
-        views.append(
-            torch.as_strided(
-                as_dtype_view,
-                size=(n_rows, *row_shape),
-                stride=(row_elems, *strides),
-                storage_offset=base_bytes // itemsize,
-            )
-        )
-    return views
-
-
-def build_slot_sibling_views(
-    raw: torch.Tensor,
-    *,
-    layouts: Sequence[Tuple[Tuple[int, ...], torch.dtype]],
-    entry_bytes: int,
-    first_offset_bytes: int,
-    max_slots: int,
-    anchor_bytes: int = 0,
-) -> List[torch.Tensor]:
-    """``(max_slots, *shape)`` views of per-slot side tensors packed after the
-    Mamba state in each slot envelope (slot stride ``entry_bytes``)."""
-    views = []
-    offset = anchor_bytes + first_offset_bytes
-    for shape, dtype in layouts:
-        itemsize = dtype.itemsize
-        assert entry_bytes % itemsize == 0 and offset % itemsize == 0, (
-            f"misaligned side state {dtype} at byte {offset} in a "
-            f"{entry_bytes} B slot envelope"
-        )
-        strides = [1]
-        for size in reversed(list(shape)[1:]):
-            strides.insert(0, strides[0] * int(size))
-        views.append(
-            torch.as_strided(
-                raw.view(dtype),
-                size=(max_slots, *shape),
-                stride=(entry_bytes // itemsize, *strides),
-                storage_offset=offset // itemsize,
-            )
-        )
-        offset += _prod(shape) * itemsize
-    return views
-
-
 def mamba_entry_bytes(
     *,
     layer_num: int,
@@ -285,7 +198,6 @@ def build_page_major_mamba_views(
     temporal_dtype: torch.dtype,
     max_slots: int,
     anchor_bytes: int = 0,
-    entry_bytes: Optional[int] = None,
 ) -> Tuple[List[torch.Tensor], torch.Tensor]:
     """Per-slot envelope views over ``raw`` for Mamba state.
 
@@ -293,20 +205,13 @@ def build_page_major_mamba_views(
     [temporal rows × layers]``. Each returned view has shape
     ``(num_layers, max_slots, *inner_shape)`` matching ``MambaPool.State.conv[i]``
     / ``.temporal``. Mamba state is always token-granular (page_size == 1).
-    ``entry_bytes`` is the slot stride when per-slot side states follow the
-    temporal rows (default: conv + temporal only).
     """
-    state_bytes = mamba_entry_bytes(
+    entry_bytes = mamba_entry_bytes(
         layer_num=layer_num,
         conv_state_shapes=conv_state_shapes,
         conv_dtype=conv_dtype,
         temporal_state_shape=temporal_state_shape,
         temporal_dtype=temporal_dtype,
-    )
-    if entry_bytes is None:
-        entry_bytes = state_bytes
-    assert entry_bytes >= state_bytes, (
-        f"slot envelope of {entry_bytes} B cannot hold {state_bytes} B of state"
     )
 
     def contiguous_strides(shape: Sequence[int]) -> Tuple[int, ...]:

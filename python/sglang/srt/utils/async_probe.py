@@ -142,22 +142,22 @@ def maybe_detect_oob(indices: Optional[torch.Tensor], low: int, high: int, msg: 
 
 
 def maybe_detect_kernel_facing_loc(
-    indices: Optional[torch.Tensor], page_size: int, page_stride: int, msg: str
+    indices: Optional[torch.Tensor], page_size: int, blocks_per_page: int, msg: str
 ):
     """Async check that a write loc is in the pool's KERNEL-FACING id space.
 
-    A kernel-facing id is `phys_page * page_stride + offset` with
-    `offset < page_size`, so its remainder modulo the page stride is
+    A kernel-facing id is `phys_page * (page_size * blocks_per_page) + offset`
+    with `offset < page_size`, so its remainder modulo the page stride is
     below page_size; a VIRTUAL id satisfies that only in the first block.
-    Vacuous when the stride is one page. Virtual ids are in range for the OOB
-    probe, so this is the only check that separates them.
+    Vacuous at blocks_per_page 1. Virtual ids are in range for the OOB probe,
+    so this is the only check that separates them.
     """
-    if page_stride <= page_size or not envs.SGLANG_ENABLE_ASYNC_ASSERT.get():
+    if blocks_per_page <= 1 or not envs.SGLANG_ENABLE_ASYNC_ASSERT.get():
         return
     if indices is None or indices.numel() == 0:
         return
     torch._assert_async(
-        (indices % page_stride < page_size).all(),
+        (indices % (page_size * blocks_per_page) < page_size).all(),
         f"write loc outside the kernel-facing id space (virtual ids?): {msg}",
     )
 

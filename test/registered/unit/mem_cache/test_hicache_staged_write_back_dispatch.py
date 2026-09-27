@@ -596,7 +596,6 @@ class TestHiCacheStagedWriteBackDispatch(CustomTestCase):
         host = MHATokenToKVPoolHost.__new__(MHATokenToKVPoolHost)
         host.layout = "page_first_direct"
         host.page_size = 2
-        host.layer_num = 2
         host.kv_buffer = torch.empty(2, 2, 2, 2, 1, 1)
 
         device_k = torch.empty(2, 3, 2, 1, 1)
@@ -736,8 +735,7 @@ class TestHiCacheStagedWriteBackDispatch(CustomTestCase):
             num_layers, 8, 1, 2
         )
         device_pool = SimpleNamespace(
-            mamba_cache=SimpleNamespace(temporal=temporal.clone(), conv=[conv.clone()]),
-            slot_sibling_views=lambda: [],
+            mamba_cache=SimpleNamespace(temporal=temporal.clone(), conv=[conv.clone()])
         )
         expected_temporal = device_pool.mamba_cache.temporal[:, device_indices].clone()
         expected_conv = device_pool.mamba_cache.conv[0][:, device_indices].clone()
@@ -824,8 +822,7 @@ class TestHiCacheStagedWriteBackDispatch(CustomTestCase):
             / 8
         ).to(torch.bfloat16)
         device_pool = SimpleNamespace(
-            mamba_cache=SimpleNamespace(temporal=temporal.clone(), conv=[conv.clone()]),
-            slot_sibling_views=lambda: [],
+            mamba_cache=SimpleNamespace(temporal=temporal.clone(), conv=[conv.clone()])
         )
         expected_temporal = device_pool.mamba_cache.temporal[:, device_indices].clone()
         expected_conv = device_pool.mamba_cache.conv[0][:, device_indices].clone()

@@ -316,19 +316,12 @@ class MultiEndedAllocator(BaseTokenToKVPoolAllocator):
         self.entry_bytes = spec.entry_bytes()
         self.min_slot_index = unified_buffer.min_slot_index(sub_pool_name)
         self.is_id_owner = is_id_owner
-        # Kernel-facing ids per physical page, from the spec that owns the
-        # layout; `kernel_page_multiplier=` overrides it only for tests. The
-        # multiplier is None when the stride is not whole pages (an envelope
-        # with index rows), which only page-table consumers need.
-        self.kernel_page_stride = (
-            spec.kernel_page_stride(page_size)
-            if kernel_page_multiplier is None
-            else page_size * kernel_page_multiplier
-        )
+        # Kernel-facing page-stride scale, from the spec that owns the layout;
+        # `kernel_page_multiplier=` overrides it only for tests.
         self.kernel_page_multiplier = (
-            self.kernel_page_stride // page_size
-            if self.kernel_page_stride % page_size == 0
-            else None
+            spec.blocks_per_page()
+            if kernel_page_multiplier is None
+            else kernel_page_multiplier
         )
         # Zero page envelopes on hand-out -- see _maybe_zero_pages.
         self._zero_pages_on_alloc = isinstance(kvcache, UnifiedMLATokenToKVPool)
@@ -1069,7 +1062,7 @@ class MultiEndedAllocator(BaseTokenToKVPoolAllocator):
     ) -> torch.Tensor:
         """Virtual token ids -> kernel-facing ids:
 
-            kernel_id(t) = v2p[t // ps] * kernel_page_stride + t % ps
+            kernel_id(t) = (t // ps) * (ps * kernel_page_multiplier) + t % ps
 
         Internal machinery (compaction, in-flight write sets) MUST keep using
         `translate_kv_loc`: kernel-facing ids are for kernels only. Tombstones (-1)
@@ -1104,7 +1097,7 @@ class MultiEndedAllocator(BaseTokenToKVPoolAllocator):
             loc=loc,
             v2p=self.virtual_to_physical,
             page_size=self.pool_page_size,
-            stride=self.kernel_page_stride,
+            stride=self.pool_page_size * self.kernel_page_multiplier,
             dcp_size=dcp_size,
             dcp_rank=dcp_rank,
             out=out,

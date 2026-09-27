@@ -549,11 +549,6 @@ class DefaultPoolConfigurator(MemoryPoolConfigurator):
             indexer_size_per_token * num_indexer_layers * element_size * indexer_ratio
         )
 
-    @property
-    def cell_size_per_token(self) -> int:
-        """Bytes one token of max_total_num_tokens costs, draft pools included."""
-        return self._cell_size
-
     def calculate_pool_sizes(
         self, available_bytes: int, page_size: int
     ) -> MemoryPoolConfig:

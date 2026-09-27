@@ -87,15 +87,6 @@ class MLATokenToKVPoolHost(HiSparseHostPoolMixin, HostKVCache):
     ):
         self.override_kv_cache_dim = override_kv_cache_dim
         self.mtp_draft_device_pools = tuple(mtp_draft_device_pools)
-        if (
-            self.mtp_draft_device_pools
-            and device_pool.host_transfer_translate is not None
-        ):
-            # The packed backup copies target and draft layers with one index list.
-            raise ValueError(
-                "MLA HiCache cannot pack MTP draft layers with a unified target "
-                "pool: the target's kernel-facing ids do not address the drafts."
-            )
         self._is_dummy = is_dummy
 
         if is_dummy:

@@ -406,33 +406,11 @@ class MambaPool:
     # Slot-lifecycle side states (see ple_state_pool.SlotIndexedState);
     # class-level default because UnifiedMambaPool skips MambaPool.__init__.
     _slot_siblings: Tuple = ()
-    # Host-tier sizing weight; set where `size` is not the state capacity (unified).
-    host_capacity_bytes: Optional[int] = None
-
-    def host_mirrored_bytes(self) -> int:
-        """Device bytes a HiCache host tier mirrors in proportion: the slots' conv
-        and temporal state and side states, not the per-request draft scratch."""
-        if self.host_capacity_bytes is not None:
-            return self.host_capacity_bytes
-        per_slot = sum(
-            state[:, 0].numel() * state.element_size()
-            for state in (*self.mamba_cache.conv, self.mamba_cache.temporal)
-        ) + sum(
-            view[0].numel() * view.element_size() for view in self.slot_sibling_views()
-        )
-        return (self.size + 1) * per_slot
 
     def register_slot_state(self, state) -> None:
         """Attach a state that rides along on clear / copy / host round-trip,
         so a slot never changes owner with a stale sibling row attached."""
         self._slot_siblings = [*self._slot_siblings, state]
-
-    def slot_sibling_views(self) -> List[torch.Tensor]:
-        """``[slot, ...]`` views of every registered side state, in registration
-        order; indexed by the same (physical) slot ids as the state itself."""
-        return [
-            view for state in self._slot_siblings for view in state.slot_major_views()
-        ]
 
     @dataclass(frozen=True, kw_only=True)
     class State:
@@ -1559,9 +1537,7 @@ class HybridReqToTokenPool(ReqToTokenPool):
 
     def short_conv_layer_cache(self, layer_id: int) -> torch.Tensor:
         if self.layer_transfer_counter is not None:
-            # HiCache loads the side states with the first state layer.
-            loaded_with = max(layer_id, min(self.mamba_map))
-            self.layer_transfer_counter.wait_until(loaded_with - self.start_layer)
+            self.layer_transfer_counter.wait_until(layer_id - self.start_layer)
         return self.short_conv_pool.layer_cache(layer_id)
 
     def short_conv_layer_intermediate_cache(
@@ -1570,10 +1546,6 @@ class HybridReqToTokenPool(ReqToTokenPool):
         return self.short_conv_pool.layer_intermediate_cache(layer_id)
 
     def get_ngram_context(self, ngram_indices: torch.Tensor) -> torch.Tensor:
-        if self.layer_transfer_counter is not None:
-            # HiCache loads the side states with the first state layer.
-            first_mamba_layer = min(self.mamba_map)
-            self.layer_transfer_counter.wait_until(first_mamba_layer - self.start_layer)
         return self.ngram_pool.get_context(ngram_indices)
 
     def set_ngram_context(
@@ -1873,8 +1845,6 @@ class KVCache(abc.ABC):
         # only for the unified pool's per-layer views, and then a write loc must
         # have been translated into that space first.
         self.kernel_page_blocks = 1
-        # Kernel-facing ids one physical page spans (page_size * blocks here).
-        self.kernel_page_stride = page_size
         self.dtype = dtype
         self.device = device
         if dtype in (torch.float8_e5m2, torch.float8_e4m3fn, torch.float8_e4m3fnuz):
@@ -2627,7 +2597,7 @@ class MHATokenToKVPool(KVCache):
         # corruption in the store_kvcache write (gated on SGLANG_ENABLE_ASYNC_ASSERT).
         maybe_detect_oob(loc, 0, self.size + self.page_size, "set_kv_buffer (MHA)")
         maybe_detect_kernel_facing_loc(
-            loc, self.page_size, self.kernel_page_stride, "set_kv_buffer (MHA)"
+            loc, self.page_size, self.kernel_page_blocks, "set_kv_buffer (MHA)"
         )
         layer_id = (
             layer_id_override if layer_id_override is not None else layer.layer_id
@@ -4596,10 +4566,7 @@ class MLATokenToKVPool(KVCache):
         loc, _, _ = unwrap_write_loc(loc_info)
         maybe_detect_oob(loc, 0, self.size + self.page_size, "set_kv_buffer (MLA)")
         maybe_detect_kernel_facing_loc(
-            loc,
-            self.page_size,
-            self.page_size * self.kernel_page_blocks,
-            "set_kv_buffer (MLA)",
+            loc, self.page_size, self.kernel_page_blocks, "set_kv_buffer (MLA)"
         )
         layer_id = (
             layer_id_override if layer_id_override is not None else layer.layer_id
@@ -4686,10 +4653,7 @@ class MLATokenToKVPool(KVCache):
             "set_mla_kv_buffer (MLA)",
         )
         maybe_detect_kernel_facing_loc(
-            loc,
-            self.page_size,
-            self.page_size * self.kernel_page_blocks,
-            "set_mla_kv_buffer (MLA)",
+            loc, self.page_size, self.kernel_page_blocks, "set_mla_kv_buffer (MLA)"
         )
         layer_id = (
             layer_id_override if layer_id_override is not None else layer.layer_id

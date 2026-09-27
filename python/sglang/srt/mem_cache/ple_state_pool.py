@@ -34,10 +34,6 @@ class SlotIndexedState(Protocol):
 
     def iter_transfer_state_entries(self): ...
 
-    def slot_major_views(self) -> List[torch.Tensor]:
-        """Views ``[slot, ...]`` of every per-slot tensor, for the host mirror."""
-        ...
-
 
 class ShortConvPool:
     def __init__(
@@ -51,10 +47,7 @@ class ShortConvPool:
         spec_state_size: int = 0,
         enable_memory_saver: bool = False,
         speculative_num_draft_tokens: Optional[int] = None,
-        conv_state: Optional[torch.Tensor] = None,
     ):
-        """``conv_state`` is an existing ``[layers, size + 1, *state_shape]``
-        view to use in place of an allocation (a unified pool's slot envelopes)."""
         self.size = size
         self.device = device
         self.layer_map = {layer_id: i for i, layer_id in enumerate(layer_ids)}
@@ -62,12 +55,6 @@ class ShortConvPool:
         self.intermediate_conv_state = None
         if not layer_ids or state_shape is None:
             return
-        if conv_state is not None:
-            expected = (len(layer_ids), size + 1, *state_shape)
-            assert tuple(conv_state.shape) == expected, (
-                f"short-conv state view {tuple(conv_state.shape)} != {expected}"
-            )
-            conv_state.zero_()
 
         self.memory_saver_adapter = TorchMemorySaverAdapter.create(
             enable=enable_memory_saver
@@ -83,14 +70,10 @@ class ShortConvPool:
                 else nullcontext()
             ),
         ):
-            self.conv_state = (
-                torch.zeros(
-                    size=(len(layer_ids), size + 1) + state_shape,
-                    dtype=dtype,
-                    device=device,
-                )
-                if conv_state is None
-                else conv_state
+            self.conv_state = torch.zeros(
+                size=(len(layer_ids), size + 1) + state_shape,
+                dtype=dtype,
+                device=device,
             )
             if speculative_num_draft_tokens is not None:
                 self.intermediate_conv_state = torch.zeros(
@@ -143,11 +126,6 @@ class ShortConvPool:
             return
         self.conv_state[:, indices] = data.to(self.conv_state.device, non_blocking=True)
 
-    def slot_major_views(self) -> List[torch.Tensor]:
-        if self.conv_state is None:
-            return []
-        return [self.conv_state.transpose(0, 1)]
-
     def iter_transfer_state_entries(self):
         """Yield replicated per-layer state for PD transfer."""
         if self.conv_state is None:
@@ -172,10 +150,7 @@ class NGramPool:
         spec_state_size: int = 0,
         enable_memory_saver: bool = False,
         speculative_num_draft_tokens: Optional[int] = None,
-        context: Optional[torch.Tensor] = None,
     ):
-        """``context`` is an existing ``[size + 1, context_len]`` int64 view to
-        use in place of an allocation (a unified pool's slot envelopes)."""
         self.size = size
         self.context_len = context_len
         self.eos_token_id = eos_token_id
@@ -184,13 +159,6 @@ class NGramPool:
         self.intermediate_context = None
         if context_len <= 0:
             return
-        if context is not None:
-            assert tuple(context.shape) == (size + 1, context_len), (
-                f"N-gram context view {tuple(context.shape)} != "
-                f"{(size + 1, context_len)}"
-            )
-            assert context.dtype == torch.long
-            context.fill_(eos_token_id)
 
         self.memory_saver_adapter = TorchMemorySaverAdapter.create(
             enable=enable_memory_saver
@@ -206,15 +174,11 @@ class NGramPool:
                 else nullcontext()
             ),
         ):
-            self.context = (
-                torch.full(
-                    (size + 1, context_len),
-                    eos_token_id,
-                    dtype=torch.long,
-                    device=device,
-                )
-                if context is None
-                else context
+            self.context = torch.full(
+                (size + 1, context_len),
+                eos_token_id,
+                dtype=torch.long,
+                device=device,
             )
             if speculative_num_draft_tokens is not None:
                 self.intermediate_context = torch.full(
@@ -271,9 +235,6 @@ class NGramPool:
         self.context[indices.to(dtype=torch.long)] = data.to(
             self.context.device, non_blocking=True
         )
-
-    def slot_major_views(self) -> List[torch.Tensor]:
-        return [] if self.context is None else [self.context]
 
     def iter_transfer_state_entries(self):
         """Yield replicated request-wide N-gram history for PD transfer."""

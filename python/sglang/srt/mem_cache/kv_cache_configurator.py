@@ -107,20 +107,6 @@ from sglang.srt.utils.common import (
 logger = logging.getLogger(__name__)
 
 
-def _reserves_envelope_draft_layers(allocator) -> bool:
-    """Whether the target's unified pool carries MTP draft layers in its page
-    envelopes (see `init_unified_mamba_pools(draft_layer_num=...)`)."""
-    from sglang.srt.mem_cache.unified_memory_pool import UnifiedQSATokenToKVPool
-
-    if not isinstance(allocator, UnifiedMambaTokenToKVPoolAllocator):
-        return False
-    target_pool = allocator.get_kvcache()
-    return (
-        isinstance(target_pool, UnifiedQSATokenToKVPool)
-        and target_pool.full_kv_pool.unified_buffer.mha_spec("full").draft_layer_num > 0
-    )
-
-
 def _should_elide_dsa_index_k(*, is_draft_worker: bool) -> bool:
     memory_config = get_memory()
     return (
@@ -550,14 +536,6 @@ class KVCacheConfigurator:
                 unified_memory_pool=bundle.unified_memory_pool,
             )
 
-        if self.is_draft_worker and _reserves_envelope_draft_layers(
-            token_to_kv_pool_allocator
-        ):
-            return self._init_unified_qsa_draft_pools(
-                req_to_token_pool=req_to_token_pool,
-                token_to_kv_pool_allocator=token_to_kv_pool_allocator,
-            )
-
         # The unified allocator hands out VIRTUAL token ids from the whole
         # virtual space (> max_total_num_tokens); the direct-indexed draft
         # pool must be sized by that space.
@@ -695,7 +673,6 @@ class KVCacheConfigurator:
         one byte buffer split between the full-attn MHA KV pool and the
         per-request Mamba state pool, with virtual slot ids above the
         allocator."""
-        from sglang.srt.layers.attention.qsa.config import parse_qsa_profile
         from sglang.srt.mem_cache.unified_memory_pool import init_unified_mamba_pools
 
         config = self.mambaish_config
@@ -762,72 +739,11 @@ class KVCacheConfigurator:
             forward_stream=self.forward_stream,
             # Lazy compaction: default ON, env-var escape hatch for rollback / A/B.
             lazy_compaction=_should_enable_lazy_compaction(),
-            # Draft workers keep the token-count byte sum (they build their own
-            # pools over the virtual id space; belt only).
+            # Draft workers keep the token-count byte sum (spec is asserted
+            # off under unified; belt only).
             unified_total_bytes=(None if self.is_draft_worker else unified_total_bytes),
-            enable_mamba_extra_buffer_lazy=(
-                get_exec().mamba.enable_mamba_extra_buffer_lazy
-            ),
-            qsa_profile=parse_qsa_profile(self.model_config.hf_config),
-            token_cell_bytes=self._token_cell_bytes(),
-            ple_req_pool_kwargs=self._get_ple_req_pool_kwargs(),
-            draft_layer_num=self._envelope_draft_layer_num(),
         )
         return bundle
-
-    def _init_unified_qsa_draft_pools(
-        self,
-        *,
-        req_to_token_pool: ReqToTokenPool,
-        token_to_kv_pool_allocator: BaseTokenToKVPoolAllocator,
-    ) -> _InitializedPools:
-        """An MTP draft whose K/V and index rows share the target's page
-        envelopes: it takes the target's ids, translated like the target's."""
-        from sglang.srt.mem_cache.unified_memory_pool import (
-            build_unified_qsa_draft_pool,
-        )
-
-        token_to_kv_pool = build_unified_qsa_draft_pool(
-            allocator=token_to_kv_pool_allocator,
-            target_pool=token_to_kv_pool_allocator.get_kvcache(),
-            full_attention_layer_ids=[0],
-            mamba_pool=req_to_token_pool.mamba_pool,
-            start_layer=self.layer_info.start_layer,
-            num_request_slots=req_to_token_pool.req_to_token.shape[0],
-            draft_index=self.draft_model_idx or 0,
-        )
-        return _InitializedPools(
-            req_to_token_pool=req_to_token_pool,
-            token_to_kv_pool=token_to_kv_pool,
-            token_to_kv_pool_allocator=token_to_kv_pool_allocator,
-        )
-
-    def _envelope_draft_layer_num(self) -> int:
-        """MTP draft layers the target's page envelopes carry: a QSA chain MTP
-        draft (the only speculative mode the unified pool admits for QSA)
-        shares the target's attention geometry."""
-        from sglang.srt.layers.attention.qsa.config import parse_qsa_profile
-
-        if (
-            self.is_draft_worker
-            or not self.spec_algorithm.is_eagle()
-            or parse_qsa_profile(self.model_config.hf_config) is None
-        ):
-            return 0
-        return int(self.spec_aux_config.eagle_draft_num_layers or 0)
-
-    def _token_cell_bytes(self) -> Optional[int]:
-        """Bytes the token budget charges per token, draft pool included."""
-        # Local import avoids a pool_configurator import cycle.
-        from sglang.srt.model_executor.pool_configurator import (
-            DefaultPoolConfigurator,
-            create_memory_pool_configurator,
-        )
-
-        configurator = create_memory_pool_configurator(self)
-        if not isinstance(configurator, DefaultPoolConfigurator):
-            return None
-        return configurator.cell_size_per_token
 
     def _init_unified_mamba_swa_pools(
         self,
@@ -2674,11 +2590,11 @@ class KVCacheConfigurator:
         return total_rest_memory - mamba_state_memory
 
     def _can_derive_mamba_split(self) -> bool:
-        # SWA KV per request is window-bounded; PP stages must agree without a
-        # collective. Unified memory floats the split at runtime, but its labels
-        # still size the request cap, the draft-state scratch and the host tier.
+        # Unified memory floats the split at runtime; SWA KV per request is
+        # window-bounded; PP stages must agree without a collective.
         return (
-            not self.is_hybrid_swa
+            not get_memory().enable_unified_memory
+            and not self.is_hybrid_swa
             and self.pp_size == 1
             and bool(self.mambaish_config.full_attention_layer_ids)
         )
