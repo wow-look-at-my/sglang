@@ -43,7 +43,9 @@ on:
 
 concurrency:
   group: fork-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # The kernel wheel build outlasts the gap between pushes; cancelling it meant it
+  # never finished. A newer run waits instead (GitHub keeps only the newest one).
+  cancel-in-progress: false
 
 permissions:
   actions: read
