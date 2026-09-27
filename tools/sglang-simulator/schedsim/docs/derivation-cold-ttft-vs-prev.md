@@ -1,4 +1,4 @@
-# Cold TTFT against the policy running the same balancer
+# Cold TTFT against the same balancer
 
 Covers `boundOwnWork`, the bound `contract_test.go` reads for a `cold TTFT mean`
 cell lost to PREV. PREV is the balancer at f15db9ee6a and NEW is the balancer on
