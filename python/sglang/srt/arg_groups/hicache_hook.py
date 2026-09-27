@@ -4,15 +4,35 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from sglang.srt.arg_groups.overrides import (
     declare_resolution,
+    model_config_of,
     resolving_view,
     use_mla_backend,
 )
 
 logger = logging.getLogger(__name__)
+
+# KV dtypes whose host pools copy the device bytes verbatim; FP4/MXFP8 pools
+# carry block-scale layouts the host pools do not preserve.
+_AUTO_HICACHE_KV_CACHE_DTYPES = frozenset(
+    {"auto", "bf16", "bfloat16", "fp8_e4m3", "fp8_e5m2"}
+)
+_AUTO_HICACHE_SPECULATIVE_ALGORITHMS = frozenset(
+    {None, "EAGLE", "EAGLE3", "NEXTN", "NGRAM"}
+)
+# Architectures whose resolution reacts to an explicit HiCache flag; the
+# automatic decision is made after those hooks ran, so it leaves them alone.
+_AUTO_HICACHE_EXCLUDED_ARCHITECTURES = frozenset(
+    {
+        "Step3p5ForCausalLM",
+        "Step3p7ForConditionalGeneration",
+        "MiniCPMForCausalLM",
+        "MiniCPMSALAForCausalLM",
+    }
+)
 
 
 def handle_hicache(server_args: Any):
@@ -248,3 +268,111 @@ def validate_hicache_host_memory_mode(server_args: Any):
             "context and never consuming its staged holds. Prefill "
             "instances share the standard scheduler path and are supported."
         )
+
+
+def handle_hicache_auto(server_args: Any):
+    """Resolve an unset ``enable_hierarchical_cache``.
+
+    Runs after every hook that reads the flag, which saw it unset (off), so
+    only configurations those hooks would neither reject nor adjust qualify.
+    Startup confirms the device pools are mirrored and the host has room
+    (``hicache_auto.build_tree_cache_with_auto_hicache``).
+    """
+    cfg = resolving_view(server_args)
+    if cfg.enable_hierarchical_cache is not None:
+        return
+    reason = auto_hicache_blocker(server_args)
+    if reason is not None:
+        logger.info("HiCache (host-memory prefix cache) auto: off, %s.", reason)
+        declare_resolution(
+            server_args, "handle_hicache_auto", enable_hierarchical_cache=False
+        )
+        return
+    logger.info(
+        "HiCache (host-memory prefix cache) auto: on, sized from free host "
+        "memory at startup; --no-enable-hierarchical-cache opts out."
+    )
+    declare_resolution(
+        server_args,
+        "handle_hicache_auto",
+        enable_hierarchical_cache=True,
+        _enable_hierarchical_cache_auto=True,
+    )
+    from sglang.srt.arg_groups.resolution_hooks import run_hook
+
+    run_hook(handle_hicache, server_args)
+
+
+def auto_hicache_blocker(server_args: Any) -> Optional[str]:
+    """Why HiCache must stay off when the flag is unset, or None if it may run."""
+    from sglang.srt.runtime_context import get_platform
+
+    if not get_platform().is_cuda:
+        return "the automatic setup is validated on CUDA only"
+    cfg = resolving_view(server_args)
+    return auto_hicache_config_blocker(cfg) or auto_hicache_model_blocker(
+        cfg, model_config_of(server_args).hf_config
+    )
+
+
+def auto_hicache_config_blocker(cfg: Any) -> Optional[str]:
+    """Flag-level reasons: a mode HiCache conflicts with, or one whose explicit
+    HiCache handling an earlier hook would have applied."""
+    from sglang.srt.model_executor.cuda_graph_config import Backend
+
+    if cfg.disaggregation_mode != "null":
+        return "PD disaggregation manages its own KV transfer"
+    if cfg.disable_radix_cache:
+        return "the radix cache is disabled"
+    if cfg.radix_cache_backend is not None:
+        return "a custom --radix-cache-backend is selected"
+    if (
+        cfg.enable_lmcache
+        or cfg.enable_flexkv
+        or cfg.enable_unified_cache_external_linker
+    ):
+        return "another KV offload backend is enabled"
+    if cfg.hicache_storage_backend is not None:
+        return (
+            "an L3 --hicache-storage-backend is set; pass "
+            "--enable-hierarchical-cache to use it"
+        )
+    if cfg.hicache_host_memory_mode != "cache":
+        return "--hicache-host-memory-mode is not 'cache'"
+    if cfg.dllm_algorithm is not None:
+        return "diffusion LLM inference does not use HiCache"
+    if cfg.pp_size > 1:
+        return "pipeline parallelism is not covered by the automatic setup"
+    if cfg.dcp_size > 1:
+        return "decode context parallelism is not covered by the automatic setup"
+    if cfg.enable_hisparse:
+        return "hierarchical sparse attention has its own host pool"
+    if cfg.enable_unified_memory or cfg.enable_page_major_kv_layout:
+        return "the unified / page-major KV layouts are not covered"
+    if cfg.enable_int8_mamba_checkpoint:
+        return "the int8 Mamba checkpoint is not mirrored by HiCache"
+    if cfg.kv_cache_dtype not in _AUTO_HICACHE_KV_CACHE_DTYPES:
+        return f"--kv-cache-dtype {cfg.kv_cache_dtype} is not mirrored verbatim"
+    if cfg.speculative_algorithm not in _AUTO_HICACHE_SPECULATIVE_ALGORITHMS:
+        return f"speculative algorithm {cfg.speculative_algorithm} is not covered"
+    if cfg.cuda_graph_config.prefill.backend == Backend.TC_PIECEWISE:
+        return "HiCache would disable the tc_piecewise prefill CUDA graph"
+    if cfg.page_size == 1 and cfg.speculative_algorithm is None:
+        return "beam-search requests would be rejected under HiCache"
+    return None
+
+
+def auto_hicache_model_blocker(cfg: Any, hf_config: Any) -> Optional[str]:
+    """Architecture-level reasons."""
+    from sglang.srt.configs.model_config import is_deepseek_dsa, is_deepseek_v4
+
+    architectures = set(hf_config.architectures or ())
+    if architectures & _AUTO_HICACHE_EXCLUDED_ARCHITECTURES:
+        return "this architecture adjusts its memory layout for HiCache"
+    if cfg.speculative_algorithm is not None and any(
+        arch.startswith("Inkling") for arch in architectures
+    ):
+        return "Inkling MTP draft state is not mirrored by HiCache"
+    if is_deepseek_dsa(hf_config) or is_deepseek_v4(hf_config):
+        return "HiCache would keep the DSA index-K cache that is otherwise elided"
+    return None
