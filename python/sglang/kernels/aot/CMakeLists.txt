@@ -252,6 +252,30 @@ if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_FP4)
     )
 endif()
 
+# Restrict gencodes to the GPUs actually deployed, e.g. -DSGL_KERNEL_CUDA_ARCHS=120a
+# for RTX PRO 6000 Blackwell. Empty builds every arch this CUDA version supports.
+set(SGL_KERNEL_CUDA_ARCHS "" CACHE STRING "GPU archs to build for (e.g. 120a); empty builds all")
+set(SGL_KERNEL_BUILD_SM90_VARIANT ON)
+set(SGL_KERNEL_BUILD_FLASHMLA ON)
+set(SGL_KERNEL_ARCH_GENCODES "")
+if (SGL_KERNEL_CUDA_ARCHS)
+    foreach(arch IN LISTS SGL_KERNEL_CUDA_ARCHS)
+        list(APPEND SGL_KERNEL_ARCH_GENCODES "-gencode=arch=compute_${arch},code=sm_${arch}")
+    endforeach()
+    list(FILTER SGL_KERNEL_CUDA_FLAGS EXCLUDE REGEX "^-gencode=")
+    list(APPEND SGL_KERNEL_CUDA_FLAGS ${SGL_KERNEL_ARCH_GENCODES})
+    # sgl_kernel/load_utils.py loads the sm90 copy only on SM90; FA3 is Hopper-only.
+    if (NOT SGL_KERNEL_CUDA_ARCHS MATCHES "(^|;)90a?(;|$)")
+        set(SGL_KERNEL_BUILD_SM90_VARIANT OFF)
+        set(SGL_KERNEL_ENABLE_FA3 OFF)
+    endif()
+    # FlashMLA kernels exist only for SM90a and SM100-family datacenter parts.
+    if (NOT SGL_KERNEL_CUDA_ARCHS MATCHES "(^|;)(90a|100a|100f|103a)(;|$)")
+        set(SGL_KERNEL_BUILD_FLASHMLA OFF)
+    endif()
+    message(STATUS "sgl-kernel: building only for ${SGL_KERNEL_CUDA_ARCHS}")
+endif()
+
 # All source files
 # NOTE: Please sort the filenames alphabetically
 set(SOURCES
@@ -312,6 +336,7 @@ set(INCLUDES
 
 # =========================== Common SM90 Build ============================= #
 # Build SM90 library with fast math optimization (same namespace, different directory)
+if (SGL_KERNEL_BUILD_SM90_VARIANT)
 Python_add_library(common_ops_sm90_build MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
 
 target_compile_options(common_ops_sm90_build PRIVATE
@@ -323,6 +348,14 @@ set_target_properties(common_ops_sm90_build PROPERTIES
     OUTPUT_NAME "common_ops"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sm90"
 )
+target_link_libraries(common_ops_sm90_build PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
+target_compile_definitions(common_ops_sm90_build PRIVATE
+    FLASHATTENTION_DISABLE_BACKWARD
+    FLASHATTENTION_DISABLE_DROPOUT
+    FLASHATTENTION_DISABLE_UNEVEN_K
+)
+install(TARGETS common_ops_sm90_build LIBRARY DESTINATION sgl_kernel/sm90)
+endif()
 
 # =========================== Common SM100+ Build ============================= #
 # Build SM100+ library with precise math (same namespace, different directory)
@@ -354,15 +387,9 @@ else()
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
 endif()
 
-target_link_libraries(common_ops_sm90_build PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
 target_link_libraries(common_ops_sm100_build PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
 
 # sparse flash attention
-target_compile_definitions(common_ops_sm90_build PRIVATE
-    FLASHATTENTION_DISABLE_BACKWARD
-    FLASHATTENTION_DISABLE_DROPOUT
-    FLASHATTENTION_DISABLE_UNEVEN_K
-)
 target_compile_definitions(common_ops_sm100_build PRIVATE
     FLASHATTENTION_DISABLE_BACKWARD
     FLASHATTENTION_DISABLE_DROPOUT
@@ -372,7 +399,6 @@ target_compile_definitions(common_ops_sm100_build PRIVATE
 # Install to different subdirectories
 # CMake will find the built libraries in their respective LIBRARY_OUTPUT_DIRECTORY locations
 # and install them to the specified destinations
-install(TARGETS common_ops_sm90_build LIBRARY DESTINATION sgl_kernel/sm90)
 install(TARGETS common_ops_sm100_build LIBRARY DESTINATION sgl_kernel/sm100)
 
 # ============================ Optional Install: FA3 ============================= #
@@ -507,6 +533,10 @@ list(APPEND INFLLM_FLASH_CUDA_FLAGS "-gencode=arch=compute_90,code=sm_90")
 if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_SM100A)
     list(APPEND INFLLM_FLASH_CUDA_FLAGS "-gencode=arch=compute_120a,code=sm_120a")
 endif()
+if (SGL_KERNEL_CUDA_ARCHS)
+    list(FILTER INFLLM_FLASH_CUDA_FLAGS EXCLUDE REGEX "^-gencode=")
+    list(APPEND INFLLM_FLASH_CUDA_FLAGS ${SGL_KERNEL_ARCH_GENCODES})
+endif()
 
 set(INFLLM_FLASH_SOURCES
     "csrc/infllm_v2/flash_extension.cc"
@@ -543,7 +573,9 @@ target_link_libraries(spatial_ops PRIVATE ${TORCH_LIBRARIES} c10 cuda)
 install(TARGETS spatial_ops LIBRARY DESTINATION sgl_kernel)
 
 # ============================ Extra Install: FLashMLA ============================= #
-include(${CMAKE_CURRENT_LIST_DIR}/cmake/flashmla.cmake)
+if (SGL_KERNEL_BUILD_FLASHMLA)
+    include(${CMAKE_CURRENT_LIST_DIR}/cmake/flashmla.cmake)
+endif()
 
 # ============================ Extra Install: triton kernels ============================= #
 install(DIRECTORY "${repo-triton_SOURCE_DIR}/python/triton_kernels/triton_kernels/"

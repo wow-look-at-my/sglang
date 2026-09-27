@@ -10,13 +10,15 @@ name: Fork CI
 # (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded.
 #
 #   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
-#   AOT kernel diff : sglang-kernel CUDA 13 wheels (x86_64 + aarch64), checked
+#   AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for
+#                     FORK_KERNEL_CUDA_ARCHS (default 120a: RTX PRO 6000 Blackwell), checked
 #                     against the ops this tree calls
 #   default branch  : kernel wheels as release sglang-kernel-v<version>, and the
 #                     serving image (docker/Dockerfile, framework_final) on ghcr.io
 #
 # Optional repository variables (Settings > Variables) for bigger machines:
-#   FORK_KERNEL_RUNNER_X64 / FORK_KERNEL_RUNNER_ARM64   runner labels
+#   FORK_KERNEL_RUNNER_X64                              runner label
+#   FORK_KERNEL_CUDA_ARCHS                              GPU archs, e.g. "90a;120a"
 #   FORK_KERNEL_BUILD_JOBS / FORK_KERNEL_NVCC_THREADS   build parallelism
 
 on:
@@ -225,8 +227,6 @@ jobs:
         include:
           - arch: x86_64
             runner: ${{ vars.FORK_KERNEL_RUNNER_X64 || 'ubuntu-latest' }}
-          - arch: aarch64
-            runner: ${{ vars.FORK_KERNEL_RUNNER_ARM64 || 'ubuntu-24.04-arm' }}
     runs-on: ${{ matrix.runner }}
     # Hosted-runner ceiling. A full build can outlast it on 4 cores; the ccache
     # saved below lets the next run resume where this one stopped.
@@ -247,8 +247,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/sgl-kernel/ccache
-          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ github.run_id }}
-          restore-keys: fork-sgl-kernel-ccache-${{ matrix.arch }}-
+          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ github.run_id }}
+          restore-keys: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-
 
       - name: Build wheel (Python 3.10, CUDA 13.0)
         id: build
@@ -257,9 +257,10 @@ jobs:
           USE_CCACHE: 1
           BUILD_JOBS: ${{ vars.FORK_KERNEL_BUILD_JOBS || '2' }}
           NVCC_THREADS: ${{ vars.FORK_KERNEL_NVCC_THREADS || '2' }}
+          CMAKE_ARGS: -DSGL_KERNEL_CUDA_ARCHS=${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}
         run: |
           cd python/sglang/kernels/aot
-          ./build.sh 3.10 13.0 ${{ matrix.arch == 'aarch64' && 'aarch64' || '' }}
+          ./build.sh 3.10 13.0
 
       # The build container writes the cache as root; the save step runs as the runner.
       - name: Save ccache
@@ -270,7 +271,7 @@ jobs:
         if: always() && steps.ccache.outcome == 'success'
         with:
           path: ~/.cache/sgl-kernel/ccache
-          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ github.run_id }}
+          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '120a' }}-${{ github.run_id }}
 
       - name: Check wheel version and ops
         run: |
@@ -344,7 +345,6 @@ jobs:
       matrix:
         include:
           - { arch: x86_64, platform: linux/amd64, suffix: amd64, runner: ubuntu-latest }
-          - { arch: aarch64, platform: linux/arm64, suffix: arm64, runner: ubuntu-24.04-arm }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
     permissions:
@@ -442,7 +442,7 @@ jobs:
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang"
           for TAG in $IMAGE_TAGS; do
             SOURCES=()
-            for SUFFIX in amd64 arm64; do
+            for SUFFIX in amd64; do
               if docker buildx imagetools inspect "${IMAGE}:${TAG}-${SUFFIX}" >/dev/null 2>&1; then
                 SOURCES+=("${IMAGE}:${TAG}-${SUFFIX}")
               fi
