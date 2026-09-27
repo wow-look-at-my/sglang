@@ -20,20 +20,20 @@ type ExtendItem struct {
 // PrefillCost prices an extend batch as Base + sum(Items.Tokens *
 // (PerToken + PerTokenCtx*MidCtx + PerTokenCtxSq*MidCtx^2)).
 type PrefillCost struct {
-	ChunkTokens int
-	Base        float64
-	PerToken    float64
-	PerTokenCtx float64
+	ChunkTokens   int
+	Base          float64
+	PerToken      float64
+	PerTokenCtx   float64
 	PerTokenCtxSq float64
 
 	// RMSEFit and RMSEHoldout are the relative error of the quadratic fit on the
 	// first logged cold run (the fit set) and the second (held out), and
 	// MaxErrHoldout its worst single chunk. A linear fit measures ~10% on the
 	// holdout; the quadratic form is what the log supports.
-	RMSEFit       float64
-	RMSEHoldout   float64
-	MaxErrHoldout float64
-	Samples       int
+	RMSEFit        float64
+	RMSEHoldout    float64
+	MaxErrHoldout  float64
+	Samples        int
 	HoldoutSamples int
 }
 
@@ -45,15 +45,15 @@ type DecodeCost struct {
 	NumDraft    int
 	// Accept carries the accepted-token counts the log reported per step; a run
 	// draws a per-request acceptance rate from it.
-	Accept      []float64
-	AcceptMean  float64
-	Samples     int
+	Accept     []float64
+	AcceptMean float64
+	Samples    int
 }
 
 // Calibration bundles the two cost models plus the pool occupancy they imply.
 type Calibration struct {
 	Prefill PrefillCost
-	Decode DecodeCost
+	Decode  DecodeCost
 	// DeviceTokens is the KV pool's capacity in tokens, from the log's own
 	// #full token / full token usage ratio.
 	DeviceTokens int

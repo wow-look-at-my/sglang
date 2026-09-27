@@ -166,7 +166,7 @@ func TestDecodeModelReproducesSteadyLines(t *testing.T) {
 		}
 		obs := s.AcceptLen / s.Throughput
 		pred := c.Decode.StepSeconds(1, s.FullTokens)
-		err := math.Abs(pred - obs) / obs
+		err := math.Abs(pred-obs) / obs
 		worst = math.Max(worst, err)
 		n++
 	}

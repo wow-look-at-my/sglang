@@ -14,8 +14,8 @@ func TestEvictionWithAndWithoutHostTier(t *testing.T) {
 		out     = 400
 	)
 	for _, tc := range []struct {
-		name      string
-		hostMul   float64
+		name       string
+		hostMul    float64
 		wantRecomp bool
 	}{
 		{"no host tier", 0, true},
