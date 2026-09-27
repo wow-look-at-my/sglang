@@ -45,6 +45,10 @@ func (c Cost) ReloadSecondsPerToken() float64 {
 // DeviceTokens is the KV pool capacity the log implies.
 func (c Cost) DeviceTokens() int { return c.Cal.DeviceTokens }
 
+// PerBatchSeconds is the extend batch's fixed overhead: the launch and the
+// kernels that run once per pass regardless of how many tokens the pass carries.
+func (c Cost) PerBatchSeconds() float64 { return c.Cal.Prefill.Base }
+
 // ExtendSeconds prices an extend batch: the per-batch base plus every item at
 // its own mid-context.
 func (c Cost) ExtendSeconds(items []trace.ExtendItem) float64 {
