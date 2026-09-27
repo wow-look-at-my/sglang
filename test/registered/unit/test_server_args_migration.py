@@ -71,6 +71,10 @@ class TestServerArgsAnnotatedCli(CustomTestCase):
         self.assertFalse(
             self._parse(["--no-experts-shared-outer-loras"]).experts_shared_outer_loras
         )
+        # On-by-default flag: the bare form must stay accepted, --no- opts out.
+        self.assertTrue(self._parse([]).enable_cache_report)
+        self.assertTrue(self._parse(["--enable-cache-report"]).enable_cache_report)
+        self.assertFalse(self._parse(["--no-enable-cache-report"]).enable_cache_report)
 
     def test_json_type_parsers(self):
         """json.loads and json_list_type parse single-string arguments."""
