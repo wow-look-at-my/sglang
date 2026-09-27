@@ -138,7 +138,7 @@ pub fn otel_tracing_init(enable: bool, otlp_endpoint: Option<&str>) -> Result<()
         .set(tracer)
         .map_err(|_| anyhow::anyhow!("Tracer already initialized"))?;
 
-    let _ = global::set_tracer_provider(provider);
+    global::set_tracer_provider(provider);
 
     // Use Release ordering: all writes to TRACER/PROVIDER happen-before this store,
     // so any thread that loads ENABLED with Acquire will see the initialized state.
