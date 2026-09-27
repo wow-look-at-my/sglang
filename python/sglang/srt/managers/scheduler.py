@@ -268,6 +268,7 @@ from sglang.srt.managers.scheduler_components.pool_stats_observer import (
 )
 from sglang.srt.managers.scheduler_components.prefill_decode_balancer import (
     PrefillDecodeBalancer,
+    batch_class,
     rank0_consensus,
 )
 from sglang.srt.managers.scheduler_components.profiler_manager import (
@@ -1375,12 +1376,8 @@ class Scheduler(
 
     def _arm_prefill_decode_interval(self, batch: Optional[ScheduleBatch]) -> None:
         if self.prefill_decode_balancer is not None:
-            is_prefill = None
-            if batch is not None and batch.forward_mode.is_extend():
-                is_prefill = True
-            elif batch is not None and batch.forward_mode.is_decode():
-                is_prefill = False
-            self.prefill_decode_balancer.on_batch_launched(is_prefill)
+            if batch is not None:
+                self.prefill_decode_balancer.on_batch_launched()
             return
         if self.prefill_decode_interval == 0 or batch is None:
             return
@@ -4807,6 +4804,10 @@ class Scheduler(
             self.batch_result_processor.process_batch_result_prebuilt(batch)
         elif batch.forward_mode.is_idle():
             self.batch_result_processor.process_batch_result_idle(batch, result)
+        if self.prefill_decode_balancer is not None:
+            self.prefill_decode_balancer.on_batch_finished(
+                batch_class(batch.forward_mode)
+            )
 
         # Submit this batch's queued host backups before the next scheduler step.
         self.tree_cache.flush_pending_backups()
