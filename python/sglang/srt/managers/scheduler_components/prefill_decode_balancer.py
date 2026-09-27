@@ -26,8 +26,8 @@ There is nothing to tune:
   batch had they arrived together. A chunked prompt's next chunk waits for
   decode to catch up rather than taking a sliver of the leftover, and is
   capped in seconds rather than tokens: cost per prefill token rises with the
-  context attention reads, so the token bound alone lets the same tokens stall
-  decode for several times the seconds they promise.
+  context attention reads, so a token bound leaves the wait to grow with the
+  prompt instead of staying at what one chunk was worth.
 * **Piggybacked decode is a bonus, not the share.** With mixed chunked
   prefill every running request decodes one token inside each prefill chunk.
   That batch is charged as prefill, minus only the marginal cost of its decode

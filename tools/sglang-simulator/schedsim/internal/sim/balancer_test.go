@@ -125,7 +125,7 @@ func TestContinuationBudgetIsDenominatedInSeconds(t *testing.T) {
 		t.Fatalf("average prefill rate %v, want 0.0002 s/token", avg)
 	}
 	// The same prompt's next chunk reads a longer context: 2000 tokens cost the
-	// same 0.8 s, four times the average rate.
+	// same 0.8 s, twice the prefill rate measured so far.
 	b.OnLaunch(true, 2000, 0, 1.0)
 	b.OnFinish(1.8)
 	average, marginal := b.PrefillSecondsPerToken(), b.marginalSecondsPerToken()
@@ -141,7 +141,7 @@ func TestContinuationBudgetIsDenominatedInSeconds(t *testing.T) {
 			got, marginal, float64(got)*marginal, 4096*average)
 	}
 	if got >= 4096 {
-		t.Errorf("budget %d does not bind at 4x the measured average rate", got)
+		t.Errorf("budget %d does not bind at twice the measured average rate", got)
 	}
 }
 
