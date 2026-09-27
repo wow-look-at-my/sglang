@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import logging
+import os
 import re
+import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
+from typing import Iterator
 
 import psutil
 
 logger = logging.getLogger(__name__)
+
+_CLAIM_LOCK_NAME = "sglang-hicache-host-memory.lock"
+# Bounded so a stuck peer delays startup instead of hanging it; also below the
+# default process-group timeout the other ranks wait in meanwhile.
+_CLAIM_LOCK_TIMEOUT_S = 300.0
+_CLAIM_LOCK_POLL_S = 0.5
 
 
 def _unescape_mount_path(value: str) -> str:
@@ -102,3 +115,56 @@ def available_host_memory_bytes() -> int:
         )
         available = min(available, cgroup_headroom)
     return available
+
+
+def _claim_lock_path() -> Path:
+    shm = Path("/dev/shm")
+    return (shm if shm.is_dir() else Path(tempfile.gettempdir())) / _CLAIM_LOCK_NAME
+
+
+@contextmanager
+def host_memory_claim_lock(
+    *, leader: bool, timeout_s: float = _CLAIM_LOCK_TIMEOUT_S
+) -> Iterator[None]:
+    """Serialize host-memory sizing and pinning across engines on one host.
+
+    Held from sampling free memory until the pools are pinned, so a second
+    engine sizes against what the first one left. One rank per host (the
+    leader) takes it; the others meet the leader in the sizing collective,
+    whose MIN makes the leader's post-lock sample the binding one.
+    """
+    if not leader:
+        yield
+        return
+    path = _claim_lock_path()
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
+    except OSError as error:
+        logger.warning("HiCache host-memory lock unavailable (%s): %s", path, error)
+        yield
+        return
+    acquired = False
+    deadline = time.monotonic() + timeout_s
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError as error:
+                if error.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "HiCache: another engine held %s for %.0f s; sizing host "
+                    "memory without it.",
+                    path,
+                    timeout_s,
+                )
+                break
+            time.sleep(_CLAIM_LOCK_POLL_S)
+        yield
+    finally:
+        if acquired:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)

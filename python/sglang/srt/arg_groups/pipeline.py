@@ -328,6 +328,11 @@ def run_resolution_pipeline(server_args: Any) -> None:
     # Apply model-capability constraints after backend selection.
     run_hook(handle_model_capability_adjustments, server_args)
 
+    # Last reader-sensitive step: every hook above saw an unset flag as off.
+    from sglang.srt.arg_groups.hicache_hook import handle_hicache_auto
+
+    run_hook(handle_hicache_auto, server_args)
+
     finalize_cuda_graph_prefill_max_context(server_args)
 
     # Validate after all batch-size declarations are visible.
