@@ -567,44 +567,37 @@ impl Tree {
 
         // Try cached tenant first (O(1)) before falling back to O(shards) DashMap iteration.
         // The cache is valid if the tenant still exists in tenant_last_access_time.
-        let tenant: TenantId = {
+        // None when the node holds no tenant: the root of an empty tree, or a node
+        // that a concurrent split has not filled yet.
+        let found: Option<TenantId> = {
             let cached = curr.last_tenant.read();
-            if let Some(ref t) = *cached {
-                if curr.tenant_last_access_time.contains_key(t.as_ref()) {
-                    Arc::clone(t)
-                } else {
+            match *cached {
+                Some(ref t) if curr.tenant_last_access_time.contains_key(t.as_ref()) => {
+                    Some(Arc::clone(t))
+                }
+                _ => {
                     drop(cached);
-                    // Cache stale, fall back to iteration and update cache
+                    // Cache missing or stale, fall back to iteration and update cache
                     let t = curr
                         .tenant_last_access_time
                         .iter()
                         .next()
-                        .map(|kv| Arc::clone(kv.key()))
-                        .unwrap_or_else(|| Arc::from("empty"));
-                    *curr.last_tenant.write() = Some(Arc::clone(&t));
+                        .map(|kv| Arc::clone(kv.key()));
+                    if let Some(ref t) = t {
+                        *curr.last_tenant.write() = Some(Arc::clone(t));
+                    }
                     t
                 }
-            } else {
-                drop(cached);
-                // No cache, iterate and populate cache
-                let t = curr
-                    .tenant_last_access_time
-                    .iter()
-                    .next()
-                    .map(|kv| Arc::clone(kv.key()))
-                    .unwrap_or_else(|| Arc::from("empty"));
-                *curr.last_tenant.write() = Some(Arc::clone(&t));
-                t
             }
         };
 
-        // Update timestamp probabilistically (1 in 8 matches) to reduce DashMap contention.
-        // LRU eviction doesn't need perfect accuracy - approximate timestamps suffice.
         let epoch = get_epoch();
-        if epoch & 0x7 == 0 {
-            curr.tenant_last_access_time
-                .insert(Arc::clone(&tenant), epoch);
+        if let Some(ref t) = found {
+            if epoch & 0x7 == 0 {
+                curr.tenant_last_access_time.insert(Arc::clone(t), epoch);
+            }
         }
+        let tenant: TenantId = found.unwrap_or_else(|| Arc::from("empty"));
 
         // Compute input char count directly from input text.
         // This is equivalent to matched_chars + remaining.chars().count() but avoids
@@ -1094,6 +1087,19 @@ mod tests {
 
         assert_eq!(matched_text, "");
         assert_eq!(tenant, "empty");
+    }
+
+    #[test]
+    fn test_cold_start_match_records_no_phantom_tenant() {
+        // A match on a node with no tenant returns the "empty" sentinel.
+        let tree = Tree::new();
+        for _ in 0..256 {
+            let _ = tree.prefix_match("hello");
+        }
+        assert!(
+            !tree.get_used_size_per_tenant().contains_key("empty"),
+            "the sentinel became a tenant"
+        );
     }
 
     #[test]
