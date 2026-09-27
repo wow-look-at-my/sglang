@@ -26,7 +26,7 @@ func mixedShare(res *Result) float64 {
 // TestScenarioBBalanceWinsAgainstPrev pins the scenario-B comparisons the
 // balancer decides, over the committed seeds: a change to the control law that
 // gives one of them back fails the build instead of costing a re-read of the
-// printed table. ITL p99 is absent on purpose: itl-contract-derivation.md
+// printed table. ITL p99 is absent on purpose: docs/derivation-itl-percentiles-under-mixed-chunk.md
 // derives that cell from the delivery accounting rather than from the schedule.
 func TestScenarioBBalanceWinsAgainstPrev(t *testing.T) {
 	cost := ScenarioCost()
@@ -87,7 +87,7 @@ func TestScenarioBBalanceWinsAgainstPrev(t *testing.T) {
 // per prefill batch, so it halves the longest stall and, because the metric divides
 // a gap by the tokens it carried, raises that policy's own ITL p99. Turning the ride
 // off wins p99 outright and gives back the tokens streams generate during a cold
-// prompt. Numbers quoted in itl-contract-derivation.md.
+// prompt. Numbers quoted in docs/derivation-itl-percentiles-under-mixed-chunk.md.
 func TestMixedRideIsWhatDecidesTheP99Cell(t *testing.T) {
 	cost := ScenarioCost()
 	sc := ScenarioB(2)
@@ -134,7 +134,7 @@ func TestMixedRideIsWhatDecidesTheP99Cell(t *testing.T) {
 	}
 }
 
-// TestITLP99BandFollowsTheMixedShare pins the pivot itl-contract-derivation.md
+// TestITLP99BandFollowsTheMixedShare pins the pivot docs/derivation-itl-percentiles-under-mixed-chunk.md
 // computes: whether mixed deliveries are more or less than 1% of the metric's
 // samples decides whether ITL p99 reports a prefill batch's seconds or a decode
 // step's. The dense cold cadence and the busy short-chat scenario land above the

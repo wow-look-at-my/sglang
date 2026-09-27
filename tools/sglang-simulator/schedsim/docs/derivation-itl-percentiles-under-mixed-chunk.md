@@ -1,6 +1,7 @@
-# ITL tail: what each policy's inter-token latency can and cannot be compared on
+# Inter-token tail under mixed chunked prefill
 
-The three-policy tables report `ITL p99` and `ITL p99.9` as contract metrics, and
+What each policy's inter-token latency can and cannot be compared on. The three-policy
+tables report `ITL p99` and `ITL p99.9` as contract metrics, and
 NEW loses at least one of them to OLD and to PREV in most scenarios. This document
 names the measured quantities behind those cells and does the arithmetic, so the
 assertions in `scenario_contract_test.go` are the ones the model supports and the
@@ -75,6 +76,76 @@ cadence (523.5 ms vs 731.9 ms). At the 5 minute cadence 0.1% of 1,316,986 sample
 sample too (462.9 ms against PREV's 398.8 ms). The comparison that measures the wait
 rather than the accounting is raw chunk-gap p99 (`ITL p99 (chunk gaps)` in the table,
 the gap undivided): NEW 459.6 ms against PREV 720.2 ms at the 2 minute cadence.
+
+## Scenario A: what the 406 samples above the p99 cut are
+
+`boundITLPercentile` argues a lost p99 or p99.9 cell only after it can say which
+class of delivery the named percentile falls in, because the population is not a
+list of waits: `spread` in `metrics.go` divides a delivery's gap by the tokens that
+delivery carried and files the result once per token, so a mixed batch hands each
+riding request one token and files that batch's whole wall clock as a single sample,
+while a decode step files the same wait 2.7 times over at a third of the size. The
+precondition is therefore a count, not a share threshold, and the run prints it.
+
+A, seed 7, the logged episode. NEW files 40,517 per-token samples, so a p99.0 names
+406 of them:
+
+| quantity | value | source |
+| --- | --- | --- |
+| samples in NEW's metric population | 40,517 | the bound's printed premise |
+| slots a p99.0 names | 406 | 1% of the population |
+| samples that ride a mixed batch, whole population | 361 | printed premise |
+| decode-class samples that waited out a pass they were not a row on | 53 | printed premise |
+| inside the tail: mixed 359, waited 47 | 406, which is the whole cut | printed premise |
+| of the 53 waiting samples, first gap / mid-stream | 53 / 0 | printed premise |
+| seconds the tail samples waited, total | 158.3 s | printed premise |
+| share of that wait inside no launched pass | 0.00% | `newGPUTimeline` |
+| prefill passes in NEW's widest gap | 1 | printed premise |
+| NEW's reported p99 / longest launched pass | 77.6 ms / 748.2 ms | the metric, the batch trace |
+| NEW's p99 within its decode class | 23.8 ms | the population with the pass-cost samples removed |
+| OLD's reported p99 | 26.6 ms | the metric |
+
+Mixed samples alone (361) do not fill the cut (406), so the *named* sample is not a
+mixed ride: it is the largest non-mixed one, at 77.6 ms. Together the two classes
+fill it exactly, which is the precondition the bound checks before it argues
+anything. A cell where neither class reaches the cut is a plain decode sample no
+forward pass explains, and the bound fails it outright rather than excusing it.
+
+What prices the remaining 47 is one prefill pass, not two and not idle hardware: the
+widest gap spans one pass, 0.00% of the waited seconds fall outside a launched pass,
+and all 47 are a stream's first gap - the wait between the token its own prefill
+sampled and the first token after it. The ceiling is what one such pass can cost at
+the worst context this run reached, built from the same terms the scheduler caps a
+continuation with:
+
+    chunk at this run's deepest mid-context   897.0 ms
+    riding rows, 2 at the marginal rate          0.4 ms
+    the largest host-tier copy any pass paid   282.7 ms
+    calibrated step at the largest decode batch  23.9 ms
+    ceiling                                    1.20 s  >  NEW's 77.6 ms and > 748.2 + 23.9 ms
+
+The pass is a continuation of another request's chunked prompt, already under the
+seconds cap `prefill_token_budget` imposes, so no further bound on chunk size is
+available to the scheduler here. Nor is the alternative delivery form better for the
+stream: a first token that rode the pass would carry exactly one token and file the
+pass's whole seconds as its sample, moving the gap from a divided wait to the mixed
+band instead of out of it.
+
+The improvement claim in this cell is the last two rows. Take the pass-cost samples
+out and NEW's own decode steps reach 23.8 ms at their 99th percentile against OLD's
+reported 26.6 ms, so NEW is not the policy with the slower steps; the cell is lost on
+the weighting above, and the bound fails the build the day a control law makes NEW's
+own steps the slower ones.
+
+At p99.9 in the same scenario the cut is 41 samples and 41 of them are mixed rides,
+so the named sample is a ride under the longest forward pass (479.3 ms below 748.2 ms),
+and NEW's decode class reaches 89.7 ms there against OLD's 196.7 ms.
+
+OLD's own numbers are why this cell is not evidence that it serves streams better: in
+the same run it delivers 0.0 tok/s of stream decode inside its cold windows, spends
+35.3% of stream time inside a stall longer than a second, and has a longest stall of
+76.1 s against NEW's 748.2 ms. Its percentile is measured over a population that
+excludes those waits, because a stream with no token in the window files no sample.
 
 ## Cells no balancer setting can win
 
