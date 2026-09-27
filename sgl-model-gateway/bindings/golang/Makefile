@@ -4,6 +4,8 @@
 # Configuration
 CARGO_BUILD_DIR ?= $(shell pwd)/target
 BUILD_MODE ?= release
+# -count=1 so a cached PASS cannot satisfy the target
+GOTEST_ARGS ?= -count=1
 LIB_NAME = libsgl_model_gateway_go
 
 # Detect OS
@@ -86,7 +88,7 @@ clean: lib-clean
 
 test: build-lib
 	@echo "Running Go tests..."
-	@go test ./...
+	@go test ./... $(GOTEST_ARGS)
 
 examples: build-lib
 	@echo "Building example programs..."

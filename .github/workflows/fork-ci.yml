@@ -10,7 +10,8 @@ name: Fork CI
 # (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded.
 #
 #   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
-#                     + model gateway (fmt, clippy, cargo test, sglang-router wheel)
+#                     + model gateway (fmt, clippy, cargo test, sglang-router wheel,
+#                       Go bindings build + go test)
 #   AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for
 #                     FORK_KERNEL_CUDA_ARCHS (default 120a: RTX PRO 6000 Blackwell), checked
 #                     against the ops this tree calls
@@ -314,6 +315,61 @@ jobs:
           name: sglang-router-wheel-x86_64
           path: sgl-model-gateway/bindings/python/dist/*.whl
           if-no-files-found: error
+
+  # bindings/golang is in the gateway workspace's `exclude`, so fork-gateway-test's
+  # fmt/clippy/test never compile it and a drifted FFI signature merges silently.
+  # Built through its own manifest instead, on the same x86_64 target as the rest.
+  fork-gateway-golang:
+    needs: fork-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: sgl-model-gateway/bindings/golang
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sgl-model-gateway/bindings/golang/go.mod
+          # Two modules sit under this path (the bindings and examples/oai_server)
+          # and the action keys its cache on one go.sum.
+          cache: false
+
+      - name: Install Rust, protoc and system deps
+        working-directory: .
+        run: bash scripts/ci/cuda/ci_install_gateway_dependencies.sh
+
+      - name: Resolve dependencies
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sgl-model-gateway/bindings/golang
+          shared-key: fork-gateway-golang
+          cache-on-failure: true
+
+      # Stable rustfmt: imports_granularity and group_imports in
+      # sgl-model-gateway/rustfmt.toml are nightly-only, so stable does not check
+      # import grouping. Run `cargo +nightly fmt --all` before widening this.
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build cdylib
+        run: make build-dev
+
+      - name: Build the Go SDK and examples
+        run: |
+          go build ./...
+          go vet ./...
+          go vet -tags=integration ./...
+          make examples BUILD_MODE=debug
+
+      - name: Go tests against the cdylib
+        run: make test BUILD_MODE=debug
 
   # ------------------------------------------------------ sglang-kernel wheel
   fork-sgl-kernel-wheel:
