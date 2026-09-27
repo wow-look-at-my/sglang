@@ -131,7 +131,7 @@ class TestEvictionThrottle(unittest.TestCase):
         throttle.begin_pass(present_rids={"a2", "c1", "d1"})
         self.assertFalse(_hold(throttle, "c1", input_len=300, queued_at=queued_at))
         self.assertTrue(_hold(throttle, "d1", input_len=300, queued_at=queued_at))
-        throttle.on_admitted(rid="c1", input_len=300, cached=0, evicted=True)
+        throttle.on_admitted(evicted=True)
 
         # The next eviction waits a full pool rebuild after the previous one.
         throttle.begin_pass(present_rids={"a2", "d1"})
@@ -155,16 +155,6 @@ class TestEvictionThrottle(unittest.TestCase):
         # "a2" was aborted in the queue: it is absent from the next pass.
         throttle.begin_pass(present_rids={"c1"})
         self.assertFalse(_hold(throttle, "c1", input_len=600, queued_at=self.clock.now))
-
-    def test_returning_conversation_that_lost_its_prefix_is_a_rebuild(self):
-        throttle = _throttle(self.clock)
-        _serve_turn(throttle, self.clock, "a1", self.a)
-        throttle.on_request_queued(rid="a2", token_ids=self.a + [7] * 20)
-        throttle.on_request_queued(rid="n1", token_ids=list(range(70_000, 70_100)))
-        throttle.on_admitted(rid="a2", input_len=420, cached=0, evicted=False)
-        throttle.on_admitted(rid="n1", input_len=100, cached=0, evicted=False)
-        self.assertTrue(throttle.rebuilds_lost_prefix(["a2"]))
-        self.assertFalse(throttle.rebuilds_lost_prefix(["n1"]))
 
 
 if __name__ == "__main__":

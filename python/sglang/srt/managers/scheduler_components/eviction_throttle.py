@@ -168,8 +168,6 @@ class EvictionThrottle:
         self.ledger = ConversationLedger(retained_tokens=self._capacity)
         self._last_evicting_admit = float("-inf")
         self._head_taken = False
-        # Requests rebuilding a prefix their conversation lost to eviction.
-        self._rebuilding: Set[str] = set()
 
     def on_request_queued(self, *, rid: str, token_ids: Sequence[int]) -> None:
         self.ledger.on_queued(rid, token_ids, self._clock())
@@ -183,7 +181,6 @@ class EvictionThrottle:
         self.ledger.on_finished(
             rid, len(input_ids) + len(output_ids), tail[-_TAIL_TOKENS:], self._clock()
         )
-        self._rebuilding.discard(rid)
 
     def begin_pass(self, *, present_rids: Set[str]) -> None:
         """Start one scan of the waiting queue. ``present_rids`` are the
@@ -214,17 +211,9 @@ class EvictionThrottle:
         self._head_taken = verdict != _ADMIT
         return verdict == _HOLD
 
-    def on_admitted(
-        self, *, rid: str, input_len: int, cached: int, evicted: bool
-    ) -> None:
+    def on_admitted(self, *, evicted: bool) -> None:
         if evicted:
             self._last_evicting_admit = self._clock()
-        conv = self.ledger.conversation_of(rid)
-        if conv is not None and conv.finished_once and 2 * cached < input_len:
-            self._rebuilding.add(rid)
-
-    def rebuilds_lost_prefix(self, rids: Sequence[str]) -> bool:
-        return any(rid in self._rebuilding for rid in rids)
 
     def _local_verdict(self, rid: str, total_tokens: int, queued_at: float) -> int:
         now = self._clock()

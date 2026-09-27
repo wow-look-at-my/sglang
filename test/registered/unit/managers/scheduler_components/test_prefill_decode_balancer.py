@@ -36,12 +36,11 @@ def _run(
     steps,
     overlap,
     prefill_pending=True,
-    reqs_per_prefill=1,
-    prefill_class=True,
+    decode_rows=0,
 ):
     """Drive the scheduler loop shape with a long chunked prompt pending, each
-    prefill batch serving ``reqs_per_prefill`` requests; returns the launched
-    classes in order.
+    prefill batch, when mixed, decoding ``decode_rows`` running requests;
+    returns the launched classes.
 
     The GPU runs batches back to back. With overlap the loop picks and launches
     batch N+1 before waiting on batch N's result, as event_loop_overlap does."""
@@ -55,13 +54,15 @@ def _run(
             continues_chunk=prefill_pending,
         )
         is_prefill = prefill_pending and not defer
+        rows = decode_rows if is_prefill else 0
         balancer.on_batch_launched(
-            is_prefill=prefill_class if is_prefill else False,
-            num_tokens=CHUNK_TOKENS if is_prefill else 0,
-            num_reqs=reqs_per_prefill if is_prefill else 5,
+            is_prefill=is_prefill,
+            num_tokens=CHUNK_TOKENS + rows if is_prefill else 0,
+            num_decode_rows=rows,
         )
         start = max(clock.now, gpu_free_at)
-        gpu_free_at = start + (PREFILL_SECS if is_prefill else DECODE_SECS)
+        seconds = PREFILL_SECS + rows * PREFILL_SECS / CHUNK_TOKENS
+        gpu_free_at = start + (seconds if is_prefill else DECODE_SECS)
         in_flight.append(gpu_free_at)
         launched.append(is_prefill)
         if len(in_flight) > (1 if overlap else 0):
@@ -71,7 +72,7 @@ def _run(
 
 
 def _run_one(balancer, clock, *, is_prefill, seconds, num_tokens=0):
-    balancer.on_batch_launched(is_prefill=is_prefill, num_tokens=num_tokens, num_reqs=1)
+    balancer.on_batch_launched(is_prefill=is_prefill, num_tokens=num_tokens)
     clock.now += seconds
     balancer.on_batch_finished()
 
@@ -114,32 +115,55 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
         launched = _run(_balancer(clock), clock, steps=4000, overlap=True)
         self.assertAlmostEqual(_prefill_time_share(launched), 0.5, delta=0.05)
 
-    def test_batch_serving_three_requests_gets_three_quarters(self):
-        """Each request a prefill batch serves weighs as much as the whole
-        decode batch, so admitted work that shares a batch drains faster."""
+    def test_overshoot_of_the_last_decode_batch_counts_toward_prefill(self):
+        """With overlap, one decode batch launches before the balance shows
+        repaid; its overshoot is decode time already served and must shorten
+        the next wait, but nothing beyond one batch may be banked."""
         clock = _Clock()
-        launched = _run(
-            _balancer(clock), clock, steps=4000, overlap=True, reqs_per_prefill=3
-        )
-        self.assertAlmostEqual(_prefill_time_share(launched), 0.75, delta=0.05)
-        self.assertEqual(_longest_prefill_run(launched), 1)
+        balancer = _balancer(clock)
+        pending = dict(prefill_pending=True, decode_runnable=True)
+        balancer.should_defer_prefill(continues_chunk=False, **pending)
+        _run_one(balancer, clock, is_prefill=True, seconds=0.8)
+        _run_one(balancer, clock, is_prefill=False, seconds=0.5)
+        _run_one(balancer, clock, is_prefill=False, seconds=0.5)
+        self.assertFalse(balancer.should_defer_prefill(continues_chunk=True, **pending))
+        self.assertAlmostEqual(balancer.debt, -0.2)
+        for _ in range(4):
+            _run_one(balancer, clock, is_prefill=False, seconds=0.5)
+        balancer.should_defer_prefill(continues_chunk=True, **pending)
+        self.assertAlmostEqual(balancer.debt, -0.5)
 
-    def test_mixed_chunks_are_decode_service(self):
-        """A mixed batch decodes every running request inside the chunk, so a
-        long prompt must prefill at full speed rather than be deferred as if
-        the streams were waiting."""
-        self.assertIs(batch_class(ForwardMode.MIXED), False)
-        self.assertIs(batch_class(ForwardMode.EXTEND), True)
+    def test_piggybacked_decode_does_not_replace_the_decode_share(self):
+        """A mixed chunk gives each running request one token, far below what
+        a decode step of the same GPU time yields; it must still be followed
+        by pure decode worth the chunk's time, or streams collapse to one
+        token per chunk while a long prompt prefills."""
+        self.assertIs(batch_class(ForwardMode.MIXED), True)
         self.assertIs(batch_class(ForwardMode.DECODE), False)
         clock = _Clock()
         launched = _run(
-            _balancer(clock),
-            clock,
-            steps=500,
-            overlap=True,
-            prefill_class=batch_class(ForwardMode.MIXED),
+            _balancer(clock), clock, steps=2000, overlap=True, decode_rows=5
         )
-        self.assertEqual(launched.count(False), 0)
+        self.assertAlmostEqual(_prefill_time_share(launched), 0.5, delta=0.05)
+        self.assertEqual(_longest_prefill_run(launched), 1)
+
+    def test_mixed_batch_is_charged_without_its_decode_rows(self):
+        clock = _Clock()
+        balancer = _balancer(clock)
+        # Measures 1 ms per extend token.
+        _run_one(balancer, clock, is_prefill=True, seconds=1.0, num_tokens=1000)
+        balancer.should_defer_prefill(
+            prefill_pending=True, decode_runnable=False, continues_chunk=False
+        )
+        balancer.on_batch_launched(
+            is_prefill=True, num_tokens=1500, num_decode_rows=500
+        )
+        clock.now += 1.5
+        balancer.on_batch_finished()
+        balancer.should_defer_prefill(
+            prefill_pending=True, decode_runnable=True, continues_chunk=False
+        )
+        self.assertAlmostEqual(balancer.debt, 1.0)
 
     def test_measures_prefill_seconds_per_token(self):
         clock = _Clock()
@@ -231,7 +255,7 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
                 prefill_pending=True, decode_runnable=True, continues_chunk=True
             )
             _run_one(balancer, clock, is_prefill=False, seconds=DECODE_SECS)
-        self.assertEqual(balancer.debt, 0.0)
+        self.assertAlmostEqual(balancer.debt, -DECODE_SECS)
         launched = _run(balancer, clock, steps=50, overlap=False)
         self.assertEqual(_longest_prefill_run(launched), 1)
 
@@ -249,7 +273,7 @@ class TestPrefillDecodeBalancer(unittest.TestCase):
     def test_consensus_value_drives_the_decision(self):
         """Ranks must agree; the balance follows the agreed (rank 0) values."""
         clock = _Clock()
-        balancer = _balancer(clock, consensus_elapsed=lambda pair: (0.25, 0.05))
+        balancer = _balancer(clock, consensus_elapsed=lambda _: (0.25, 0.05, 0.05))
         _run_one(balancer, clock, is_prefill=True, seconds=9.0, num_tokens=1)
         balancer.should_defer_prefill(
             prefill_pending=True, decode_runnable=True, continues_chunk=True

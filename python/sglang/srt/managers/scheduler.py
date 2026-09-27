@@ -1432,21 +1432,6 @@ class Scheduler(
             rids.add(self.chunked_req.rid)
         return rids
 
-    def _balancer_class(self, batch: ScheduleBatch) -> Optional[bool]:
-        """How the balancer charges ``batch``: a mixed batch is decode service
-        unless it rebuilds a prefix its conversation lost to eviction."""
-        is_prefill = batch_class(batch.forward_mode)
-        if (
-            batch.forward_mode.is_mixed()
-            and self.eviction_throttle is not None
-            and batch.decoding_reqs is not None
-        ):
-            decoding = {req.rid for req in batch.decoding_reqs}
-            is_prefill = self.eviction_throttle.rebuilds_lost_prefix(
-                [req.rid for req in batch.reqs if req.rid not in decoding]
-            )
-        return is_prefill
-
     def _prefill_token_budget(self) -> Optional[int]:
         if self.prefill_decode_balancer is None:
             return None
@@ -1455,10 +1440,15 @@ class Scheduler(
     def _arm_prefill_decode_interval(self, batch: Optional[ScheduleBatch]) -> None:
         if self.prefill_decode_balancer is not None:
             if batch is not None:
+                decode_rows = (
+                    len(batch.decoding_reqs)
+                    if batch.forward_mode.is_mixed() and batch.decoding_reqs
+                    else 0
+                )
                 self.prefill_decode_balancer.on_batch_launched(
-                    is_prefill=self._balancer_class(batch),
+                    is_prefill=batch_class(batch.forward_mode),
                     num_tokens=batch.extend_num_tokens or 0,
-                    num_reqs=len(batch.reqs),
+                    num_decode_rows=decode_rows,
                 )
             return
         if self.prefill_decode_interval == 0 or batch is None:
@@ -4132,7 +4122,6 @@ class Scheduler(
             would_evict = self._eviction_throttle_holds(adder, req)
             if would_evict is None:
                 continue
-            cached = len(req.prefix_indices) + req.host_hit_length
             req.init_next_round_input(self.tree_cache)
             if self.enable_hicache_storage and (
                 self._prefetch_after_device_hit_loss(req)
@@ -4154,12 +4143,7 @@ class Scheduler(
                 and adder.can_run_list
                 and adder.can_run_list[-1] is req
             ):
-                self.eviction_throttle.on_admitted(
-                    rid=req.rid,
-                    input_len=len(req.origin_input_ids),
-                    cached=cached,
-                    evicted=would_evict,
-                )
+                self.eviction_throttle.on_admitted(evicted=would_evict)
 
             if self.enable_lora:
                 running_loras.add(req.lora_id)
