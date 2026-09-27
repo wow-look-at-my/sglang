@@ -10,6 +10,7 @@ name: Fork CI
 # (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded.
 #
 #   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
+#                     + model gateway (fmt, clippy, cargo test, sglang-router wheel)
 #   AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for
 #                     FORK_KERNEL_CUDA_ARCHS (default 120a: RTX PRO 6000 Blackwell), checked
 #                     against the ops this tree calls
@@ -214,6 +215,98 @@ jobs:
         with:
           name: sglang-wheel-py3.12-x86_64
           path: python/dist/*.whl
+          if-no-files-found: error
+
+  # ----------------------------------------------------------- model gateway
+  # Upstream builds and tests sgl-model-gateway in pr-test-rust.yml, guarded to
+  # sgl-project/sglang. The toolchain comes from sgl-model-gateway/rust-toolchain.toml.
+  fork-gateway-test:
+    needs: fork-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: sgl-model-gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust, protoc and system deps
+        working-directory: .
+        run: bash scripts/ci/cuda/ci_install_gateway_dependencies.sh
+
+      # Cargo.lock is gitignored; resolving it first puts the exact dependency
+      # set into the rust-cache key along with the rustc version.
+      - name: Resolve dependencies
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sgl-model-gateway
+          shared-key: fork-gateway-dev
+          cache-on-failure: true
+
+      - name: rustfmt
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt
+          cargo +nightly fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # smg-mcp (third_party/) is a workspace member but not a default member.
+      - name: cargo test
+        timeout-minutes: 60
+        run: |
+          cargo test
+          cargo test -p smg-mcp
+
+  fork-gateway-wheel:
+    needs: fork-plan
+    # Same as upstream: ubuntu-22.04 keeps the wheel at manylinux_2_35.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: sgl-model-gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Rust, protoc and system deps
+        working-directory: .
+        run: bash scripts/ci/cuda/ci_install_gateway_dependencies.sh
+
+      - name: Resolve dependencies
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sgl-model-gateway
+          shared-key: fork-gateway-wheel
+          cache-on-failure: true
+
+      - name: Build wheel
+        working-directory: sgl-model-gateway/bindings/python
+        run: |
+          python3 -m pip install --upgrade pip maturin
+          maturin build --profile ci --features vendored-openssl --out dist
+
+      - name: Smoke-test and run Python unit tests
+        working-directory: sgl-model-gateway/bindings/python
+        run: |
+          pip install dist/*.whl
+          python3 -c "from sglang_router.sglang_router_rs import Router; print('Rust extension: OK')"
+          python3 -m sglang_router.launch_router --help > /dev/null
+          pip install pytest pytest-cov
+          pytest -q tests --cov=sglang_router --cov-config=.coveragerc --cov-report=term-missing --cov-fail-under=80
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sglang-router-wheel-x86_64
+          path: sgl-model-gateway/bindings/python/dist/*.whl
           if-no-files-found: error
 
   # ------------------------------------------------------ sglang-kernel wheel
