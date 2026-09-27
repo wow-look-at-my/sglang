@@ -49,14 +49,96 @@ func TestGapDiagnosticScenarioB(t *testing.T) {
 
 // pooledTrace concatenates several seeds of one scenario into one trace, so a
 // diagnostic can quote the same population the pooled metrics are quantiled over.
+//
+// Each seed is re-identified on the way in. classifyDeliveries keys a delivery by
+// (request id, delivery time) because within one run that pair names exactly one batch,
+// but ids are assigned per seed, so two seeds can present the same pair with different
+// classes and the merged map would label both with whichever batch wrote last. The
+// clones exist only in the merged trace; the runs themselves are not touched.
 func pooledTrace(runs []*Result) *Result {
 	merged := &Result{Agents: runs[0].Agents, End: runs[0].End}
-	for _, r := range runs {
-		merged.Requests = append(merged.Requests, r.Requests...)
-		merged.Batches = append(merged.Batches, r.Batches...)
+	for ri, r := range runs {
+		clones := make(map[*Request]*Request, len(r.Requests))
+		reqs := make([]*Request, 0, len(r.Requests))
+		for _, req := range r.Requests {
+			c := *req
+			c.ID = req.ID + (ri+1)*1_000_000
+			clones[req] = &c
+			reqs = append(reqs, &c)
+		}
+		remap := func(p *Request) *Request {
+			if p == nil {
+				return nil
+			}
+			return clones[p]
+		}
+		batches := make([]*Batch, 0, len(r.Batches))
+		for _, b := range r.Batches {
+			nb := *b
+			nb.Rows = remapRequests(b.Rows, remap)
+			nb.Decode = remapRequests(b.Decode, remap)
+			nb.Continuation = remap(b.Continuation)
+			nb.Items = make([]Item, len(b.Items))
+			for i, it := range b.Items {
+				it.Req = remap(it.Req)
+				nb.Items[i] = it
+			}
+			batches = append(batches, &nb)
+		}
+		merged.Requests = append(merged.Requests, reqs...)
+		merged.Batches = append(merged.Batches, batches...)
 		merged.Windows = append(merged.Windows, r.Windows...)
 		merged.PrefillLog = append(merged.PrefillLog, r.PrefillLog...)
 		merged.DecodeLog = append(merged.DecodeLog, r.DecodeLog...)
 	}
 	return merged
+}
+
+// remapRequests rebuilds a batch's request list through the merge's clone table.
+func remapRequests(rs []*Request, remap func(*Request) *Request) []*Request {
+	if rs == nil {
+		return nil
+	}
+	out := make([]*Request, len(rs))
+	for i, r := range rs {
+		out[i] = remap(r)
+	}
+	return out
+}
+
+// TestMergedTraceAttributesEverySeed checks the merge against the seeds it joined: the
+// per-class sample counts must be the sum of what each run produced on its own, because
+// a delivery counted once as "mixed" in one run cannot arrive in the merged trace as
+// "decode", and one lost to a key collision cannot reappear anywhere.
+func TestMergedTraceAttributesEverySeed(t *testing.T) {
+	cost := ScenarioCost()
+	for _, sc := range []Scenario{ScenarioA(), ScenarioB(2), ScenarioThrash(4, 600)} {
+		var runs []*Result
+		want := map[string]int{}
+		total := 0
+		for _, seed := range sc.Seeds {
+			res := Run(sc, DefaultConfig(ModeNew, cost), seed)
+			runs = append(runs, res)
+			for label, c := range deliveryClassStats(res) {
+				want[label] += c.Copies
+				total += c.Copies
+			}
+		}
+		got := deliveryClassStats(pooledTrace(runs))
+		for label, n := range want {
+			if got[label] == nil || got[label].Copies != n {
+				t.Errorf("%s / %s: merged trace has %s samples, the seeds summed to %d",
+					sc.Name, label, countText(got[label]), n)
+			}
+		}
+	}
+}
+
+// countText renders a class's sample count for a failure message, including the case
+// where the merged trace has no such class at all.
+func countText(c *deliveryClass) string {
+	if c == nil {
+		return "no"
+	}
+	return fmt.Sprintf("%d", c.Copies)
 }
