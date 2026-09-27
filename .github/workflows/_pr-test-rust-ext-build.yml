@@ -47,6 +47,10 @@ on:
         description: 'Cache key prefix. Callers share it on purpose to reuse each other''s build; it encodes the arch and the interpreter ABI set, since the modules are portable across neither.'
         type: string
         default: rust-ext-x86_64-cp310-cp312
+      python_versions:
+        description: 'JSON list of interpreters to build modules for; each needs its own set (no crate sets abi3).'
+        type: string
+        default: '["3.10", "3.12"]'
       max_glibc:
         description: >
           Highest GLIBC symbol version the built .so files may require. A ceiling set
@@ -177,7 +181,7 @@ jobs:
       # log to compare against.
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.12']
+        python-version: ${{ fromJSON(inputs.python_versions) }}
     steps:
       - uses: actions/checkout@v4
         with:

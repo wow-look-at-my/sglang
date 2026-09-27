@@ -165,6 +165,9 @@ jobs:
     with:
       runs_on: ubuntu-22.04
       artifact_name: fork-rust-ext-x86_64
+      # The serving image (docker/Dockerfile) runs Python 3.12 only.
+      python_versions: '["3.12"]'
+      cache_key_prefix: fork-rust-ext-x86_64-cp312
 
   base-a-test-cpu:
     needs: [fork-check-changes, fork-rust-ext-build]
@@ -176,6 +179,7 @@ jobs:
       caller_inputs: '{"skip_pr_test_health_check": true}'
       partitions: ${{ needs.fork-check-changes.outputs.partitions }}
       run_timeout_minutes: '30'
+      python_version: '3.12'
       rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
 
   # ------------------------------------------------------------ sglang wheel
