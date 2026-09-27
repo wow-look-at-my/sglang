@@ -119,6 +119,12 @@ type ColdWindow struct {
 // Done reports whether the prompt ever reached its first token.
 func (w ColdWindow) Done() bool { return w.FirstTok >= 0 }
 
+// newColdWindow opens a window with no first token yet. FirstTok must start at
+// -1: 0.0 is a time, and Done() would read an unfinished prompt as served.
+func newColdWindow(tag string, arrival float64) ColdWindow {
+	return ColdWindow{Tag: tag, Arrival: arrival, FirstTok: -1}
+}
+
 // Result is one run: the trace every metric is computed from.
 type Result struct {
 	Cfg        Config
@@ -280,7 +286,7 @@ func (e *engine) ingest() {
 		r.ArrivedDuringCold = e.coldInFlight()
 		if r.Kind == KindCold {
 			r.Win = len(e.res.Windows)
-			e.res.Windows = append(e.res.Windows, ColdWindow{Tag: r.Tag, Arrival: r.Arrival})
+			e.res.Windows = append(e.res.Windows, newColdWindow(r.Tag, r.Arrival))
 		}
 		if e.th != nil {
 			e.th.OnQueue(r.Conv, r.InputLen, e.now)
