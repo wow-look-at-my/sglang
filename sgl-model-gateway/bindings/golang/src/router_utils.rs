@@ -34,7 +34,12 @@ fn as_huggingface(tokenizer: &dyn Tokenizer) -> Option<&HuggingFaceTokenizer> {
             tokenizer
                 .as_any()
                 .downcast_ref::<CachedTokenizer>()
-                .and_then(|cached| cached.inner().as_any().downcast_ref::<HuggingFaceTokenizer>())
+                .and_then(|cached| {
+                    cached
+                        .inner()
+                        .as_any()
+                        .downcast_ref::<HuggingFaceTokenizer>()
+                })
         })
 }
 
@@ -47,8 +52,8 @@ fn process_content_format(
     messages
         .iter()
         .map(|message| {
-            let mut message_json =
-                serde_json::to_value(message).map_err(|e| format!("Failed to serialize message: {}", e))?;
+            let mut message_json = serde_json::to_value(message)
+                .map_err(|e| format!("Failed to serialize message: {}", e))?;
 
             if let Some(obj) = message_json.as_object_mut() {
                 if let Some(content_value) = obj.get_mut("content") {
