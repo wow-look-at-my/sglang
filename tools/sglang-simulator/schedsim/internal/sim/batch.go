@@ -114,6 +114,7 @@ func (e *Engine) prefillBatch(runnable []*Request, budget int, capped bool) *bat
 		}
 		wouldEvict := false
 		if e.thr != nil {
+			e.match(r)
 			total := e.admissionTokens(r)
 			wouldEvict = total >= remNoEvict
 			if e.thr.shouldHold(r.ID, r.InputLen(), r.prefixIdx, total, wouldEvict, r.queuedAt, e.now) {
