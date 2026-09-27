@@ -27,15 +27,11 @@ from sglang.srt.model_executor.runner import (
     ShapeKey,
     _grouped_foreach_copy_,
     get_batch_sizes_to_capture,
-    model_capture_mode,
 )
 from sglang.srt.model_executor.runner.flashinfer_autotune import (
     maybe_flashinfer_autotune_speculative_draft,
 )
 from sglang.srt.model_executor.runner_backend.utils import resolve_decode_backend
-from sglang.srt.model_executor.runner_backend_utils import (
-    CUDA_GRAPH_CAPTURE_FAILED_MSG,
-)
 from sglang.srt.runtime_context import (
     get_exec,
     get_flags,
@@ -291,13 +287,7 @@ class EAGLEDraftExtendCudaGraphRunner(DecodeCudaGraphRunner):
 
         self.backend = resolve_decode_backend(self)
 
-        try:
-            with model_capture_mode():
-                self.capture()
-        except RuntimeError as e:
-            raise Exception(
-                f"Capture cuda graph failed: {e}\n{CUDA_GRAPH_CAPTURE_FAILED_MSG}"
-            )
+        self._capture_all_graphs(failure_label="Capture cuda graph failed")
 
     def _replay_graph(self, shape_key, forward_batch):
         return self.backend.replay(shape_key, forward_batch)

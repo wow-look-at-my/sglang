@@ -57,7 +57,7 @@ from sglang.srt.model_executor.runner.flashinfer_autotune import (
 )
 from sglang.srt.model_executor.runner_backend.utils import resolve_decode_backend
 from sglang.srt.model_executor.runner_backend_utils import (
-    CUDA_GRAPH_CAPTURE_FAILED_MSG,
+    cuda_graph_capture_failed_msg,
 )
 from sglang.srt.runtime_context import (
     get_disagg,
@@ -216,13 +216,7 @@ class MultiLayerEagleDraftExtendCudaGraphRunner(DecodeCudaGraphRunner):
 
         self.backend = resolve_decode_backend(self)
 
-        try:
-            with model_capture_mode():
-                self.capture()
-        except RuntimeError as e:
-            raise Exception(
-                f"Capture cuda graph failed: {e}\n{CUDA_GRAPH_CAPTURE_FAILED_MSG}"
-            )
+        self._capture_all_graphs(failure_label="Capture cuda graph failed")
 
     def _replay_graph(self, shape_key, forward_batch):
         return self.backend.replay(shape_key, forward_batch)
@@ -949,8 +943,8 @@ class OneGraphMultiLayerEagleMultiStepDraftExtendCudaGraphRunner(
         except RuntimeError as e:
             raise Exception(
                 f"Capture single-CG draft extend failed: {e}\n"
-                f"{CUDA_GRAPH_CAPTURE_FAILED_MSG}"
-            )
+                f"{cuda_graph_capture_failed_msg(e)}"
+            ) from e
         after_mem = get_available_gpu_memory(self.device, self.gpu_id)
         logger.info(
             "Capture single-CG draft extend end. "
