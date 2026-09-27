@@ -80,7 +80,9 @@ the run prints:
    6.9 ms at 600 s, and 6.6 ms against 6.6 ms at 1800 s. A policy whose whole distribution
    sat higher would not be excused by a tail argument.
 6. Both policies must have run the same deployment: the GPU busy share is 98.4% for all
-   three at 600 s and 99.5% at 1800 s, with the decode share 77.8-78.1%.
+   three at 600 s and 99.5% at 1800 s, and the decode share is 77.8-78.1% at 600 s and
+   77.1-77.3% at 1800 s. `TestDeliveryClassShareTable` prints the busy and decode shares,
+   the medians in condition 5 and the longest stalls in condition 4 for both tiers.
 
 Conditions 1 and 3 together are the claim: the tail samples are tokens handed out inside
 a prefill batch, and no such token can wait longer than the batch that carried it.
@@ -102,11 +104,11 @@ at 1800 s.
 
 Refuses:
 
-* Every `ITL p99` cell under eviction. NEW wins all six (25.0-42.5 ms against opponents
-  at 82.7 ms to 258.4 ms, and against OLD's 8.2 s to 93.7 ms), so there is nothing to
-  argue.
+* Every `ITL p99` cell under eviction. NEW wins all six: 25.0-42.5 ms against PREV's
+  81.7-258.4 ms and against OLD's 82.7 ms to 9.2 s, so there is nothing to argue.
 * The `output tok/s` caret on thrash at 4x over 600 s (317.5 against OLD's 317.6). That
-  is 0.017% and inside the tie band the contract judges; a derivation would be claiming
+  is +0.02% at the precision the contract prints, inside the tie band it judges; a
+  derivation would be claiming
   a loss the contract does not see.
 * `longest stall` at the 4x tier. NEW's is the shortest of the three (831.0 ms), so it
   is a win, not an exception.

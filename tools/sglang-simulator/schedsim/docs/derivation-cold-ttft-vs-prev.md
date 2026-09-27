@@ -67,8 +67,9 @@ cut into passes. NEW runs 62 more own passes than PREV in A, 653 more at B 2 min
 more at B 5 min and 224 more at D 500K - the fair cede and the seconds-form chunk cap
 both shorten a continuation - and `ownTolerance` (5%) is sized so that the whole
 per-pass base of every one of those passes could be charged to own work without
-tripping it: 653 x 10.0 ms = 6.53 s against 1541.4 s of own work is the largest such
-ratio in the set, 0.42%, and the others are 0.50%, 0.29% and 0.69%. In the
+tripping it. The largest such ratio in the set is D 500K's 224 passes: 2.24 s against
+326.5 s of own work, 0.69%. The others are 0.50% in A (62 passes), 0.49% at B 5 min
+(323) and 0.42% at B 2 min (653 x 10.0 ms against 1541.4 s). In the
 account the difference does not even land in that bucket, because `AccountWindow`
 splits a pass's base into `Overhead` rather than into the request whose chunk it was;
 the measured excess is 0.00006-0.00015% of own work. The overhead the extra passes
