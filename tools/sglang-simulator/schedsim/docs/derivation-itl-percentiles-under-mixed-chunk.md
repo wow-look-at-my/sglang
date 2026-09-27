@@ -207,7 +207,7 @@ samples is a decode sample. Latencies are ms except where a unit is written.
 | --- | --- | --- | --- | --- | --- |
 | A: logged episode | 0.89% (361 of 40,517) | 77.6 / 161.5 | 479.3 / 646.7 | 422.0 / 541.7 | 748.2 ms / 1.76 s |
 | C: 2 req/s, max 16 | 2.46% (28,850 of 1,170,763) | 139.5 / 94.5 | 223.4 / 244.0 | 192.5 / 238.0 | 322.7 / 611.7 |
-| C: 0.5 req/s, max 16 | 0.33% (986 of 303,313) | 18.3 / 19.8 | 156.7 / 90.4 | 32.0 / 32.0 | 279.9 / 312.8 |
+| C: 0.5 req/s, max 16 | 0.33% (986 of 300,032) | 18.3 / 19.8 | 156.7 / 90.4 | 32.0 / 32.0 | 279.9 / 312.8 |
 | D: one cold 400K | 0.68% (4,544 of 669,290) | 26.6 / 30.4 | 395.7 / 339.8 | 134.6 / 95.5 | 665.3 / 1.54 s |
 | D: one cold 100K | 0.49% (3,581 of 728,029) | 26.0 / 27.1 | 145.5 / 147.3 | 63.3 / 72.0 | 363.2 / 699.7 |
 | thrash host 4x, 600 s | 0.64% (3,679 of 573,269) | 28.4 / 84.3 | 427.8 / 287.5 | 263.4 / 284.4 | 831.0 / 899.8 |
@@ -235,9 +235,12 @@ Within the sensitivity sweep the same crossing accounts for four cells that used
 pass: `decode D0 x0.7`, `decode DCtx 0`, `decode DBS 0` and `MTP accept 3.5` reported
 NEW p99 of 30.9, 118.1, 70.5 and 31.5 ms with the bound in tokens - decode-band
 values, mixed share just under 1% - and report 290.9, 307.9, 302.2 and 291.0 ms with
-the bound in seconds, as the extra chunks take their share just over it. The same
+the bound in seconds. The mixed count does not grow across that pair (12,600 to 12,481
+deliveries); the crossing comes from the population shrinking, 930,743 samples to
+924,753, which pushes the 1.35% share over the line as the denominator falls. The same
 four rows improve their longest stall by 13-25% (957 to 831 ms, 941 to 774 ms, 1.01 to
-0.76 s, 970 to 800 ms) and their p99.9 with it.
+0.76 s, 970 to 800 ms), and three of the four their p99.9 (488.1 to 417.2 ms, 479.5 to
+422.4 ms, 1.01 s to 760.1 ms); `MTP accept 3.5` worsens there, 295.6 to 307.9 ms.
 
 Two other failure classes are not the tail mechanism at all:
 
