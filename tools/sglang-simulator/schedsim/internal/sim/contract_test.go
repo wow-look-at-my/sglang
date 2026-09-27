@@ -566,18 +566,24 @@ func boundITLPercentile(r Row, k MetricKey, opp string) error {
 	if total == 0 || oppTotal == 0 {
 		return fmt.Errorf("no inter-token samples to argue from")
 	}
-	share, oppShare := float64(single)/float64(total), float64(oppSingle)/float64(oppTotal)
 	q := 0.01
 	if k == MITLp999 {
 		q = 0.001
 	}
-	if share <= q {
-		return fmt.Errorf("only %.2f%% of NEW's samples are single-token deliveries, which cannot "+
-			"move a p%.1f; the gap is not the delivery-count effect this bound argues", 100*share, 100*(1-q))
+	// The class this bound argues about is the delivery the percentile lands on: a
+	// mixed batch's ride carries exactly one token and files that whole batch's
+	// wall clock as one sample. A single-token sample is not that class -- a decode
+	// step whose drafts were all rejected also files one token, which is why OLD
+	// files many of them -- so the precondition is the mixed-delivery share.
+	newMixed, oppMixed := mixedShare(pooledTrace(newRuns)), mixedShare(pooledTrace(oppRuns))
+	if newMixed <= q {
+		return fmt.Errorf("only %.2f%% of NEW's samples ride a mixed batch, which cannot move a "+
+			"p%.1f; the gap is not the mixed-delivery effect this bound argues",
+			100*newMixed, 100*(1-q))
 	}
-	if oppShare > share {
-		return fmt.Errorf("%s files a larger single-token share (%.2f%% vs %.2f%%), so it is not "+
-			"the policy delivering in multi-token steps", opp, 100*oppShare, 100*share)
+	if oppMixed >= newMixed {
+		return fmt.Errorf("%s rides a mixed batch at least as often (%.2f%% vs %.2f%%), so it is not "+
+			"the policy delivering tokens inside prefill batches", opp, 100*oppMixed, 100*newMixed)
 	}
 	// The bound itself: no sample can outlast a forward pass that served the
 	// stream, and the percentile must sit under the longest one NEW launched.
