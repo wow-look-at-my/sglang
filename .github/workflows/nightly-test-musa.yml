@@ -295,7 +295,7 @@ jobs:
         nightly-test-multimodal-server-1-gpu-musa,
         nightly-test-multimodal-server-2-gpu-musa,
       ]
-    if: github.repository == 'sgl-project/sglang' && (always())
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses

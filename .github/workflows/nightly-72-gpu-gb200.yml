@@ -80,10 +80,8 @@ jobs:
     needs: validate-inputs
     # Run if validate-inputs succeeded (dispatch) or was skipped (cron).
     if: |
-      github.repository == 'sgl-project/sglang' && (
-        always() && github.repository == 'sgl-project/sglang'
-        && (needs.validate-inputs.result == 'success' || needs.validate-inputs.result == 'skipped')
-      )
+      always() && github.repository == 'sgl-project/sglang'
+      && (needs.validate-inputs.result == 'success' || needs.validate-inputs.result == 'skipped')
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}

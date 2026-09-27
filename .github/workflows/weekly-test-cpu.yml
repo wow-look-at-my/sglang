@@ -27,7 +27,6 @@ jobs:
   # run_all_tests skips the paths-filter, so every test runs regardless of what
   # the last commit touched.
   check-changes:
-    if: github.repository == 'sgl-project/sglang'
     uses: ./.github/workflows/_pr-test-check-changes.yml
     with:
       pr_test_yml: '.github/workflows/weekly-test-cpu.yml'

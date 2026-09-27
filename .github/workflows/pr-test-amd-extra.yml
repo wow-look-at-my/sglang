@@ -125,12 +125,10 @@ jobs:
   # gate is enforced at runtime inside pr-gate.yml.
   call-gate:
     if: |
-      github.repository == 'sgl-project/sglang' && (
-        github.event_name != 'pull_request' ||
-        github.event.action != 'labeled' ||
-        github.event.label.name == 'run-ci' ||
-        github.event.label.name == 'run-ci-extra'
-      )
+      github.event_name != 'pull_request' ||
+      github.event.action != 'labeled' ||
+      github.event.label.name == 'run-ci' ||
+      github.event.label.name == 'run-ci-extra'
     uses: ./.github/workflows/pr-gate.yml
     with:
       require-run-ci: true
@@ -248,13 +246,11 @@ jobs:
     # Same `labeled` guard as call-gate: an unrelated label would otherwise finish
     # green with nothing executed, over the real run's result.
     if: |
-      github.repository == 'sgl-project/sglang' && (
-        always() &&
-        (github.event_name != 'pull_request' ||
-         github.event.action != 'labeled' ||
-         github.event.label.name == 'run-ci' ||
-         github.event.label.name == 'run-ci-extra')
-      )
+      always() &&
+      (github.event_name != 'pull_request' ||
+       github.event.action != 'labeled' ||
+       github.event.label.name == 'run-ci' ||
+       github.event.label.name == 'run-ci-extra')
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses
