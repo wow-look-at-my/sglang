@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from typing import (
     List,
     Optional,
@@ -200,9 +201,20 @@ class Schedule(msgspec.Struct):
         "The interval to poll requests in scheduler. Can be set to >1 to reduce the overhead of this.",
     ] = 1
     enable_mixed_chunk: A[
-        bool,
-        "Enabling mixing prefill and decode in a batch when using chunked prefill.",
-    ] = False
+        Optional[bool],
+        Arg(
+            help=(
+                "Let running requests decode inside each chunked-prefill batch, "
+                "so a long prefill never stalls them for more than one chunk. "
+                "Unset (the default): enabled automatically with chunked "
+                "prefill when nothing in the configuration conflicts with it; "
+                "the startup log states the decision and its reason. "
+                "--no-enable-mixed-chunk turns it off."
+            ),
+            action=argparse.BooleanOptionalAction,
+            fallback=False,
+        ),
+    ] = None
 
     # -------------------------------------------------------------------------
     # Mamba cache and linear attn

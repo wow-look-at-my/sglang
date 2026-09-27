@@ -56,6 +56,7 @@ class TestDisaggregationPriorityQueueing(unittest.TestCase):
         scheduler.enable_hicache_storage = False
         scheduler.enable_unified_cache_external_linker = False
         scheduler.processed_tokens_counter = 0
+        scheduler.eviction_throttle = None
         scheduler.waiting_queue = []
         scheduler._prefetch_kvcache = MagicMock()
         scheduler.tree_cache = MagicMock()

@@ -72,17 +72,24 @@ class PrefillBudget:
     def ceil_paged_tokens(self, tokens: int) -> int:
         return -(-tokens // self.page_size) * self.page_size
 
-    def _available_and_evictable(self):
-        evictable = (
+    def _evictable(self):
+        return (
             self.tree_cache.full_evictable_size()
             if self.tree_cache.supports_mamba()
             else self.tree_cache.evictable_size()
         )
-        return self.allocator.available_size() + evictable
+
+    def _available_and_evictable(self):
+        return self.allocator.available_size() + self._evictable()
 
     @property
     def remaining_total(self):
         return self._available_and_evictable() - self.total_offset
+
+    @property
+    def remaining_without_eviction(self):
+        """``remaining_total`` less what reclaiming cached prefixes supplies."""
+        return self.remaining_total - self._evictable()
 
     @property
     def remaining_current(self):
@@ -159,15 +166,15 @@ class SWAPrefillBudget(PrefillBudget):
         self.all_swa = all_swa
         self.req_ring = is_swa_req_ring(self.allocator)
 
+    def _evictable(self):
+        if self.all_swa:
+            return self.tree_cache.swa_evictable_size()
+        return self.tree_cache.full_evictable_size()
+
     def _available_and_evictable(self):
         if self.all_swa:
-            return (
-                self.allocator.swa_available_size()
-                + self.tree_cache.swa_evictable_size()
-            )
-        return (
-            self.allocator.full_available_size() + self.tree_cache.full_evictable_size()
-        )
+            return self.allocator.swa_available_size() + self._evictable()
+        return self.allocator.full_available_size() + self._evictable()
 
     @property
     def remaining_swa(self):

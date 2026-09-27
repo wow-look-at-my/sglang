@@ -83,6 +83,50 @@ async fn test_server_connection_with_mock() {
     manager.shutdown().await;
 }
 
+/// `protocol: sse` configs must keep working although rmcp no longer ships an SSE client.
+#[tokio::test]
+async fn test_legacy_sse_server_connection_and_tool_call() {
+    let mock_server = MockMCPServer::start_sse()
+        .await
+        .expect("Failed to start mock SSE MCP server");
+
+    let config = McpConfig {
+        servers: vec![McpServerConfig {
+            name: "sse_server".to_string(),
+            transport: McpTransport::Sse {
+                url: mock_server.url(),
+                token: Some("test-token".to_string()),
+            },
+            proxy: None,
+            required: true,
+        }],
+        pool: Default::default(),
+        proxy: None,
+        warmup: Vec::new(),
+        inventory: Default::default(),
+    };
+
+    let manager = McpManager::with_defaults(config)
+        .await
+        .expect("Should connect to the SSE mock server");
+    assert_eq!(manager.list_servers(), vec!["sse_server".to_string()]);
+    assert_eq!(manager.list_tools().len(), 2);
+
+    let response = manager
+        .call_tool(
+            "brave_web_search",
+            json!({"query": "legacy sse"}).to_string(),
+        )
+        .await
+        .expect("SSE tool call should succeed");
+    let text = response.content[0]
+        .as_text()
+        .expect("Expected text content");
+    assert_eq!(text.text, "Mock search results for: legacy sse");
+
+    manager.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_tool_availability_checking() {
     let mock_server = create_mock_server().await;
@@ -223,7 +267,7 @@ async fn test_tool_execution_with_mock() {
     assert!(!response.content.is_empty(), "Should have content");
 
     // Check the content
-    if let rmcp::model::RawContent::Text(text) = &response.content[0].raw {
+    if let rmcp::model::ContentBlock::Text(text) = &response.content[0] {
         assert!(text
             .text
             .contains("Mock search results for: rust programming"));
