@@ -266,6 +266,16 @@ jobs:
           cargo test
           cargo test -p smg-mcp
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/sglang-simulator/schedsim/go.mod
+
+      # The simulator is the proof artifact for scheduler changes, so its tests
+      # gate a push the same way the gateway's do.
+      - name: scheduler simulator tests
+        working-directory: tools/sglang-simulator/schedsim
+        run: go test ./... -count=1
+
   fork-gateway-wheel:
     needs: fork-plan
     # Same as upstream: ubuntu-22.04 keeps the wheel at manylinux_2_35.
