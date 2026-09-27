@@ -1,10 +1,11 @@
 ARG CUDA_VERSION=13.0.3
+# Kept in sync with python/sglang/kernels/aot by scripts/release/bump_kernel_version_to_sglang.py.
+ARG SGL_KERNEL_VERSION=0.4.9
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
 
 ARG TARGETARCH
 ARG BUILD_TYPE=all
 ARG BRANCH_TYPE=remote
-ARG SGL_KERNEL_VERSION=0.4.9
 ARG SGL_VERSION
 ARG USE_LATEST_SGLANG=0
 ARG GDRCOPY_VERSION=2.5.1
@@ -163,7 +164,8 @@ ENV LANG=en_US.UTF-8 \
 
 # Holds no wheel by default, so sglang-kernel comes from PyPI. Override it with
 # `--build-context sgl_kernel_wheels=<dir of sglang_kernel-*.whl>` to install the
-# kernel built from this checkout, e.g. before that version is published.
+# kernel built from this checkout, e.g. before that version is published;
+# SGL_KERNEL_WHEEL_REQUIRED=1 then fails the build instead of falling back to PyPI.
 FROM base AS sgl_kernel_wheels
 
 ########################################################
@@ -174,6 +176,7 @@ FROM base AS torch_deps
 ARG CUDA_VERSION
 ARG BUILD_TYPE
 ARG SGL_KERNEL_VERSION
+ARG SGL_KERNEL_WHEEL_REQUIRED=0
 ARG GITHUB_ARTIFACTORY
 
 WORKDIR /sgl-workspace
@@ -198,6 +201,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && if [ -n "$LOCAL_KERNEL_WHL" ]; then \
         echo "Installing local sglang-kernel wheel: $LOCAL_KERNEL_WHL" \
         && python3 -m pip install "$LOCAL_KERNEL_WHL" --force-reinstall --no-deps; \
+    elif [ "$SGL_KERNEL_WHEEL_REQUIRED" = "1" ]; then \
+        echo "ERROR: no sglang_kernel-${SGL_KERNEL_VERSION}+*_$(uname -m).whl in the sgl_kernel_wheels build context:" \
+        && ls -al /tmp/sgl_kernel_wheels \
+        && exit 1; \
     else \
         python3 -m pip install sglang-kernel==${SGL_KERNEL_VERSION} --force-reinstall --no-deps; \
     fi
@@ -574,6 +581,7 @@ ARG BUILD_TYPE
 ARG CUDA_VERSION
 ARG SGL_VERSION
 ARG USE_LATEST_SGLANG
+ARG SGL_KERNEL_VERSION
 
 WORKDIR /sgl-workspace
 
@@ -630,6 +638,9 @@ COPY --from=gateway_builder /build/gateway_wheels /tmp/gateway_wheels
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --force-reinstall /tmp/gateway_wheels/*.whl \
     && rm -rf /tmp/gateway_wheels
+
+# Every later pip step could have swapped the kernel wheel installed in torch_deps.
+RUN python3 -c "import importlib.metadata as m, sys; v = m.version('sglang-kernel'); print('sglang-kernel', v); sys.exit(0 if v.split('+')[0] == '${SGL_KERNEL_VERSION}' else 'sglang-kernel ' + v + ' is not ${SGL_KERNEL_VERSION}')"
 
 # Set workspace directory
 WORKDIR /sgl-workspace/sglang
