@@ -123,15 +123,28 @@ def unmirrored_state_reason(
     )
     from sglang.srt.mem_cache.qsa_kv_pool import QSATokenToKVPool
     from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
+    from sglang.srt.mem_cache.unified_memory_pool import (
+        UnifiedHybridLinearKVPool,
+        UnifiedMHATokenToKVPool,
+        UnifiedQSATokenToKVPool,
+    )
 
     plain = (MHATokenToKVPool, MLATokenToKVPool)
+    # Unified MHA only: its host pool resolves kernel-facing ids per transfer,
+    # and packed MTP drafts are backed up with their own (virtual) ids.
+    hybrid_full = {
+        HybridLinearKVPool: plain,
+        QSATokenToKVPool: plain,
+        UnifiedHybridLinearKVPool: (UnifiedMHATokenToKVPool,),
+        UnifiedQSATokenToKVPool: (UnifiedMHATokenToKVPool,),
+    }
 
     def reason(pool: Any, role: str) -> Optional[str]:
         kind = type(pool)
         if kind in plain:
             return None
-        if kind in (HybridLinearKVPool, QSATokenToKVPool):
-            if type(pool.full_kv_pool) in plain:
+        if kind in hybrid_full:
+            if type(pool.full_kv_pool) in hybrid_full[kind]:
                 return None
             kind = type(pool.full_kv_pool)
         elif kind is SWAKVPool:

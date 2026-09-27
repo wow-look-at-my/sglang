@@ -502,6 +502,19 @@ class TestDerivedSplitThroughPoolSizer(unittest.TestCase):
         _, ratio, _ = self._run(explicitly_set=False, max_running_requests=None)
         self.assertAlmostEqual(ratio, MIN_STATE_POOL_SHARE / (1 - MIN_STATE_POOL_SHARE))
 
+    def test_unified_pool_labels_are_derived_too(self):
+        """Under the unified pool the split floats, but the state label still
+        sizes the request cap, the per-request draft-state scratch and the host
+        tier's state share; the arbitrary 0.9 default gave the state half of each."""
+        from sglang.srt.mem_cache.mamba_pool_split import MIN_STATE_POOL_SHARE
+
+        _, ratio, _ = self._run(
+            explicitly_set=False,
+            max_running_requests=None,
+            enable_unified_memory=True,
+        )
+        self.assertAlmostEqual(ratio, MIN_STATE_POOL_SHARE / (1 - MIN_STATE_POOL_SHARE))
+
     def test_a_given_ratio_is_left_alone(self):
         for explicitly_set in (True, None):
             with self.subTest(explicitly_set=explicitly_set):

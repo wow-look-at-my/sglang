@@ -347,8 +347,10 @@ def auto_hicache_config_blocker(cfg: Any) -> Optional[str]:
         return "decode context parallelism is not covered by the automatic setup"
     if cfg.enable_hisparse:
         return "hierarchical sparse attention has its own host pool"
-    if cfg.enable_unified_memory or cfg.enable_page_major_kv_layout:
-        return "the unified / page-major KV layouts are not covered"
+    # The unified pool is covered where its host pools are; startup checks the
+    # built pools (hicache_auto.unmirrored_state_reason).
+    if cfg.enable_page_major_kv_layout and not cfg.enable_unified_memory:
+        return "the page-major KV layout without the unified pool is not covered"
     if cfg.enable_int8_mamba_checkpoint:
         return "the int8 Mamba checkpoint is not mirrored by HiCache"
     if cfg.kv_cache_dtype not in _AUTO_HICACHE_KV_CACHE_DTYPES:

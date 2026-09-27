@@ -165,6 +165,7 @@ class TestUnifiedSWATombstoneClamp(unittest.TestCase):
         swa_allocator.pool_page_size = page_size
         swa_allocator.virtual_to_physical = v2p
         swa_allocator.kernel_page_multiplier = multiplier
+        swa_allocator.kernel_page_stride = page_size * multiplier
         pool = object.__new__(UnifiedSWAKVPool)
         pool._swa_allocator = swa_allocator
         return pool
