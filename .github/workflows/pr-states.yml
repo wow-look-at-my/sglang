@@ -35,6 +35,7 @@ concurrency:
 
 jobs:
   update-pr-body:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     steps:
       - name: Update CI states block in PR body

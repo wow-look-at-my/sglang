@@ -364,6 +364,7 @@ from sglang.srt.utils.hf_transformers_utils import (
 )
 from sglang.srt.utils.msgspec_utils import msgspec_to_builtins
 from sglang.srt.utils.numa_utils import get_numa_node_if_available, numa_bind_to_node
+from sglang.srt.utils.sgl_kernel_ops import warn_missing_sgl_kernel_ops
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.utils.weight_versions import (
     compute_weight_version_spans,
@@ -595,6 +596,7 @@ class Scheduler(
         self.token_to_kv_pool_allocator = result.token_to_kv_pool_allocator
         self.disable_radix_cache = result.disable_radix_cache
         self.tree_cache = result.tree_cache
+        self.enable_hierarchical_cache = result.enable_hierarchical_cache
         if self.enable_hierarchical_cache:
             cache_controller = self.tree_cache.cache_controller
             if cache_controller is not None:
@@ -6100,6 +6102,8 @@ def run_scheduler_process(
     scheduler = None
     try:
         scheduler = Scheduler(server_args, port_args)
+        if tp_rank == 0 and pp_rank == 0 and not dp_rank:
+            warn_missing_sgl_kernel_ops()
 
         # Send initialization info back to the parent process
         pipe_writer.send(scheduler.get_init_info())

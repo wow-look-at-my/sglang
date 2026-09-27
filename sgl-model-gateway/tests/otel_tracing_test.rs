@@ -25,7 +25,7 @@ use smg::{
 };
 use tokio::sync::oneshot;
 use tonic::metadata::MetadataMap;
-use tonic_v12::{transport::Server, Request as TonicRequest, Response, Status};
+use tonic::{transport::Server, Request as TonicRequest, Response, Status};
 use tower::ServiceExt;
 use tracing::info_span;
 use tracing_subscriber::prelude::*;
@@ -47,7 +47,7 @@ impl TestOtelCollector {
     }
 }
 
-#[tonic_v12::async_trait]
+#[tonic::async_trait]
 impl TraceService for TestOtelCollector {
     async fn export(
         &self,

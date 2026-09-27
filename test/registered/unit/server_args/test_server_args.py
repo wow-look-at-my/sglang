@@ -14,6 +14,7 @@ import msgspec.structs
 
 import sglang.srt.server_args as server_args_module
 from sglang.srt.arg_groups import (
+    hicache_hook,
     parallel_hook,
     pd_disaggregation_hook,
     serving_hook,
@@ -30,7 +31,10 @@ from sglang.srt.arg_groups.cuda_graph_hook import (
     handle_cuda_graph_config,
 )
 from sglang.srt.arg_groups.hicache_hook import (
+    auto_hicache_config_blocker,
+    auto_hicache_model_blocker,
     handle_hicache,
+    handle_hicache_auto,
     handle_hicache_ratio_default,
 )
 from sglang.srt.arg_groups.hisparse_hook import (
@@ -53,8 +57,10 @@ from sglang.srt.arg_groups.moe_hook import (
 )
 from sglang.srt.arg_groups.overrides import (
     cutedsl_moe_max_num_tokens,
+    declare_resolution,
     max_speculative_num_draft_tokens,
     resolution_result,
+    resolving_view,
 )
 from sglang.srt.arg_groups.parallel_hook import (
     handle_context_parallelism,
@@ -95,6 +101,8 @@ from sglang.srt.model_executor.cuda_graph_config import (
     CudaGraphConfig,
     Phase,
     PhaseConfig,
+    default_cuda_graph_config,
+    with_phase,
 )
 from sglang.srt.runtime_context import (
     describe_kv_events_publisher,
@@ -2224,6 +2232,148 @@ class TestHiCacheArgs(CustomTestCase):
         )
 
         handle_cache_compatibility(args)
+
+
+class TestHiCacheAutoResolution(CustomTestCase):
+    """An unset --enable-hierarchical-cache resolves per configuration."""
+
+    @staticmethod
+    def _make_args(**overrides) -> ServerArgs:
+        fields = {"page_size": 64, **overrides}
+        cuda_graph_config = fields.pop("cuda_graph_config", None)
+        args = ServerArgs(model_path="dummy", **fields)
+        handle_hicache_ratio_default(args)
+        declare_resolution(
+            args,
+            "test",
+            # CUDA's default prefill backend; the default elsewhere is tc_piecewise.
+            cuda_graph_config=cuda_graph_config
+            or with_phase(
+                default_cuda_graph_config(), Phase.PREFILL, backend=Backend.BREAKABLE
+            ),
+        )
+        return args
+
+    def test_unset_flag_follows_the_blocker(self):
+        for blocker, expected in ((None, True), ("a reason", False)):
+            with self.subTest(blocker=blocker):
+                args = self._make_args()
+                with patch.object(
+                    hicache_hook, "auto_hicache_blocker", return_value=blocker
+                ):
+                    handle_hicache_auto(args)
+                self.assertIs(
+                    resolution_result(args, "enable_hierarchical_cache"), expected
+                )
+                self.assertIs(
+                    resolution_result(args, "_enable_hierarchical_cache_auto"),
+                    expected,
+                )
+
+    def test_explicit_flag_is_never_second_guessed(self):
+        for explicit in (True, False):
+            with self.subTest(explicit=explicit):
+                args = self._make_args(enable_hierarchical_cache=explicit)
+                with patch.object(
+                    hicache_hook,
+                    "auto_hicache_blocker",
+                    side_effect=AssertionError("explicit flag consulted the auto path"),
+                ):
+                    handle_hicache_auto(args)
+                self.assertIs(
+                    resolution_result(args, "enable_hierarchical_cache"), explicit
+                )
+                self.assertFalse(
+                    resolution_result(args, "_enable_hierarchical_cache_auto")
+                )
+
+    def test_cli_flag_is_tri_state(self):
+        parser = argparse.ArgumentParser()
+        ServerArgs.add_cli_args(parser)
+        for argv, expected in (
+            ([], None),
+            (["--enable-hierarchical-cache"], True),
+            (["--no-enable-hierarchical-cache"], False),
+        ):
+            with self.subTest(argv=argv):
+                parsed = parser.parse_args(["--model-path", "dummy", *argv])
+                self.assertIs(parsed.enable_hierarchical_cache, expected)
+
+    def test_each_incompatible_configuration_keeps_hicache_off(self):
+        """Every combination an explicit flag would reject, or would adjust in
+        an earlier hook, must block the automatic enable."""
+        self.assertIsNone(
+            auto_hicache_config_blocker(resolving_view(self._make_args()))
+        )
+        tc_piecewise = with_phase(
+            default_cuda_graph_config(), Phase.PREFILL, backend=Backend.TC_PIECEWISE
+        )
+        blocked = {
+            "PD disaggregation": {"disaggregation_mode": "prefill"},
+            "radix cache off": {"disable_radix_cache": True},
+            "custom radix backend": {"radix_cache_backend": "custom"},
+            "lmcache": {"enable_lmcache": True},
+            "flexkv": {"enable_flexkv": True},
+            "external linker": {"enable_unified_cache_external_linker": True},
+            "L3 storage": {"hicache_storage_backend": "file"},
+            "buffer-only host memory": {"hicache_host_memory_mode": "buffer_only"},
+            "dllm": {"dllm_algorithm": "LowConfidence"},
+            "pipeline parallel": {"pp_size": 2},
+            "decode context parallel": {"dcp_size": 2},
+            "hisparse": {"enable_hisparse": True},
+            "unified memory": {"enable_unified_memory": True},
+            "page-major layout": {"enable_page_major_kv_layout": True},
+            "int8 mamba checkpoint": {"enable_int8_mamba_checkpoint": True},
+            "fp4 kv cache": {"kv_cache_dtype": "nvfp4"},
+            "mxfp8 kv cache": {"kv_cache_dtype": "mxfp8"},
+            "uncovered speculative algorithm": {"speculative_algorithm": "DFLASH"},
+            "tc_piecewise prefill graph": {"cuda_graph_config": tc_piecewise},
+            "beam search reachable": {"page_size": 1},
+        }
+        for name, overrides in blocked.items():
+            with self.subTest(name):
+                cfg = resolving_view(self._make_args(**overrides))
+                self.assertIsNotNone(auto_hicache_config_blocker(cfg))
+
+    def test_page_size_one_with_speculation_is_not_blocked(self):
+        # Speculative decoding already rejects beam search.
+        cfg = resolving_view(
+            self._make_args(page_size=1, speculative_algorithm="EAGLE")
+        )
+        self.assertIsNone(auto_hicache_config_blocker(cfg))
+
+    def test_architectures_with_hicache_specific_handling_are_blocked(self):
+        cfg = resolving_view(self._make_args(speculative_algorithm="EAGLE"))
+        allowed = ("Qwen4ExpForConditionalGeneration", "Qwen3NextForCausalLM")
+        blocked = (
+            "Step3p5ForCausalLM",
+            "MiniCPMSALAForCausalLM",
+            "InklingForConditionalGeneration",
+            "DeepseekV32ForCausalLM",
+            "DeepseekV4ForCausalLM",
+        )
+        for arch in allowed + blocked:
+            with self.subTest(arch=arch):
+                # DSA models are recognized by their indexer top-k.
+                hf_config = SimpleNamespace(architectures=[arch], index_topk=2048)
+                reason = auto_hicache_model_blocker(cfg, hf_config)
+                self.assertEqual(reason is not None, arch in blocked)
+class TestMambaRatioExplicitlySet(CustomTestCase):
+    """The pool sizer derives the state/KV split only when this records False;
+    a model default declared before the cache hook (Inkling's 0.1) must count
+    as set, or the derivation would silently replace it."""
+
+    def _explicitly_set(self, *, declared=None, **fields):
+        args = ServerArgs(model_path="dummy", **fields)
+        if declared is not None:
+            declare_resolution(args, "model", mamba_full_memory_ratio=declared)
+        handle_cache_compatibility(args)
+        return resolution_result(args, "_mamba_full_memory_ratio_explicitly_set")
+
+    def test_what_was_given_counts_as_set(self):
+        self.assertFalse(self._explicitly_set())
+        self.assertTrue(self._explicitly_set(mamba_full_memory_ratio=0.5))
+        self.assertTrue(self._explicitly_set(declared=0.1))
 
 
 class TestNgramExternalSamArgs(CustomTestCase):

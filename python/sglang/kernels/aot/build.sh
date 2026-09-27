@@ -112,6 +112,7 @@ docker run --rm \
   -v "${CCACHE_HOST_DIR}:/ccache" \
   -w /sgl-kernel \
   -e ARCH="${ARCH}" \
+  -e CMAKE_ARGS="${CMAKE_ARGS:-}" \
   -e GITHUB_ARTIFACTORY="${GITHUB_ARTIFACTORY_FLAG}" \
   "${DEPS_TAG}" \
   bash -c '

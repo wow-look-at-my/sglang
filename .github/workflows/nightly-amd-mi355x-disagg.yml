@@ -121,9 +121,11 @@ jobs:
   nightly-mi355x-2n:
     needs: setup
     if: |
-      always() && github.repository == 'sgl-project/sglang'
-      && needs.setup.result == 'success'
-      && needs.setup.outputs.matrix-2n != '{"include":[]}'
+      github.repository == 'sgl-project/sglang' && (
+        always() && github.repository == 'sgl-project/sglang'
+        && needs.setup.result == 'success'
+        && needs.setup.outputs.matrix-2n != '{"include":[]}'
+      )
     runs-on: linux-sglang-mi35x-di
     strategy:
       fail-fast: false
@@ -267,9 +269,11 @@ jobs:
       - setup
       - nightly-mi355x-2n
     if: |
-      !cancelled() && github.repository == 'sgl-project/sglang'
-      && needs.setup.result == 'success'
-      && needs.setup.outputs.matrix-4n != '{"include":[]}'
+      github.repository == 'sgl-project/sglang' && (
+        !cancelled() && github.repository == 'sgl-project/sglang'
+        && needs.setup.result == 'success'
+        && needs.setup.outputs.matrix-4n != '{"include":[]}'
+      )
     runs-on: linux-sglang-mi35x-di
     strategy:
       fail-fast: false
