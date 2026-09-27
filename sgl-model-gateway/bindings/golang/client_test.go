@@ -5,6 +5,10 @@ import (
 	"testing"
 )
 
+// testTokenizerPath is llm-tokenizer's built-in testing tokenizer, selected by
+// path instead of by a fixture on disk, so these tests need no model files.
+const testTokenizerPath = "mock"
+
 // TestClientConfig tests ClientConfig validation
 func TestClientConfig(t *testing.T) {
 	tests := []struct {
@@ -16,7 +20,7 @@ func TestClientConfig(t *testing.T) {
 			name: "valid config",
 			config: ClientConfig{
 				Endpoint:      "grpc://localhost:20000",
-				TokenizerPath: "/path/to/tokenizer",
+				TokenizerPath: testTokenizerPath,
 			},
 			wantErr: false,
 		},
@@ -101,13 +105,12 @@ func TestClientClose(t *testing.T) {
 	// if it requires actual server connection)
 	config := ClientConfig{
 		Endpoint:      "grpc://localhost:20000",
-		TokenizerPath: "/path/to/tokenizer",
+		TokenizerPath: testTokenizerPath,
 	}
 
-	// Skip if connection fails (expected in unit test environment)
 	client, err := NewClient(config)
 	if err != nil {
-		t.Skip("Skipping client close test: server not available")
+		t.Fatalf("NewClient() failed: %v", err)
 	}
 
 	// First close should succeed
@@ -229,12 +232,12 @@ func TestToolCallStructure(t *testing.T) {
 func TestConcurrentClientOperations(t *testing.T) {
 	config := ClientConfig{
 		Endpoint:      "grpc://localhost:20000",
-		TokenizerPath: "/path/to/tokenizer",
+		TokenizerPath: testTokenizerPath,
 	}
 
 	client, err := NewClient(config)
 	if err != nil {
-		t.Skip("Skipping concurrent operations test: server not available")
+		t.Fatalf("NewClient() failed: %v", err)
 	}
 	defer client.Close()
 
@@ -291,12 +294,12 @@ func intPtr(i int) *int {
 func TestContextCancellation(t *testing.T) {
 	config := ClientConfig{
 		Endpoint:      "grpc://localhost:20000",
-		TokenizerPath: "/path/to/tokenizer",
+		TokenizerPath: testTokenizerPath,
 	}
 
 	client, err := NewClient(config)
 	if err != nil {
-		t.Skip("Skipping context cancellation test: server not available")
+		t.Fatalf("NewClient() failed: %v", err)
 	}
 	defer client.Close()
 

@@ -4,6 +4,8 @@
 # Configuration
 CARGO_BUILD_DIR ?= $(shell pwd)/target
 BUILD_MODE ?= release
+# -count=1 so a cached PASS cannot satisfy the target
+GOTEST_ARGS ?= -count=1
 LIB_NAME = libsgl_model_gateway_go
 
 # Detect OS
@@ -25,6 +27,14 @@ LIB_BUILD_PATH := $(LIB_BUILD_DIR)/$(LIB_NAME)$(LIB_EXT)
 LIB_EXPORT_DIR := $(ROOT_DIR)/lib
 LIB_EXPORT_PATH := $(LIB_EXPORT_DIR)/$(LIB_NAME)$(LIB_EXT)
 
+# BUILD_MODE selects the cargo profile, so the library directory and the
+# `cargo build` flag cannot drift apart between `build` and `build-dev`
+ifeq ($(BUILD_MODE),release)
+    CARGO_PROFILE_FLAG = --release
+else
+    CARGO_PROFILE_FLAG =
+endif
+
 # Python LDFLAGS (needed for Rust FFI that depends on Python)
 PYTHON_LDFLAGS := $(shell python3-config --ldflags --embed 2>/dev/null || python3-config --ldflags 2>/dev/null || echo "")
 
@@ -33,7 +43,7 @@ LIB_DIR := $(if $(wildcard $(LIB_EXPORT_PATH)),$(LIB_EXPORT_DIR),$(LIB_BUILD_DIR
 export CGO_LDFLAGS = -L$(LIB_DIR) -lsgl_model_gateway_go $(PYTHON_LDFLAGS) -ldl
 export $(LD_LIBRARY_PATH_VAR) := $(LIB_DIR):$($(LD_LIBRARY_PATH_VAR))
 
-.PHONY: all build build-dev lib lib-clean clean test examples help run-simple run-streaming check-lib
+.PHONY: all build build-dev build-lib lib lib-clean clean test examples help run-simple run-streaming check-lib
 
 help:
 	@echo "Available targets:"
@@ -50,16 +60,17 @@ help:
 all: build
 
 build:
-	@echo "Building Rust FFI library (release mode)..."
-	@CARGO_TARGET_DIR=$(CARGO_BUILD_DIR) cargo build --release --manifest-path Cargo.toml
-	@echo "Library built at: $(LIB_BUILD_PATH)"
+	@$(MAKE) --no-print-directory BUILD_MODE=release build-lib
 
 build-dev:
-	@echo "Building Rust FFI library (debug mode)..."
-	@CARGO_TARGET_DIR=$(CARGO_BUILD_DIR) cargo build --manifest-path Cargo.toml
-	@echo "Library built at: $(LIB_BUILD_DIR)/debug/$(LIB_NAME)$(LIB_EXT)"
+	@$(MAKE) --no-print-directory BUILD_MODE=debug build-lib
 
-lib: build
+build-lib:
+	@echo "Building Rust FFI library ($(BUILD_MODE) mode)..."
+	@CARGO_TARGET_DIR=$(CARGO_BUILD_DIR) cargo build $(CARGO_PROFILE_FLAG) --manifest-path Cargo.toml
+	@echo "Library built at: $(LIB_BUILD_PATH)"
+
+lib: build-lib
 	@echo "Copying library to ./lib directory..."
 	@mkdir -p $(LIB_EXPORT_DIR)
 	@cp $(LIB_BUILD_PATH) $(LIB_EXPORT_PATH)
@@ -75,21 +86,23 @@ clean: lib-clean
 	@CARGO_TARGET_DIR=$(CARGO_BUILD_DIR) cargo clean --manifest-path Cargo.toml
 	@echo "Clean complete"
 
-test: build
+test: build-lib
 	@echo "Running Go tests..."
-	@go test ./...
+	@go test ./... $(GOTEST_ARGS)
 
-examples: build
+examples: build-lib
 	@echo "Building example programs..."
 	@cd examples/simple && go build -o simple main.go
 	@cd examples/streaming && go build -o streaming main.go
+	@echo "Building oai_server example (separate Go module)..."
+	@cd examples/oai_server && go build -o build/oai_server .
 	@echo "Examples built"
 
-run-simple: build
+run-simple: build-lib
 	@echo "Running simple example..."
 	@cd examples/simple && bash run.sh
 
-run-streaming: build
+run-streaming: build-lib
 	@echo "Running streaming example..."
 	@cd examples/streaming && bash run.sh
 
