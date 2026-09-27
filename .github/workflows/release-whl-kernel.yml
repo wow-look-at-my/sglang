@@ -115,6 +115,7 @@ jobs:
           path: python/sglang/kernels/aot/dist/*
 
   release-cu130:
+    if: github.repository == 'sgl-project/sglang'
     needs: build-cu130-matrix
     runs-on: ubuntu-latest
     steps:
@@ -217,7 +218,10 @@ jobs:
 
   release-rocm720:
     needs: build-rocm-matrix
-    if: ${{ github.event_name == 'push' || inputs.target == 'all' || inputs.target == 'rocm720' }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name == 'push' || inputs.target == 'all' || inputs.target == 'rocm720'
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -269,7 +273,10 @@ jobs:
 
   release-rocm1000:
     needs: build-rocm-matrix
-    if: ${{ github.event_name == 'push' || inputs.target == 'all' || inputs.target == 'rocm1000' }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name == 'push' || inputs.target == 'all' || inputs.target == 'rocm1000'
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -371,6 +378,7 @@ jobs:
           path: python/sglang/kernels/aot/dist/*
 
   release-musa43:
+    if: github.repository == 'sgl-project/sglang'
     needs: build-musa43
     runs-on: ubuntu-latest
     steps:

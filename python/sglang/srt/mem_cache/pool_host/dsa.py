@@ -149,11 +149,17 @@ class DSAIndexerPoolHost(HostKVCache):
     def get_ksize_per_token(self):
         return self.get_size_per_token()
 
+    def _device_index_buffers(self, device_pool) -> list[torch.Tensor]:
+        """Per-layer device page buffers, ``[num_pages, page_stride]`` rows."""
+        return device_pool.index_k_with_scale_buffer
+
     def init_kv_buffer(self):
         alloc_func = ALLOC_MEMORY_FUNCS[self.device_pool.device]
         device_pools = (self.device_pool, *self.mtp_draft_device_pools)
         self.packed_device_index_buffers = [
-            buffer for pool in device_pools for buffer in pool.index_k_with_scale_buffer
+            buffer
+            for pool in device_pools
+            for buffer in self._device_index_buffers(pool)
         ]
         self.index_k_device_ptrs = torch.tensor(
             [x.data_ptr() for x in self.packed_device_index_buffers],
@@ -260,7 +266,7 @@ class DSAIndexerPoolHost(HostKVCache):
             if self.layout == "layer_first":
                 transfer_kv_per_layer_mla(
                     src=self.index_k_with_scale_buffer[host_layer_id],
-                    dst=device_pool.index_k_with_scale_buffer[device_layer_id],
+                    dst=self._device_index_buffers(device_pool)[device_layer_id],
                     src_indices=host_page_indices,
                     dst_indices=device_page_indices,
                     item_size=self.indexer_page_stride_size,
@@ -268,7 +274,7 @@ class DSAIndexerPoolHost(HostKVCache):
             elif self.layout == "page_first":
                 transfer_kv_per_layer_mla_pf_lf(
                     src=self.index_k_with_scale_buffer,
-                    dst=device_pool.index_k_with_scale_buffer[device_layer_id],
+                    dst=self._device_index_buffers(device_pool)[device_layer_id],
                     src_indices=host_page_indices,
                     dst_indices=device_page_indices,
                     layer_id=host_layer_id,
@@ -281,7 +287,9 @@ class DSAIndexerPoolHost(HostKVCache):
             if self.layout == "layer_first":
                 transfer_kv_direct(
                     src_layers=[self.index_k_with_scale_buffer[host_layer_id]],
-                    dst_layers=[device_pool.index_k_with_scale_buffer[device_layer_id]],
+                    dst_layers=[
+                        self._device_index_buffers(device_pool)[device_layer_id]
+                    ],
                     src_indices=host_page_indices,
                     dst_indices=device_page_indices,
                     page_size=1,
@@ -289,7 +297,7 @@ class DSAIndexerPoolHost(HostKVCache):
             elif self.layout == "page_first_direct":
                 transfer_kv_per_layer_direct_pf_lf(
                     src_ptrs=[self.index_k_with_scale_buffer],
-                    dst_ptrs=[device_pool.index_k_with_scale_buffer[device_layer_id]],
+                    dst_ptrs=[self._device_index_buffers(device_pool)[device_layer_id]],
                     src_indices=host_page_indices,
                     dst_indices=device_page_indices,
                     layer_id=host_layer_id,
@@ -324,7 +332,7 @@ class DSAIndexerPoolHost(HostKVCache):
         if use_kernel:
             if self.layout == "layer_first":
                 transfer_kv_per_layer_mla(
-                    src=device_pool.index_k_with_scale_buffer[device_layer_id],
+                    src=self._device_index_buffers(device_pool)[device_layer_id],
                     dst=self.index_k_with_scale_buffer[host_layer_id],
                     src_indices=device_page_indices,
                     dst_indices=host_page_indices,
@@ -340,7 +348,9 @@ class DSAIndexerPoolHost(HostKVCache):
         elif io_backend == "direct":
             if self.layout == "layer_first":
                 transfer_kv_direct(
-                    src_layers=[device_pool.index_k_with_scale_buffer[device_layer_id]],
+                    src_layers=[
+                        self._device_index_buffers(device_pool)[device_layer_id]
+                    ],
                     dst_layers=[self.index_k_with_scale_buffer[host_layer_id]],
                     src_indices=device_page_indices,
                     dst_indices=host_page_indices,

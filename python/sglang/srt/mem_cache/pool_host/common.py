@@ -4,7 +4,10 @@ import json
 import logging
 import os
 from collections import defaultdict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
+from typing import Iterator, Optional
 
 import torch
 
@@ -18,6 +21,43 @@ logger = logging.getLogger(__name__)
 _is_hip = is_hip()
 
 _CUDA_HOST_REGISTERED_RANGES_ATTR = "_sglang_cuda_host_registered_ranges"
+
+# Buffers registered inside track_host_registrations(), for rollback.
+_tracked_registrations: ContextVar[Optional[list[torch.Tensor]]] = ContextVar(
+    "hicache_tracked_host_registrations", default=None
+)
+
+
+class HostPinError(RuntimeError):
+    """cudaHostRegister refused a HiCache host buffer."""
+
+
+@contextmanager
+def track_host_registrations() -> Iterator[list[torch.Tensor]]:
+    """Collect every buffer pinned inside the scope, so a failed build can unpin them."""
+    registered: list[torch.Tensor] = []
+    token = _tracked_registrations.set(registered)
+    try:
+        yield registered
+    finally:
+        _tracked_registrations.reset(token)
+
+
+def unregister_host_buffers(buffers: list[torch.Tensor]) -> None:
+    """Unpin buffers; safe on buffers a pool's destroy() already unpinned."""
+    for buffer in buffers:
+        _cuda_host_unregister(buffer)
+
+
+def probe_host_registration(num_bytes: int = 2 << 20) -> Optional[str]:
+    """Pin and unpin a small buffer; return the failure, or None if pinning works."""
+    buffer = torch.empty(num_bytes, dtype=torch.uint8)
+    try:
+        _cuda_host_register(buffer)
+    except HostPinError as error:
+        return str(error)
+    _cuda_host_unregister(buffer)
+    return None
 
 
 class HostTensorAllocator:
@@ -174,7 +214,7 @@ def _cuda_host_register(
             ptr = base + offset
             rc = int(cudart.cudaHostRegister(ptr, size, 0))
             if rc != 0:
-                raise RuntimeError(
+                raise HostPinError(
                     f"cudaHostRegister failed (rc={rc}, "
                     f"{cudart.cudaGetErrorString(rc)}) at offset={offset} size={size} "
                     f"(total={total}, chunk_limit={chunk_bytes}); host buffer is not "
@@ -187,6 +227,9 @@ def _cuda_host_register(
         # cudaHostUnregister to receive each base pointer, not just the tensor's
         # original base once after several independent registrations.
         setattr(buffer, _CUDA_HOST_REGISTERED_RANGES_ATTR, registered_ranges)
+        tracked = _tracked_registrations.get()
+        if tracked is not None:
+            tracked.append(buffer)
     except Exception:
         remaining_ranges = _cuda_host_unregister_ranges(
             cudart, registered_ranges, operation="registration rollback"

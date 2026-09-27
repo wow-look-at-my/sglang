@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.repository == 'sgl-project/sglang'
     name: build ${{ matrix.platform }}-${{ matrix.device_type }}
     runs-on: ${{ matrix.runner }}
     strategy:

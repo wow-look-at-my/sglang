@@ -500,9 +500,16 @@ class BaseMultimodalProcessor(ABC):
             self.mm_processor_executor.shutdown()
 
     def _create_cpu_executor(self) -> concurrent.futures.ProcessPoolExecutor:
-        start_method = "spawn" if self.mm_feature_transport == "cuda_vmm" else "fork"
+        if self.mm_feature_transport == "cuda_vmm":
+            mp_context = mp.get_context("spawn")
+        else:
+            # fork from this threaded process can hand a worker a lock another
+            # thread held (e.g. the broken-pool cleanup), deadlocking it. The fork
+            # server is single-threaded; preloading keeps its forks cheap.
+            mp_context = mp.get_context("forkserver")
+            mp_context.set_forkserver_preload([__name__])
         return concurrent.futures.ProcessPoolExecutor(
-            mp_context=mp.get_context(start_method),
+            mp_context=mp_context,
             max_workers=int(os.environ.get("SGLANG_CPU_WORKERS", os.cpu_count())),
         )
 

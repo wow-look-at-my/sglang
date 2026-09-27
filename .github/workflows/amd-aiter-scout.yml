@@ -34,6 +34,7 @@ concurrency:
 
 jobs:
   resolve-aiter:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       aiter_sha: ${{ steps.resolve.outputs.sha }}
@@ -84,7 +85,7 @@ jobs:
 
   call-nightly-amd:
     name: Nightly AMD (all ROCm versions)
-    if: needs.resolve-aiter.outputs.run_nightly_amd == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.resolve-aiter.outputs.run_nightly_amd == 'true')
     needs: resolve-aiter
     uses: ./.github/workflows/nightly-test-amd.yml
     secrets: inherit
@@ -97,7 +98,7 @@ jobs:
 
   call-pr-test-amd:
     name: PR Test AMD (all ROCm versions)
-    if: needs.resolve-aiter.outputs.run_pr_test_amd == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.resolve-aiter.outputs.run_pr_test_amd == 'true')
     needs: resolve-aiter
     uses: ./.github/workflows/pr-test-amd.yml
     secrets: inherit
@@ -109,7 +110,7 @@ jobs:
       continue_on_error: ${{ inputs.continue_on_error == '' && true || inputs.continue_on_error }}
 
   check-all-jobs:
-    if: always()
+    if: github.repository == 'sgl-project/sglang' && (always())
     needs:
       - resolve-aiter
       - call-nightly-amd

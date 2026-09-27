@@ -15,7 +15,10 @@ from torch.distributed import ProcessGroup
 import sglang.srt.distributed.device_communicators.custom_all_reduce_ops as ops
 from sglang.srt.distributed.device_communicators.cuda_wrapper import CudaRTLibrary
 from sglang.srt.distributed.device_communicators.custom_all_reduce_utils import (
+    CustomAllreduceGraphRegistrationError,
     can_use_custom_all_reduce_with_nvlink,
+    graph_registration_failure_message,
+    is_vmm_backed_allocator,
     is_weak_contiguous,
 )
 from sglang.srt.environ import envs
@@ -139,9 +142,21 @@ class CustomAllreduce:
             )
             self.register_buffer(self.buffer)
 
+        # cudaIpcGetMemHandle rejects VMM memory, which backs graph-captured inputs
+        # under torch_memory_saver or expandable_segments; stage those inputs
+        # through the cudaMalloc'd IPC buffer instead of registering them.
+        allocator_is_vmm = _is_cuda and is_vmm_backed_allocator(device)
+        if allocator_is_vmm:
+            log_info_on_rank0(
+                logger,
+                "[AR] Caching allocator is VMM-backed (expandable_segments); custom "
+                "all-reduce stages CUDA-graph inputs through its IPC buffer.",
+            )
+        self.stage_graph_inputs = (
+            envs.SGLANG_MEMORY_SAVER_CUDA_GRAPH.get() or allocator_is_vmm
+        )
         self.disabled = False
         self.original_disabled = False  # Ensure original_disabled == disabled
-        self.tms_cudagraph = envs.SGLANG_MEMORY_SAVER_CUDA_GRAPH.get()
 
     @staticmethod
     def create_shared_buffer(
@@ -237,25 +252,49 @@ class CustomAllreduce:
             handles, offsets = self._gather_ipc_meta((bytes(handle), offset))
             log_info_on_rank0(logger, f"Registering {len(offset)} cuda graph addresses")
             ops.register_graph_buffers(self._ptr, handles, offsets)
-        else:
+            return
+
+        # Every rank takes part in both exchanges even after a local failure,
+        # so the group agrees on the outcome instead of deadlocking.
+        try:
             handle, offset = ops.get_graph_buffer_ipc_meta(self._ptr)
+            error = None
+        except RuntimeError as e:
+            handle, offset, error = None, None, str(e)
+        all_data = self._all_gather_objects([handle, offset, error])
+        errors = [d[2] for d in all_data if d[2] is not None]
+        if not errors:
             log_info_on_rank0(logger, f"Registering {len(offset)} cuda graph addresses")
-            # We cannot directly use `dist.all_gather_object` here
-            # because it is incompatible with `gloo` backend under inference mode.
-            # see https://github.com/pytorch/pytorch/issues/126032 for details.
-            all_data = [
-                [None, None] for _ in range(dist.get_world_size(group=self.group))
-            ]
-            all_data[self.rank] = [handle, offset]
-            ranks = sorted(dist.get_process_group_ranks(group=self.group))
-            for i, rank in enumerate(ranks):
-                dist.broadcast_object_list(
-                    all_data[i], src=rank, group=self.group, device="cpu"
+            try:
+                ops.register_graph_buffers(
+                    self._ptr, [d[0] for d in all_data], [d[1] for d in all_data]
                 )
-            # Unpack list of tuples to tuple of lists.
-            handles = [d[0] for d in all_data]  # type: ignore
-            offsets = [d[1] for d in all_data]  # type: ignore
-            ops.register_graph_buffers(self._ptr, handles, offsets)
+                error = None
+            except RuntimeError as e:
+                error = str(e)
+            all_errors = self._all_gather_objects([error])
+            errors = [d[0] for d in all_errors if d[0] is not None]
+        if errors:
+            self.disabled = True
+            self.original_disabled = True
+            raise CustomAllreduceGraphRegistrationError(
+                graph_registration_failure_message(errors[0])
+            )
+
+    def _all_gather_objects(self, local: List[Any]) -> List[List[Any]]:
+        # We cannot directly use `dist.all_gather_object` here
+        # because it is incompatible with `gloo` backend under inference mode.
+        # see https://github.com/pytorch/pytorch/issues/126032 for details.
+        all_data: List[List[Any]] = [
+            [None] * len(local) for _ in range(self.world_size)
+        ]
+        all_data[self.rank] = local
+        ranks = sorted(dist.get_process_group_ranks(group=self.group))
+        for i, rank in enumerate(ranks):
+            dist.broadcast_object_list(
+                all_data[i], src=rank, group=self.group, device="cpu"
+            )
+        return all_data
 
     def should_custom_ar(self, inp: torch.Tensor):
         if self.disabled:
@@ -313,7 +352,9 @@ class CustomAllreduce:
             return None
         if self._IS_CAPTURING:
             if torch.cuda.is_current_stream_capturing():
-                return self._all_reduce_impl(input, registered=not self.tms_cudagraph)
+                return self._all_reduce_impl(
+                    input, registered=not self.stage_graph_inputs
+                )
             else:
                 # Could be warmup OR piecewise cuda graph split op execution.
                 # In piecewise cuda graph, split ops run eagerly outside the graph

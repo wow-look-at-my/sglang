@@ -31,6 +31,10 @@ HICACHE_HOST_MEMORY_RESERVE_BYTES: int = 10 * (1024**3)
 _WRITE_BACK_STAGING_PAGE_CHUNK = 64
 
 
+class HostMemoryBudgetError(ValueError):
+    """A HiCache host pool does not fit the host-memory budget."""
+
+
 _host_memory_budget: ContextVar[Optional[int]] = ContextVar(
     "hicache_host_memory_budget", default=None
 )
@@ -223,7 +227,7 @@ class HostKVCache(abc.ABC):
         requested_bytes = self.size * self.size_per_token
         available_bytes = host_memory_budget_bytes(requested_bytes)
         if requested_bytes > available_bytes:
-            raise ValueError(
+            raise HostMemoryBudgetError(
                 f"Not enough host memory available. Requesting "
                 f"{requested_bytes / 1e9:.2f} GB but only have "
                 f"{available_bytes / 1e9:.2f} GB free. Please reduce the "

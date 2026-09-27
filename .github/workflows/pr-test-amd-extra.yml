@@ -125,10 +125,12 @@ jobs:
   # gate is enforced at runtime inside pr-gate.yml.
   call-gate:
     if: |
-      github.event_name != 'pull_request' ||
-      github.event.action != 'labeled' ||
-      github.event.label.name == 'run-ci' ||
-      github.event.label.name == 'run-ci-extra'
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name != 'pull_request' ||
+        github.event.action != 'labeled' ||
+        github.event.label.name == 'run-ci' ||
+        github.event.label.name == 'run-ci-extra'
+      )
     uses: ./.github/workflows/pr-gate.yml
     with:
       require-run-ci: true
@@ -144,7 +146,7 @@ jobs:
   extra-a-test-1-gpu-small-amd:
     name: ${{ format('extra-a-test-1-gpu-small-amd ({0}, linux-{1}-1gpu-sglang)', inputs.rocm_version || 'rocm10', inputs.runner_arch || 'mi300') }}
     needs: [call-gate]
-    if: ${{ !cancelled() && needs.call-gate.result == 'success' }}
+    if: github.repository == 'sgl-project/sglang' && (!cancelled() && needs.call-gate.result == 'success')
     runs-on: ${{ format('linux-{0}-1gpu-sglang', inputs.runner_arch || 'mi300') }}
     steps:
       - name: Checkout code
@@ -177,7 +179,7 @@ jobs:
   extra-a-test-1-gpu-large-amd:
     name: ${{ format('extra-a-test-1-gpu-large-amd ({0}, linux-{1}-1gpu-sglang)', inputs.rocm_version || 'rocm10', inputs.runner_arch || 'mi300') }}
     needs: [call-gate]
-    if: ${{ !cancelled() && needs.call-gate.result == 'success' }}
+    if: github.repository == 'sgl-project/sglang' && (!cancelled() && needs.call-gate.result == 'success')
     runs-on: ${{ format('linux-{0}-1gpu-sglang', inputs.runner_arch || 'mi300') }}
     steps:
       - name: Checkout code
@@ -207,7 +209,7 @@ jobs:
   extra-a-test-2-gpu-large-amd:
     name: ${{ format('extra-a-test-2-gpu-large-amd ({0}, linux-{1}-2gpu-sglang)', inputs.rocm_version || 'rocm10', inputs.runner_arch || 'mi300') }}
     needs: [call-gate]
-    if: ${{ !cancelled() && needs.call-gate.result == 'success' }}
+    if: github.repository == 'sgl-project/sglang' && (!cancelled() && needs.call-gate.result == 'success')
     runs-on: ${{ format('linux-{0}-2gpu-sglang', inputs.runner_arch || 'mi300') }}
     steps:
       - name: Checkout code
@@ -246,11 +248,13 @@ jobs:
     # Same `labeled` guard as call-gate: an unrelated label would otherwise finish
     # green with nothing executed, over the real run's result.
     if: |
-      always() &&
-      (github.event_name != 'pull_request' ||
-       github.event.action != 'labeled' ||
-       github.event.label.name == 'run-ci' ||
-       github.event.label.name == 'run-ci-extra')
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
+        (github.event_name != 'pull_request' ||
+         github.event.action != 'labeled' ||
+         github.event.label.name == 'run-ci' ||
+         github.event.label.name == 'run-ci-extra')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses

@@ -166,7 +166,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-test-1-gpu-unit,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-test-1-gpu-unit,'))
+      )
     runs-on: linux-mi300-1gpu-sglang
     steps:
       - name: Checkout code
@@ -201,7 +204,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-test-1-gpu-kernel,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-test-1-gpu-kernel,'))
+      )
     runs-on: linux-mi300-1gpu-sglang
     steps:
       - name: Checkout code
@@ -236,7 +242,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-test-1-gpu-mi35x,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-test-1-gpu-mi35x,'))
+      )
     runs-on: linux-mi35x-gpu-1
     steps:
       - name: Checkout code
@@ -276,7 +285,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-accuracy-2-gpu,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-accuracy-2-gpu,'))
+      )
     runs-on: linux-mi300-2gpu-sglang
     steps:
       - name: Checkout code
@@ -312,7 +324,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-2-gpu-mi35x-glm51-mxfp4,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-2-gpu-mi35x-glm51-mxfp4,'))
+      )
     runs-on: linux-mi35x-gpu-2
     steps:
       - name: Checkout code
@@ -352,7 +367,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-2-gpu-mi35x-deepseek-r1-mxfp4-tp2,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-2-gpu-mi35x-deepseek-r1-mxfp4-tp2,'))
+      )
     runs-on: linux-mi35x-gpu-2
     steps:
       - name: Checkout code
@@ -393,7 +411,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-accuracy-2-gpu-vlm,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-accuracy-2-gpu-vlm,'))
+      )
     runs-on: linux-mi300-2gpu-sglang
     steps:
       - name: Checkout code
@@ -430,7 +451,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-perf-2-gpu-text,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-perf-2-gpu-text,'))
+      )
     runs-on: linux-mi300-2gpu-sglang
     steps:
       - name: Checkout code
@@ -468,7 +492,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-perf-2-gpu-vlm,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-perf-2-gpu-vlm,'))
+      )
     runs-on: linux-mi300-2gpu-sglang
     steps:
       - name: Checkout code
@@ -506,7 +533,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-4-gpu,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-4-gpu,'))
+      )
     runs-on: linux-mi300-4gpu-sglang
     steps:
       - name: Checkout code
@@ -547,7 +577,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-accuracy-8-gpu,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-accuracy-8-gpu,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -600,7 +633,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-accuracy-8-gpu-mi35x,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-accuracy-8-gpu-mi35x,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -659,7 +695,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-grok1-int4,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-grok1-int4,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -709,7 +748,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-grok1-int4,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-grok1-int4,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -766,7 +808,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-grok2,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-grok2,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -816,7 +861,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-grok2,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-grok2,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -877,7 +925,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-deepseek-v32,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-deepseek-v32,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -926,7 +977,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-deepseek-v32-mtp,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-deepseek-v32-mtp,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -983,7 +1037,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v32,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v32,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1037,7 +1094,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v32-mtp,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v32-mtp,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1093,7 +1153,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-mxfp4,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-mxfp4,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1147,7 +1210,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-mxfp4-tp4,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-mxfp4-tp4,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1200,7 +1266,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-mxfp4-kv-fp8,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-mxfp4-kv-fp8,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1254,7 +1323,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-mxfp4-ar-fusion,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-mxfp4-ar-fusion,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1308,7 +1380,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-hicache,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-r1-hicache,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1355,7 +1430,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-deepseek-v4-flash,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-deepseek-v4-flash,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -1398,7 +1476,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v4-flash,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v4-flash,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1454,7 +1535,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v4-pro,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v4-pro,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1510,7 +1594,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v4-pro-mtp,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v4-pro-mtp,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1566,7 +1653,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v4-pro-dspark,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-deepseek-v4-pro-dspark,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1616,7 +1706,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-kimi-k26,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-kimi-k26,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -1659,7 +1752,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-kimi-k3,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-kimi-k3,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1725,7 +1821,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-qwen35,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-qwen35,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -1779,7 +1878,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-qwen35,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-qwen35,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1833,7 +1935,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-qwen35-triton-dcp,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-qwen35-triton-dcp,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1877,7 +1982,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-qwen38-mxfp4,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-qwen38-mxfp4,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -1936,7 +2044,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-glm51,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-glm51,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -1992,7 +2103,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-glm52-fp8,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-glm52-fp8,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -2053,7 +2167,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-glm5-mxfp4,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-mi35x-glm5-mxfp4,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -2111,7 +2228,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-4-gpu-mi35x-minimax-m25,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-4-gpu-mi35x-minimax-m25,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -2155,7 +2275,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-4-gpu-mi35x-minimax-m3,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-4-gpu-mi35x-minimax-m3,'))
+      )
     runs-on: linux-mi35x-gpu-8
     steps:
       - name: Checkout code
@@ -2214,7 +2337,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-minimax-m27,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-8-gpu-minimax-m27,'))
+      )
     runs-on: linux-mi300-8gpu-sglang
     steps:
       - name: Checkout code
@@ -2271,7 +2397,10 @@ jobs:
       fail-fast: false
       matrix:
         rocm_version: ${{ fromJson(inputs.rocm_version && inputs.rocm_version != 'all' && format('["{0}"]', inputs.rocm_version) || '["rocm10", "rocm724", "rocm720"]') }}
-    if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-1-gpu-zimage-turbo,'))
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && (!(inputs.job_filter || inputs.job_select) || (inputs.job_filter || inputs.job_select) == 'all' || contains(format(',{0},', inputs.job_filter || inputs.job_select), ',nightly-1-gpu-zimage-turbo,'))
+      )
     runs-on: linux-mi300-1gpu-sglang
     steps:
       - name: Checkout code
@@ -2312,7 +2441,10 @@ jobs:
           retention-days: 30
 
   check-all-jobs:
-    if: always() && (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        always() && (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+      )
     needs:
       # 1-GPU Unit Tests (MI30x + MI35x)
       - nightly-test-1-gpu-unit

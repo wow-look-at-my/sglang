@@ -10,6 +10,7 @@ import torch
 from sglang.srt.managers.schedule_batch import Req
 from sglang.srt.managers.schedule_policy import PrefillAdder
 from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.mem_cache.allocator import TokenToKVPoolAllocator
 from sglang.srt.mem_cache.allocator.hisparse import (
     DeepSeekV4HiSparseTokenToKVPoolAllocator,
 )
@@ -20,9 +21,15 @@ from sglang.srt.mem_cache.allocator.swa import (
 from sglang.srt.mem_cache.allocator.unified_hybrid_swa import (
     UnifiedMambaSWATokenToKVPoolAllocator,
 )
+from sglang.srt.mem_cache.base_prefix_cache import InsertParams
+from sglang.srt.mem_cache.cache_init_params import CacheInitParams
 from sglang.srt.mem_cache.common import evict_from_tree_cache
+from sglang.srt.mem_cache.memory_pool import MHATokenToKVPool, ReqToTokenPool
 from sglang.srt.mem_cache.prefill_budget import SWAPrefillBudget
+from sglang.srt.mem_cache.radix_cache import RadixKey
+from sglang.srt.mem_cache.unified_cache.components import ComponentType
 from sglang.srt.mem_cache.unified_memory_pool import init_unified_swa_pools
+from sglang.srt.mem_cache.unified_radix_cache import UnifiedRadixCache
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -294,6 +301,106 @@ class TestFixedPrefillMemoryBudget(unittest.TestCase):
         cache.evict_for_alloc.assert_called_once()
         params = cache.evict_for_alloc.call_args.args[0]
         self.assertEqual((params.num_tokens, params.swa_num_tokens), (8, 8))
+
+
+class TestLockedPrefixIsNotAdmissionCapacity(unittest.TestCase):
+    """A prefix a live conversation holds is not spendable by another request.
+
+    Failure mode: a capacity query that counts `protected_size()` as free, or
+    a tree core that stops moving a locked prefix out of `evictable_size()`,
+    lets a new request admit by reclaiming a conversation that is still
+    decoding. The victim then re-prefills its whole history on the next turn.
+    The unlocked half of the case keeps the guard honest in the other
+    direction: a finished conversation's cache must stay reclaimable.
+    """
+
+    PREFIX_TOKENS = 64
+
+    def _cache_with_one_conversation(self):
+        kv_pool = MHATokenToKVPool(
+            size=self.PREFIX_TOKENS,
+            page_size=1,
+            dtype=torch.float16,
+            head_num=2,
+            head_dim=8,
+            layer_num=1,
+            device="cpu",
+            enable_memory_saver=False,
+        )
+        allocator = TokenToKVPoolAllocator(
+            size=self.PREFIX_TOKENS,
+            dtype=torch.float16,
+            device="cpu",
+            kvcache=kv_pool,
+            need_sort=False,
+        )
+        cache = UnifiedRadixCache(
+            CacheInitParams(
+                disable=False,
+                req_to_token_pool=ReqToTokenPool(
+                    size=2,
+                    max_context_len=self.PREFIX_TOKENS,
+                    device="cpu",
+                    enable_memory_saver=False,
+                ),
+                token_to_kv_pool_allocator=allocator,
+                page_size=1,
+                eviction_policy="lru",
+                tree_components=(ComponentType.FULL,),
+            )
+        )
+        tokens = list(range(1, self.PREFIX_TOKENS + 1))
+        values = allocator.alloc(len(tokens))
+        self.assertIsNotNone(values)
+        node = cache.insert(
+            InsertParams(key=RadixKey(array("q", tokens)), value=values)
+        ).last_device_node
+        # The whole pool is this conversation's prefix, so it is the only
+        # capacity a second request could admit against.
+        self.assertEqual(allocator.available_size(), 0)
+        return cache, allocator, node
+
+    def _probe(self, budget):
+        return budget.check_prefill(
+            extend_input_len=32,
+            total_tokens=32,
+            max_new_tokens=1,
+            input_tokens=32,
+            swa_host_hit_length=0,
+            chunk_limit=None,
+        )
+
+    def test_locked_prefix_is_not_admission_capacity(self):
+        cache, allocator, node = self._cache_with_one_conversation()
+        budget = allocator.create_prefill_budget(cache)
+
+        self.assertEqual(cache.evictable_size(), self.PREFIX_TOKENS)
+        self.assertEqual(budget.remaining_total, self.PREFIX_TOKENS)
+        self.assertEqual(self._probe(budget), (True, None))
+        self.assertTrue(budget.has_capacity())
+
+        # The conversation is mid-decode: its prefix is protected, not free.
+        receipt = cache.inc_lock_ref(node)
+        self.assertEqual(cache.evictable_size(), 0)
+        self.assertEqual(cache.protected_size(), self.PREFIX_TOKENS)
+        self.assertEqual(budget.remaining_total, 0)
+        self.assertFalse(budget.has_capacity())
+        self.assertEqual(self._probe(budget), (False, None))
+        self.assertFalse(
+            budget.can_allocate_prefill(
+                paged_input=1,
+                extend_input_len=1,
+                max_new_tokens=1,
+                chunk_limit=None,
+            )
+        )
+
+        # The conversation finishes, so the same prefix is dead cache again.
+        cache.dec_lock_ref(node, receipt.to_dec_params())
+        self.assertEqual(cache.evictable_size(), self.PREFIX_TOKENS)
+        self.assertEqual(budget.remaining_total, self.PREFIX_TOKENS)
+        self.assertTrue(budget.has_capacity())
+        self.assertEqual(self._probe(budget), (True, None))
 
 
 if __name__ == "__main__":
