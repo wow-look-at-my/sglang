@@ -173,7 +173,10 @@ func BaseScenarios() []Scenario {
 	for _, hostMul := range []float64{0, 1.5, 4} {
 		out = append(out, ScenarioThrash(hostMul, 600))
 	}
-	return append(out, ScenarioThrash(0, 1800), ScenarioThrash(1.5, 1800))
+	for _, hostMul := range []float64{0, 1.5, 4} {
+		out = append(out, ScenarioThrash(hostMul, 1800))
+	}
+	return out
 }
 
 // ftoa prints a float as a short decimal, for scenario keys and labels.
