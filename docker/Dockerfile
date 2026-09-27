@@ -1,6 +1,11 @@
 ARG CUDA_VERSION=13.0.3
 # Kept in sync with python/sglang/kernels/aot by scripts/release/bump_kernel_version_to_sglang.py.
 ARG SGL_KERNEL_VERSION=0.4.9
+# Semicolon-separated GPU archs the image must serve, e.g. "120a"; empty builds
+# every optional arch-specific component.
+ARG GPU_ARCHS=
+# Compile jobs per native build step; empty keeps each tool's own default.
+ARG BUILD_JOBS=
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
 
 ARG TARGETARCH
@@ -178,6 +183,7 @@ ARG BUILD_TYPE
 ARG SGL_KERNEL_VERSION
 ARG SGL_KERNEL_WHEEL_REQUIRED=0
 ARG GITHUB_ARTIFACTORY
+ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
@@ -226,6 +232,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         13.0.3) CUINDEX=130 ;; \
         *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
+    && if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
     && cd /tmp/sglang_deps/python \
     && mkdir -p sglang \
     && touch sglang/__init__.py \
@@ -268,15 +275,22 @@ FROM torch_deps AS hpc_ops_builder
 # RoPE kernels from the Tencent Hunyuan AI Infra team, consumed by the opt-in
 # hpc_ops attention and MoE runner backends.
 ARG HPC_OPS_COMMIT=ab1a402724635507037426068f6cddc3d30dc0a8
+ARG GPU_ARCHS
+ARG BUILD_JOBS
 
 WORKDIR /build
 
-# The kernels target Hopper (sm90a) only, so skip non-x86_64 images.
-# setup.py derives the version from `git rev-parse`, so keep the .git dir
-# (a source zip archive would not build).
+# The kernels target Hopper (sm90a) only, so skip non-x86_64 images and images
+# whose GPU_ARCHS leave out sm90. setup.py derives the version from
+# `git rev-parse`, so keep the .git dir (a source zip archive would not build).
 RUN --mount=type=cache,target=/root/.cache/pip \
     mkdir -p /wheels && \
-    if [ "$(uname -m)" = "x86_64" ]; then \
+    case ";${GPU_ARCHS};" in \
+        ";;"|*";90;"*|*";90a;"*) WANT_HPC_OPS=1 ;; \
+        *) WANT_HPC_OPS=0; echo "Skipping hpc-ops: GPU_ARCHS=${GPU_ARCHS} has no sm90" ;; \
+    esac && \
+    if [ -n "$BUILD_JOBS" ]; then export MAX_JOBS="$BUILD_JOBS" CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"; fi && \
+    if [ "$(uname -m)" = "x86_64" ] && [ "$WANT_HPC_OPS" = "1" ]; then \
         git clone https://github.com/Tencent/hpc-ops.git && \
         cd hpc-ops && \
         git checkout ${HPC_OPS_COMMIT} && \
@@ -370,6 +384,7 @@ ARG GITHUB_ARTIFACTORY
 ARG BRANCH_TYPE
 ARG SGL_VERSION
 ARG USE_LATEST_SGLANG
+ARG BUILD_JOBS
 
 WORKDIR /build
 
@@ -380,6 +395,7 @@ COPY sgl-model-gateway /build/sgl-model-gateway
 RUN --mount=type=cache,target=/root/.cache/pip \
     curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && export PATH="/root/.cargo/bin:${PATH}" \
+    && if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
     && python3 -m pip install maturin \
     && cd /build/sgl-model-gateway/bindings/python \
     && ulimit -n 65536 && maturin build --release --features vendored-openssl --out /build/gateway_wheels \
@@ -407,6 +423,7 @@ ARG MSCCLPP_VERSION
 # Renamed from NCCL_VERSION: the nvidia/cuda base image sets ENV NCCL_VERSION
 # (Debian apt format, e.g. 2.28.3-1), which shadows a same-named ARG inside RUN.
 ARG SGL_NCCL_VERSION
+ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
@@ -414,7 +431,7 @@ WORKDIR /sgl-workspace
 # Copy artifacts from parallel builders
 # =============================================================================
 
-# Copy HPC-Ops wheel and install (empty on non-x86_64; kernels are sm90a-only)
+# Copy HPC-Ops wheel and install (empty on non-x86_64 or without sm90 in GPU_ARCHS)
 COPY --from=hpc_ops_builder /wheels /tmp/wheels/hpc-ops
 RUN --mount=type=cache,target=/root/.cache/pip \
     if ls /tmp/wheels/hpc-ops/*.whl >/dev/null 2>&1; then \
@@ -485,7 +502,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Install MSCCL++ Python dependencies and package (builds extension via CMake through pip)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    git clone --depth=1 --branch ${MSCCLPP_VERSION} https://${GITHUB_ARTIFACTORY}/microsoft/mscclpp.git /tmp/mscclpp \
+    if [ -n "$BUILD_JOBS" ]; then export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"; fi \
+    && git clone --depth=1 --branch ${MSCCLPP_VERSION} https://${GITHUB_ARTIFACTORY}/microsoft/mscclpp.git /tmp/mscclpp \
     && case "${CUDA_VERSION}" in \
            13.*) \
                CMAKE_ARGS="-DMSCCLPP_BYPASS_GPU_CHECK=ON -DMSCCLPP_USE_CUDA=ON -DMSCCLPP_GPU_ARCHS=80,90,100,100a,103,103a" \
@@ -582,6 +600,7 @@ ARG CUDA_VERSION
 ARG SGL_VERSION
 ARG USE_LATEST_SGLANG
 ARG SGL_KERNEL_VERSION
+ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
@@ -600,7 +619,8 @@ RUN if [ "$BRANCH_TYPE" = "local" ]; then \
 # Editable install (fast - dependencies already installed via constraints)
 # Clean up __pycache__/tests/pyc in same RUN to avoid writing ~28k files to layer
 RUN --mount=type=cache,target=/root/.cache/pip \
-    cd /sgl-workspace/sglang \
+    if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
+    && cd /sgl-workspace/sglang \
     && python3 -m pip install --no-deps -e "python[${BUILD_TYPE}]" \
     && kernels lock python \
     && ( success=0; \
