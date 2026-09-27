@@ -4,7 +4,7 @@ FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
 ARG TARGETARCH
 ARG BUILD_TYPE=all
 ARG BRANCH_TYPE=remote
-ARG SGL_KERNEL_VERSION=0.4.7
+ARG SGL_KERNEL_VERSION=0.4.8
 ARG SGL_VERSION
 ARG USE_LATEST_SGLANG=0
 ARG GDRCOPY_VERSION=2.5.1
@@ -161,6 +161,11 @@ ENV LANG=en_US.UTF-8 \
 #   framework (combines all artifacts)
 #
 
+# Holds no wheel by default, so sglang-kernel comes from PyPI. Override it with
+# `--build-context sgl_kernel_wheels=<dir of sglang_kernel-*.whl>` to install the
+# kernel built from this checkout, e.g. before that version is published.
+FROM base AS sgl_kernel_wheels
+
 ########################################################
 # PARALLEL STAGE 1: Torch/Deps Builder (starts from base)
 ########################################################
@@ -182,13 +187,20 @@ RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.ru
 
 # Install sgl-kernel (from pre-built wheel)
 RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,from=sgl_kernel_wheels,target=/tmp/sgl_kernel_wheels \
     python3 -m pip install --upgrade pip setuptools wheel html5lib six \
     && case "$CUDA_VERSION" in \
         13.0.3) ;; \
         *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
+    && LOCAL_KERNEL_WHL=$(ls /tmp/sgl_kernel_wheels/sglang_kernel-${SGL_KERNEL_VERSION}[+-]*_$(uname -m).whl 2>/dev/null | head -1) \
     # --no-deps prevents pip from pulling torch from default PyPI
-    && python3 -m pip install sglang-kernel==${SGL_KERNEL_VERSION} --force-reinstall --no-deps
+    && if [ -n "$LOCAL_KERNEL_WHL" ]; then \
+        echo "Installing local sglang-kernel wheel: $LOCAL_KERNEL_WHL" \
+        && python3 -m pip install "$LOCAL_KERNEL_WHL" --force-reinstall --no-deps; \
+    else \
+        python3 -m pip install sglang-kernel==${SGL_KERNEL_VERSION} --force-reinstall --no-deps; \
+    fi
 
 # Copy dep spec + Rust crate source + proto files. setuptools-rust compiles the
 # Rust extension during the stub wheel build; the crate's build.rs references
