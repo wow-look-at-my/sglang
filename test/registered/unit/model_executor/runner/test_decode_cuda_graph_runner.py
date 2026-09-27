@@ -1,4 +1,4 @@
-"""Unit tests for ``DecodeCudaGraphRunner`` capture-phase profiling — CPU-only.
+"""Unit tests for ``DecodeCudaGraphRunner`` capture phase — CPU-only.
 
 Two capture-trace modes plus their precedence:
 
@@ -28,6 +28,11 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+import torch
+
+from sglang.srt.distributed.device_communicators.custom_all_reduce import (
+    CustomAllreduceGraphRegistrationError,
+)
 from sglang.srt.model_executor.runner import decode_cuda_graph_runner as mod
 from sglang.srt.model_executor.runner.decode_cuda_graph_runner import (
     DecodeCudaGraphRunner,
@@ -243,6 +248,83 @@ class TestOriginalTraceExport(CustomTestCase):
                 prof.export_chrome_trace.assert_not_called()
                 self.assertFalse(
                     os.path.isdir(os.path.join(tmp, "graph_capture_profile"))
+                )
+
+
+class _FakeBackend:
+    def __init__(self):
+        self.graphs = {}
+
+    def cleanup(self):
+        self.graphs.clear()
+
+
+class _FakeCapturingRunner:
+    """Stand-in whose ``capture()`` fails with the scripted errors, then succeeds."""
+
+    def __init__(self, errors):
+        self.errors = list(errors)
+        self.backend = _FakeBackend()
+        self.num_captures = 0
+
+    def capture(self):
+        self.num_captures += 1
+        self.backend.graphs[self.num_captures] = "graph"
+        if self.errors:
+            raise self.errors.pop(0)
+
+
+class TestCaptureAllGraphs(CustomTestCase):
+    def _capture(self, runner, *, peer_needs_recapture=()):
+        """Run on this rank; the other ranks' recapture votes are scripted."""
+        peer_votes = list(peer_needs_recapture)
+
+        def any_rank_needs_recapture(needs_recapture):
+            peer_vote = peer_votes.pop(0) if peer_votes else False
+            return needs_recapture or peer_vote
+
+        with mock.patch.object(
+            mod, "_any_rank_needs_recapture", any_rank_needs_recapture
+        ):
+            DecodeCudaGraphRunner._capture_all_graphs(
+                runner, failure_label="Capture cuda graph failed"
+            )
+
+    def test_custom_ar_registration_failure_recaptures_instead_of_crashing(self):
+        """A custom all-reduce graph-buffer registration failure must not kill
+        startup: graphs are recaptured, and only the recaptured ones survive."""
+        runner = _FakeCapturingRunner(
+            [CustomAllreduceGraphRegistrationError("invalid argument")]
+        )
+
+        self._capture(runner)
+
+        self.assertEqual(runner.num_captures, 2)
+        self.assertEqual(list(runner.backend.graphs), [2])
+
+    def test_rank_outside_failed_subgroup_recaptures_with_the_others(self):
+        """When custom all-reduce failed only in a subgroup this rank is not in,
+        this rank must still recapture, or its peers hang in capture collectives."""
+        runner = _FakeCapturingRunner([])
+
+        self._capture(runner, peer_needs_recapture=[True])
+
+        self.assertEqual(runner.num_captures, 2)
+        self.assertEqual(list(runner.backend.graphs), [2])
+
+    def test_failure_hint_gives_memory_advice_only_for_oom(self):
+        """Memory remedies must be offered for an OOM, and must not be offered
+        for a CUDA IPC failure of custom all-reduce."""
+        oom = torch.OutOfMemoryError("CUDA out of memory. Tried to allocate 2 GiB")
+        ipc = RuntimeError("invalid argument\ncsrc/allreduce/custom_all_reduce.cuh:614")
+        for error, expects_memory_advice in ((oom, True), (ipc, False)):
+            with self.subTest(error=str(error)):
+                with self.assertRaises(Exception) as ctx:
+                    self._capture(_FakeCapturingRunner([error]))
+                message = str(ctx.exception)
+                self.assertIn(str(error), message)
+                self.assertEqual(
+                    "--mem-fraction-static" in message, expects_memory_advice
                 )
 
 

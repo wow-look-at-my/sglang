@@ -58,6 +58,7 @@ from .configs.custom_all_reduce_v2 import (
 from .custom_all_reduce_utils import (
     can_use_custom_all_reduce_with_nvlink,
     is_one_nvlink_clique,
+    is_vmm_backed_allocator,
     is_weak_contiguous,
 )
 
@@ -473,12 +474,6 @@ class CustomAllReduceV2:
         self.close()
 
 
-def _is_vmm_backed_allocator(device: torch.device) -> bool:
-    """Check whether expandable-segments VMM backs the caching allocator."""
-    probe = torch.empty(1, dtype=torch.uint8, device=device)
-    return is_vmm_pointer(probe.data_ptr())
-
-
 def can_use_custom_all_reduce_v2(
     group: ProcessGroup,
     device: torch.device,
@@ -487,7 +482,7 @@ def can_use_custom_all_reduce_v2(
     if dist.get_world_size(group=group) not in supported:
         return False
     if not all(in_the_same_node_as(group, source_rank=0)):
-        return is_one_nvlink_clique(group, device) and _is_vmm_backed_allocator(device)
+        return is_one_nvlink_clique(group, device) and is_vmm_backed_allocator(device)
     full_nvlink = can_use_custom_all_reduce_with_nvlink(
         group=group,
         device=device,
