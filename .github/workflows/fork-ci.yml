@@ -377,7 +377,6 @@ jobs:
           go vet ./...
           go build -o "${RUNNER_TEMP}/go-examples/oai_server" .
 
-  # go.mod pins org modules at the v0.0.0 placeholder; only go-toolchain resolves it.
   fork-schedsim:
     needs: fork-plan
     runs-on: ubuntu-latest
@@ -385,16 +384,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # go-toolchain is a fat APE; the kernel runs it through /bin/sh once this entry exists.
-      - name: Install go-toolchain
-        run: |
-          printf '%s\n' ':APE:M::\x4d\x5a\x71\x46\x70\x44\x3d\x27::/bin/sh:' | sudo tee /proc/sys/fs/binfmt_misc/register > /dev/null
-          sudo curl -fsSL --compressed "https://dl.pazer.build/go-toolchain?os=linux&arch=amd64" -o /usr/local/bin/go-toolchain
-          sudo chmod +x /usr/local/bin/go-toolchain
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/sglang-simulator/schedsim/go.mod
+          cache-dependency-path: tools/sglang-simulator/schedsim/go.sum
 
       - name: Scheduler simulator requirement tests
         working-directory: tools/sglang-simulator/schedsim
-        run: go-toolchain
+        run: go test ./...
 
   # ------------------------------------------------------ sglang-kernel wheel
   fork-sgl-kernel-wheel:
