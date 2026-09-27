@@ -55,7 +55,11 @@ permissions:
 
 jobs:
   fork-plan:
-    if: github.repository != 'sgl-project/sglang'
+    # A same-repo PR's commits already run on push; only fork PRs need this event.
+    if: >-
+      github.repository != 'sgl-project/sglang' &&
+      !(github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     outputs:
       kernel_version: ${{ steps.plan.outputs.kernel_version }}
