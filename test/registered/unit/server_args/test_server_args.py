@@ -2251,6 +2251,7 @@ class TestMambaRatioExplicitlySet(CustomTestCase):
         self.assertTrue(self._explicitly_set(mamba_full_memory_ratio=0.5))
         self.assertTrue(self._explicitly_set(declared=0.1))
 
+
 class TestHiCacheAutoResolution(CustomTestCase):
     """An unset --enable-hierarchical-cache resolves per configuration."""
 
