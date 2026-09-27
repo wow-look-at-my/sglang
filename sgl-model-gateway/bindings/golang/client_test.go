@@ -5,6 +5,9 @@ import (
 	"testing"
 )
 
+// NewClient loads this through the native library; the gRPC connection itself is lazy.
+const testTokenizerPath = "testdata/tokenizer.json"
+
 // TestClientConfig tests ClientConfig validation
 func TestClientConfig(t *testing.T) {
 	tests := []struct {
@@ -16,7 +19,7 @@ func TestClientConfig(t *testing.T) {
 			name: "valid config",
 			config: ClientConfig{
 				Endpoint:      "grpc://localhost:20000",
-				TokenizerPath: "/path/to/tokenizer",
+				TokenizerPath: testTokenizerPath,
 			},
 			wantErr: false,
 		},
@@ -24,7 +27,7 @@ func TestClientConfig(t *testing.T) {
 			name: "missing endpoint",
 			config: ClientConfig{
 				Endpoint:      "",
-				TokenizerPath: "/path/to/tokenizer",
+				TokenizerPath: testTokenizerPath,
 			},
 			wantErr: true,
 		},
@@ -97,17 +100,14 @@ func TestChatCompletionRequestValidation(t *testing.T) {
 
 // TestClientClose tests that Close can be called multiple times safely
 func TestClientClose(t *testing.T) {
-	// Create a mock client (note: in real tests, you might want to skip this
-	// if it requires actual server connection)
 	config := ClientConfig{
 		Endpoint:      "grpc://localhost:20000",
-		TokenizerPath: "/path/to/tokenizer",
+		TokenizerPath: testTokenizerPath,
 	}
 
-	// Skip if connection fails (expected in unit test environment)
 	client, err := NewClient(config)
 	if err != nil {
-		t.Skip("Skipping client close test: server not available")
+		t.Fatalf("NewClient() failed: %v", err)
 	}
 
 	// First close should succeed
@@ -229,12 +229,12 @@ func TestToolCallStructure(t *testing.T) {
 func TestConcurrentClientOperations(t *testing.T) {
 	config := ClientConfig{
 		Endpoint:      "grpc://localhost:20000",
-		TokenizerPath: "/path/to/tokenizer",
+		TokenizerPath: testTokenizerPath,
 	}
 
 	client, err := NewClient(config)
 	if err != nil {
-		t.Skip("Skipping concurrent operations test: server not available")
+		t.Fatalf("NewClient() failed: %v", err)
 	}
 	defer client.Close()
 
@@ -291,12 +291,12 @@ func intPtr(i int) *int {
 func TestContextCancellation(t *testing.T) {
 	config := ClientConfig{
 		Endpoint:      "grpc://localhost:20000",
-		TokenizerPath: "/path/to/tokenizer",
+		TokenizerPath: testTokenizerPath,
 	}
 
 	client, err := NewClient(config)
 	if err != nil {
-		t.Skip("Skipping context cancellation test: server not available")
+		t.Fatalf("NewClient() failed: %v", err)
 	}
 	defer client.Close()
 

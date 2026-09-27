@@ -49,7 +49,8 @@ go mod tidy
 
 ### Build Requirements
 
-- Go 1.21+, Rust toolchain, Python 3.x
+- Go 1.25+ (from `go.mod`), the Rust toolchain pinned by `sgl-model-gateway/rust-toolchain.toml`, and `protoc`
+- Unit tests load `testdata/tokenizer.json` through the native library, so build it first (`make build`)
 
 ## Quick Start
 

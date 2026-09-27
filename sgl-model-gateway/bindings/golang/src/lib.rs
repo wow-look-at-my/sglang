@@ -11,6 +11,9 @@
 //! All functions marked with `#[no_mangle]` and `extern "C"` must be called
 //! with valid pointers and follow the documented memory management rules.
 
+// The `# Safety` section above is the contract for every exported `extern "C"` function.
+#![allow(clippy::missing_safety_doc)]
+
 // Re-export error types
 // Re-export client stream function (defined in client.rs but used by stream)
 pub use client::sgl_client_chat_completion_stream;

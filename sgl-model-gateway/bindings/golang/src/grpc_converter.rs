@@ -461,7 +461,7 @@ pub(crate) async fn convert_proto_chunk_to_openai(
                 for &token_id in &chunk.token_ids {
                     match decoder_guard
                         .process_token(token_id)
-                        .unwrap_or_else(|_| smg::tokenizer::stop::SequenceDecoderOutput::Held)
+                        .unwrap_or(smg::tokenizer::stop::SequenceDecoderOutput::Held)
                     {
                         smg::tokenizer::stop::SequenceDecoderOutput::Text(t) => {
                             text.push_str(&t);
@@ -481,7 +481,7 @@ pub(crate) async fn convert_proto_chunk_to_openai(
                 // Use incremental decoder to handle multi-byte character boundaries
                 let decode_stream = handle.decode_streams.entry(index).or_insert_with(|| {
                     DecodeStream::new(
-                        Arc::clone(&tokenizer),
+                        Arc::clone(tokenizer),
                         &[], // No prompt tokens for completion
                         handle.skip_special_tokens,
                     )
@@ -531,7 +531,7 @@ pub(crate) async fn convert_proto_chunk_to_openai(
             stream_buffer.push_str(&chunk_text);
 
             // Handle tool calls if tools are provided
-            if let (Some(ref tools), Some(ref tool_parser)) =
+            if let (Some(tools), Some(tool_parser)) =
                 (handle.tools.as_ref(), handle.tool_parser.as_ref())
             {
                 let tool_choice_enabled = !matches!(

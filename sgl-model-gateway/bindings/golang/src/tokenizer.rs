@@ -207,12 +207,14 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
     if let Some(hf_tokenizer) = tokenizer.as_any().downcast_ref::<HuggingFaceTokenizer>() {
         // Apply chat template with tools
         let empty_docs: [Value; 0] = [];
-        let tools_slice = tools.as_ref().map(|t| t.as_slice());
+        let tools_slice = tools.as_deref();
         let params = ChatTemplateParams {
             add_generation_prompt: true,
             tools: tools_slice,
             documents: Some(&empty_docs),
             template_kwargs: None,
+            // None: the HuggingFace tokenizer injects its own bos/eos/unk/pad tokens.
+            special_tokens: None,
         };
 
         match hf_tokenizer.apply_chat_template(&messages, params) {
@@ -300,6 +302,8 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
             tools: Some(&empty_tools),
             documents: Some(&empty_docs),
             template_kwargs: None,
+            // None: the HuggingFace tokenizer injects its own bos/eos/unk/pad tokens.
+            special_tokens: None,
         };
 
         match hf_tokenizer.apply_chat_template(&messages, params) {

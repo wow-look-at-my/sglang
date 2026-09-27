@@ -10,7 +10,9 @@ use std::{
 use once_cell::sync::Lazy;
 use smg::{
     protocols::chat::ChatCompletionRequest,
-    routers::grpc::utils::{generate_tool_constraints, process_chat_messages},
+    routers::grpc::utils::{
+        filter_chat_request_by_tool_choice, generate_tool_constraints, process_chat_messages,
+    },
     tokenizer::{create_tokenizer_from_file, traits::Tokenizer},
 };
 use smg_grpc_client::sglang_scheduler::SglangSchedulerClient;
@@ -142,13 +144,14 @@ pub unsafe extern "C" fn sgl_client_chat_completion_stream(
     let tokenizer = Arc::clone(&client_ref.tokenizer);
 
     // Parse OpenAI ChatCompletionRequest
-    let chat_request: ChatCompletionRequest = match serde_json::from_str(request_str) {
+    let parsed_request: ChatCompletionRequest = match serde_json::from_str(request_str) {
         Ok(req) => req,
         Err(e) => {
             set_error_message(error_out, &format!("Failed to parse request JSON: {}", e));
             return SglErrorCode::ParsingError;
         }
     };
+    let chat_request = filter_chat_request_by_tool_choice(&parsed_request);
 
     // Process messages and apply chat template
     let processed_messages = match process_chat_messages(&chat_request, tokenizer.as_ref()) {

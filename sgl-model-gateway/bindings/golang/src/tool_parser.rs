@@ -22,7 +22,7 @@ use super::{
 };
 
 /// Global parser factory (initialized once)
-static PARSER_FACTORY: Lazy<ParserFactory> = Lazy::new(|| ParserFactory::new());
+static PARSER_FACTORY: Lazy<ParserFactory> = Lazy::new(ParserFactory::new);
 
 /// Global tokio runtime for async operations
 static RUNTIME: Lazy<Runtime> =
@@ -218,10 +218,8 @@ pub unsafe extern "C" fn sgl_tool_parser_parse_incremental(
                 return SglErrorCode::InvalidArgument;
             }
         };
-        match serde_json::from_str::<Vec<Tool>>(tools_str) {
-            Ok(t) => t,
-            Err(_) => vec![], // If parsing fails, use empty tools
-        }
+        // If parsing fails, use empty tools
+        serde_json::from_str::<Vec<Tool>>(tools_str).unwrap_or_default()
     } else {
         vec![]
     };
