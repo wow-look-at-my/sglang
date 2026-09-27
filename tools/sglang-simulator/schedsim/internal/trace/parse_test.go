@@ -1,9 +1,9 @@
 package trace
 
 import (
-	"github.com/stretchr/testify/require"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func mustParse(t *testing.T) []Step {
@@ -108,8 +108,6 @@ func TestDecodeLineIntervalBoundsTheWindow(t *testing.T) {
 	bound := float64(MaxDecodeStepsInColdWindow())
 	require.Greater(t, normal, bound)
 
-	// The claimed 8-20 tok/s band must be shown impossible from these lines,
-	// which is the honest reason it is not reproduced.
 	lo := m.GenRateForSteps(MaxDecodeStepsInColdWindow())
 	require.Less(t, lo, 8)
 

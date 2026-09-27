@@ -17,13 +17,9 @@ import (
 //go:embed live_log.txt
 var EmbeddedLog string
 
-// DecodeLogInterval is the number of decode iterations between decode stat
-// lines (--decode-log-interval, default 40). A decode line therefore aggregates
-// 40 decode steps, and its gen throughput is tokens over that whole window:
-// absence of decode lines bounds decode steps, it does not report zero.
 const DecodeLogInterval = 40
 
-// Kind distinguishes the two batch classes the scheduler alternates between.
+// Kind distinguishes both batch classes the scheduler alternates between.
 type Kind int
 
 const (
@@ -198,9 +194,6 @@ type Metrics struct {
 	DecodeStepToks float64 // median speculative tokens accepted per decode step
 	RunningDecode  int     // running requests on the last decode step before the stretch
 
-	// LowGenLines counts pre-collapse decode lines reporting under 100 tok/s and
-	// LowGenNearPrefill how many of those sit within a line or two of a prefill
-	// line, which is the signature of a log window that swallowed a chunk.
 	LowGenLines       int
 	LowGenNearPrefill int
 }
@@ -350,9 +343,6 @@ func Summarize(steps []Step, chunkSize int) Metrics {
 	}
 	m.BaselineGenTP = median(baseline)
 	m.MinGenTP = minOf(minGen)
-	// The log's own interval is 40, so at most 39 decode steps fit in the cold
-	// window without a line, an order of magnitude under the thousands a healthy
-	// schedule would run there.
 	for i, s := range steps {
 		if s.Kind != Decode || s.Throughput >= 100 {
 			continue

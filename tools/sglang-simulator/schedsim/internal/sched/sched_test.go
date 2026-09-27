@@ -108,9 +108,6 @@ func TestPrefillShareTradesPrefillTimeAgainstGeneration(t *testing.T) {
 	}
 }
 
-// The balancer's own rule is symmetric at 50/50, so the split it produces must
-// be near even. This is what makes PrefillShare=0.5 a reproduction of the
-// shipped rule rather than a tunable invented here.
 func TestBalancedShareSplitsGPUTimeEvenly(t *testing.T) {
 	w, _ := workload(t)
 
@@ -161,8 +158,8 @@ func TestDecodeCostKnobResponds(t *testing.T) {
 	scaled.DecodePerReqFraction = 1.0
 	rScaled := Simulate(w, scaled, 0)
 
-	// Both generate for three conversations, so compare step counts and window,
-	// which the per-request cost does govern.
+	// Both generate for conversations, so compare step counts and window, which
+	// the per-request cost does govern.
 	require.Less(t, rScaled.DecodeSteps, rFlat.DecodeSteps)
 
 	require.Greater(t, rScaled.WindowSeconds, rFlat.WindowSeconds)
@@ -219,9 +216,6 @@ func TestPerRequestDecodeCostDividesGeneration(t *testing.T) {
 	}
 }
 
-// Requests queued behind the chunk cannot join it, so they must not weigh the
-// split: the revised balancer gives decode the shipped 50/50 share whatever
-// the queue, carrying at most one decode step of overshoot per chunk.
 func TestQueueBalanceIgnoresRequestsThatCannotRun(t *testing.T) {
 	w, _ := workload(t)
 
@@ -280,7 +274,7 @@ func TestWorkloadChunksComeFromTheLog(t *testing.T) {
 
 		require.Greater(t, c.Seconds, 0)
 
-		// The log reports throughput to two decimals, so the identity holds to
+		// The log reports throughput to decimals, so the identity holds to
 		// that rounding rather than exactly.
 		back := float64(c.Tokens) / c.Seconds
 		rel := (back - c.InputTPS) / c.InputTPS
