@@ -56,7 +56,7 @@ class Schedule(msgspec.Struct):
     prefill_decode_interval: A[
         Optional[int],
         Arg(
-            help="The number of decode rounds to run after a prefill batch before scheduling the next prefill. By default, this is disabled except for profiled Qwen3-VL serving configurations on Hopper. In data-parallel attention mode, the interval is synchronized across all DP ranks. Set to 0 to disable.",
+            help="The number of decode rounds to run after a prefill batch before scheduling the next prefill. When unset or 0, the scheduler measures prefill and decode step times and gives each half of the GPU time while both have work, so a long chunked prefill cannot stall running requests; a positive value replaces that with this fixed interval. Profiled Qwen3-VL serving configurations on Hopper default to a fixed interval. In data-parallel attention mode, the interval is synchronized across all DP ranks.",
             resolvable=True,
         ),
     ] = None

@@ -18,7 +18,11 @@ def _make_scheduler(*, interval: int, require_mlp_sync: bool) -> Scheduler:
     scheduler.prefill_decode_interval = interval
     scheduler._prefill_decode_interval_remaining = 0
     scheduler.require_mlp_sync = require_mlp_sync
+    scheduler.prefill_decode_balancer = None
     return scheduler
+
+
+_RUNNING = SimpleNamespace(is_empty=lambda: False, is_prefill_only=False)
 
 
 def _make_batch(*, local_extend: bool, global_extend: bool):
@@ -36,7 +40,7 @@ class TestPrefillDecodeInterval(unittest.TestCase):
             _make_batch(local_extend=True, global_extend=False)
         )
 
-        self.assertFalse(scheduler._should_defer_prefill())
+        self.assertFalse(scheduler._should_defer_prefill(_RUNNING))
 
     def test_non_dp_interval_uses_local_forward_mode(self):
         scheduler = _make_scheduler(interval=2, require_mlp_sync=False)
@@ -45,9 +49,9 @@ class TestPrefillDecodeInterval(unittest.TestCase):
             _make_batch(local_extend=True, global_extend=False)
         )
 
-        self.assertTrue(scheduler._should_defer_prefill())
-        self.assertTrue(scheduler._should_defer_prefill())
-        self.assertFalse(scheduler._should_defer_prefill())
+        self.assertTrue(scheduler._should_defer_prefill(_RUNNING))
+        self.assertTrue(scheduler._should_defer_prefill(_RUNNING))
+        self.assertFalse(scheduler._should_defer_prefill(_RUNNING))
 
     def test_dp_interval_uses_globally_synchronized_extend_flag(self):
         scheduler = _make_scheduler(interval=2, require_mlp_sync=True)
@@ -58,7 +62,7 @@ class TestPrefillDecodeInterval(unittest.TestCase):
         )
 
         self.assertEqual(scheduler._prefill_decode_interval_remaining, 2)
-        self.assertTrue(scheduler._should_defer_prefill())
+        self.assertTrue(scheduler._should_defer_prefill(_RUNNING))
 
     def test_decode_batch_does_not_rearm_interval(self):
         scheduler = _make_scheduler(interval=2, require_mlp_sync=True)
