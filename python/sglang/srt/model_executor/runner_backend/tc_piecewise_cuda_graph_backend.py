@@ -267,6 +267,11 @@ class TcPiecewiseCudaGraphBackend(BaseCudaGraphBackend):
             **kwargs,
         )
 
+    def discard_captured_graphs(self) -> None:
+        """Drop the piecewise graphs but keep the compiled callable for recapture."""
+        for piecewise_backend in self._compile_config.piecewise_backends:
+            piecewise_backend.discard_captured_graphs()
+
     def cleanup(self) -> None:
         self._compiled_fn = None
         self._compile_config = None

@@ -30,9 +30,10 @@ from unittest import mock
 
 import torch
 
-from sglang.srt.distributed.device_communicators.custom_all_reduce import (
+from sglang.srt.distributed.device_communicators.custom_all_reduce_utils import (
     CustomAllreduceGraphRegistrationError,
 )
+from sglang.srt.model_executor.runner import base_cuda_graph_runner
 from sglang.srt.model_executor.runner import decode_cuda_graph_runner as mod
 from sglang.srt.model_executor.runner.decode_cuda_graph_runner import (
     DecodeCudaGraphRunner,
@@ -284,7 +285,7 @@ class TestCaptureAllGraphs(CustomTestCase):
             return needs_recapture or peer_vote
 
         with mock.patch.object(
-            mod, "_any_rank_needs_recapture", any_rank_needs_recapture
+            base_cuda_graph_runner, "any_rank_needs_recapture", any_rank_needs_recapture
         ):
             DecodeCudaGraphRunner._capture_all_graphs(
                 runner, failure_label="Capture cuda graph failed"

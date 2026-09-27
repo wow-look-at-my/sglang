@@ -439,6 +439,22 @@ def can_p2p(rank: int, world_size: int) -> bool:
     return True
 
 
+class CustomAllreduceGraphRegistrationError(RuntimeError):
+    """CUDA-graph buffers could not be IPC-registered on some rank of the group.
+
+    Raised identically on every rank of the group, after the communicator has
+    disabled itself there; graphs captured with it must be discarded and recaptured.
+    """
+
+
+def graph_registration_failure_message(error: str) -> str:
+    return (
+        "Custom all-reduce could not IPC-register its CUDA-graph buffers "
+        f"({' '.join(error.split())}); it is now disabled for this group and "
+        "all-reduce falls back to NCCL."
+    )
+
+
 def is_vmm_backed_allocator(device: torch.device) -> bool:
     """Check whether expandable-segments VMM backs the caching allocator."""
     probe = torch.empty(1, dtype=torch.uint8, device=device)

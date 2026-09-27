@@ -1,0 +1,455 @@
+name: Fork CI
+
+# CI for forks of sgl-project/sglang, on GitHub-hosted runners only. Upstream
+# workflows build on self-hosted pools (x64-kernel-build-node, x64-docker-build-node,
+# GPU runners) and publish with Docker Hub / PyPI secrets that a fork does not
+# have. Every job of those workflows, *-finish aggregators included, starts its
+# `if:` with github.repository == 'sgl-project/sglang', so on a fork they all
+# report skipped. This workflow is the fork's replacement and skips upstream.
+# A new upstream-only job needs the same guard; hosted, secret-free workflows
+# (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded.
+#
+#   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
+#   AOT kernel diff : sglang-kernel CUDA 13 wheels (x86_64 + aarch64), checked
+#                     against the ops this tree calls
+#   default branch  : kernel wheels as release sglang-kernel-v<version>, and the
+#                     serving image (docker/Dockerfile, framework_final) on ghcr.io
+#
+# Optional repository variables (Settings > Variables) for bigger machines:
+#   FORK_KERNEL_RUNNER_X64 / FORK_KERNEL_RUNNER_ARM64   runner labels
+#   FORK_KERNEL_BUILD_JOBS / FORK_KERNEL_NVCC_THREADS   build parallelism
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_kernel:
+        description: "Build the sglang-kernel wheels even if python/sglang/kernels/aot is unchanged"
+        type: boolean
+        default: false
+      build_docker:
+        description: "Build and push the serving image to ghcr.io"
+        type: boolean
+        default: false
+      image_tag:
+        description: "Image tag for build_docker (default: dev-<branch>)"
+        type: string
+        default: ""
+
+concurrency:
+  group: fork-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  fork-plan:
+    if: github.repository != 'sgl-project/sglang'
+    runs-on: ubuntu-latest
+    outputs:
+      kernel_version: ${{ steps.plan.outputs.kernel_version }}
+      build_kernel: ${{ steps.plan.outputs.build_kernel }}
+      kernel_changed: ${{ steps.plan.outputs.kernel_changed }}
+      publish_kernel: ${{ steps.plan.outputs.publish_kernel }}
+      build_docker: ${{ steps.plan.outputs.build_docker }}
+      image_tags: ${{ steps.plan.outputs.image_tags }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide what to build
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          INPUT_BUILD_KERNEL: ${{ inputs.build_kernel }}
+          INPUT_BUILD_DOCKER: ${{ inputs.build_docker }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          KERNEL_VERSION=$(grep -Po '(?<=^version = ")[^"]*' python/sglang/kernels/aot/pyproject.toml)
+          echo "kernel_version=${KERNEL_VERSION}" >> "$GITHUB_OUTPUT"
+
+          BASE=""
+          case "$EVENT" in
+            pull_request) BASE="$PR_BASE" ;;
+            push)
+              BASE="$PUSH_BEFORE"
+              if [[ "$BASE" =~ ^0+$ ]]; then BASE="$DEFAULT_BRANCH"; fi ;;
+          esac
+          CHANGED="unknown"
+          if [ -n "$BASE" ]; then
+            # The compare API lists at most 300 files; treat a full page as unknown.
+            if FILES=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE}...${GITHUB_SHA}" --jq '.files[].filename'); then
+              [ "$(printf '%s\n' "$FILES" | grep -c .)" -lt 300 ] && CHANGED="$FILES"
+            fi
+          fi
+          touched() { [ "$CHANGED" = "unknown" ] || printf '%s\n' "$CHANGED" | grep -qE "$1"; }
+
+          KERNEL_CHANGED=false
+          if [ -n "$BASE" ] && touched '^(python/sglang/kernels/aot/|\.github/workflows/fork-ci\.yml$)'; then
+            KERNEL_CHANGED=true
+          fi
+
+          ON_DEFAULT=false
+          if [ "$GITHUB_REF" = "refs/heads/${DEFAULT_BRANCH}" ] && [ "$EVENT" != "pull_request" ]; then
+            ON_DEFAULT=true
+          fi
+
+          # A wheel for the pinned version must exist somewhere before the image
+          # can install it: PyPI (upstream releases) or this fork's release.
+          KERNEL_AVAILABLE=false
+          if curl -fsS --max-time 15 --retry 3 -o /dev/null "https://pypi.org/pypi/sglang-kernel/${KERNEL_VERSION}/json" \
+             || gh release view "sglang-kernel-v${KERNEL_VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            KERNEL_AVAILABLE=true
+          fi
+
+          BUILD_KERNEL=false
+          if [ "$KERNEL_CHANGED" = true ] || [ "$INPUT_BUILD_KERNEL" = true ] \
+             || { [ "$ON_DEFAULT" = true ] && [ "$KERNEL_AVAILABLE" = false ]; }; then
+            BUILD_KERNEL=true
+          fi
+
+          BUILD_DOCKER=false
+          if [ "$ON_DEFAULT" = true ] && [ "$EVENT" = push ] || [ "$INPUT_BUILD_DOCKER" = true ]; then
+            BUILD_DOCKER=true
+          fi
+          SHORT_SHA="${GITHUB_SHA::7}"
+          if [ -n "$INPUT_IMAGE_TAG" ]; then
+            IMAGE_TAGS="${INPUT_IMAGE_TAG}"
+          elif [ "$ON_DEFAULT" = true ]; then
+            IMAGE_TAGS="dev dev-${SHORT_SHA}"
+          else
+            IMAGE_TAGS="dev-$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-100)"
+          fi
+
+          {
+            echo "kernel_changed=${KERNEL_CHANGED}"
+            echo "build_kernel=${BUILD_KERNEL}"
+            echo "publish_kernel=${ON_DEFAULT}"
+            echo "build_docker=${BUILD_DOCKER}"
+            echo "image_tags=${IMAGE_TAGS}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Fork CI plan"
+            echo "| item | value |"
+            echo "|---|---|"
+            echo "| sglang-kernel version | ${KERNEL_VERSION} (available: ${KERNEL_AVAILABLE}) |"
+            echo "| AOT kernel changed | ${KERNEL_CHANGED} |"
+            echo "| build kernel wheels | ${BUILD_KERNEL} |"
+            echo "| publish kernel release | ${ON_DEFAULT} |"
+            echo "| build image | ${BUILD_DOCKER} (${IMAGE_TAGS}) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------- CPU tests
+  fork-check-changes:
+    needs: fork-plan
+    uses: ./.github/workflows/_pr-test-check-changes.yml
+    with:
+      # Pushes have no PR diff to filter on; run the whole CPU suite.
+      run_all_tests: ${{ github.event_name != 'pull_request' }}
+
+  fork-rust-ext-build:
+    needs: fork-check-changes
+    uses: ./.github/workflows/_pr-test-rust-ext-build.yml
+    with:
+      runs_on: ubuntu-22.04
+      artifact_name: fork-rust-ext-x86_64
+
+  base-a-test-cpu:
+    needs: [fork-check-changes, fork-rust-ext-build]
+    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' }}
+    uses: ./.github/workflows/_pr-test-stage-cpu.yml
+    with:
+      self_name: base-a-test-cpu
+      check_changes: ${{ toJson(needs.fork-check-changes.outputs) }}
+      caller_inputs: '{"skip_pr_test_health_check": true}'
+      partitions: ${{ needs.fork-check-changes.outputs.partitions }}
+      run_timeout_minutes: '30'
+      rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
+
+  # ------------------------------------------------------------ sglang wheel
+  fork-sglang-wheel:
+    needs: fork-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # setuptools-scm derives the version from tags
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install protoc
+        run: sudo bash scripts/ci/utils/install_protoc.sh
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build wheel
+        run: |
+          cd python
+          cp ../README.md ../LICENSE .
+          pip install build wheel "setuptools>=61.0" "setuptools-rust>=1.11" \
+            "setuptools-scm>=8.0" "torch==2.13.0" --extra-index-url https://download.pytorch.org/whl/cpu
+          python3 -m build --wheel --no-isolation
+
+      - name: Repair and smoke-test wheel
+        run: |
+          pip install auditwheel patchelf
+          python3 scripts/release/prepare_sglang_wheel.py python/dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sglang-wheel-py3.10-x86_64
+          path: python/dist/*.whl
+          if-no-files-found: error
+
+  # ------------------------------------------------------ sglang-kernel wheel
+  fork-sgl-kernel-wheel:
+    needs: fork-plan
+    if: needs.fork-plan.outputs.build_kernel == 'true'
+    name: fork-sgl-kernel-wheel (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ${{ vars.FORK_KERNEL_RUNNER_X64 || 'ubuntu-latest' }}
+          - arch: aarch64
+            runner: ${{ vars.FORK_KERNEL_RUNNER_ARM64 || 'ubuntu-24.04-arm' }}
+    runs-on: ${{ matrix.runner }}
+    # Hosted-runner ceiling. A full build can outlast it on 4 cores; the ccache
+    # saved below lets the next run resume where this one stopped.
+    timeout-minutes: 360
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore ccache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/sgl-kernel/ccache
+          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ github.run_id }}
+          restore-keys: fork-sgl-kernel-ccache-${{ matrix.arch }}-
+
+      - name: Build wheel (Python 3.10, CUDA 13.0)
+        id: build
+        timeout-minutes: 320
+        env:
+          USE_CCACHE: 1
+          BUILD_JOBS: ${{ vars.FORK_KERNEL_BUILD_JOBS || '2' }}
+          NVCC_THREADS: ${{ vars.FORK_KERNEL_NVCC_THREADS || '2' }}
+        run: |
+          cd python/sglang/kernels/aot
+          ./build.sh 3.10 13.0 ${{ matrix.arch == 'aarch64' && 'aarch64' || '' }}
+
+      # The build container writes the cache as root; the save step runs as the runner.
+      - name: Save ccache
+        if: always() && steps.ccache.outcome == 'success'
+        run: sudo chown -R "$(id -u):$(id -g)" ~/.cache/sgl-kernel/ccache || true
+
+      - uses: actions/cache/save@v4
+        if: always() && steps.ccache.outcome == 'success'
+        with:
+          path: ~/.cache/sgl-kernel/ccache
+          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ github.run_id }}
+
+      - name: Check wheel version and ops
+        run: |
+          set -euo pipefail
+          VERSION='${{ needs.fork-plan.outputs.kernel_version }}'
+          ls -alh python/sglang/kernels/aot/dist
+          WHEELS=$(ls python/sglang/kernels/aot/dist/sglang_kernel-${VERSION}+*_${{ matrix.arch }}.whl)
+          python3 scripts/ci/utils/check_sgl_kernel_wheel_ops.py $WHEELS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sgl-kernel-wheel-${{ matrix.arch }}
+          path: python/sglang/kernels/aot/dist/*.whl
+          if-no-files-found: error
+
+  fork-sgl-kernel-release:
+    needs: [fork-plan, fork-sgl-kernel-wheel]
+    if: ${{ !cancelled() && needs.fork-plan.outputs.publish_kernel == 'true' && needs.fork-sgl-kernel-wheel.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: sgl-kernel-wheel-*
+          path: wheels
+          merge-multiple: true
+
+      - name: Publish to release sglang-kernel-v${{ needs.fork-plan.outputs.kernel_version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.fork-plan.outputs.kernel_version }}
+          KERNEL_CHANGED: ${{ needs.fork-plan.outputs.kernel_changed }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          WHEELS=(wheels/*.whl)
+          if [ ${#WHEELS[@]} -eq 0 ]; then
+            echo "::error::no sglang-kernel wheel was built"; exit 1
+          fi
+          TAG="sglang-kernel-v${VERSION}"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "sglang-kernel ${VERSION}" \
+              --notes "sglang-kernel ${VERSION} built from ${GITHUB_SHA}. Install: pip install sglang-kernel==${VERSION} --find-links https://github.com/${GITHUB_REPOSITORY}/releases/expanded_assets/${TAG}"
+          fi
+          EXISTING=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          for WHEEL in "${WHEELS[@]}"; do
+            NAME=$(basename "$WHEEL")
+            if printf '%s\n' "$EXISTING" | grep -qxF "$NAME"; then
+              if [ "$KERNEL_CHANGED" = true ]; then
+                # One version must mean one op set: a wheel already published under
+                # this version would silently lack whatever this change adds.
+                echo "::error::$NAME is already published; bump the kernel version (scripts/release/bump_kernel_version.py, then bump_kernel_version_to_sglang.py) to ship a changed kernel"
+                exit 1
+              fi
+              echo "$NAME already published; keeping it"
+            else
+              gh release upload "$TAG" "$WHEEL" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
+
+  # ------------------------------------------------------------ serving image
+  fork-docker-image:
+    needs: [fork-plan, fork-sgl-kernel-wheel]
+    if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' }}
+    name: fork-docker-image (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, platform: linux/amd64, suffix: amd64, runner: ubuntu-latest }
+          - { arch: aarch64, platform: linux/arm64, suffix: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost /usr/local/.ghcup || true
+          docker system prune -af || true
+          df -h /
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: sgl-kernel-wheel-${{ matrix.arch }}
+          path: ${{ runner.temp }}/sgl-kernel-wheels
+
+      - name: Collect the sglang-kernel wheel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.fork-plan.outputs.kernel_version }}
+        run: |
+          set -euo pipefail
+          DIR="${RUNNER_TEMP}/sgl-kernel-wheels"
+          mkdir -p "$DIR"
+          if ! ls "$DIR"/*_${{ matrix.arch }}.whl >/dev/null 2>&1; then
+            gh release download "sglang-kernel-v${VERSION}" --repo "$GITHUB_REPOSITORY" \
+              --pattern "*_${{ matrix.arch }}.whl" --dir "$DIR" || true
+          fi
+          if ls "$DIR"/*_${{ matrix.arch }}.whl >/dev/null 2>&1; then
+            ls -alh "$DIR"
+          elif curl -fsS --max-time 15 --retry 3 -o /dev/null "https://pypi.org/pypi/sglang-kernel/${VERSION}/json"; then
+            echo "Using sglang-kernel ${VERSION} from PyPI"
+          else
+            echo "::error::no sglang-kernel ${VERSION} wheel for ${{ matrix.arch }}: not built in this run, not in release sglang-kernel-v${VERSION}, not on PyPI"
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push ${{ matrix.platform }}
+        env:
+          IMAGE_TAGS: ${{ needs.fork-plan.outputs.image_tags }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang"
+          TAG_ARGS=()
+          for TAG in $IMAGE_TAGS; do TAG_ARGS+=(-t "${IMAGE}:${TAG}-${{ matrix.suffix }}"); done
+          docker buildx build \
+            --target framework_final \
+            --platform ${{ matrix.platform }} \
+            -f docker/Dockerfile \
+            --build-arg CUDA_VERSION=13.0.3 \
+            --build-arg BUILD_TYPE=all \
+            --build-arg BRANCH_TYPE=local \
+            --build-arg INSTALL_FLASHINFER_JIT_CACHE=1 \
+            --build-arg CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
+            --build-context sgl_kernel_wheels="${RUNNER_TEMP}/sgl-kernel-wheels" \
+            --label org.opencontainers.image.source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            "${TAG_ARGS[@]}" \
+            --push \
+            .
+
+  fork-docker-manifest:
+    needs: [fork-plan, fork-docker-image]
+    if: ${{ !cancelled() && needs.fork-plan.outputs.build_docker == 'true' && needs.fork-docker-image.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Join the per-arch images under each tag
+        env:
+          IMAGE_TAGS: ${{ needs.fork-plan.outputs.image_tags }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang"
+          for TAG in $IMAGE_TAGS; do
+            SOURCES=()
+            for SUFFIX in amd64 arm64; do
+              if docker buildx imagetools inspect "${IMAGE}:${TAG}-${SUFFIX}" >/dev/null 2>&1; then
+                SOURCES+=("${IMAGE}:${TAG}-${SUFFIX}")
+              fi
+            done
+            if [ ${#SOURCES[@]} -eq 0 ]; then
+              echo "::error::no per-arch image was pushed for ${TAG}"; exit 1
+            fi
+            docker buildx imagetools create -t "${IMAGE}:${TAG}" "${SOURCES[@]}"
+            echo "Published ${IMAGE}:${TAG} from ${SOURCES[*]}" >> "$GITHUB_STEP_SUMMARY"
+          done

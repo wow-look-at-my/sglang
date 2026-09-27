@@ -32,9 +32,11 @@ concurrency:
 jobs:
   mori-pd:
     if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'run-mori-pd') ||
-      (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'run-mori-pd'))
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.action == 'labeled' && github.event.label.name == 'run-mori-pd') ||
+        (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'run-mori-pd'))
+      )
     runs-on: linux-mi35x-gpu-8.fabric
     timeout-minutes: 90
     steps:
@@ -69,9 +71,11 @@ jobs:
 
   mori-hicache:
     if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'run-mori-hicache') ||
-      (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'run-mori-hicache'))
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.action == 'labeled' && github.event.label.name == 'run-mori-hicache') ||
+        (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'run-mori-hicache'))
+      )
     runs-on: linux-mi35x-gpu-8
     timeout-minutes: 120
     steps:
