@@ -8,24 +8,23 @@
 //! These functions are designed to be called for each stream chunk, but can be optimized
 //! with batching in the future.
 
+use serde_json::Value;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::sync::Arc;
-use serde_json::Value;
 
 use smg_grpc_client::sglang_proto as proto;
 
-use super::error::{SglErrorCode, set_error_message};
+use super::error::{set_error_message, SglErrorCode};
 use super::grpc_converter::GrpcResponseConverterHandle;
 
-use tokio::runtime::Runtime;
 use once_cell::sync::Lazy;
+use tokio::runtime::Runtime;
 
 /// Global tokio runtime for async operations
-static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    Runtime::new().expect("Failed to create tokio runtime for postprocessor FFI")
-});
+static RUNTIME: Lazy<Runtime> =
+    Lazy::new(|| Runtime::new().expect("Failed to create tokio runtime for postprocessor FFI"));
 
 /// Postprocess a gRPC stream chunk to OpenAI format
 ///
@@ -43,6 +42,10 @@ static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `converter_handle` must be live; `proto_chunk_json` must be NUL-terminated
+/// UTF-8; the out pointers must be null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_postprocess_stream_chunk(
     converter_handle: *mut GrpcResponseConverterHandle,
@@ -72,7 +75,10 @@ pub unsafe extern "C" fn sgl_postprocess_stream_chunk(
     let json_value: Value = match serde_json::from_str(proto_chunk_str) {
         Ok(v) => v,
         Err(e) => {
-            set_error_message(error_out, &format!("Failed to parse proto chunk JSON: {}", e));
+            set_error_message(
+                error_out,
+                &format!("Failed to parse proto chunk JSON: {}", e),
+            );
             return SglErrorCode::ParsingError;
         }
     };
@@ -233,6 +239,10 @@ pub unsafe extern "C" fn sgl_postprocess_stream_chunk(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `converter_handle` must be live; `proto_chunks_json_array` must be
+/// NUL-terminated UTF-8; the out pointers must be null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_postprocess_stream_chunks_batch(
     converter_handle: *mut GrpcResponseConverterHandle,
