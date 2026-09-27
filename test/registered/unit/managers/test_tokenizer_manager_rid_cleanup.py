@@ -14,6 +14,9 @@ Covers:
 """
 
 import asyncio
+import socket
+import threading
+import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -38,7 +41,7 @@ from sglang.srt.observability.req_time_stats import (  # noqa: E402
 )
 from sglang.srt.runtime_context import get_context
 
-register_cpu_ci(est_time=12, suite="base-a-test-cpu")
+register_cpu_ci(est_time=16, suite="base-a-test-cpu")
 
 
 _NOT_FINISHED = object()  # Sentinel: request has not finished yet
@@ -888,6 +891,138 @@ class TestDisconnectAfterDispatchAbortsRequest(CustomTestCase):
         aborts = [m for m in sent if isinstance(m, AbortReq) and m.rid == rid]
         self.assertTrue(aborts, "disconnect must send an AbortReq to the scheduler")
         self.assertIn(rid, tm.rid_to_state)
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+class TestClientDisconnectOverHttp(CustomTestCase):
+    """A real uvicorn/h11 server in front of TokenizerManager's response wait:
+    the client closing its socket must abort the request at once, not on the
+    next is_disconnected() poll."""
+
+    def setUp(self):
+        import uvicorn
+        from fastapi import FastAPI, Request
+        from fastapi.responses import StreamingResponse
+
+        self.tm = _make_tokenizer_manager(self)
+        self.tm.request_logger = Mock()
+        self.tm.request_metrics_exporter_manager = Mock()
+        self.tm.request_metrics_exporter_manager.exporter_enabled.return_value = False
+        self.aborts = []
+        self.tm.abort_request = lambda rid: self.aborts.append((rid, time.monotonic()))
+
+        app = FastAPI()
+        tm = self.tm
+
+        @app.post("/wait")
+        async def wait(body: dict, request: Request):
+            state = _make_req_state(body["rid"])
+            state.obj.stream = body["stream"]
+            state.obj.background = False
+            tm.rid_to_state[state.obj.rid] = state
+            if body["finish_after"] is not None:
+
+                def finish():
+                    state.out_list.append(
+                        {"text": "", "meta_info": {"finish_reason": {"type": "length"}}}
+                    )
+                    state.finished = True
+                    state.event.set()
+
+                asyncio.get_running_loop().call_later(body["finish_after"], finish)
+            stream = tm._wait_one_response(state.obj, request)
+            # Mirrors the OpenAI handlers: the first chunk is awaited before
+            # any response exists, so no Starlette disconnect listener runs yet.
+            try:
+                first = await anext(stream)
+            except ValueError:
+                return {"disconnected": True}
+            if not body["stream"]:
+                return {"finish_reason": first["meta_info"]["finish_reason"]}
+
+            async def chunks():
+                yield b"data: first\n\n"
+                async for _ in stream:
+                    yield b"data: more\n\n"
+
+            return StreamingResponse(chunks(), media_type="text/event-stream")
+
+        self.port = _free_port()
+        self.server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host="127.0.0.1",
+                port=self.port,
+                http="h11",
+                loop="asyncio",
+                lifespan="off",
+                log_level="error",
+            )
+        )
+        thread = threading.Thread(target=self.server.run, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(setattr, self.server, "should_exit", True)
+        deadline = time.monotonic() + 10
+        while not self.server.started:
+            self.assertLess(time.monotonic(), deadline, "uvicorn did not start")
+            time.sleep(0.01)
+
+    def _send(self, *, rid, stream, finish_after=None, body_padding=0):
+        import json
+
+        body = json.dumps(
+            {
+                "rid": rid,
+                "stream": stream,
+                "finish_after": finish_after,
+                "padding": "x" * body_padding,
+            }
+        ).encode()
+        sock = socket.create_connection(("127.0.0.1", self.port))
+        sock.sendall(
+            b"POST /wait HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\n"
+            + b"Content-Length: %d\r\n\r\n" % len(body)
+            + body
+        )
+        return sock
+
+    def _wait_for_abort(self, timeout):
+        deadline = time.monotonic() + timeout
+        while not self.aborts and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    def test_disconnect_of_waiting_request_aborts_promptly(self):
+        for stream in (False, True):
+            with self.subTest(stream=stream):
+                self.aborts.clear()
+                rid = f"waiting_{stream}"
+                # A multi-MB body must be read in full, not taken for a disconnect.
+                sock = self._send(rid=rid, stream=stream, body_padding=4 << 20)
+                time.sleep(0.5)
+                self.assertEqual(self.aborts, [], "aborted while client connected")
+                closed_at = time.monotonic()
+                sock.close()
+                self._wait_for_abort(timeout=3)
+                self.assertEqual([r for r, _ in self.aborts], [rid])
+                # The polling fallback fires after 4s of silence.
+                self.assertLess(self.aborts[0][1] - closed_at, 1.0)
+
+    def test_completed_request_is_not_aborted(self):
+        """http.disconnect also arrives once the response is complete, so a
+        finished request must not be reported as a client disconnect."""
+        sock = self._send(rid="completes", stream=False, finish_after=0.1)
+        sock.settimeout(5)
+        self.assertIn(b"length", sock.recv(65536))
+        time.sleep(0.3)
+        sock.close()
+        self._wait_for_abort(timeout=0.5)
+        self.assertEqual(self.aborts, [])
 
 
 if __name__ == "__main__":

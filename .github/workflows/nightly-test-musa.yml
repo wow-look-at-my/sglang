@@ -40,7 +40,10 @@ env:
 jobs:
   # ==================== General: kernel ====================
   nightly-test-musa-general-kernel:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+      )
     runs-on: s5000-1-gpu-runner
     timeout-minutes: 240
     env:
@@ -81,7 +84,10 @@ jobs:
 
   # ==================== General: multimodal layer ====================
   nightly-test-musa-general-multimodal-layer:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+      )
     runs-on: s5000-1-gpu-runner
     timeout-minutes: 240
     env:
@@ -124,7 +130,10 @@ jobs:
 
   # ==================== LLM server: 1-GPU ====================
   nightly-test-llm-server-1-gpu-musa:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+      )
     runs-on: s5000-1-gpu-runner
     timeout-minutes: 240
     env:
@@ -171,7 +180,10 @@ jobs:
 
   # ==================== Multimodal: 1-GPU (split) ====================
   nightly-test-multimodal-server-1-gpu-musa:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+      )
     runs-on: s5000-1-gpu-runner
     strategy:
       fail-fast: false
@@ -225,7 +237,10 @@ jobs:
 
   # ==================== Multimodal: 2-GPU ====================
   nightly-test-multimodal-server-2-gpu-musa:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+      )
     runs-on: s5000-2-gpu-runner
     timeout-minutes: 240
     env:
@@ -280,7 +295,7 @@ jobs:
         nightly-test-multimodal-server-1-gpu-musa,
         nightly-test-multimodal-server-2-gpu-musa,
       ]
-    if: always()
+    if: github.repository == 'sgl-project/sglang' && (always())
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses

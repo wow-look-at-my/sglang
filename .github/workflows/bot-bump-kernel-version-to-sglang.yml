@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   bump-kernel-version-to-sglang:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       branch_name: ${{ steps.set_output.outputs.branch_name }}

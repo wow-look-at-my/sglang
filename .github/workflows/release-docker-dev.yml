@@ -138,7 +138,7 @@ jobs:
 
   build-and-publish:
     needs: prepare
-    if: ${{ !inputs.build_only }}
+    if: github.repository == 'sgl-project/sglang' && (!inputs.build_only)
     uses: ./.github/workflows/_docker-build-and-publish.yml
     with:
       docker_target: framework_final
@@ -150,7 +150,7 @@ jobs:
 
   build-only:
     needs: prepare
-    if: ${{ inputs.build_only && github.repository == 'sgl-project/sglang' }}
+    if: github.repository == 'sgl-project/sglang' && (inputs.build_only && github.repository == 'sgl-project/sglang')
     runs-on: x64-docker-build-node
     env:
       IMAGE: sglang-diffusion-build-only:${{ github.run_id }}-${{ github.run_attempt }}
@@ -208,7 +208,7 @@ jobs:
 
   cleanup-nightly:
     needs: build-and-publish
-    if: ${{ !inputs.build_only && !inputs.tag && !inputs.pr_number }}
+    if: github.repository == 'sgl-project/sglang' && (!inputs.build_only && !inputs.tag && !inputs.pr_number)
     uses: ./.github/workflows/_docker-cleanup-nightly.yml
     with:
       tag_prefixes: '["nightly-dev", "nightly-dev-cu13"]'
@@ -217,7 +217,10 @@ jobs:
 
   build-overlay:
     needs: [prepare, build-and-publish]
-    if: ${{ !inputs.build_only && inputs.overlay_dockerfile != '' && github.repository == 'sgl-project/sglang' }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !inputs.build_only && inputs.overlay_dockerfile != '' && github.repository == 'sgl-project/sglang'
+      )
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

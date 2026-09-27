@@ -15,7 +15,9 @@ from torch.distributed import ProcessGroup
 import sglang.srt.distributed.device_communicators.custom_all_reduce_ops as ops
 from sglang.srt.distributed.device_communicators.cuda_wrapper import CudaRTLibrary
 from sglang.srt.distributed.device_communicators.custom_all_reduce_utils import (
+    CustomAllreduceGraphRegistrationError,
     can_use_custom_all_reduce_with_nvlink,
+    graph_registration_failure_message,
     is_vmm_backed_allocator,
     is_weak_contiguous,
 )
@@ -36,14 +38,6 @@ _is_hip = is_hip()
 _is_musa = is_musa()
 
 logger = logging.getLogger(__name__)
-
-
-class CustomAllreduceGraphRegistrationError(RuntimeError):
-    """CUDA-graph buffers could not be IPC-registered on some rank of the group.
-
-    Raised identically on every rank of the group, after the communicator has
-    disabled itself there; graphs captured with it must be discarded and recaptured.
-    """
 
 
 class CustomAllreduce:
@@ -283,11 +277,8 @@ class CustomAllreduce:
         if errors:
             self.disabled = True
             self.original_disabled = True
-            first_error = " ".join(errors[0].split())
             raise CustomAllreduceGraphRegistrationError(
-                "Custom all-reduce could not IPC-register its CUDA-graph buffers "
-                f"({first_error}); it is now disabled for this group and "
-                "all-reduce falls back to NCCL."
+                graph_registration_failure_message(errors[0])
             )
 
     def _all_gather_objects(self, local: List[Any]) -> List[List[Any]]:

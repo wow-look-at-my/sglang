@@ -71,6 +71,7 @@ jobs:
   # workflow never builds. pr_test_yml points back here so shard sizing reads
   # this file's own run_timeout_minutes.
   check-changes:
+    if: github.repository == 'sgl-project/sglang'
     uses: ./.github/workflows/_pr-test-check-changes.yml
     with:
       git_ref: ${{ inputs.ref || '' }}

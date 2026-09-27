@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from typing import (
     Any,
@@ -188,8 +189,13 @@ class Serving(msgspec.Struct):
     ] = "sglang_storage"
     enable_cache_report: A[
         bool,
-        "Return number of cached tokens in usage.prompt_tokens_details for each openai request.",
-    ] = False
+        Arg(
+            help="Return the number of prefix-cache-hit prompt tokens in "
+            "usage.prompt_tokens_details.cached_tokens for each OpenAI-compatible "
+            "request. On by default; pass --no-enable-cache-report to omit it.",
+            action=argparse.BooleanOptionalAction,
+        ),
+    ] = True
     return_input_ids: A[
         bool,
         "Return prompt (input) token ids on the response-level sglext extension for every chat completion request, as if return_input_ids_in_sglext were set on the request.",

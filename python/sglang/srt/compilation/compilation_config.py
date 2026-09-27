@@ -30,6 +30,9 @@ class CompilationConfig:
         self.enable_debug_mode = enable_debug_mode
         self.split_ops = []
         self.split_ops.extend(SPLIT_OPS)
+        # Every piecewise backend compiled from this config; lets its owner
+        # drop their captured graphs without recompiling.
+        self.piecewise_backends = []
         self.configure_inductor()
 
     def add_split_op(self, op: str):

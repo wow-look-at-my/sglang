@@ -12,6 +12,7 @@ from unittest import mock
 import torch
 
 from sglang.srt.distributed.device_communicators import custom_all_reduce as car
+from sglang.srt.distributed.device_communicators import custom_all_reduce_v2 as car_v2
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -166,6 +167,69 @@ class TestCustomAllreduceGraphCapture(CustomTestCase):
 
         self.assertTrue(ca.disabled)
         self.assertIsNone(ca.custom_all_reduce(torch.zeros(64)))
+
+
+class _FakeIpcManager:
+    def batch_get_handles(self, ptrs):
+        return [(b"h" * 64, 0) for _ in ptrs]
+
+    def batch_open_handles(self, handles):
+        return [0x9000 + i for i in range(len(handles))]
+
+
+class _FailingVmmGraphInputManager:
+    def register_graph_inputs(self):
+        raise RuntimeError("cuMemMap: CUDA_ERROR_INVALID_VALUE")
+
+
+class TestCustomAllReduceV2GraphRegistration(CustomTestCase):
+    """Rank 0 of a 2-rank group; the peer's all_gather_object payloads are scripted."""
+
+    def _build(self, *, vmm_inputs, peer_payloads):
+        ar = car_v2.CustomAllReduceV2.__new__(car_v2.CustomAllReduceV2)
+        ar.disabled = False
+        ar.override_algo = None
+        ar.group = object()
+        ar.rank = _RANK
+        ar.world_size = _WORLD_SIZE
+        ar._graph_inputs = [(0x5000, 256)]
+        ar._ipc_manager = _FakeIpcManager()
+        ar._vmm_graph_input_manager = _FailingVmmGraphInputManager()
+        peer_payloads = list(peer_payloads)
+
+        def all_gather_object(gathered, local, group):
+            gathered[_RANK] = local
+            gathered[1 - _RANK] = peer_payloads.pop(0)
+
+        for patch in (
+            mock.patch.object(car_v2, "is_vmm_pointer", lambda ptr: vmm_inputs),
+            mock.patch.object(car_v2.dist, "all_gather_object", all_gather_object),
+            mock.patch.object(car_v2.CustomAllReduceV2, "close", lambda self: None),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        return ar
+
+    def _assert_group_fell_back_to_nccl(self, ar):
+        with self.assertRaises(car_v2.CustomAllreduceGraphRegistrationError):
+            ar._register_graph_inputs()
+        self.assertTrue(ar.disabled)
+        self.assertFalse(ar.should_custom_ar(torch.zeros(64)))
+
+    def test_peer_ipc_export_failure_disables_v2_on_healthy_rank(self):
+        """A peer that failed to export its cudaIpc handles must not leave this
+        rank opening garbage handles; the whole group drops v2 custom AR."""
+        ar = self._build(
+            vmm_inputs=False,
+            peer_payloads=["invalid argument", "invalid argument"],
+        )
+        self._assert_group_fell_back_to_nccl(ar)
+
+    def test_local_vmm_mapping_failure_is_recoverable(self):
+        """A VMM peer-mapping failure must disable v2 custom AR on every rank
+        and surface as the recoverable error, not crash startup."""
+        ar = self._build(vmm_inputs=True, peer_payloads=[None])
+        self._assert_group_fell_back_to_nccl(ar)
 
 
 if __name__ == "__main__":

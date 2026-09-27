@@ -87,6 +87,7 @@ permissions:
 
 jobs:
   prepare-partitions:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -119,7 +120,7 @@ jobs:
   rerun-test-cuda:
     name: rerun-test-cuda (partition ${{ matrix.partition }})
     needs: prepare-partitions
-    if: inputs.mode == 'cuda'
+    if: github.repository == 'sgl-project/sglang' && (inputs.mode == 'cuda')
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare-partitions.outputs.matrix) }}
@@ -255,7 +256,7 @@ jobs:
   rerun-test-multimodal-gen:
     name: rerun-test-multimodal-gen (partition ${{ matrix.partition }})
     needs: prepare-partitions
-    if: inputs.mode == 'multimodal_gen'
+    if: github.repository == 'sgl-project/sglang' && (inputs.mode == 'multimodal_gen')
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare-partitions.outputs.matrix) }}
@@ -347,7 +348,7 @@ jobs:
   rerun-test-cpu:
     name: rerun-test-cpu (partition ${{ matrix.partition }})
     needs: prepare-partitions
-    if: inputs.mode == 'cpu'
+    if: github.repository == 'sgl-project/sglang' && (inputs.mode == 'cpu')
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare-partitions.outputs.matrix) }}
@@ -462,7 +463,10 @@ jobs:
 
   write-back-result:
     needs: [prepare-partitions, rerun-test-cuda, rerun-test-multimodal-gen, rerun-test-cpu]
-    if: always() && inputs.reply_comment_id != '' && inputs.reply_marker != ''
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        always() && inputs.reply_comment_id != '' && inputs.reply_marker != ''
+      )
     runs-on: ubuntu-latest
     permissions:
       issues: write
