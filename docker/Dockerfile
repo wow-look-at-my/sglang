@@ -6,6 +6,8 @@ ARG SGL_KERNEL_VERSION=0.4.9
 ARG GPU_ARCHS=
 # Compile jobs per native build step; empty keeps each tool's own default.
 ARG BUILD_JOBS=
+# 0 leaves sgl-model-gateway (the Rust router binary and sglang-router wheel) out.
+ARG INSTALL_GATEWAY=1
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
 
 ARG TARGETARCH
@@ -401,8 +403,19 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && ulimit -n 65536 && maturin build --release --features vendored-openssl --out /build/gateway_wheels \
     && cd /build/sgl-model-gateway \
     && cargo build --release --bin sgl-model-gateway --features vendored-openssl \
-    && cp target/release/sgl-model-gateway /build/sgl-model-gateway-bin \
+    && mkdir -p /build/gateway_bin \
+    && cp target/release/sgl-model-gateway /build/gateway_bin/sgl-model-gateway \
     && rm -rf /root/.cargo /root/.rustup /build/sgl-model-gateway/target /build/sgl-model-gateway/bindings/python/target
+
+# INSTALL_GATEWAY picks the gateway artifacts: the build above, or two empty
+# directories, in which case BuildKit never runs gateway_builder at all.
+FROM base AS gateway_artifacts_0
+RUN mkdir -p /build/gateway_wheels /build/gateway_bin
+
+FROM gateway_builder AS gateway_artifacts_1
+
+# hadolint ignore=DL3006
+FROM gateway_artifacts_${INSTALL_GATEWAY} AS gateway_artifacts
 
 ########################################################
 ########## Final Framework Image ######################
@@ -652,11 +665,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 ENV SGLANG_RUST_BUILD_MODE=never
 
 
-# Install pre-built gateway artifacts from parallel builder
-COPY --from=gateway_builder /build/sgl-model-gateway-bin /opt/sglang/bin/sgl-model-gateway
-COPY --from=gateway_builder /build/gateway_wheels /tmp/gateway_wheels
+# Install pre-built gateway artifacts from parallel builder (none when INSTALL_GATEWAY=0)
+COPY --from=gateway_artifacts /build/gateway_bin/ /opt/sglang/bin/
+COPY --from=gateway_artifacts /build/gateway_wheels /tmp/gateway_wheels
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install --force-reinstall /tmp/gateway_wheels/*.whl \
+    if ls /tmp/gateway_wheels/*.whl >/dev/null 2>&1; then \
+        python3 -m pip install --force-reinstall /tmp/gateway_wheels/*.whl; \
+    fi \
     && rm -rf /tmp/gateway_wheels
 
 # Every later pip step could have swapped the kernel wheel installed in torch_deps.
@@ -796,8 +811,8 @@ COPY --from=framework_final /opt/sglang/lib/python3.12/site-packages /opt/sglang
 # Copy SGLang workspace
 COPY --from=framework_final /sgl-workspace /sgl-workspace
 
-# Copy sgl-model-gateway binary
-COPY --from=framework_final /opt/sglang/bin/sgl-model-gateway /opt/sglang/bin/sgl-model-gateway
+# Copy sgl-model-gateway binary (none when INSTALL_GATEWAY=0)
+COPY --from=gateway_artifacts /build/gateway_bin/ /opt/sglang/bin/
 
 # Copy sglang binary
 COPY --from=framework_final /opt/sglang/bin/sglang /opt/sglang/bin/sglang
