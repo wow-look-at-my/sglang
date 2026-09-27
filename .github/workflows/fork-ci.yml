@@ -9,7 +9,7 @@ name: Fork CI
 # A new upstream-only job needs the same guard; hosted, secret-free workflows
 # (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded.
 #
-#   every push / PR : CPU unit suite (base-a-test-cpu) + sglang wheel
+#   every push      : CPU unit suite (base-a-test-cpu) + sglang wheel
 #                     + model gateway (fmt, clippy, cargo test, sglang-router wheel,
 #                       Go bindings build + go test)
 #   AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for
@@ -26,7 +26,6 @@ name: Fork CI
 on:
   push:
     branches: ["**"]
-  pull_request:
   workflow_dispatch:
     inputs:
       build_kernel:
@@ -43,7 +42,7 @@ on:
         default: ""
 
 concurrency:
-  group: fork-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: fork-ci-${{ github.event_name }}-${{ github.ref }}
   # The kernel wheel build outlasts the gap between pushes; cancelling it meant it
   # never finished. A newer run waits instead (GitHub keeps only the newest one).
   cancel-in-progress: false
@@ -56,11 +55,7 @@ permissions:
 
 jobs:
   fork-plan:
-    # A same-repo PR's commits already run on push; only fork PRs need this event.
-    if: >-
-      github.repository != 'sgl-project/sglang' &&
-      !(github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.repository != 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       kernel_version: ${{ steps.plan.outputs.kernel_version }}
@@ -78,7 +73,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           INPUT_BUILD_KERNEL: ${{ inputs.build_kernel }}
           INPUT_BUILD_DOCKER: ${{ inputs.build_docker }}
@@ -89,12 +83,10 @@ jobs:
           echo "kernel_version=${KERNEL_VERSION}" >> "$GITHUB_OUTPUT"
 
           BASE=""
-          case "$EVENT" in
-            pull_request) BASE="$PR_BASE" ;;
-            push)
-              BASE="$PUSH_BEFORE"
-              if [[ "$BASE" =~ ^0+$ ]]; then BASE="$DEFAULT_BRANCH"; fi ;;
-          esac
+          if [ "$EVENT" = push ]; then
+            BASE="$PUSH_BEFORE"
+            if [[ "$BASE" =~ ^0+$ ]]; then BASE="$DEFAULT_BRANCH"; fi
+          fi
           CHANGED="unknown"
           if [ -n "$BASE" ]; then
             # The compare API lists at most 300 files; treat a full page as unknown.
@@ -110,7 +102,7 @@ jobs:
           fi
 
           ON_DEFAULT=false
-          if [ "$GITHUB_REF" = "refs/heads/${DEFAULT_BRANCH}" ] && [ "$EVENT" != "pull_request" ]; then
+          if [ "$GITHUB_REF" = "refs/heads/${DEFAULT_BRANCH}" ]; then
             ON_DEFAULT=true
           fi
 
@@ -165,7 +157,7 @@ jobs:
     uses: ./.github/workflows/_pr-test-check-changes.yml
     with:
       # Pushes have no PR diff to filter on; run the whole CPU suite.
-      run_all_tests: ${{ github.event_name != 'pull_request' }}
+      run_all_tests: true
 
   fork-rust-ext-build:
     needs: fork-check-changes
