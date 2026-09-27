@@ -17,6 +17,8 @@ type Scenario struct {
 	Summary string
 	// Colds are the prompt lengths of the workload's cold prompts.
 	Colds []int
+	// ColdOutput is the output length of every cold prompt.
+	ColdOutput int
 }
 
 func Deployment(m cost.Model) sim.Config {
@@ -64,10 +66,13 @@ func agents(seed int64, n int, ctx0 Span, colds []ColdPrompt, horizon float64) *
 func periodicColds(every, horizon float64, tokens int) []ColdPrompt {
 	var cs []ColdPrompt
 	for t := 30.0; t < horizon; t += every {
-		cs = append(cs, ColdPrompt{At: t, Tokens: tokens, Output: 1000})
+		cs = append(cs, ColdPrompt{At: t, Tokens: tokens, Output: coldOutput})
 	}
 	return cs
 }
+
+// coldOutput is the output length of every cold prompt.
+const coldOutput = 1000
 
 // B is agents with a cold 400K prompt every period.
 func B(minutes float64, horizon float64, tweak func(*Agents)) Scenario {
@@ -76,8 +81,9 @@ func B(minutes float64, horizon float64, tweak func(*Agents)) Scenario {
 		colds = append(colds, 400000)
 	}
 	return Scenario{
-		Name:  fmt.Sprintf("B-%g (cold every %g min)", minutes, minutes),
-		Colds: colds,
+		Name:       fmt.Sprintf("B-%g (cold every %g min)", minutes, minutes),
+		Colds:      colds,
+		ColdOutput: coldOutput,
 		Build: func(seed int64) (sim.Workload, float64) {
 			a := agents(seed, 5, Span{60000, 180000}, periodicColds(60*minutes, horizon, 400000), horizon)
 			if tweak != nil {
@@ -92,10 +98,11 @@ func B(minutes float64, horizon float64, tweak func(*Agents)) Scenario {
 func D(tokens int) Scenario {
 	horizon := 90 + float64(tokens)/1500
 	return Scenario{
-		Name:  fmt.Sprintf("D-%dK", tokens/1000),
-		Colds: []int{tokens},
+		Name:       fmt.Sprintf("D-%dK", tokens/1000),
+		Colds:      []int{tokens},
+		ColdOutput: coldOutput,
 		Build: func(seed int64) (sim.Workload, float64) {
-			return agents(seed, 5, Span{60000, 180000}, []ColdPrompt{{At: 30, Tokens: tokens, Output: 1000}}, horizon), horizon
+			return agents(seed, 5, Span{60000, 180000}, []ColdPrompt{{At: 30, Tokens: tokens, Output: coldOutput}}, horizon), horizon
 		},
 	}
 }
@@ -147,19 +154,20 @@ func A() Scenario {
 	}
 	followCtx := mixed.HitTokens
 	return Scenario{
-		Name:  "A (logged episode)",
-		Colds: []int{c1, inputs[1], inputs[2]},
+		Name:       "A (logged episode)",
+		Colds:      []int{c1, inputs[1], inputs[2]},
+		ColdOutput: coldOutput,
 		Build: func(int64) (sim.Workload, float64) {
 			seg := &sim.Segment{Tokens: followCtx}
 			r1 := &sim.Conv{ID: 1, Chain: []*sim.Segment{seg}, Len: followCtx, Finished: 1}
 			reqs := []*sim.Request{
-				{Conv: &sim.Conv{ID: 2}, Kind: sim.Cold, Arrival: 0, NewTokens: c1, OutputLen: 1000, MaxNew: 16384},
+				{Conv: &sim.Conv{ID: 2}, Kind: sim.Cold, Arrival: 0, NewTokens: c1, OutputLen: coldOutput, MaxNew: 16384},
 				{Conv: r1, Kind: sim.Turn, Arrival: arrival(lines[0]), NewTokens: inputs[0] - followCtx,
 					OutputLen: 600, MaxNew: 16384},
 				{Conv: &sim.Conv{ID: 3}, Kind: sim.Cold, Arrival: arrival(lines[1]), NewTokens: inputs[1],
-					OutputLen: 1000, MaxNew: 16384},
+					OutputLen: coldOutput, MaxNew: 16384},
 				{Conv: &sim.Conv{ID: 4}, Kind: sim.Cold, Arrival: arrival(lines[2]), NewTokens: inputs[2],
-					OutputLen: 1000, MaxNew: 16384},
+					OutputLen: coldOutput, MaxNew: 16384},
 			}
 			return &Replay{Seeded: []*sim.Conv{r1}, Requests: reqs}, math.Inf(1)
 		},

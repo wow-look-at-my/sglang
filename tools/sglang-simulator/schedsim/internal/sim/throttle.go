@@ -2,7 +2,9 @@ package sim
 
 import (
 	"math"
+	"os"
 	"sort"
+	"strconv"
 )
 
 // The eviction throttle mirrors python/sglang/srt/managers/
@@ -108,6 +110,8 @@ func (l *ledger) prune() {
 	l.convs = kept
 }
 
+var thrVariant, _ = strconv.Atoi(os.Getenv("SCHEDSIM_THR"))
+
 const (
 	verdictAdmit = iota
 	verdictAdmitAged
@@ -126,6 +130,11 @@ type throttle struct {
 // newThrottle returns nil when the host tier mirrors the whole device pool:
 // then an evicted prefix reloads instead of being recomputed.
 func newThrottle(deviceTokens, hostTokens int, spt func() float64) *throttle {
+	if thrVariant >= 1 {
+		capacity := max(deviceTokens, hostTokens)
+		return &throttle{deviceTokens: capacity, unmirrored: deviceTokens, secondsPerToken: spt,
+			ledger: newLedger(capacity), lastEvictingAdmit: math.Inf(-1)}
+	}
 	if hostTokens >= deviceTokens {
 		return nil
 	}
@@ -162,7 +171,11 @@ func (t *throttle) localVerdict(rid, totalTokens int, queuedAt, now float64) int
 		return verdictAdmit
 	}
 	waited := now - math.Max(queuedAt, t.lastEvictingAdmit)
-	if waited < float64(t.unmirrored)*t.secondsPerToken() {
+	displaced := t.unmirrored
+	if thrVariant == 2 {
+		displaced = totalTokens
+	}
+	if waited < float64(displaced)*t.secondsPerToken() {
 		return verdictHold
 	}
 	return verdictAdmitAged

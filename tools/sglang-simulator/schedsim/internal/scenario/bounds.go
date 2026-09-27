@@ -22,6 +22,8 @@ type Bound struct {
 	Chunk float64
 	// TailShare is the least share of gaps that stall on the colds at NEW's longest stall.
 	TailShare float64
+	// Throughput is the most a drained run that decodes as long as NEW.
+	Throughput float64
 }
 
 // coldPrefill prices one prompt of n tokens as chunk batches run back to back.
@@ -47,17 +49,24 @@ func BoundFor(s Scenario, base sim.Config, newRun sim.Metrics) (Bound, bool) {
 	}
 	var b Bound
 	b.Chunk = math.Inf(1)
-	var stalls float64
+	var stalls, prefill float64
+	decodeTail := math.Inf(1)
 	for _, n := range s.Colds {
 		p, c := coldPrefill(cfg, n)
-		b.Prefill += p / float64(len(s.Colds))
+		prefill += p
 		b.Chunk = math.Min(b.Chunk, c)
 		stalls += math.Ceil(p / newRun.Stall)
+		steps := math.Ceil(float64(s.ColdOutput-1) / cfg.Cost.AcceptLen)
+		decodeTail = math.Min(decodeTail, steps*cfg.Cost.DecodeSeconds(1, n))
 	}
+	b.Prefill = prefill / float64(len(s.Colds))
 	b.DecodeShare = newRun.WindowDecode / newRun.WindowSeconds
 	b.TTFT = b.Prefill / (1 - b.DecodeShare)
 	b.Idle = 1 - (newRun.WindowDecode+newRun.WindowPrefill)/newRun.WindowSeconds
 	b.TailShare = newRun.WindowStreams * stalls / newRun.Gaps
+	if newRun.Drained {
+		b.Throughput = newRun.Tokens / (prefill + newRun.WindowDecode + decodeTail)
+	}
 	return b, true
 }
 

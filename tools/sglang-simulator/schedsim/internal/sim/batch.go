@@ -148,8 +148,7 @@ func (e *Engine) prefillBatch(runnable []*Request) *batch {
 // chunkFollows mirrors PrefillDecodeBalancer.chunk_follows: the next chunk
 // launches before this batch is charged, so it carries the decode rows instead.
 func (e *Engine) chunkFollows(chunk int) bool {
-	return e.cfg.Overlap && e.nb != nil && e.chunked != nil &&
-		e.chunked.target-e.chunked.done > chunk && !e.nb.prefillInFlight()
+	return e.nb != nil && e.nb.burstContinues(e.cfg.Overlap, e.chunked != nil && e.chunked.target-e.chunked.done > chunk)
 }
 
 const (

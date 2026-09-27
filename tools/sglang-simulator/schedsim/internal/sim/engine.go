@@ -149,6 +149,7 @@ func (e *Engine) Run(w Workload, horizon float64) {
 	e.Rec.End = math.Min(e.now, horizon)
 	if math.IsInf(horizon, 1) {
 		e.Rec.End = e.now
+		e.Rec.Drained = !e.Rec.Stuck
 	}
 }
 
@@ -180,6 +181,17 @@ func (e *Engine) decodable() []*Request {
 
 func (e *Engine) decide() *batch {
 	runnable := e.decodable()
+	if e.nb != nil {
+		e.nb.target = 0
+		if r := e.chunked; r != nil {
+			c := e.cfg.ChunkSize
+			last := r.target - c
+			e.nb.target = 2 * (e.cfg.Cost.BatchOverhead + e.cfg.Cost.ExtendSeconds(last, c))
+			if !e.cfg.Overlap {
+				e.nb.target /= 2
+			}
+		}
+	}
 	if e.bal != nil {
 		pending := len(e.waiting) > 0 || e.chunked != nil
 		if e.bal.shouldDefer(pending, len(runnable) > 0) {
