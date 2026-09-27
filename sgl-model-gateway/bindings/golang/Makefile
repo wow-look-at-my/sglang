@@ -43,7 +43,7 @@ LIB_DIR := $(if $(wildcard $(LIB_EXPORT_PATH)),$(LIB_EXPORT_DIR),$(LIB_BUILD_DIR
 export CGO_LDFLAGS = -L$(LIB_DIR) -lsgl_model_gateway_go $(PYTHON_LDFLAGS) -ldl
 export $(LD_LIBRARY_PATH_VAR) := $(LIB_DIR):$($(LD_LIBRARY_PATH_VAR))
 
-.PHONY: all build build-dev build-lib lib lib-clean clean test examples help run-simple run-streaming check-lib
+.PHONY: all build build-dev build-lib build-go lib lib-clean clean test examples help run-simple run-streaming check-lib
 
 help:
 	@echo "Available targets:"
@@ -53,6 +53,7 @@ help:
 	@echo "  lib-clean       - Clean ./lib directory"
 	@echo "  clean           - Clean build artifacts"
 	@echo "  test            - Run Go tests"
+	@echo "  build-go        - Build and vet the Go SDK against the built library"
 	@echo "  examples        - Build example programs"
 	@echo "  run-simple      - Run simple example"
 	@echo "  run-streaming   - Run streaming example"
@@ -85,6 +86,14 @@ clean: lib-clean
 	@echo "Cleaning build artifacts..."
 	@CARGO_TARGET_DIR=$(CARGO_BUILD_DIR) cargo clean --manifest-path Cargo.toml
 	@echo "Clean complete"
+
+# The cgo directives name the library but not the directory it sits in; LIB_DIR is
+# this file's answer, so the Go side is built and vetted here.
+build-go: check-lib
+	@echo "Building and vetting the Go SDK..."
+	@go build ./...
+	@go vet ./...
+	@go vet -tags=integration ./...
 
 test: build-lib
 	@echo "Running Go tests..."

@@ -380,11 +380,12 @@ jobs:
       - name: Build cdylib
         run: make build-dev
 
+      # The cgo directives name the library but not the directory it sits in, and
+      # the Makefile's CGO_LDFLAGS is what supplies it, so a `go build` of the
+      # example binaries outside make cannot link.
       - name: Build the Go SDK and examples
         run: |
-          go build ./...
-          go vet ./...
-          go vet -tags=integration ./...
+          make build-go BUILD_MODE=debug
           make examples BUILD_MODE=debug
 
       - name: Go tests against the cdylib
