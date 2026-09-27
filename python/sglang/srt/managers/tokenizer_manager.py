@@ -66,6 +66,7 @@ from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.lora.lora_registry import LoRARef, LoRARegistry
 from sglang.srt.managers.async_dynamic_batch_tokenizer import AsyncDynamicbatchTokenizer
+from sglang.srt.managers.client_disconnect import watch_client_disconnect
 from sglang.srt.managers.disagg_service import start_disagg_service
 from sglang.srt.managers.embed_types import PositionalEmbeds
 from sglang.srt.managers.io_struct import (
@@ -247,6 +248,7 @@ class ReqState:
 
     dispatched: bool = False
     abort_sent: bool = False
+    client_disconnected: bool = False
 
     # For streaming output
     last_output_offset: int = 0
@@ -1848,115 +1850,141 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
     ):
         # Not all request types have `stream` (e.g., EmbeddingReqInput). Default to non-streaming.
         is_stream = getattr(obj, "stream", False)
-        while True:
-            try:
-                if request is None:
-                    # Engine requests have no HTTP client to poll for disconnects.
-                    await state.event.wait()
-                else:
-                    await asyncio.wait_for(
-                        state.event.wait(), timeout=_REQUEST_STATE_WAIT_TIMEOUT
-                    )
-            except asyncio.TimeoutError:
-                if (
-                    request is not None
-                    and not obj.background
-                    and await request.is_disconnected()
-                ):
-                    # Abort the request for disconnected requests (non-streaming, waiting queue)
-                    self.abort_request(obj.rid)
-                    # Use exception to kill the whole call stack and asyncio task
-                    raise ValueError(
-                        f"Request is disconnected from the client side (type 1). Abort request {obj.rid=}"
-                    )
-                continue
-
-            # Drain all pending outputs atomically.
-            out_list = state.out_list
-            state.out_list = []
-            finished = state.finished
-            state.event.clear()
-
-            # With incremental streaming, each chunk is a delta — coalesce
-            # multiple queued chunks to avoid dropping token ids.
-            incremental_stream = is_stream and self.incremental_streaming_output
-            if incremental_stream and len(out_list) > 1:
-                out = self._coalesce_streaming_chunks(
-                    out_list,
-                    obj.rid,
-                    state.customized_info_accumulated.keys(),
-                )
-            else:
-                out = out_list[-1]
-
-            # Resolve deferred text for non-incremental streaming.
-            # _handle_batch_output sets "text": None on intermediate chunks
-            # to avoid O(n) string rebuild per step (O(n^2) total).
-            if (
-                is_stream
-                and not incremental_stream
-                and "text" in out
-                and out["text"] is None
-            ):
-                out["text"] = state.get_text()
-
-            # Flattened so the downstream finished/logging/metrics logic is shared.
-            if out.get("beam_results"):
-                if not finished:
-                    # Intermediate beam output; skip until finished.
+        disconnect_watcher = (
+            watch_client_disconnect(
+                request, lambda: self._on_client_disconnect(obj.rid, state)
+            )
+            if request is not None and not obj.background
+            else None
+        )
+        try:
+            while True:
+                try:
+                    if request is None:
+                        # Engine requests have no HTTP client to poll for disconnects.
+                        await state.event.wait()
+                    else:
+                        await asyncio.wait_for(
+                            state.event.wait(), timeout=_REQUEST_STATE_WAIT_TIMEOUT
+                        )
+                except asyncio.TimeoutError:
+                    if (
+                        request is not None
+                        and not obj.background
+                        and await request.is_disconnected()
+                    ):
+                        # Abort the request for disconnected requests (non-streaming, waiting queue)
+                        self.abort_request(obj.rid)
+                        # Use exception to kill the whole call stack and asyncio task
+                        raise ValueError(
+                            f"Request is disconnected from the client side (type 1). Abort request {obj.rid=}"
+                        )
                     continue
-                out = build_beam_search_out(out)
 
-            if finished:
-                # Record response sent time right before we log finished results and metrics.
-                if not state.time_stats.response_sent_to_client_time:
-                    state.time_stats.set_response_sent_to_client_time()
-                    out["meta_info"]["response_sent_to_client_ts"] = (
-                        state.time_stats.get_response_sent_to_client_realtime()
-                    )
-                self.request_logger.log_finished_request(
-                    obj,
-                    out,
-                    request=request,
-                )
-
-                if self.request_metrics_exporter_manager.exporter_enabled():
-                    asyncio.create_task(
-                        self.request_metrics_exporter_manager.write_record(obj, out)
-                    )
-
-                # Check if this was an abort/error created by scheduler
-                if isinstance(out["meta_info"].get("finish_reason"), dict):
-                    abort_out = await self._handle_abort_finish_reason(
-                        out, state, is_stream
-                    )
-                    if abort_out is not None:
-                        yield abort_out
-                        break
-
-                yield out
-                break
-
-            if is_stream:
-                # Record response sent time right before we send response.
-                if not state.time_stats.response_sent_to_client_time:
-                    state.time_stats.set_response_sent_to_client_time()
-                    out["meta_info"]["response_sent_to_client_ts"] = (
-                        state.time_stats.get_response_sent_to_client_realtime()
-                    )
-                yield out
-            else:
-                if (
-                    request is not None
-                    and not obj.background
-                    and await request.is_disconnected()
-                ):
-                    # Abort the request for disconnected requests (non-streaming, running)
-                    self.abort_request(obj.rid)
-                    # Use exception to kill the whole call stack and asyncio task
+                if state.client_disconnected:
                     raise ValueError(
-                        f"Request is disconnected from the client side (type 3). Abort request {obj.rid=}"
+                        f"Request is disconnected from the client side (type 2). Abort request {obj.rid=}"
                     )
+
+                # Drain all pending outputs atomically.
+                out_list = state.out_list
+                state.out_list = []
+                finished = state.finished
+                state.event.clear()
+
+                # With incremental streaming, each chunk is a delta — coalesce
+                # multiple queued chunks to avoid dropping token ids.
+                incremental_stream = is_stream and self.incremental_streaming_output
+                if incremental_stream and len(out_list) > 1:
+                    out = self._coalesce_streaming_chunks(
+                        out_list,
+                        obj.rid,
+                        state.customized_info_accumulated.keys(),
+                    )
+                else:
+                    out = out_list[-1]
+
+                # Resolve deferred text for non-incremental streaming.
+                # _handle_batch_output sets "text": None on intermediate chunks
+                # to avoid O(n) string rebuild per step (O(n^2) total).
+                if (
+                    is_stream
+                    and not incremental_stream
+                    and "text" in out
+                    and out["text"] is None
+                ):
+                    out["text"] = state.get_text()
+
+                # Flattened so the downstream finished/logging/metrics logic is shared.
+                if out.get("beam_results"):
+                    if not finished:
+                        # Intermediate beam output; skip until finished.
+                        continue
+                    out = build_beam_search_out(out)
+
+                if finished:
+                    # The ASGI server reports http.disconnect once the response completes.
+                    if disconnect_watcher is not None:
+                        disconnect_watcher.cancel()
+                    # Record response sent time right before we log finished results and metrics.
+                    if not state.time_stats.response_sent_to_client_time:
+                        state.time_stats.set_response_sent_to_client_time()
+                        out["meta_info"]["response_sent_to_client_ts"] = (
+                            state.time_stats.get_response_sent_to_client_realtime()
+                        )
+                    self.request_logger.log_finished_request(
+                        obj,
+                        out,
+                        request=request,
+                    )
+
+                    if self.request_metrics_exporter_manager.exporter_enabled():
+                        asyncio.create_task(
+                            self.request_metrics_exporter_manager.write_record(obj, out)
+                        )
+
+                    # Check if this was an abort/error created by scheduler
+                    if isinstance(out["meta_info"].get("finish_reason"), dict):
+                        abort_out = await self._handle_abort_finish_reason(
+                            out, state, is_stream
+                        )
+                        if abort_out is not None:
+                            yield abort_out
+                            break
+
+                    yield out
+                    break
+
+                if is_stream:
+                    # Record response sent time right before we send response.
+                    if not state.time_stats.response_sent_to_client_time:
+                        state.time_stats.set_response_sent_to_client_time()
+                        out["meta_info"]["response_sent_to_client_ts"] = (
+                            state.time_stats.get_response_sent_to_client_realtime()
+                        )
+                    yield out
+                else:
+                    if (
+                        request is not None
+                        and not obj.background
+                        and await request.is_disconnected()
+                    ):
+                        # Abort the request for disconnected requests (non-streaming, running)
+                        self.abort_request(obj.rid)
+                        # Use exception to kill the whole call stack and asyncio task
+                        raise ValueError(
+                            f"Request is disconnected from the client side (type 3). Abort request {obj.rid=}"
+                        )
+        finally:
+            if disconnect_watcher is not None:
+                disconnect_watcher.cancel()
+
+    def _on_client_disconnect(self, rid: str, state: ReqState) -> None:
+        if state.finished:
+            return
+        state.client_disconnected = True
+        self.abort_request(rid)
+        state.event.set()
 
     async def _handle_batch_request(
         self,
