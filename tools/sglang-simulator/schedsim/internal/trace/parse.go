@@ -4,11 +4,16 @@
 package trace
 
 import (
+	"bytes"
+	"compress/gzip"
 	_ "embed"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // EmbeddedLog is the operator log the simulation is driven by, kept byte for
@@ -16,6 +21,46 @@ import (
 //
 //go:embed live_log.txt
 var EmbeddedLog string
+
+// embeddedLog2Gz is a second, larger operator log corpus (28 hours, 11 process
+// boots), stored gzip-compressed because it is far too big to keep as plain
+// text in the module. It carries the production timestamped format (an
+// "<RFC3339Nano> <worker> <LEVEL> " prefix before the bare "TP<n>] ..." body
+// live_log.txt uses), plus server_args boot headers, boot-ending signals, HTTP
+// completion lines and Triton JIT-compile lines that live_log.txt does not.
+//
+//go:embed live_log2.txt.gz
+var embeddedLog2Gz []byte
+
+var (
+	log2Once sync.Once
+	log2Text string
+	log2Err  error
+)
+
+// Log2 is the decompressed second corpus. Decompression happens once, on first
+// use, and is cached: most tests and callers never touch it, so nothing pays
+// for a megabyte-plus gunzip unless it is actually needed.
+func Log2() string {
+	log2Once.Do(func() {
+		r, err := gzip.NewReader(bytes.NewReader(embeddedLog2Gz))
+		if err != nil {
+			log2Err = err
+			return
+		}
+		defer r.Close()
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, r); err != nil {
+			log2Err = err
+			return
+		}
+		log2Text = buf.String()
+	})
+	if log2Err != nil {
+		panic("trace: decompress live_log2.txt.gz: " + log2Err.Error())
+	}
+	return log2Text
+}
 
 // DecodeLogInterval is the number of decode iterations between decode stat
 // lines (--decode-log-interval, default 40). A decode line therefore aggregates
@@ -53,25 +98,69 @@ type Step struct {
 	MambaUsage float64
 	AcceptLen  float64 // decode: speculative tokens accepted per step
 	Throughput float64 // the step's own reported tok/s (input or gen)
+
+	// At is the line's timestamp in the production format ("<RFC3339Nano>
+	// <worker> <LEVEL> TP0] ..."); zero for the bare "TP0] ..." format.
+	At time.Time
+	// Worker is the process id the line carries in the production format.
+	Worker string
+	// Rank is the tensor-parallel rank that printed the line. Only rank 0
+	// prints batch lines in a healthy deployment; Parse keeps rank 0 only, so
+	// a log where every rank printed them is not counted twice.
+	Rank int
 }
 
-var kindRe = regexp.MustCompile(`^TP\d+\] (Prefill|Decode) batch,`)
+// kindRe matches a batch line in either format: the bare "TP0] Prefill batch,"
+// the embedded log uses, or the production line with its
+// "<timestamp> <worker> <level> " prefix.
+var kindRe = regexp.MustCompile(`^(?:(\d{4}-\d\d-\d\dT\S+) (\S+) (\S+) )?TP(\d+)\] (Prefill|Decode) batch,`)
 
 // Parse reads every scheduler step line out of a log, ignoring the HTTP request
-// lines interleaved with them.
+// lines interleaved with them. Both line formats are accepted (see kindRe);
+// only rank 0's batch lines are kept.
 func Parse(log string) ([]Step, error) {
 	var steps []Step
 	for i, raw := range strings.Split(log, "\n") {
-		m := kindRe.FindStringSubmatch(raw)
-		if m == nil {
-			continue
+		s, ok, err := parseStep(raw, i+1)
+		if err != nil {
+			return nil, err
 		}
-		s := Step{Line: i + 1}
-		if m[1] == "Prefill" {
-			s.Kind = Prefill
-		} else {
-			s.Kind = Decode
+		if ok {
+			steps = append(steps, s)
 		}
+	}
+	if len(steps) == 0 {
+		return nil, errNoSteps
+	}
+	return steps, nil
+}
+
+var errNoSteps = fmt.Errorf("no scheduler step lines in log")
+
+// parseStep parses one line as a batch step. ok is false for any line that is
+// not a rank-0 batch line; err reports a batch line with a malformed field.
+func parseStep(raw string, lineNo int) (Step, bool, error) {
+	m := kindRe.FindStringSubmatch(raw)
+	if m == nil {
+		return Step{}, false, nil
+	}
+	rank, _ := strconv.Atoi(m[4])
+	if rank != 0 {
+		return Step{}, false, nil
+	}
+	s := Step{Line: lineNo, Worker: m[2], Rank: rank}
+	if m[1] != "" {
+		if t, err := time.Parse(time.RFC3339Nano, m[1]); err == nil {
+			s.At = t
+		}
+	}
+	if m[5] == "Prefill" {
+		s.Kind = Prefill
+	} else {
+		s.Kind = Decode
+	}
+	{
+		i := lineNo - 1
 		for _, f := range []struct {
 			key string
 			dst *int
@@ -86,7 +175,7 @@ func Parse(log string) ([]Step, error) {
 		} {
 			v, ok, err := intField(raw, f.key)
 			if err != nil {
-				return nil, fmt.Errorf("line %d: %w", i+1, err)
+				return Step{}, false, fmt.Errorf("line %d: %w", i+1, err)
 			}
 			if ok {
 				*f.dst = v
@@ -102,7 +191,7 @@ func Parse(log string) ([]Step, error) {
 		} {
 			v, err := floatField(raw, f.key)
 			if err != nil {
-				return nil, fmt.Errorf("line %d: %w", i+1, err)
+				return Step{}, false, fmt.Errorf("line %d: %w", i+1, err)
 			}
 			*f.dst = v
 		}
@@ -112,18 +201,14 @@ func Parse(log string) ([]Step, error) {
 		}
 		v, err := floatField(raw, rateKey)
 		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", i+1, err)
+			return Step{}, false, fmt.Errorf("line %d: %w", i+1, err)
 		}
 		if v <= 0 {
-			return nil, fmt.Errorf("line %d: %s has no positive %s", i+1, s.Kind, rateKey)
+			return Step{}, false, fmt.Errorf("line %d: %s has no positive %s", i+1, s.Kind, rateKey)
 		}
 		s.Throughput = v
-		steps = append(steps, s)
 	}
-	if len(steps) == 0 {
-		return nil, fmt.Errorf("no scheduler step lines in log")
-	}
-	return steps, nil
+	return s, true, nil
 }
 
 // intField pulls an integer field. Metric names are prefixes of one another
@@ -401,6 +486,18 @@ func nearPrefill(steps []Step, at, radius int) bool {
 // log's own definition of input throughput, so nothing here is assumed.
 func StepSeconds(s Step) float64 {
 	return float64(s.NewTokens) / s.Throughput
+}
+
+// Seconds is StepSeconds as a method.
+func (s Step) Seconds() float64 { return StepSeconds(s) }
+
+// StepGap is the wall-clock seconds between two timestamped steps, which the
+// production format supports and the bare format does not (ok=false then).
+func StepGap(prev, cur Step) (float64, bool) {
+	if prev.At.IsZero() || cur.At.IsZero() {
+		return 0, false
+	}
+	return cur.At.Sub(prev.At).Seconds(), true
 }
 
 func median(xs []float64) float64 {
