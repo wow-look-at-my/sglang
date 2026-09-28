@@ -1,0 +1,56 @@
+name: Fork site
+
+# Publish the visual scheduler simulator (tools/sglang-simulator/schedsim/web)
+# to buildhost on every push. The project defaults to this repository's name,
+# so the default branch serves at https://sglang.pazer.site/ and every other
+# branch at https://sglang.pazer.site/@<branch>/ (slashes flattened to `-`).
+# Authentication is the runner's OIDC token: buildhost auto-provisions the
+# project for this org, so no secret is stored here.
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  # buildhost-publish-site hands the preview URL to this branch's pull request
+  pull-requests: write
+  # mints the OIDC token buildhost authenticates
+  id-token: write
+  checks: read
+  # buildhost-publish-site records what it uploaded on the org's linked storage
+  artifact-metadata: write
+  deployments: write
+
+concurrency:
+  group: fork-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish-simulator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # sim.js is committed beside sim.ts; rebuild so the site is never stale
+      # relative to the source, and stage only what the page needs.
+      - name: Build the simulator page
+        working-directory: tools/sglang-simulator/schedsim/web
+        run: |
+          npm install --no-audit --no-fund --silent typescript@5
+          npx tsc -p tsconfig.json
+          node sim.js
+          mkdir -p "$RUNNER_TEMP/site"
+          cp index.html sim.js style.css "$RUNNER_TEMP/site/"
+
+      - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-site@master
+        with:
+          branch: ${{ github.ref_name }}
+          source_dir: ${{ runner.temp }}/site
+          deployment_ref: ${{ github.ref_name }}
