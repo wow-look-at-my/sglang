@@ -67,6 +67,8 @@ class _CacheHitRateWindow:
         self.samples = deque()
         self.hit_tokens = 0
         self.total_tokens = 0
+        self.last_rate = 0.0
+        self.has_sample = False
 
     def add(self, hit_tokens: int, total_tokens: int, now: float) -> float:
         if total_tokens > 0:
@@ -80,7 +82,14 @@ class _CacheHitRateWindow:
             self.hit_tokens -= expired_hit_tokens
             self.total_tokens -= expired_total_tokens
 
-        return self.hit_tokens / self.total_tokens if self.total_tokens > 0 else 0.0
+        # An empty window means no first-attempt prefill was observed, not that
+        # the cache served nothing. Returning 0.0 for that case makes the two
+        # indistinguishable to every consumer, so carry the last measured rate
+        # and expose the gap through has_sample.
+        self.has_sample = self.total_tokens > 0
+        if self.has_sample:
+            self.last_rate = self.hit_tokens / self.total_tokens
+        return self.last_rate
 
 
 def _decode_total_seq_lens(batch: ScheduleBatch) -> int:
@@ -787,8 +796,14 @@ class SchedulerMetricsReporter:
                 prefill_stats.log_hit_tokens - prefill_stats.reprocessed_log_hit_tokens
             )
             total_tokens = effective_input_tokens + effective_hit_tokens
+            # total_tokens == 0 means every prefill in this report was a
+            # reprocessed (retracted) attempt, so there is no first-attempt
+            # sample. Hold the previous rate instead of publishing a 0.0 that
+            # reads identically to a genuine total cache miss.
             cache_hit_rate = (
-                effective_hit_tokens / total_tokens if total_tokens > 0 else 0.0
+                effective_hit_tokens / total_tokens
+                if total_tokens > 0
+                else self.stats.cache_hit_rate
             )
             self.recent_cache_hit_rate = self.cache_hit_rate_window.add(
                 effective_hit_tokens,
@@ -819,6 +834,7 @@ class SchedulerMetricsReporter:
             )
             self.stats.num_grammar_queue_reqs = len(self.scheduler.grammar_manager)
             self.stats.cache_hit_rate = cache_hit_rate
+            self.stats.cache_hit_rate_sample_tokens = total_tokens
             # Refresh here too: prefill-heavy stretches can run long between
             # decode-stats ticks, and the gauge must decay rather than hold.
             self.stats.gen_throughput = self._current_gen_throughput(now)
