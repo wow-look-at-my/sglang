@@ -140,6 +140,38 @@ func WorkloadFromLog(steps []trace.Step, m trace.Metrics, chunkSize int) Workloa
 	return w
 }
 
+// WorkloadFromRun builds the workload for one cold run of a boot, with the
+// decode step and running-request figures the boot's Metrics measured. It is
+// WorkloadFromLog for a run other than the longest.
+func WorkloadFromRun(steps []trace.Step, r trace.ColdRun, m trace.Metrics) Workload {
+	w := Workload{
+		ChunkSize:           m.ColdChunks,
+		RunningReqs:         r.RunningAtStart,
+		DecodeStepSeconds:   m.DecodeStepSecs,
+		DecodeTokensPerStep: m.DecodeStepToks,
+	}
+	if r.Chunks() > 0 {
+		w.ChunkSize = steps[r.Start].NewTokens
+	}
+	for i := r.Start; i < r.End; i++ {
+		s := steps[i]
+		w.Chunks = append(w.Chunks, Chunk{
+			Tokens:   s.NewTokens,
+			Usage:    s.FullUsage,
+			Seconds:  trace.StepSeconds(s),
+			InputTPS: s.Throughput,
+		})
+		w.TotalTokens += s.NewTokens
+	}
+	if w.RunningReqs <= 0 {
+		w.RunningReqs = 1
+	}
+	w.Source = fmt.Sprintf(
+		"log lines %d-%d: %d cold %d-token chunks, first reports #pending-token %d",
+		steps[r.Start].Line, steps[r.End-1].Line, r.Chunks(), w.ChunkSize, r.Pending)
+	return w
+}
+
 // Params returns the knobs for a policy over this workload.
 func (w Workload) Params(policy Policy) Params {
 	return Params{

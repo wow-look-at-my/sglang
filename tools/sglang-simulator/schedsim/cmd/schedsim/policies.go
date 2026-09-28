@@ -22,8 +22,8 @@ type policyFlags struct {
 	aSeed   int64
 }
 
-func registerPolicyFlags(fs *flag.FlagSet) policyFlags {
-	var p policyFlags
+func registerPolicyFlags(fs *flag.FlagSet) *policyFlags {
+	p := &policyFlags{}
 	fs.StringVar(&p.only, "only", "", "comma-separated substrings of scenario names to report (default: all)")
 	fs.IntVar(&p.workers, "workers", 0, "parallel run workers (default: the machine's CPU count)")
 	fs.BoolVar(&p.sweep, "sweep-policies", true, "print the sensitivity sweep over the three policies")
@@ -35,9 +35,9 @@ func registerPolicyFlags(fs *flag.FlagSet) policyFlags {
 // printPolicies runs every scenario under OLD, PREV and NEW and writes the
 // comparison. Costs come from the same calibration the log gives the other model,
 // so both halves of the report charge the GPU the same way.
-func printPolicies(w io.Writer, cal trace.Calibration, pf policyFlags) {
+func printPolicies(w io.Writer, cal trace.Calibration, steps []trace.Step, pf *policyFlags) {
 	cost := sim.NewCost(cal)
-	linear := trace.FitPrefillLinear(mustSteps(), cal.ChunkSize)
+	linear := trace.FitPrefillLinear(steps, cal.ChunkSize)
 	fmt.Fprintf(w, "\n=== Three-policy comparison ===\n\n")
 	fmt.Fprintf(w, "Cost model fitted to the log: %s\n", cal.String())
 	fmt.Fprintf(w, "Policies: OLD = upstream prefill-priority; PREV = the balancer at f15db9ee6a; "+
