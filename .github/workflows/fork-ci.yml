@@ -269,6 +269,21 @@ jobs:
         working-directory: tools/sglang-simulator/schedsim
         run: go test ./... -count=1
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The visual simulator ships its compiled sim.js beside sim.ts so the
+      # page opens from a file:// URL; this rebuilds it and runs the headless
+      # comparison, and fails if the committed sim.js is stale.
+      - name: visual simulator
+        working-directory: tools/sglang-simulator/schedsim/web
+        run: |
+          npm install --no-audit --no-fund --silent typescript@5
+          npx tsc -p tsconfig.json
+          node sim.js
+          git diff --exit-code -- sim.js
+
   fork-gateway-wheel:
     needs: fork-plan
     # Same as upstream: ubuntu-22.04 keeps the wheel at manylinux_2_35.

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scheduler side by side</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Prefill / decode scheduling, old rule vs time-share balancer</h1>
+  <p class="lede">Both sides get the same traffic: agent conversations taking turns, plus long cold prompts arriving at random or on demand. Costs are schedsim's calibration on the Qwen3.8-Flash-Next log. Orange blocks are prefill chunks (dark orange: a cold prompt's), blue are decode steps, purple are mixed chunks; the white line is total agent tok/s, thin lines one stream each.</p>
+</header>
+
+<section class="controls">
+  <div class="group">
+    <button id="play" class="primary">Play</button>
+    <button id="stepBtn">+1 s</button>
+    <button id="reset">Reset</button>
+    <label>speed <input id="speed" type="range" min="1" max="60" value="10"> <span id="speedLabel">10x</span></label>
+    <span class="clock">t = <b id="clock">0.0 s</b></span>
+  </div>
+  <div class="group inject">
+    <label>size <input id="injectSize" type="number" value="400" min="10" max="520" step="10">k tokens</label>
+    <button id="injectCold">Inject cold prompt</button>
+    <button id="injectAgent">Inject new conversation</button>
+    <button id="injectFollow">Inject follow-up turn</button>
+  </div>
+  <details>
+    <summary>Traffic and deployment</summary>
+    <div class="grid">
+      <label>seed <input id="seed" type="number" value="7"></label>
+      <label>agent streams <input id="agents" type="number" value="5" min="0" max="16"></label>
+      <label>agent context k, min <input id="ctxMin" type="number" value="100"></label>
+      <label>max <input id="ctxMax" type="number" value="250"></label>
+      <label>think s, min <input id="thinkMin" type="number" value="1" step="0.5"></label>
+      <label>max <input id="thinkMax" type="number" value="5" step="0.5"></label>
+      <label>random cold prompt every (mean s, 0 = off) <input id="coldEvery" type="number" value="90"></label>
+      <label>cold size k, min <input id="coldMin" type="number" value="150"></label>
+      <label>max <input id="coldMax" type="number" value="400"></label>
+      <label>chunked_prefill_size <input id="chunk" type="number" value="4096" step="512"></label>
+      <label>KV pool k tokens <input id="pool" type="number" value="1398"></label>
+      <label>max_running_requests <input id="maxRunning" type="number" value="16"></label>
+      <label class="check"><input id="hicache" type="checkbox" checked> host tier on the new side (4x)</label>
+      <label class="check"><input id="mixed" type="checkbox" checked> mixed chunk on the new side</label>
+      <label class="check"><input id="cede" type="checkbox" checked> cede half a chunk to short requests (new side)</label>
+    </div>
+  </details>
+</section>
+
+<main class="sides">
+  <article class="side" id="old">
+    <h2>OLD <span>prefill priority (upstream)</span></h2>
+    <div class="stats" id="old-stats"></div>
+    <canvas id="old-timeline" width="900" height="60"></canvas>
+    <canvas id="old-rates" width="900" height="160"></canvas>
+    <div class="lists">
+      <div><h3>queue</h3><ul id="old-queue"></ul></div>
+      <div><h3>streams</h3><ul id="old-streams"></ul></div>
+    </div>
+  </article>
+  <article class="side" id="new">
+    <h2>NEW <span>time-share balancer (this fork)</span></h2>
+    <div class="stats" id="new-stats"></div>
+    <canvas id="new-timeline" width="900" height="60"></canvas>
+    <canvas id="new-rates" width="900" height="160"></canvas>
+    <div class="lists">
+      <div><h3>queue</h3><ul id="new-queue"></ul></div>
+      <div><h3>streams</h3><ul id="new-streams"></ul></div>
+    </div>
+  </article>
+</main>
+
+<footer>
+  <p>What to try: press Play, then "Inject cold prompt" while the agents are decoding. On the left the decode steps stop until every chunk of the prompt has run; on the right they keep going and the prompt finishes later. Lower the KV pool or raise the agents' context to see eviction and recompute. Not modelled: the eviction throttle; the cede here is the simple half-chunk rule rather than the fork's amortised one; the pool evicts whole conversations where the server evicts pages.</p>
+</footer>
+<script src="sim.js"></script>
+</body>
+</html>
