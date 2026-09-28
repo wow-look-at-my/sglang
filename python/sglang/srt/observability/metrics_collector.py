@@ -80,6 +80,10 @@ class SchedulerStats:
     num_grammar_queue_reqs: int = 0
     gen_throughput: float = 0.0
     cache_hit_rate: float = 0.0
+    # Denominator behind cache_hit_rate. Zero means the reporting window
+    # contained no first-attempt prefill, so cache_hit_rate carries no new
+    # measurement and must not be read as "no cache hits".
+    cache_hit_rate_sample_tokens: int = 0
     decode_sum_seq_lens: int = 0
 
     # Memory pool usage ratios (0.0–1.0).
@@ -305,6 +309,16 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
         self.cache_hit_rate = Gauge(
             name="sglang:cache_hit_rate",
             documentation="The prefix cache hit rate.",
+            labelnames=labels.keys(),
+            multiprocess_mode="mostrecent",
+        )
+        self.cache_hit_rate_sample_tokens = Gauge(
+            name="sglang:cache_hit_rate_sample_tokens",
+            documentation=(
+                "Token denominator behind sglang:cache_hit_rate. Zero means "
+                "the window held no first-attempt prefill, so cache_hit_rate "
+                "is a stale carry-over rather than a measured zero."
+            ),
             labelnames=labels.keys(),
             multiprocess_mode="mostrecent",
         )
@@ -1383,6 +1397,9 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
         self._log_gauge(self.num_grammar_queue_reqs, stats.num_grammar_queue_reqs)
         self._log_gauge(self.gen_throughput, stats.gen_throughput)
         self._log_gauge(self.cache_hit_rate, stats.cache_hit_rate)
+        self._log_gauge(
+            self.cache_hit_rate_sample_tokens, stats.cache_hit_rate_sample_tokens
+        )
         self._log_gauge(self.decode_sum_seq_lens, stats.decode_sum_seq_lens)
 
         # Memory pool usage ratios
