@@ -810,6 +810,17 @@ class LLaDA2MoeModelLM(nn.Module):
             )
         self.logits_processor = LogitsProcessor(config, return_full_logits=True)
 
+        # Lazy: get_moe_weights() snapshots x.data, and building the map eagerly would
+        # pin every expert weight's pre-process_weights_after_loading storage.
+        self.routed_experts_weights_of_layer = LazyValue(
+            lambda: {
+                layer_id: layer.mlp.get_moe_weights()
+                for layer_id, layer in enumerate(self.model.layers)
+                if not isinstance(layer, PPMissingLayer)
+                and isinstance(layer.mlp, LLaDA2MoeSparseMoeBlock)
+            }
+        )
+
     @property
     def start_layer(self):
         return self.model.start_layer
@@ -940,18 +951,6 @@ class LLaDA2MoeModelLM(nn.Module):
                         param, "weight_loader", default_weight_loader
                     )
                     weight_loader(param, loaded_weight)
-
-        # Lazy: get_moe_weights() snapshots x.data, and building the map here would
-        # pin every expert weight's pre-process_weights_after_loading storage.
-        if not hasattr(self, "routed_experts_weights_of_layer"):
-            self.routed_experts_weights_of_layer = LazyValue(
-                lambda: {
-                    layer_id: layer.mlp.get_moe_weights()
-                    for layer_id, layer in enumerate(self.model.layers)
-                    if not isinstance(layer, PPMissingLayer)
-                    and isinstance(layer.mlp, LLaDA2MoeSparseMoeBlock)
-                }
-            )
 
     @classmethod
     def get_model_config_for_expert_location(cls, config):

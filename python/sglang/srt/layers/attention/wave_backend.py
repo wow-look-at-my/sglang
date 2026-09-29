@@ -122,6 +122,13 @@ class WaveAttnBackend(AttentionBackend):
         self.device = model_runner.device
         self.device_core_count = get_device_core_count(model_runner.gpu_id)
 
+        # Allocated by init_cuda_graph_state.
+        self.cuda_graph_attn_logits: Optional[torch.Tensor] = None
+        self.cuda_graph_attn_lse: Optional[torch.Tensor] = None
+        self.cuda_graph_num_kv_splits: Optional[torch.Tensor] = None
+        self.cuda_graph_kv_indices: Optional[torch.Tensor] = None
+        self.cuda_graph_custom_mask: Optional[torch.Tensor] = None
+
     def get_num_kv_splits(
         self,
         num_kv_splits: torch.Tensor,

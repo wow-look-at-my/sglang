@@ -308,6 +308,25 @@ class FP8MQALogitsKernel:
         self.cluster_shape_mn = (1, 1)
         self.mma_tiler_mn = (block_kv, self.N)
 
+        # Set at JIT trace time by _setup_mma and __call__.
+        self.a_dtype = None
+        self.b_dtype = None
+        self.a_major_mode = None
+        self.b_major_mode = None
+        self.mma_tiler = None
+        self.cta_tile_shape_mnk = None
+        self.cluster_layout_vmnk = None
+        self.epi_tile = None
+        self.a_smem_layout_staged = None
+        self.b_smem_layout_staged = None
+        self.num_tmem_alloc_cols = None
+        self.num_tmem_alloc_cols_total = None
+        self.a_tma_view_layout = None
+        self.w_smem_layout_staged = None
+        self.s_smem_layout_staged = None
+        self.num_kv_scale_tma_bytes = None
+        self.num_q_tma_bytes = None
+
     def _setup_mma(self, a_dtype, b_dtype, a_major, b_major):
         self.a_dtype = a_dtype
         self.b_dtype = b_dtype

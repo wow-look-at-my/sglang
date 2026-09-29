@@ -1089,7 +1089,7 @@ class _RecordingQuantMethod:
 
 class _QuantizedLinear(LinearBase):
     def __init__(self, quant_method):
-        nn.Module.__init__(self)
+        super().__init__(input_size=2, output_size=2)
         self.weight = nn.Parameter(torch.empty(2, 2), requires_grad=False)
         self.quant_method = quant_method
 
@@ -1103,7 +1103,7 @@ class _QuantizedEncoder(nn.Module):
 
 class _SRTQuantizedLinear(SrtLinearBase):
     def __init__(self, quant_method):
-        nn.Module.__init__(self)
+        super().__init__(input_size=2, output_size=2)
         self.weight = nn.Parameter(torch.empty(2, 2), requires_grad=False)
         self.quant_method = quant_method
 

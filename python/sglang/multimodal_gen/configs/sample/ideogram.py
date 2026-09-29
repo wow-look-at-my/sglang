@@ -65,7 +65,7 @@ class Ideogram4SamplingParams(SamplingParams):
             )
         preset_cfg = IDEOGRAM4_PRESETS[self.preset]
         preset_steps = int(preset_cfg["num_steps"])
-        explicit_fields = getattr(self, "_explicit_fields", None)
+        explicit_fields = self._explicit_fields
         num_steps_is_explicit = (
             explicit_fields is None or "num_inference_steps" in explicit_fields
         )

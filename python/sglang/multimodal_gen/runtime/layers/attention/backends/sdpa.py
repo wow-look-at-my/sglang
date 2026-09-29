@@ -243,7 +243,15 @@ class DynamicCudnnSDPAImpl(SDPAImpl):
             set_fa_ver,
         )
 
-        self.causal = causal
+        super().__init__(
+            num_heads=num_heads,
+            head_size=head_size,
+            causal=causal,
+            softmax_scale=softmax_scale,
+            num_kv_heads=num_kv_heads,
+            prefix=prefix,
+            **extra_impl_args,
+        )
         self.head_size = head_size
         self._is_sm100 = (
             torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 10

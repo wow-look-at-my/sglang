@@ -1,0 +1,9 @@
+{
+  "name": "schedsim-web",
+  "private": true,
+  "description": "Visual side-by-side scheduler simulator (old prefill-priority vs time-share balancer)",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json && node sim.js"
+  }
+}

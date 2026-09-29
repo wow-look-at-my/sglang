@@ -127,6 +127,21 @@ class FlashAttentionForwardBase:
                 "due to accumulator thread ownership pattern."
             )
         self.arch = BaseDSL._get_dsl().get_arch_enum()
+        # Set at JIT trace time by the subclass __call__ and _setup_attributes.
+        self.num_mma_threads = None
+        self.num_producer_threads = None
+        self.num_Q_load_threads = None
+        self.num_epilogue_threads = None
+        self.use_tma_O = None
+        self.sQ_layout = None
+        self.sK_layout = None
+        self.sV_layout = None
+        self.sO_layout = None
+        self.sP_layout = None
+        self.gmem_tiled_copy_Q = None
+        self.gmem_tiled_copy_K = None
+        self.gmem_tiled_copy_V = None
+        self.gmem_tiled_copy_O = None
 
     @staticmethod
     def can_implement(

@@ -290,19 +290,25 @@ class LongcatFlashForCausalLMNextN(LongcatFlashForCausalLM):
         quant_config: Optional[QuantizationConfig] = None,
     ) -> None:
         nn.Module.__init__(self)
+        self.fuse_qkv_a_proj = (
+            hasattr(config, "q_lora_rank") and config.q_lora_rank is not None
+        )
         self.config = config
+        self.tp_size = get_parallel().tp_size
         self.quant_config = (
             None
             if "mtp" in getattr(config, "disable_quant_module", [])
             else quant_config
         )
         self.model = LongcatFlashModelNextN(config, self.quant_config)
+        self.use_ngram_embedding = False
         self.lm_head = ParallelLMHead(
             config.vocab_size,
             config.hidden_size,
             quant_config=self.quant_config,
         )
         self.logits_processor = LogitsProcessor(config)
+        self.capture_aux_hidden_states = False
 
     @torch.no_grad()
     def forward(

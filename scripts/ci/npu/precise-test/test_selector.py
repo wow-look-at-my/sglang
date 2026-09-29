@@ -53,6 +53,45 @@ COVERAGE_DENSITY_THRESHOLD = 0.0
 MIN_AFFECTED_LINES = 1
 
 
+def _diff_from_git(base_sha: str | None, head_sha: str | None, diff_file: str) -> bool:
+    """Write base..head as a unified diff using the local checkout.
+
+    A shallow or sparse checkout is enough: both commits are fetched by
+    hash and compared as objects, no working tree needed. Returns False
+    when the SHAs are missing or git cannot produce the diff.
+    """
+    if not base_sha or not head_sha:
+        print("  PR_BASE_SHA / PR_HEAD_SHA not set; no git fallback available")
+        return False
+    try:
+        fetch = subprocess.run(
+            ["git", "fetch", "--no-tags", "--depth=1", "origin", base_sha, head_sha],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if fetch.returncode != 0:
+            print(f"  git fetch failed: {fetch.stderr.strip()}")
+            return False
+        diff = subprocess.run(
+            ["git", "diff", "--no-color", "--no-ext-diff", base_sha, head_sha],
+            capture_output=True,
+            timeout=300,
+        )
+        if diff.returncode != 0:
+            print(f"  git diff failed: {diff.stderr.decode(errors='replace').strip()}")
+            return False
+        with open(diff_file, "wb") as f:
+            f.write(diff.stdout)
+        print(
+            f"  Using git diff {base_sha[:7]}..{head_sha[:7]} from the local checkout"
+        )
+        return True
+    except Exception as e:
+        print(f"  git fallback failed: {e}")
+        return False
+
+
 def _get_test_files_from_pr_diff(diff_file: str) -> list[str]:
     """
     Extract new/modified test files from PR diff.
@@ -1724,8 +1763,9 @@ def main():
 
         # Use cross-platform temp directory
         diff_file = os.path.join(tempfile.gettempdir(), "pr.diff")
-        max_retries = 3
+        max_retries = 5
         base_sha = None
+        fetched = False
 
         for attempt in range(1, max_retries + 1):
             print(f"  Attempt {attempt}/{max_retries} to get PR diff via GitHub API...")
@@ -1751,13 +1791,28 @@ def main():
                     with open(diff_file, "wb") as f:
                         f.write(diff_bytes)
                 print("  Using GitHub API to get diff")
+                fetched = True
                 break
             except Exception as e:
                 print(f"  Attempt {attempt} failed: {e}")
-                if attempt == max_retries:
-                    print(f"  All {max_retries} attempts failed, exiting")
-                    exit(1)
-                time.sleep(1)
+                if attempt < max_retries:
+                    # The API answers 503 in bursts; back off instead of
+                    # burning every attempt inside the same second.
+                    time.sleep(2 ** (attempt - 1))
+
+        if not fetched:
+            # The runner's checkout can produce the same diff without the API
+            # when the workflow hands over the pull request's base and head.
+            print(
+                f"  All {max_retries} API attempts failed; trying the local git checkout"
+            )
+            env_base = os.environ.get("PR_BASE_SHA")
+            env_head = os.environ.get("PR_HEAD_SHA")
+            if _diff_from_git(env_base, env_head, diff_file):
+                base_sha = env_base
+            else:
+                print("  Could not get the PR diff from git either, exiting")
+                exit(1)
 
         print(f"  PR diff saved to: {diff_file}")
 

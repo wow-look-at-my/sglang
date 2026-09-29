@@ -117,6 +117,11 @@ class KVCacheQuantMethodBase(ABC):
     name: str
     SCALE_BLOCK_SIZE: int = 1
 
+    def __init__(self):
+        self._active_attention_accesses: Optional[
+            tuple[KVCacheAttentionAccess, ...]
+        ] = None
+
     def attention_accesses(self) -> tuple[KVCacheAttentionAccess, ...]:
         return KV_CACHE_ATTENTION_ACCESS_REGISTRY.get(self.name, ())
 
@@ -159,7 +164,9 @@ class KVCacheQuantMethodBase(ABC):
         )
 
     def active_attention_accesses(self) -> tuple[KVCacheAttentionAccess, ...]:
-        return getattr(self, "_active_attention_accesses", self.attention_accesses())
+        if self._active_attention_accesses is None:
+            return self.attention_accesses()
+        return self._active_attention_accesses
 
     def resolve_attention_access(
         self, phase, backend_name: str, backend_tags: Iterable[str] = ()
@@ -456,6 +463,7 @@ class NVFP4KVCacheMethod(KVCacheQuantMethodBase):
         page_size: int = 16,
         native_scale_layout: Optional[bool] = None,
     ):
+        super().__init__()
         self.num_layers = num_layers
         self.device = device
         self.page_size = page_size
@@ -784,7 +792,7 @@ class FP4MXBlock16KVCacheMethod(KVCacheQuantMethodBase):
         device: Optional[str] = None,
         page_size: Optional[int] = None,
     ):
-        pass
+        super().__init__()
 
     def create_buffers(
         self, size: int, head_num: int, head_dim: int, layer_num: int, device: str

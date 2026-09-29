@@ -47,6 +47,9 @@ class FullComponent(TreeComponent):
         super().__init__(cache, params)
         # HiCache state: set to host KV pool when HiCache enabled
         self._full_kv_pool_host = None
+        self._evict_device_request_cnt = 0
+        self._evict_device_last_node = None
+        self._evict_device_heap = []
         # Lazy bind eviction strategy since tree core is initialized after component init.
         self.session_ref_eviction_strategy = (
             self._session_ref_eviction_strategy

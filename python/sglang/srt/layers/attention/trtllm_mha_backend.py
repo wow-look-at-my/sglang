@@ -254,6 +254,7 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
         self.topk = get_spec().speculative_eagle_topk or 0
         self.speculative_step_id = speculative_step_id
         self.target_verify_metadata = {}
+        self.draft_extend_metadata = {}
         self.speculative_num_draft_tokens = get_spec().speculative_num_draft_tokens
 
         self._nvfp4_fp8_output = None

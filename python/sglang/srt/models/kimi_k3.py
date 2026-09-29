@@ -1603,6 +1603,8 @@ class KimiK3DeltaAttention(nn.Module):
             # _merge_bfa_weights().
             self._bfa_w: Optional[torch.Tensor] = None
             self._bfa_f_b_w: Optional[torch.Tensor] = None
+            self._bfa_fa_size = 0
+            self._bfa_b_size = 0
             if _is_hip:
                 # ROCm only: _merge_kda_inproj_weights_hip() may merge the
                 # whole [q,k,v,g | f_a | b] in-proj instead, making _bfa_w a
@@ -3547,6 +3549,7 @@ class KimiK3ForConditionalGeneration(nn.Module):
 
         self.vision_tower = KimiK3VisionTower(config.vision_config)
         self.mm_projector = KimiK3MultiModalProjector(config.vision_config)
+        self._encoder_image_processor = None
 
         self.language_model = None
         if not config.encoder_only:

@@ -579,6 +579,28 @@ class SchedulerPPMixin:
                 if queue_size == 0:
                     self.on_idle()
 
+    def init_pp_loop_defaults(self: Scheduler):
+        """Empty PP loop state; each PP event loop replaces it via init_pp_loop_state."""
+        self.pp_loop_size = 0
+        self.mbs: List[Optional[ScheduleBatch]] = []
+        self.last_mbs: List[Optional[ScheduleBatch]] = []
+        self.running_mbs: List[ScheduleBatch] = []
+        self.mb_metadata: List[Optional[PPBatchMetadata]] = []
+        self.pp_outputs: Optional[PPProxyTensors] = None
+        self.last_rank_comm_queue: deque[Tuple[torch.Event, PPProxyTensors]] = deque()
+        self.send_req_work = []
+        self.send_proxy_work = []
+        self.send_output_work = []
+        self.send_proxy_requires_forward_fence = False
+        self.launch_event = None
+        self.pp_proxy_recv_event = None
+        self.pp_send_done_event = None
+        self.pp_comm_stream = None
+        self.pp_comm_stream_ctx = nullcontext()
+        self._pp_tensor_dict_inbox: Dict[
+            str, deque[Tuple[Dict[str, torch.Tensor], Optional[torch.Event]]]
+        ] = defaultdict(deque)
+
     def init_pp_loop_state(self: Scheduler):
         self.pp_loop_size: int = (
             get_parallel().pp_size + get_parallel().pp_async_batch_depth

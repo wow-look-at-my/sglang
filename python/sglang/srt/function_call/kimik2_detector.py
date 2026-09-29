@@ -226,7 +226,7 @@ class KimiK2Detector(BaseFormatDetector):
             self._buffer = hold
             return StreamingParseResult(normal_text=_strip_special_tokens(emit))
 
-        if not hasattr(self, "_tool_indices"):
+        if self._tool_indices is None:
             self._tool_indices = self._get_tool_indices(tools)
 
         normal_text_parts: list[str] = []

@@ -29,6 +29,7 @@ class Mxfp4HummingMoEMethod:
     def __init__(self, fp8_method, prefix: str):
         self._fp8 = fp8_method
         self.prefix = prefix
+        self.runner = None
 
     def create_moe_runner(self, layer, moe_runner_config):
         from sglang.srt.layers.moe.moe_runner import MoeRunner

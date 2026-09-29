@@ -49,6 +49,7 @@ class BaseLoRABackend(LoRABackendLmHeadMixing):
         # Request/token caps for serving a batch from the static metadata.
         self.prefill_cuda_graph_max_bs: int | None = None
         self.prefill_cuda_graph_max_tokens: int | None = None
+        self.moe_cg_buffers: dict | None = None
         # Separate scratch sized for the largest prefill token bucket.
         self.prefill_moe_cg_buffers: dict | None = None
         self._moe_cg_buffer_init_args: tuple[int, torch.dtype, object] | None = None

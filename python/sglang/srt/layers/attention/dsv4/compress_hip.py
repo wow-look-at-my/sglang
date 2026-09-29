@@ -127,7 +127,7 @@ class CompressorHip(_CompressorBase):
         extend_lens = forward_batch.extend_seq_lens_cpu
         req_pool_indices = forward_batch.req_pool_indices
         req_to_token = backend.req_to_token_pool.req_to_token
-        assert not self.forward_mode.is_target_verify()
+        assert not forward_batch.forward_mode.is_target_verify()
 
         assert extend_lens is not None and prefix_lens is not None
         device = kv_and_scores.kv.device
@@ -394,8 +394,6 @@ class CompressorHip(_CompressorBase):
                 kv_score, forward_batch, attn_backend=attn_backend
             )
 
-        self.compress_decode = self.compress_decode_paged
-        self.compress_extend = self.compress_extend_paged
         kv_and_scores = KVAndScore(kv_score)
 
         if TYPE_CHECKING:
@@ -405,13 +403,13 @@ class CompressorHip(_CompressorBase):
             forward_batch.forward_mode.is_decode()
             or forward_batch.forward_mode.is_target_verify()
         ):
-            result = self.compress_decode(
+            result = self.compress_decode_paged(
                 kv_and_scores=kv_and_scores,
                 forward_batch=forward_batch,
                 attn_backend=attn_backend,
             )
         elif forward_batch.forward_mode.is_extend():
-            result = self.compress_extend(
+            result = self.compress_extend_paged(
                 kv_and_scores=kv_and_scores,
                 forward_batch=forward_batch,
                 attn_backend=attn_backend,
@@ -445,7 +443,6 @@ class CompressorHip(_CompressorBase):
             assert x.shape[0] == 0
             return x.new_empty(0, self.head_dim)
         kv_score = self.compute_kv_score(x, forward_batch)
-        self.forward_mode = forward_batch.forward_mode
         return self.compress_dispatch(
             kv_score, forward_batch, attn_backend=attn_backend
         )

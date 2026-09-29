@@ -352,7 +352,7 @@ class CudaIpcTensorTransportProxy(StreamOrderedPoolConsumerMixin):
         self, consumer_count: int = 1, consumer_rank: Optional[int] = None
     ) -> None:
         """Release a borrowed view after all current-stream reads are enqueued."""
-        storage = getattr(self, "_borrowed_storage", None)
+        storage = self._borrowed_storage
         if storage is None:
             return
         device_id = self._borrowed_device_id
@@ -370,7 +370,7 @@ class CudaIpcTensorTransportProxy(StreamOrderedPoolConsumerMixin):
 
     def release_without_reconstruction(self, consumer_count: int = 1) -> None:
         """Release a pool slice when its request abandons this proxy."""
-        if getattr(self, "_borrowed_storage", None) is not None:
+        if self._borrowed_storage is not None:
             self.release_borrowed_on_current_stream(consumer_count)
         else:
             self.acknowledge_consumption(consumer_count)

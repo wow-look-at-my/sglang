@@ -312,6 +312,9 @@ class MockMamba2ModelRunner(ModelRunner):
         runner_batch_size: int | None = None,
     ):
         pool_batch_size = runner_batch_size or case.batch_size
+        self.init_component_defaults()
+        self.init_deferred_component_defaults()
+        self.init_startup_observability()
         self.device = device
         self.dtype = dtype
         self.kv_cache_dtype = dtype

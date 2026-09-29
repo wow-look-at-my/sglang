@@ -1198,6 +1198,23 @@ class DeepseekV4AttnBackend(
         self.is_draft_runner = model_runner.is_draft_worker
         self._verify_mask = None
         self.cuda_graph_swa_out_cache_loc: Optional[torch.Tensor] = None
+        self.cuda_graph_metadata_of_bucket_and_bs: Dict[
+            _GraphBucket,
+            Dict[
+                int,
+                Union[
+                    DSV4Metadata,
+                    DSV4RawDecodeMetadata,
+                    DSV4RawVerifyMetadata,
+                ],
+            ],
+        ] = {bucket: {} for bucket in _GraphBucket}
+        self.draft_extend_num_tokens_per_req: Optional[int] = None
+        self._current_capture_raw: Optional[
+            Union[DSV4RawDecodeMetadata, DSV4RawVerifyMetadata]
+        ] = None
+        self._source_proj_bufs: Dict[int, List[Dict[str, torch.Tensor]]] = {}
+        self._q8kv8_sparse_prefill_log_emitted = False
 
     def _move_to_device(self, x: List[int]) -> torch.Tensor:
         pin_tensor = torch.tensor(x, dtype=torch.int32, pin_memory=True)
@@ -2559,7 +2576,7 @@ class DeepseekV4AttnBackend(
     def _source_projection_buffers(self, num_tokens: int, ratio: int) -> dict:
         cfg = self.model_runner.model_config.hf_text_config
         heads, dim = int(cfg.index_n_heads), int(cfg.index_head_dim)
-        sets = getattr(self, "_source_proj_bufs", None) or {}
+        sets = self._source_proj_bufs
         have = sets.get(ratio)
         if have is None or have[0]["q"].shape[0] < num_tokens:
             latent = self.model_runner.model_config.head_dim
@@ -2579,7 +2596,6 @@ class DeepseekV4AttnBackend(
                 bufs["score"] = zeros(num_tokens, latent, dtype=torch.float32)
             # Keep the previous allocations alive: captured graphs still hold them.
             sets[ratio] = [bufs] + (have or [])
-            self._source_proj_bufs = sets
         bufs = sets[ratio][0]
         return {name: buf[:num_tokens] for name, buf in bufs.items()}
 
@@ -2608,17 +2624,9 @@ class DeepseekV4AttnBackend(
         self.forward_metadata = capture_metadata
 
     def init_cuda_graph_state(self, max_bs: int, max_num_tokens: int) -> None:
-        self.cuda_graph_metadata_of_bucket_and_bs: Dict[
-            _GraphBucket,
-            Dict[
-                int,
-                Union[
-                    DSV4Metadata,
-                    DSV4RawDecodeMetadata,
-                    DSV4RawVerifyMetadata,
-                ],
-            ],
-        ] = {bucket: {} for bucket in _GraphBucket}
+        self.cuda_graph_metadata_of_bucket_and_bs = {
+            bucket: {} for bucket in _GraphBucket
+        }
         self.draft_extend_num_tokens_per_req = (
             max_num_tokens // max_bs if max_bs > 0 else 1
         )
@@ -2683,9 +2691,8 @@ class DeepseekV4AttnBackend(
 
         # Warmup upgraded raw->full on the host; restore raw so capture
         # re-runs the upgrade inside the graph.
-        current_raw = getattr(self, "_current_capture_raw", None)
-        if current_raw is not None:
-            self.forward_metadata = current_raw
+        if self._current_capture_raw is not None:
+            self.forward_metadata = self._current_capture_raw
 
     # ---- DeepSeek V4.1 ratio 1/2 compressor and indexer, torch bring-up path ----
 
@@ -3669,7 +3676,7 @@ class DeepseekV4AttnBackend(
             self._prepare_q8kv8_q_and_sink(q_flat, attn_sink)
         )
 
-        if not getattr(self, "_q8kv8_sparse_prefill_log_emitted", False):
+        if not self._q8kv8_sparse_prefill_log_emitted:
             logger.info(
                 "DSV4_Q8KV8_SPARSE_PREFILL_HIT layer_id=%s "
                 "compress_ratio=%s q_shape=%s padded_heads=%s d_v=%s",

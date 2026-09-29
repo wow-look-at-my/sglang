@@ -899,6 +899,7 @@ class BailingMoEForCausalLM(nn.Module):
         self.logits_processor = LogitsProcessor(config)
 
         self.capture_aux_hidden_states = False
+        self.routed_experts_weights_of_layer = {}
 
     def get_input_embeddings(self):
         return self.model.word_embeddings

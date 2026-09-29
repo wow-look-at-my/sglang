@@ -48,6 +48,8 @@ class Mxfp4FlashinferCutlassMoEMethod:
         self._swiglu_limit_tensor: torch.Tensor | None = None
         self._use_swiglu_step = False
         self._mxfp4_weight_global_scale_tensor: torch.Tensor | None = None
+        self.moe_runner_config = None
+        self.runner = None
 
     @property
     def load_up_proj_weight_first(self) -> bool:

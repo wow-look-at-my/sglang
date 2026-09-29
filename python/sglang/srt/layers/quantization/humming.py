@@ -475,6 +475,7 @@ class HummingConfig(QuantizationConfig):
             else self.full_config.get("weight_block_size")
         )
         self.is_fp4_experts: bool = False
+        self.hf_to_sglang_mapper: WeightsMapper | None = None
 
     @classmethod
     def get_name(cls) -> str:
@@ -513,7 +514,7 @@ class HummingConfig(QuantizationConfig):
     def is_layer_skipped(self, config: dict[str, Any], prefix: str):
         keys = ["ignored_layers", "ignore", "modules_to_not_convert"]
         ignored_layers = self.get_from_keys_or(config, keys, []) or []
-        if hasattr(self, "hf_to_sglang_mapper"):
+        if self.hf_to_sglang_mapper is not None:
             ignored_layers = self.hf_to_sglang_mapper.apply_list(ignored_layers)
 
         for entry in ignored_layers:
@@ -697,7 +698,7 @@ class HummingLayerQuantizationConfig(HummingConfig):
         force_input_schema: "HummingInputSchema | None" = None,
         is_online_quant: bool = False,
     ):
-        _lazy_import_humming()
+        super().__init__()
         self.weight_schema = weight_schema
         self.weight_block_size = getattr(weight_schema, "weight_block_size", None)
         if input_schema is None:
@@ -727,6 +728,7 @@ class HummingLinearMethod(LinearMethodBase):
         self.force_weight_schema = quant_config.force_weight_schema
         self.force_input_schema = quant_config.force_input_schema
         self.is_online_quant = self.quant_config.is_online_quant
+        self.compute_config: str | None = None
 
     def prepare_weight_loader(self, layer: torch.nn.Module, weight_loader: Callable):
         def new_weight_loader(
@@ -991,6 +993,9 @@ class HummingMoEMethod(FusedMoEMethodBase):
         self.input_schema = quant_config.input_schema
         self.force_weight_schema = quant_config.force_weight_schema
         self.force_input_schema = quant_config.force_input_schema
+        self.processed = False
+        self.weight_schemas = {}
+        self.input_schemas = {}
 
     def prepare_weight_loader(self, layer, weight_loader):
         def new_weight_loader(
@@ -1115,7 +1120,7 @@ class HummingMoEMethod(FusedMoEMethodBase):
         layer.register_buffer("locks", locks)
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        if getattr(self, "processed", False):
+        if self.processed:
             return
         self.processed = True
         from sglang.srt.layers.quantization.humming_utils import (

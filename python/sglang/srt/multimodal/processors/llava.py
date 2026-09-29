@@ -291,13 +291,28 @@ class LlavaImageProcessor(BaseMultimodalProcessor):
 
 
 class LlavaMultimodalProcessor(BaseMultimodalProcessor):
-    """
-    This is a wrapper class used to identify the multimodal processor for Llava architectures' vision model.
+    """Registers Llava architectures and picks the processor for their vision tower.
+
+    Construction returns an instance of the picked processor class, not of this
+    class, so the caller holds a fully initialized processor.
     """
 
     models = [LlavaForConditionalGeneration, Mistral3ForConditionalGeneration]
 
-    def _get_sgl_processor_cls(self, model_type: str):
+    def __new__(cls, hf_config, server_args, _processor, *args, **kwargs):
+        assert hasattr(hf_config, "vision_config")
+        assert hasattr(hf_config, "text_config")
+        vision_type = hf_config.vision_config.model_type
+        if not vision_type:
+            raise ValueError(
+                f"Required `vision_config.model_type` is not found in hf_config: `{hf_config}`"
+            )
+        return cls._get_sgl_processor_cls(vision_type)(
+            hf_config, server_args, _processor, *args, **kwargs
+        )
+
+    @staticmethod
+    def _get_sgl_processor_cls(model_type: str):
         if model_type == "clip_vision_model":
             return LlavaImageProcessor
         if hf_name := HF_MAPPING_NAMES.get(model_type):
@@ -310,22 +325,3 @@ class LlavaMultimodalProcessor(BaseMultimodalProcessor):
         raise ValueError(
             f"Cannot find corresponding multimodal processor registered in sglang for model type `{model_type}`"
         )
-
-    def __init__(self, hf_config, server_args, _processor, *args, **kwargs):
-        assert hasattr(hf_config, "vision_config")
-        assert hasattr(hf_config, "text_config")
-        self.vision_config = hf_config.vision_config
-        self.text_config = hf_config.text_config
-        self.hf_config = hf_config
-
-        if vision_type := getattr(self.vision_config, "model_type"):
-            self.inner = self._get_sgl_processor_cls(vision_type)(
-                hf_config, server_args, _processor, *args, **kwargs
-            )
-        else:
-            raise ValueError(
-                f"Required `vision_config.model_type` is not found in hf_config: `{hf_config}`"
-            )
-
-    async def process_mm_data_async(self, *args, **kwargs):
-        return await self.inner.process_mm_data_async(*args, **kwargs)

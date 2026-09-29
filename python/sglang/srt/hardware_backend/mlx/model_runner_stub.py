@@ -46,12 +46,16 @@ class _DummyKVCache(KVCache):
         # initialization that may touch CUDA APIs.
         self.size = size
         self.page_size = 1
+        self.kernel_page_blocks = 1
+        self.kernel_page_stride = self.page_size
         self.dtype = dtype
         self.store_dtype = dtype
         self.device = device
         self.layer_num = 0
         self.start_layer = 0
         self.end_layer = 0
+        self.allocation_label = None
+        self.memory_saver_adapter = None
         self.mem_usage = 0
         self.cpu_offloading_chunk_size = 8192
         self.layer_transfer_counter = None
@@ -138,6 +142,8 @@ class MlxModelRunnerStub(ModelRunner):
         )
 
         self.model = _DummyModel()
+        self.load_config = None
+        self.loader = None
 
         self.sliding_window_size = None
         if (
@@ -243,6 +249,13 @@ class MlxModelRunnerStub(ModelRunner):
             enable=get_exec().features.enable_memory_saver
         )
 
+        # No EPLB, token oracle, expert backup or LoRA on the MLX path.
+        self.eplb_manager = None
+        self.expert_location_updater = None
+        self._token_oracle_manager = None
+        self.expert_backup_client = None
+        self.uno_lora_id = None
+
         # Load model (sets metadata only)
         self.sampler = None
         self.load_model()
@@ -260,6 +273,7 @@ class MlxModelRunnerStub(ModelRunner):
 
         # KV cache dtype
         self.kv_cache_dtype = self.dtype
+        self.kv_cache_dtype_str = None
 
         # Pool sizing — use the MLX runner's auto-sized pool if available,
         # otherwise fall back to context_len.

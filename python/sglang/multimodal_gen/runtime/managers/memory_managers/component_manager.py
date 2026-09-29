@@ -164,6 +164,7 @@ class ComponentResidencyManager:
         self._warmup_phase_full_weight_transition_components: tuple[str, ...] = ()
         self._warmup_phase_peaks: dict[str, WarmupPhasePeak] = {}
         self._completed_warmup_phase_peaks: dict[str, WarmupPhasePeak] = {}
+        self._debug_requests_seen = 0
 
     @property
     def host_pin_budget(self) -> HostPinBudget:
@@ -698,7 +699,7 @@ class ComponentResidencyManager:
                     log_host_memory_breakdown,
                 )
 
-                self._debug_requests_seen = getattr(self, "_debug_requests_seen", 0) + 1
+                self._debug_requests_seen += 1
                 log_host_memory_breakdown(
                     self.placement_modules(),
                     label=f"after request {self._debug_requests_seen}",

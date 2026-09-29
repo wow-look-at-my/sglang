@@ -128,6 +128,7 @@ class NunchakuConfig(QuantizationConfig):
         return {}
 
     def __post_init__(self):
+        super().__init__()
         if self.group_size is None:
             if self.precision == "nvfp4":
                 self.group_size = 16

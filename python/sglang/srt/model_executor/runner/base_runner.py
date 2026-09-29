@@ -223,6 +223,7 @@ def _allocate_decode_buffers(
 
 class BaseRunner(ABC):
     def __init__(self, model_runner: ModelRunner) -> None:
+        self._init_runner_defaults()
         self.model_runner = model_runner
         self.device = model_runner.device
         self.device_module = torch.get_device_module(self.device)
@@ -240,6 +241,16 @@ class BaseRunner(ABC):
         self.attn_tp_size = get_parallel().attn_tp_size
         self.attn_tp_rank = get_parallel().attn_tp_rank
         self.tbo_plugin = TboCudaGraphRunnerPlugin()
+
+    def _init_runner_defaults(self) -> None:
+        """Empty values for the fields __init__ sets; a subclass that skips
+        __init__ calls this first."""
+        self.dp_size = None
+        self.return_hidden_states_mode = CaptureHiddenMode.NULL
+        self.enable_return_hidden_states = False
+        self.attn_tp_size = None
+        self.attn_tp_rank = None
+        self.tbo_plugin = None
 
     def warmup(self) -> None:
         """Run kernel warmup + autotune once, gated by mr._kernel_warmed_up."""

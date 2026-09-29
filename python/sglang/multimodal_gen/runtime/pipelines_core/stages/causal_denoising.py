@@ -157,11 +157,7 @@ class CausalDMDDenoisingStage(DenoisingStage):
 
     def __init__(self, transformer, scheduler) -> None:
         super().__init__(transformer, scheduler)
-        # KV and cross-attention cache state (initialized on first forward)
-        self.causal_kv_cache: list | None = None
-        self.crossattn_cache: list | None = None
-        self.causal_kv_cache_neg: list | None = None
-        self.crossattn_cache_neg: list | None = None
+        self._init_causal_forward_state()
         # Model-dependent constants (aligned with causal_inference.py assumptions)
         self.num_transformer_blocks = self.transformer.config.num_layers
         self.num_frames_per_block = self.transformer.config.num_frames_per_block
@@ -177,6 +173,14 @@ class CausalDMDDenoisingStage(DenoisingStage):
             self.local_attn_size = -1
         self.sink_size = self.transformer.config.sink_size
 
+    def _init_causal_forward_state(self) -> None:
+        # KV and cross-attention cache state (initialized on first forward)
+        self.causal_kv_cache: list | None = None
+        self.crossattn_cache: list | None = None
+        self.causal_kv_cache_neg: list | None = None
+        self.crossattn_cache_neg: list | None = None
+        # Set per request by _prepare_frame_seq_length from the latent shape.
+        self.num_token_per_frame: int | None = None
         self._causal_attn_metadata_builder_cls = None
         self._causal_attn_metadata_builder = None
 

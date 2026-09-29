@@ -154,6 +154,7 @@ class EICStorage(HiCacheStorage):
         global G_EnableKVSetGPUDirect, G_EnableKVGetGPUDirect
         global GPUNicAffinity, CPUNicAffinity, G_EnableGPUNicAffinity
 
+        super().__init__()
         config_file = get_eic_config_file_path()
         if os.path.exists(config_file) is False:
             logger.error(f"config file {config_file} not exists")

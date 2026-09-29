@@ -209,6 +209,8 @@ class InternS1ProForConditionalGeneration(Qwen3VLMoeForConditionalGeneration):
         if len(config.vision_config.deepstack_visual_indexes) == 0:
             self.use_deepstack = {}
 
+        self._cached_params_dict = None
+
     def _load_fope_weights(self, name: str, loaded_weight: torch.Tensor, params_dict):
         """load fope weights"""
         attn_tp_size = get_parallel().attn_tp_size
@@ -232,7 +234,7 @@ class InternS1ProForConditionalGeneration(Qwen3VLMoeForConditionalGeneration):
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights"""
         # Cache params_dict to avoid repeated expensive traversal of model parameters
-        if not hasattr(self, "_cached_params_dict"):
+        if self._cached_params_dict is None:
             self._cached_params_dict = dict(self.named_parameters())
         params_dict = self._cached_params_dict
         other_weights = dict()

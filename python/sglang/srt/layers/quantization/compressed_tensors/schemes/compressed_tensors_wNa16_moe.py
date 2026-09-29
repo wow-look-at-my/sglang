@@ -91,6 +91,9 @@ class CompressedTensorsWNA16MoE(CompressedTensorsMoEScheme):
                 f"{WNA16_SUPPORTED_BITS}",
             )
         self.num_gpu_experts = num_gpu_experts
+        self.is_k_full = None
+        self.moe_runner_config = None
+        self.runner = None
 
     @classmethod
     def get_min_capability(cls) -> int:
@@ -578,6 +581,9 @@ class NPUCompressedTensorsW4A16Int4DynamicMoE(CompressedTensorsMoEScheme):
 
         self.w13_kernel = NPUWNA16Int4MoEMethod()
         self.w2_kernel = NPUWNA16Int4MoEMethod()
+        self.num_experts = None
+        self.moe_runner_config = None
+        self.runner = None
 
     # TODO: See if we can merge this method's logic
     # with CompressedTensorsWNA16MoE. Need more models and tests.

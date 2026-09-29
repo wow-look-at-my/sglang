@@ -1135,6 +1135,13 @@ class LayerwiseOffloadManager:
         # mapped layers handed to the courier and not yet collected
         self._mapped_courier: Optional[MappedLayerCourier] = None
         self._courier_inflight: Set[int] = set()
+        # courier stats already reported by _log_direct_read_summary
+        self._direct_read_seen: Dict[str, float] = {
+            "bytes": 0,
+            "cached": 0,
+            "probes": 0,
+            "fraction_sum": 0.0,
+        }
         # layer_idx -> torch.get_device_module().Event for fine-grained sync, to make sure the weight is resident in pre-hook
         self._prefetch_events: Dict[int, torch.get_device_module().Event] = {}
 
@@ -1826,11 +1833,7 @@ class LayerwiseOffloadManager:
         if courier is None:
             return
         stats = courier.stats
-        seen = getattr(
-            self,
-            "_direct_read_seen",
-            {"bytes": 0, "cached": 0, "probes": 0, "fraction_sum": 0.0},
-        )
+        seen = self._direct_read_seen
         direct_bytes = stats["direct_read_bytes"] - seen["bytes"]
         cached = stats["cached_layers"] - seen["cached"]
         probes = stats["probes"] - seen["probes"]
@@ -2611,6 +2614,11 @@ class LayerwiseOffloadableModuleMixin:
     # transfer per request and is worth it only when device memory is the
     # binding constraint, so it follows --performance-mode memory.
     park_non_layer_weights_between_uses: bool = False
+
+    # Host copies taken by _capture_mps_cpu_non_layer_weights. Capture rebinds
+    # these per instance; the shared empty defaults are never mutated.
+    _mps_cpu_non_layer_parameters: Dict[str, torch.Tensor] = {}
+    _mps_cpu_buffers: Dict[str, torch.Tensor] = {}
 
     def _managed_layer_parameter_names(self) -> set:
         """Parameter names some layerwise manager already streams."""

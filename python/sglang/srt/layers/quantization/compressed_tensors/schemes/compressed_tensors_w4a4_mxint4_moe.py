@@ -79,6 +79,7 @@ class CompressedTensorsMxInt4MoE(CompressedTensorsMoEScheme):
                 "is supported for the mxint4"
             )
         self._cache_permute_indices = {}
+        self.moe_runner_config = None
 
     @classmethod
     def get_min_capability(cls) -> int:

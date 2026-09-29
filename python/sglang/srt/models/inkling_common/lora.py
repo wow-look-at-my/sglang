@@ -11,6 +11,23 @@ class InklingBatchDenseMLPWithLoRA(InklingBatchDenseMLP):
 
     is_shared_fused_moe = True
 
+    # Instances are made by a __class__ swap, so __init__ never runs; class
+    # defaults cover the fields until initialize_lora and set_lora_info.
+    lora_backend: BaseLoRABackend | None = None
+    set_lora: bool = False
+    experts_shared_outer_loras: bool = False
+    _lora_routing_cache: dict | None = None
+    gate_up_lora_a_weights: torch.Tensor | None = None
+    gate_up_lora_b_weights: torch.Tensor | None = None
+    down_lora_a_weights: torch.Tensor | None = None
+    down_lora_b_weights: torch.Tensor | None = None
+
+    def __init__(self, *args, **kwargs) -> None:
+        raise TypeError(
+            "InklingBatchDenseMLPWithLoRA is made by a __class__ swap of an "
+            "InklingBatchDenseMLP; initialize_lora is its constructor"
+        )
+
     def initialize_lora(self, lora_backend: BaseLoRABackend) -> None:
         problems = []
         if (

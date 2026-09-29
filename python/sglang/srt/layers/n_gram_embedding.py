@@ -78,6 +78,9 @@ class NgramEmbedding(torch.nn.Module):
                 for delta in range(self.over_embedding_n):
                     self.oe_weights[n - 2][k][delta] = pow(num_embeddings, delta, mod)
 
+        self.oe_n_gram_ids = None
+        self.exclusive_req_len_sums = None
+
     def init_buffers(
         self, max_running_requests: int, chunked_prefill_size: int, device: str
     ):

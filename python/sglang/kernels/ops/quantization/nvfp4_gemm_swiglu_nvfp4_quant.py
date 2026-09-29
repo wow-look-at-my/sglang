@@ -240,6 +240,51 @@ class Sm100BlockScaledPersistentDenseGemmKernel:
         self.use_prefetch = use_prefetch
         self.prefetch_dist = prefetch_dist
         self.vectorized_f32 = vectorized_f32
+        self.buffer_align_bytes = 1024
+
+        # Set at JIT trace time by _setup_attributes and __call__.
+        self.a_dtype = None
+        self.b_dtype = None
+        self.sf_dtype = None
+        self.c_dtype = None
+        self.a_major_mode = None
+        self.b_major_mode = None
+        self.c_layout = None
+        self.generate_sfc = None
+        self.mma_inst_shape_mn = None
+        self.mma_inst_shape_mn_sfb = None
+        self.mma_tiler_sfb = None
+        self.mma_tiler_c = None
+        self.cta_tile_shape_mnk = None
+        self.cta_tile_shape_mnk_c = None
+        self.cluster_layout_vmnk = None
+        self.cluster_layout_sfb_vmnk = None
+        self.num_mcast_ctas_a = None
+        self.num_mcast_ctas_b = None
+        self.num_mcast_ctas_sfb = None
+        self.is_a_mcast = None
+        self.is_b_mcast = None
+        self.is_sfb_mcast = None
+        self.epi_tile = None
+        self.epi_tile_cnt = None
+        self.epi_tile_n_required = None
+        self.num_acc_stage = None
+        self.num_ab_stage = None
+        self.num_c_stage = None
+        self.overlapping_accum = None
+        self.num_sfa_tmem_cols = None
+        self.num_sfb_tmem_cols = None
+        self.num_sf_tmem_cols = None
+        self.num_accumulator_tmem_cols = None
+        self.iter_acc_early_release_in_epilogue = None
+        self.a_smem_layout_staged = None
+        self.b_smem_layout_staged = None
+        self.sfa_smem_layout_staged = None
+        self.sfb_smem_layout_staged = None
+        self.c_smem_layout_staged = None
+        self.num_tma_load_bytes = None
+        self.tile_sched_params = None
+        self.shared_storage = None
 
     def _setup_attributes(self):
         """Set up configurations that are dependent on GEMM inputs
@@ -623,8 +668,6 @@ class Sm100BlockScaledPersistentDenseGemmKernel:
             self.cluster_shape_mn,
             max_active_clusters,
         )
-
-        self.buffer_align_bytes = 1024
 
         # Define shared storage for kernel
         @cute.struct

@@ -178,6 +178,25 @@ jobs:
       run_timeout_minutes: '30'
       rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
 
+  # ------------------------------------------------------ constructor order Fails when an __init__ step reads a self field before an earlier step sets it, or when a method creates a field the constructor never initializes.
+  fork-init-order-check:
+    needs: fork-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tools/init-order-check
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run check
+
   # ------------------------------------------------------------ sglang wheel
   fork-sglang-wheel:
     needs: fork-plan
@@ -268,6 +287,21 @@ jobs:
       - name: scheduler simulator tests
         working-directory: tools/sglang-simulator/schedsim
         run: go test ./... -count=1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The visual simulator ships its compiled sim.js beside sim.ts so the
+      # page opens from a file:// URL; this rebuilds it and runs the headless
+      # comparison, and fails if the committed sim.js is stale.
+      - name: visual simulator
+        working-directory: tools/sglang-simulator/schedsim/web
+        run: |
+          npm install --no-audit --no-fund --silent typescript@5
+          npx tsc -p tsconfig.json
+          node sim.js
+          git diff --exit-code -- sim.js
 
   fork-gateway-wheel:
     needs: fork-plan
@@ -516,22 +550,21 @@ jobs:
             exit 0
           fi
           EXISTING=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
-          # Compare with the release's build commit, not the last push: a revert and re-apply changes nothing.
           BUILT_FROM=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)
-          SOURCE_CHANGED=true
-          if FILES=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BUILT_FROM}...${GITHUB_SHA}" --jq '.files[].filename') \
-             && [ "$(printf '%s\n' "$FILES" | grep -c .)" -lt 300 ] \
-             && ! printf '%s\n' "$FILES" | grep -q '^python/sglang/kernels/aot/'; then
-            SOURCE_CHANGED=false
-          fi
-          echo "kernel source changed since ${BUILT_FROM}: ${SOURCE_CHANGED}"
+          aot_tree() {
+            gh api "repos/${GITHUB_REPOSITORY}/contents/python/sglang/kernels?ref=$1" --jq '.[] | select(.name == "aot") | .sha'
+          }
+          PUBLISHED_TREE=$(aot_tree "$BUILT_FROM")
+          CURRENT_TREE=$(aot_tree "$GITHUB_SHA")
+          : "${PUBLISHED_TREE:?no kernel source tree at $BUILT_FROM}" "${CURRENT_TREE:?no kernel source tree at $GITHUB_SHA}"
+          echo "kernel tree at release commit $BUILT_FROM: $PUBLISHED_TREE; at $GITHUB_SHA: $CURRENT_TREE"
           for WHEEL in "${WHEELS[@]}"; do
             NAME=$(basename "$WHEEL")
             if ! printf '%s\n' "$EXISTING" | grep -qxF "$NAME"; then
               echo "::error::release $TAG is published without $NAME and cannot take new assets; bump the kernel version (scripts/release/bump_kernel_version.py)"
               exit 1
             fi
-            if [ "$SOURCE_CHANGED" = true ]; then
+            if [ "$PUBLISHED_TREE" != "$CURRENT_TREE" ]; then
               # One version must mean one op set: a wheel already published under
               # this version would silently lack whatever this change adds.
               echo "::error::$NAME is already published; bump the kernel version (scripts/release/bump_kernel_version.py, then bump_kernel_version_to_sglang.py) to ship a changed kernel"
@@ -544,9 +577,10 @@ jobs:
   # Built for the fork's deployment only: x86_64, CUDA 13, FORK_KERNEL_CUDA_ARCHS
   # (default 120a), served with sglang.launch_server, so the image leaves out the
   # sm90-only hpc-ops kernels and the sgl-model-gateway router.
+  # Publishes only a tree that passed the constructor-order check and the CPU suite.
   fork-docker-image:
-    needs: [fork-plan, fork-sgl-kernel-wheel]
-    if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' }}
+    needs: [fork-plan, fork-sgl-kernel-wheel, fork-init-order-check, base-a-test-cpu]
+    if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' && needs.fork-init-order-check.result == 'success' && needs.base-a-test-cpu.result == 'success' }}
     name: fork-docker-image (${{ matrix.arch }})
     strategy:
       fail-fast: false

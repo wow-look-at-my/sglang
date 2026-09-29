@@ -68,7 +68,8 @@ jobs:
         env:
           UV_SYSTEM_PYTHON: "1"
         run: |
-          uv pip install -e "python" --index-strategy unsafe-best-match --prerelease allow
+          OVERRIDE_ARGS=$(bash scripts/ci/utils/uv_kernel_pin_override.sh)
+          uv pip install -e "python" --index-strategy unsafe-best-match --prerelease allow $OVERRIDE_ARGS
           uv pip install pytest
           uv pip install -e "tools/sglang-simulator[aic]"
 

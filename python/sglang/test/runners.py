@@ -180,6 +180,11 @@ class HFRunner:
         self.output_str_only = output_str_only
         self.trust_remote_code = trust_remote_code
         self.patch_model_do_sample_false = patch_model_do_sample_false
+        # start_model_process loads these in the child process.
+        self.base_model = None
+        self.model = None
+        self.processor = None
+        self.tokenizer = None
 
         self.in_queue = mp.Queue()
         self.out_queue = mp.Queue()

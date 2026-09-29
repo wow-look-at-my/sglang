@@ -87,11 +87,12 @@ class ToolServer(ABC):
 class MCPToolServer(ToolServer):
     def __init__(self):
         self.harmony_tool_descriptions = {}
+        self.urls: dict[str, str] = {}
 
     async def add_tool_server(self, server_url: str):
         tool_urls = server_url.split(",")
         self.harmony_tool_descriptions = {}
-        self.urls: dict[str, str] = {}
+        self.urls = {}
         for url in tool_urls:
             url = f"http://{url}/sse"
             initialize_response, list_tools_response = await list_server_and_tools(url)

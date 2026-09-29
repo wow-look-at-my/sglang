@@ -40,6 +40,7 @@ class ComfyInt8EmbeddingMethod(QuantizeMethodBase):
 
     def __init__(self, *, tensorwise: bool = False) -> None:
         self.tensorwise = tensorwise
+        self.output_dtype: torch.dtype | None = None
 
     def create_weights(
         self,

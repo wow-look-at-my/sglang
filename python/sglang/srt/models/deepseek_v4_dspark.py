@@ -409,6 +409,7 @@ class DSparkV4MarkovHead(nn.Module):
         )
         self._tp_shard: Optional[MarkovW2ShardGeometry] = None
         self._shard_group = None
+        self._vocab_gather = None
 
     def configure_tp_shard(self, *, lm_head: nn.Module) -> None:
         if not self._opt_markov_w2_tp_shard:

@@ -123,6 +123,7 @@ class TensorcastStore(HiCacheStorage):
     """Adapt SGLang KV pages to TensorCast byte-artifact Session calls."""
 
     def __init__(self, storage_config: HiCacheStorageConfig) -> None:
+        super().__init__()
         source = storage_config.extra_config
         if source is None:
             raise ValueError(

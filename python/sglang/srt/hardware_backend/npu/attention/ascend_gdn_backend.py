@@ -37,6 +37,10 @@ class AscendGDNAttnBackend(AscendMambaAttnBackendBase):
         decode_backend = backends.decode
         prefill_backend = backends.prefill
         self.kernel_dispatcher = GDNKernelDispatcher(decode_backend, prefill_backend)
+        self.num_accept_tokens: Optional[torch.Tensor] = None
+        self.actual_seq_lengths: Optional[torch.Tensor] = None
+        self.ssm_state_indices: Optional[torch.Tensor] = None
+        self.graph_mode = False
 
     def _prepare_mamba_track_metadata(self, forward_batch: ForwardBatch):
         if self.forward_metadata.has_mamba_track_mask:

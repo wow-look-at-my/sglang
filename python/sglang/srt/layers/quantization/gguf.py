@@ -356,6 +356,7 @@ class GGUFLinearMethod(LinearMethodBase):
 
     def __init__(self, quant_config: GGUFConfig):
         self.quant_config = quant_config
+        self.params_dtype = None
 
     def create_weights(
         self,
@@ -492,6 +493,7 @@ class GGUFMoEMethod(FusedMoEMethodBase):
 
     def __init__(self, quant_config: GGUFConfig):
         self.quant_config = quant_config
+        self.moe_runner_config = None
 
     def create_weights(
         self,
@@ -649,6 +651,7 @@ class GGUFLinearAscendMethod(LinearMethodBase):
 
     def __init__(self, quant_config: GGUFConfig):
         self.quant_config = quant_config
+        self.params_dtype = None
 
     def create_weights(
         self,
@@ -809,6 +812,8 @@ class GGUFMoEAscendMethod(FusedMoEMethodBase):
         self.quant_config = quant_config
         self.w13_kernel = NPUUnquantMoEMethod()
         self.w2_kernel = NPUUnquantMoEMethod()
+        self.params_dtype = None
+        self.moe_runner_config = None
 
     def create_weights(
         self,

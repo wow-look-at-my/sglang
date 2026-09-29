@@ -343,6 +343,12 @@ class MlxAuxiliaryStateComponent(MambaComponent):
             )
         TreeComponent.__init__(self, cache, params)
         self.enable_mamba_extra_buffer = False
+        self.mamba_cache_chunk_size: Optional[int] = None
+        self.mamba_checkpoint_grid: Optional[int] = None
+        # -1 disables the per-path checkpoint cap.
+        self.mamba_max_states_per_path = -1
+        self._evict_device_request_cnt = 0
+        self._evict_device_cursor = None
         self._mamba_pool_host = None
 
     @staticmethod

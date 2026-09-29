@@ -30,7 +30,7 @@ from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.models.exaone_moe import ExaoneMoEForCausalLM, ExaoneMoEModel
 from sglang.srt.runtime_context import get_parallel
-from sglang.srt.utils import add_prefix
+from sglang.srt.utils import LazyValue, add_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,8 @@ class ExaoneMoEForCausalLMMTP(ExaoneMoEForCausalLM):
             use_attn_tp_group=get_parallel().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        self.capture_aux_hidden_states = False
+        self._routed_experts_weights_of_layer = LazyValue(lambda: {})
 
     @torch.no_grad()
     def forward(

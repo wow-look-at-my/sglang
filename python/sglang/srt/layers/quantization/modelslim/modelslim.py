@@ -474,6 +474,7 @@ class ModelSlimConfig(QuantizationConfig):
 
 class ModelSlimLinearMethod(_NPULinearMethodBase):
     def __init__(self, quantization_config: ModelSlimConfig):
+        super().__init__(quantization_config)
         self.quantization_config = quantization_config
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
@@ -534,6 +535,7 @@ class ModelSlimFusedMoEMethod(FusedMoEMethodBase):
 
     def __init__(self, quantization_config: ModelSlimConfig):
         self.quantization_config = quantization_config
+        self.moe_runner_config = None
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         layer.w13_scheme.process_weights_after_loading(layer)

@@ -375,6 +375,12 @@ class GenerateReqInput:
         Union[List[Optional[Union[Dict, KvHintsEnvelope]]], Dict, KvHintsEnvelope]
     ] = None
 
+    def __post_init__(self):
+        # Resolved by normalize_batch_and_arguments.
+        self.is_single: bool = True
+        self.batch_size: int = 1
+        self.parallel_sample_num: int = 1
+
     def regenerate_rid(self):
         """Generate a new request ID and return it."""
         if isinstance(self.rid, list):
@@ -1252,6 +1258,11 @@ class EmbeddingReqInput:
     # scoring today). Unlike MIS, pooling is AT the position (no delimiter - 1).
     # Batch-level: List[List[int]] (one per request). After __getitem__: List[int].
     token_indices_to_pool: Optional[Union[List[List[int]], List[int]]] = None
+
+    def __post_init__(self):
+        # Resolved by normalize_batch_and_arguments.
+        self.is_single: bool = True
+        self.batch_size: int = 1
 
     def regenerate_rid(self):
         """Generate a new request ID and return it."""

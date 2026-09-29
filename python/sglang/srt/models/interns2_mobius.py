@@ -542,6 +542,8 @@ class InternS2MobiusAttentionDecoderLayer(
         self.hidden_size = config.hidden_size
         self.attn_tp_rank = get_parallel().attn_tp_rank
         self.attn_tp_size = get_parallel().attn_tp_size
+        self.kv_tp_size = self.attn_tp_size
+        self.kv_tp_rank = self.attn_tp_rank
         self.total_num_heads = config.num_attention_heads
         if self.total_num_heads % self.attn_tp_size != 0:
             raise ValueError("num_attention_heads must be divisible by attention TP")
@@ -736,6 +738,7 @@ class InternS2MobiusForCausalLM(Qwen3_5ForCausalLM):
         )
         self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.layers_to_capture = []
+        self.flashinfer_mnnvl_cutedsl_fusion = None
 
     def get_hidden_dim(self, module_name: str, layer_idx: int):
         if module_name == "gate_up_proj":

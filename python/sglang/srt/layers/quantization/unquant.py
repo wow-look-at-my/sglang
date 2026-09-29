@@ -645,6 +645,8 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, BaseFusedOp):
         # Set by process_weights_after_loading when w13 rows are permuted to
         # interleave gate/up for the fused swiglu up-GEMM epilogue.
         self.w13_swiglu_interleaved = False
+        self.moe_runner_config: Optional[MoeRunnerConfig] = None
+        self._aiter_runner: Optional[MoeRunner] = None
 
     def create_weights(
         self,
@@ -1003,7 +1005,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, BaseFusedOp):
         self.runner = MoeRunner(backend, moe_runner_config)
 
         # aiter CK fused-MoE only supports some shapes / activations; else use triton.
-        self._aiter_runner: Optional[MoeRunner] = None
+        self._aiter_runner = None
         if (
             _use_aiter
             and (

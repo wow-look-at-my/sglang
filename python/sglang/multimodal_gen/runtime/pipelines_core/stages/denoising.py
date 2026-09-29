@@ -2320,13 +2320,13 @@ class DenoisingStage(PipelineStage, RolloutDenoisingMixin):
             i: The current timestep index.
         """
         attn_metadata = None
-        self.attn_metadata_builder = None
+        attn_metadata_builder = None
         try:
-            self.attn_metadata_builder_cls = self.attn_backend.get_builder_cls()
+            attn_metadata_builder_cls = self.attn_backend.get_builder_cls()
         except NotImplementedError:
-            self.attn_metadata_builder_cls = None
-        if self.attn_metadata_builder_cls:
-            self.attn_metadata_builder = self.attn_metadata_builder_cls()
+            attn_metadata_builder_cls = None
+        if attn_metadata_builder_cls:
+            attn_metadata_builder = attn_metadata_builder_cls()
         if (
             self.attn_backend.get_enum() == AttentionBackendEnum.SLIDING_TILE_ATTN
             or self.attn_backend.get_enum() == AttentionBackendEnum.VIDEO_SPARSE_ATTN
@@ -2335,7 +2335,7 @@ class DenoisingStage(PipelineStage, RolloutDenoisingMixin):
             vsa_sparsity = attention_backend_config.get(
                 "VSA_sparsity", attention_backend_config.get("sparsity", 0.0)
             )
-            attn_metadata = self.attn_metadata_builder.build(
+            attn_metadata = attn_metadata_builder.build(
                 current_timestep=i,
                 raw_latent_shape=batch.raw_latent_shape[2:5],
                 patch_size=server_args.pipeline_config.dit_config.patch_size,
@@ -2411,7 +2411,7 @@ class DenoisingStage(PipelineStage, RolloutDenoisingMixin):
                 if prompt_length is None:
                     prompt_length = context_length
 
-            attn_metadata = self.attn_metadata_builder.build(
+            attn_metadata = attn_metadata_builder.build(
                 current_timestep=current_timestep,
                 raw_latent_shape=batch.raw_latent_shape,
                 patch_size=patch_size,
@@ -2440,7 +2440,7 @@ class DenoisingStage(PipelineStage, RolloutDenoisingMixin):
                 }
             )
         elif self.attn_backend.get_enum() == AttentionBackendEnum.FA:
-            attn_metadata = self.attn_metadata_builder.build(
+            attn_metadata = attn_metadata_builder.build(
                 raw_latent_shape=batch.raw_latent_shape
             )
         elif self.attn_backend.get_enum() in [
@@ -2465,7 +2465,7 @@ class DenoisingStage(PipelineStage, RolloutDenoisingMixin):
                 else:
                     patch_size = (patch_size, patch_size, patch_size)
 
-            attn_metadata = self.attn_metadata_builder.build(
+            attn_metadata = attn_metadata_builder.build(
                 current_timestep=current_timestep,
                 skip_first_steps=skip_first_steps,
                 sparsity=sparsity,

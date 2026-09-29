@@ -178,7 +178,12 @@ class SanaWMStreamingDenoisingStage(CausalDMDDenoisingStage):
         # fields (num_frames_per_block / sliding_window_num_frames / sink_size)
         # that SANA-WM defines per-run via the pipeline config instead.
         DenoisingStage.__init__(self, transformer, scheduler)
+        self._init_causal_forward_state()
         self.num_transformer_blocks = len(transformer.blocks)
+        self.num_frames_per_block: int | None = None
+        self.sliding_window_num_frames: int | None = None
+        self.local_attn_size = -1
+        self.sink_size: int | None = None
         # Realtime pipelines keep the DiT device-resident for the session's
         # lifetime (the per-tick offload round-trip would dominate latency);
         # the offline pipeline keeps the default offload behavior.

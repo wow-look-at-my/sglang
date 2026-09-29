@@ -53,6 +53,7 @@ class GSM8KEval(Eval):
     ):
         self._num_threads = num_threads
         self._num_shots = num_shots
+        self._few_shot_prompt = ""
 
         if data_path:
             filename = data_path

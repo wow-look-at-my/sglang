@@ -1101,6 +1101,7 @@ class Cosmos3DenoisingStage(PipelineStage, RolloutDenoisingMixin):
         self.vae = vae
         self._logged_parallel_config = False
         self._logged_cfg_split = False
+        self._share_vision_temporal_positions = True
 
         # Apply torch.compile if enabled
         if server_args is not None:
@@ -1232,8 +1233,8 @@ class Cosmos3DenoisingStage(PipelineStage, RolloutDenoisingMixin):
                 action_fps=action_fps,
                 action_start_frame_offset=action_start_frame_offset,
                 control_latents=control_latents,
-                transfer_share_vision_temporal_positions=getattr(
-                    self, "_share_vision_temporal_positions", True
+                transfer_share_vision_temporal_positions=(
+                    self._share_vision_temporal_positions
                 ),
             )
 

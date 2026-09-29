@@ -165,6 +165,9 @@ class BaseSparseAlgorithmImpl(BaseSparseAlgorithm):
         self.sparsity_ratio = config.sparse_extra_config.get("sparsity_ratio", 0.7)
         self.num_recent_pages = config.sparse_extra_config.get("num_recent_pages", 4)
         self.page_size = config.page_size
+        self.token_to_kv_pool = None
+        self.start_layer = 0
+        self.end_layer = 0
 
     def initialize_representation_pool(
         self,

@@ -51,7 +51,7 @@ from sglang.srt.models.utils import (
     enable_fused_set_kv_buffer,
 )
 from sglang.srt.runtime_context import get_exec, get_parallel
-from sglang.srt.utils import add_prefix, is_cuda
+from sglang.srt.utils import LazyValue, add_prefix, is_cuda
 
 _is_cuda = is_cuda()
 
@@ -240,6 +240,7 @@ class MellumAttention(Qwen3MoeAttention):
                 _yarn_factor != 1.0,
             )
         )
+        self.use_fused_qk_norm_rope_cpu = False
         self._used_fused_qk_norm_rope_last_call = False
 
         self.attn = RadixAttention(
@@ -393,6 +394,7 @@ class MellumDecoderLayer(Qwen3MoeDecoderLayer):
             sliding_window_size=sliding_window_size,
             alt_stream=alt_stream,
         )
+        self.rope_theta = self.self_attn.rope_theta
 
         self.attn_tp_size = get_parallel().attn_tp_size
         self.attn_tp_rank = get_parallel().attn_tp_rank
@@ -522,6 +524,13 @@ class MellumForCausalLM(Qwen3MoeForCausalLM):
         )
         self.logits_processor = LogitsProcessor(cfg)
         self.capture_aux_hidden_states = False
+        self.routed_experts_weights_of_layer = LazyValue(
+            lambda: {
+                layer_id: self.model.layers[layer_id].mlp.get_moe_weights()
+                for layer_id in range(self.start_layer, self.end_layer)
+                if isinstance(self.model.layers[layer_id].mlp, Qwen3MoeSparseMoeBlock)
+            }
+        )
 
         self.attn_cp_size = get_parallel().attn_cp_size
         self.attn_cp_rank = get_parallel().attn_cp_rank

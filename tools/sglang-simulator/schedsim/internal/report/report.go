@@ -53,7 +53,25 @@ type Input struct {
 
 	// Revised holds the revised balancer's runs, one per pending-queue size.
 	Revised []RevisedRun
+
+	// Incident is what the operator reported alongside the log, when the log
+	// came with a report: the generation band they saw and the sag they
+	// quoted. Nil for a log that arrived without one, so the report does not
+	// attribute one incident's words to another log.
+	Incident *Incident
 }
+
+// Incident is the operator's own statement of what they saw.
+type Incident struct {
+	// BandLo and BandHi bound the tok/s the interrupted conversation got.
+	BandLo, BandHi float64
+	// SagFrom and SagTo are the input tok/s they quoted at the start and
+	// bottom of the cold prefill.
+	SagFrom, SagTo float64
+}
+
+// EmbeddedIncident is the report that came with the embedded log.
+var EmbeddedIncident = &Incident{BandLo: 8, BandHi: 20, SagFrom: 13874, SagTo: 4831}
 
 // RevisedRun is one queue-balance run and the queue length behind its chunks.
 type RevisedRun struct {
@@ -104,18 +122,25 @@ func Write(w io.Writer, in Input) {
 	fmt.Fprintf(w, "  steps; a healthy schedule would have run about %.0f there\n",
 		m.NormalDecodeStepsInColdWindow())
 	fmt.Fprintf(w, "  (%.2f s of measured prefill at %.1f steps/s)\n", m.ColdSeconds, m.NormalDecodeStepsPerSec())
-	fmt.Fprintf(w, "  the operator's ~8-20 tok/s band corresponds to a conversation getting\n")
-	fmt.Fprintf(w, "  %.0f-%.0f%% of scheduling steps (rate x step duration / tokens per step),\n",
-		100*m.DecodeDutyCycleForRate(8), 100*m.DecodeDutyCycleForRate(20))
-	fmt.Fprintf(w, "  i.e. partial starvation, not the total starvation this window shows.\n")
-	fmt.Fprintf(w, "  This fragment cannot resolve which: 0 decode lines is consistent with\n")
-	fmt.Fprintf(w, "  anything up to %d steps, or %.1f tok/s, and both readings sit below the\n",
-		trace.MaxDecodeStepsInColdWindow(), m.GenRateForSteps(trace.MaxDecodeStepsInColdWindow()))
-	fmt.Fprintf(w, "  band. It is reported as a band the log cannot pin down, not back-filled.\n")
+	if inc := in.Incident; inc != nil {
+		fmt.Fprintf(w, "  the operator's ~%.0f-%.0f tok/s band corresponds to a conversation getting\n", inc.BandLo, inc.BandHi)
+		fmt.Fprintf(w, "  %.0f-%.0f%% of scheduling steps (rate x step duration / tokens per step),\n",
+			100*m.DecodeDutyCycleForRate(inc.BandLo), 100*m.DecodeDutyCycleForRate(inc.BandHi))
+		fmt.Fprintf(w, "  i.e. partial starvation, not the total starvation this window shows.\n")
+		fmt.Fprintf(w, "  This fragment cannot resolve which: 0 decode lines is consistent with\n")
+		fmt.Fprintf(w, "  anything up to %d steps, or %.1f tok/s, and both readings sit below the\n",
+			trace.MaxDecodeStepsInColdWindow(), m.GenRateForSteps(trace.MaxDecodeStepsInColdWindow()))
+		fmt.Fprintf(w, "  band. It is reported as a band the log cannot pin down, not back-filled.\n")
+	} else {
+		fmt.Fprintf(w, "  0 decode lines is consistent with anything up to %d steps, or %.1f tok/s\n",
+			trace.MaxDecodeStepsInColdWindow(), m.GenRateForSteps(trace.MaxDecodeStepsInColdWindow()))
+	}
 	fmt.Fprintf(w, "  measured prefill sag: steady %.2f -> bottom %.2f tok/s (peak %.2f)\n",
 		m.ColdSteadyTP, m.ColdMinTP, m.ColdPeakTP)
-	fmt.Fprintf(w, "  the operator quoted ~13,874 -> ~4,831 tok/s; those are this log's steady\n")
-	fmt.Fprintf(w, "  start and its minimum, so the sag is reproduced from the log exactly\n")
+	if inc := in.Incident; inc != nil {
+		fmt.Fprintf(w, "  the operator quoted ~%s -> ~%s tok/s; those are this log's steady\n", commas(inc.SagFrom), commas(inc.SagTo))
+		fmt.Fprintf(w, "  start and its minimum, so the sag is reproduced from the log exactly\n")
+	}
 	fmt.Fprintf(w, "  cold prefill cost as measured: %.2f s for %d tokens\n\n", m.ColdSeconds, m.ColdTokens)
 
 	fmt.Fprintf(w, "BEFORE / AFTER\n")
@@ -200,12 +225,21 @@ func yn(b bool) string {
 }
 
 // DefaultFidelities builds the provenance section for a run with the default
-// knobs.
-func DefaultFidelities(m trace.Metrics) []Fidelity {
+// knobs. inc is the operator's report when the log came with one.
+func DefaultFidelities(m trace.Metrics, inc *Incident) []Fidelity {
+	sag := fmt.Sprintf("the %d chunk lines report it; steady %.2f, bottom %.2f, peak %.2f tok/s",
+		m.ColdChunks, m.ColdSteadyTP, m.ColdMinTP, m.ColdPeakTP)
+	band := fmt.Sprintf("the old policy this model builds produces 0 tok/s (total starvation), and 0 decode stat lines in the window is consistent with anything up to %d steps, or %.1f tok/s. Baseline before the window: %.1f tok/s median.",
+		trace.MaxDecodeStepsInColdWindow(), m.GenRateForSteps(trace.MaxDecodeStepsInColdWindow()), m.BaselineGenTP)
+	if inc != nil {
+		sag += fmt.Sprintf(", which are the log's own steady start and minimum the operator quoted as ~%s -> ~%s", commas(inc.SagFrom), commas(inc.SagTo))
+		band = fmt.Sprintf("the ~%.0f-%.0f tok/s band maps to a decode duty cycle of %.0f-%.0f%% (rate x step duration / tokens per step): a conversation getting that fraction of steps. The log cannot pin it down, because 0 decode stat lines in the window is consistent with anything up to %d steps, or %.1f tok/s. The log's own lines are one conversation plus one cold prompt, so the concurrent figure came from a conversation it was not logging. This is stated as a band the log does not resolve, not back-filled; the old policy this model builds produces 0 tok/s (total starvation). Baseline here: %.1f tok/s median.",
+			inc.BandLo, inc.BandHi, 100*m.DecodeDutyCycleForRate(inc.BandLo), 100*m.DecodeDutyCycleForRate(inc.BandHi),
+			trace.MaxDecodeStepsInColdWindow(), m.GenRateForSteps(trace.MaxDecodeStepsInColdWindow()),
+			m.BaselineGenTP)
+	}
 	return []Fidelity{
-		{"input throughput of each cold chunk (the sag)", Measured,
-			fmt.Sprintf("the %d chunk lines report it; steady %.2f, bottom %.2f, peak %.2f tok/s, which are the log's own steady start and minimum the operator quoted as ~13,874 -> ~4,831",
-				m.ColdChunks, m.ColdSteadyTP, m.ColdMinTP, m.ColdPeakTP)},
+		{"input throughput of each cold chunk (the sag)", Measured, sag},
 		{"#pending-token at the start of the prefill", Measured,
 			fmt.Sprintf("%d tokens outstanding on the first cold chunk", m.PendingAtCold)},
 		{"a chunk's GPU seconds", Derived,
@@ -216,11 +250,7 @@ func DefaultFidelities(m trace.Metrics) []Fidelity {
 		{"decode steps inside the cold-prefill window", Derived,
 			fmt.Sprintf("the log has 0 decode stat lines there and emits one every %d decode iterations, so under the old policy decode is bounded at %d steps over the window; the old policy's own rule produces exactly 0 because a chunk is always formable",
 				trace.DecodeLogInterval, trace.MaxDecodeStepsInColdWindow())},
-		{"generation rate the interrupted conversation observed (OLD)", NotReproducible,
-			fmt.Sprintf("the ~8-20 tok/s band maps to a decode duty cycle of %.0f-%.0f%% (rate x step duration / tokens per step): a conversation getting that fraction of steps. The log cannot pin it down, because 0 decode stat lines in the window is consistent with anything up to %d steps, or %.1f tok/s. The log's own lines are one conversation plus one cold prompt, so the concurrent figure came from a conversation it was not logging. This is stated as a band the log does not resolve, not back-filled; the old policy this model builds produces 0 tok/s (total starvation). Baseline here: %.1f tok/s median.",
-				100*m.DecodeDutyCycleForRate(8), 100*m.DecodeDutyCycleForRate(20),
-				trace.MaxDecodeStepsInColdWindow(), m.GenRateForSteps(trace.MaxDecodeStepsInColdWindow()),
-				m.BaselineGenTP)},
+		{"generation rate the interrupted conversation observed (OLD)", NotReproducible, band},
 		{"the log's own low gen lines (not used as a curve)", Measured,
 			fmt.Sprintf("%d of %d decode lines report under 100 tok/s, %d of them within two lines of a prefill line. A line aggregates %d decode iterations, so one that caught a prefill chunk spreads too few tokens over too long a window. These are reporting artifacts of the log interval, which is why the model uses each decode line's own tokens/duration and not the line's raw rate as a load curve.",
 				m.LowGenLines, m.DecodeSteps, m.LowGenNearPrefill, trace.DecodeLogInterval)},
@@ -231,6 +261,15 @@ func DefaultFidelities(m trace.Metrics) []Fidelity {
 		{"prefill share of contended GPU time", Assumed,
 			"the balancer's shipped rule is an even split (debt = prefill seconds - decode seconds), so 0.5 is its own value, not a fit to this log"},
 	}
+}
+
+// commas formats a rate the way the operator wrote it.
+func commas(f float64) string {
+	s := fmt.Sprintf("%.0f", f)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 // Summary prints the one-line-per-model digest.

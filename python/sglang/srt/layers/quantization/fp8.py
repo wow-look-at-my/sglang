@@ -1317,8 +1317,23 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         self.dequant_fp4_to_fp8 = self.quant_config.dequant_fp4_to_fp8
         self.with_bias = False
         # The MxFP4 wrapper methods borrow this instance for weight loading;
-        # they never call create_moe_runner, so moe_runner_config is unset.
+        # they never call create_moe_runner, so moe_runner_config stays None.
         self._owns_moe_runner = False
+        self.moe_runner_config = None
+        self._cutlass_buffers_ready = False
+        self.ab_strides1 = None
+        self.c_strides1 = None
+        self.ab_strides2 = None
+        self.c_strides2 = None
+        self.workspace = None
+        self.a_ptr = None
+        self.b_ptr = None
+        self.out_ptr = None
+        self.a_scales_ptr = None
+        self.b_scales_ptr = None
+        self.expert_offsets = None
+        self.problem_sizes1 = None
+        self.problem_sizes2 = None
         if get_moe_runner_backend().is_cutlass():
             assert cutlass_fp8_supported(), (
                 "cutlass_fp8 MoE requires CUDA 12.0+ with SM90 or CUDA 12.4+ with SM89"
@@ -3149,7 +3164,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         return self.runner.run(dispatch_output, quant_info)
 
     def _ensure_cutlass_buffers_initialized(self, layer: Module) -> None:
-        if getattr(self, "_cutlass_buffers_ready", False):
+        if self._cutlass_buffers_ready:
             return
 
         device = layer.w13_weight.device

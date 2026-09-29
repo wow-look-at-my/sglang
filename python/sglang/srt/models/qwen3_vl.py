@@ -1397,6 +1397,7 @@ class Qwen3VLForConditionalGeneration(nn.Module):
 
         # For EAGLE3 support
         self.capture_aux_hidden_states = False
+        self._mm_feature_copy_stream: Optional[torch.cuda.Stream] = None
 
     def separate_deepstack_embeds(self, embedding):
         assert embedding.shape[-1] % (1 + self.num_deepstack_embeddings) == 0, (
@@ -1564,7 +1565,7 @@ class Qwen3VLForConditionalGeneration(nn.Module):
                 device="cpu",
                 pin_memory=torch.cuda.is_available(),
             )
-            copy_stream = getattr(self, "_mm_feature_copy_stream", None)
+            copy_stream = self._mm_feature_copy_stream
             if copy_stream is None:
                 copy_stream = torch.cuda.Stream(device=self.visual.device)
                 self._mm_feature_copy_stream = copy_stream

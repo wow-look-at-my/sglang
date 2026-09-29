@@ -231,7 +231,9 @@ def _compute_model_num_layers(
 
 
 def _resolve_pp_layer_range(*, model: Any, model_num_layers: int) -> _PPLayerRange:
+    start_layer = getattr(model, "start_layer", None)
+    end_layer = getattr(model, "end_layer", None)
     return _PPLayerRange(
-        start_layer=getattr(model, "start_layer", 0),
-        end_layer=getattr(model, "end_layer", model_num_layers),
+        start_layer=0 if start_layer is None else start_layer,
+        end_layer=model_num_layers if end_layer is None else end_layer,
     )

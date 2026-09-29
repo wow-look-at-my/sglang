@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 class SimHiCacheStorage(HiCacheStorage):
     def __init__(self, storage_config: HiCacheStorageConfig):
+        super().__init__()
         extra = storage_config.extra_config or {}
         self.write_gbps = float(extra.get("sim_write_gbps", 5.0))
         self.read_gbps = float(extra.get("sim_read_gbps", self.write_gbps))

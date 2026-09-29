@@ -546,6 +546,18 @@ class FlashInferAttnBackend(AttentionBackend):
         self.full_cg_prefill_wrappers: Optional[
             List[BatchPrefillWithPagedKVCacheWrapper]
         ] = None
+        self.full_cg_prefill_req_slots = 0
+        self.full_cg_prefill_workspace_buffer: Optional[torch.Tensor] = None
+        self.full_cg_prefill_qo_indptr: List[torch.Tensor] = []
+        self.full_cg_prefill_kv_indptr: List[torch.Tensor] = []
+        self.full_cg_prefill_kv_indices: List[torch.Tensor] = []
+
+        # Allocated by init_cuda_graph_state.
+        self.cuda_graph_kv_indices: List[torch.Tensor] = []
+        self.cuda_graph_swa_out_cache_loc: Optional[torch.Tensor] = None
+        self.cuda_graph_custom_mask: Optional[torch.Tensor] = None
+        self.cuda_graph_qk_indptr: List[torch.Tensor] = []
+        self.cuda_graph_qo_indptr: List[torch.Tensor] = []
 
     def _check_kv_attention_access(self, phase: str, access) -> None:
         if access is not None:
@@ -2369,6 +2381,7 @@ class FlashInferMultiStepDraftBackend:
         self.draft_window_size, self.draft_sink_size = resolve_draft_decode_window(
             model_runner
         )
+        self.cuda_graph_kv_indices: Optional[torch.Tensor] = None
 
     def common_template(
         self,

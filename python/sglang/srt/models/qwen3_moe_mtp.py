@@ -28,9 +28,13 @@ from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.models.qwen3_moe import Qwen3MoeForCausalLM, Qwen3MoeModel
+from sglang.srt.models.qwen3_moe import (
+    Qwen3MoeForCausalLM,
+    Qwen3MoeModel,
+    Qwen3MoeSparseMoeBlock,
+)
 from sglang.srt.runtime_context import get_parallel
-from sglang.srt.utils import add_prefix
+from sglang.srt.utils import LazyValue, add_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +85,15 @@ class Qwen3MoeForCausalLMMTP(Qwen3MoeForCausalLM):
             num_experts=self.config.num_experts,
         )
         self.capture_aux_hidden_states = False
+        self.routed_experts_weights_of_layer = LazyValue(
+            lambda: {
+                layer_id: self.model.layers[layer_id].mlp.get_moe_weights()
+                for layer_id in range(self.start_layer, self.end_layer)
+                if isinstance(self.model.layers[layer_id].mlp, Qwen3MoeSparseMoeBlock)
+            }
+        )
+        self.attn_cp_size = get_parallel().attn_cp_size
+        self.moe_dp_size = get_parallel().moe_dp_size
 
     def set_embed_and_head(self, embed, head):
         del self.model.embed_tokens.weight

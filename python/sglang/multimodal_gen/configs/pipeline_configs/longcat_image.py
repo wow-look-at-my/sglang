@@ -251,6 +251,12 @@ class LongCatImagePipelineConfig(ImagePipelineConfig):
         default_factory=lambda: (longcat_postprocess_text,)
     )
 
+    def __post_init__(self):
+        self._encode_prefix_ids: list[int] | None = None
+        self._encode_suffix_ids: list[int] | None = None
+        self._encode_prefix_len: int = 0
+        self._encode_suffix_len: int = 0
+
     def get_model_deployment_config(self) -> ModelDeploymentConfig:
         return ModelDeploymentConfig(
             keep_resident_min_available_gb=70,
@@ -317,7 +323,7 @@ class LongCatImagePipelineConfig(ImagePipelineConfig):
     def _ensure_encode_prefix_suffix(self, tokenizer):
         """Lazily tokenize the fixed encode prefix/suffix (tokenizer unavailable
         at config construction time). Cached on the config instance."""
-        if not hasattr(self, "_encode_prefix_ids"):
+        if self._encode_prefix_ids is None:
             self._encode_prefix_ids = tokenizer(
                 ENCODE_PREFIX_STR, add_special_tokens=False
             )["input_ids"]

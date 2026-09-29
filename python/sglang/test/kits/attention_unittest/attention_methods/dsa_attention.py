@@ -17,6 +17,7 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMo
 from sglang.srt.model_executor.forward_context import ForwardContext, forward_context
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.runtime_context import get_context, get_parallel
+from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 
 from .dense_attention import (
     DEFAULT_DEVICE,
@@ -285,6 +286,9 @@ class DSAMockModelRunner(ModelRunner):
         fp8_kv_cache: bool = False,
     ):
         pool_batch_size = runner_batch_size or case.batch_size
+        self.init_component_defaults()
+        self.init_deferred_component_defaults()
+        self.init_startup_observability()
         self.device = device
         self.dtype = dtype
         # `kv_cache_dtype` is the dtype the *storage* uses. For FP8 KV
@@ -314,9 +318,10 @@ class DSAMockModelRunner(ModelRunner):
         else:
             spec_num_draft_tokens = 0
         self.gpu_id = 0
-        self.canary_manager = None
+        self.spec_algorithm = SpeculativeAlgorithm.NONE
         self.page_size = case.page_size
         self.model_config = model_config
+        self.model = None
         self.tp_size = 1
         self._kernel_warmed_up = True
         self.dp_size = 1
@@ -408,6 +413,7 @@ class DSAMockModelRunner(ModelRunner):
         self.hisparse_coordinator = None
         self.init_new_workspace = False
         self.is_hybrid_swa = False
+        self.sliding_window_size = None
         self.use_mla_backend = True
 
     @property

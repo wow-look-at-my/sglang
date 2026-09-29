@@ -1,0 +1,18 @@
+{
+	"name": "init-order-check",
+	"private": true,
+	"type": "module",
+	"description": "Fails when an __init__ step reads a self attribute that no earlier step assigned.",
+	"scripts": {
+		"check": "node src/main.ts",
+		"test": "tsc -p tsconfig.json && node --test 'test/**/*.test.ts'"
+	},
+	"dependencies": {
+		"tree-sitter-python": "0.25.0",
+		"web-tree-sitter": "0.27.0"
+	},
+	"devDependencies": {
+		"@types/node": "22.19.1",
+		"typescript": "5.9.3"
+	}
+}

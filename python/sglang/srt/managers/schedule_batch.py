@@ -1160,6 +1160,8 @@ class Req(ReqDllmMixin):
         # 3: last token
         self.surr_offset = None  # Surrounding offset to defeat the cleanup algorithm
         self.read_offset = None
+        self.surr_and_decode_ids: Optional[List[int]] = None
+        self.cur_decode_ids_len = 0
         self.decoded_text = ""
 
         # For multimodal inputs
@@ -3559,10 +3561,6 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         self.mamba_cow_src_indices = None
         self.mamba_cow_dst_indices = None
         self.mamba_clear_indices = None
-
-        # Clear context parallel metadata - CP is only for prefill, not decode
-        if hasattr(self, "attn_cp_metadata") and self.attn_cp_metadata is not None:
-            self.attn_cp_metadata = None
 
         if not self.spec_algorithm.is_none():
             # Spec decoding owns decode preparation (allocation, seq-lens bookkeeping).

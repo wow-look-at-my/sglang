@@ -103,6 +103,12 @@ class FlashAttentionForwardSm120(FlashAttentionForwardBase):
             assert rel_extent_padded >= 128
             assert rel_extent_padded % 128 == 0
         self.bias_n_max = rel_extent_padded // self.tile_n if has_bias else 0
+        # Set at JIT trace time by __call__ and _setup_attributes.
+        self.num_qk_threads = None
+        self.sBias_layout = None
+        self.tma_copy_bytes_K = None
+        self.tma_copy_bytes_V = None
+        self.tma_copy_bytes_Bias = None
 
     @cute.jit
     def _get_n_block_min_max(

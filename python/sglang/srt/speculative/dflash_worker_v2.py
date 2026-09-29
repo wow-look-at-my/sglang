@@ -388,6 +388,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         self._warned_sampling_fallback = False
         self._draft_probs_buf = None
         self._logged_first_verify = False
+        self._logged_padding_trim = False
         self._full_embed_gpu: Optional[torch.Tensor] = None
         # Under dp attention, peer DP ranks run different (idle) paths, so
         # spec broadcasts must stay within the attn-TP group.
@@ -829,7 +830,7 @@ class DFlashWorkerV2(BaseSpecWorker):
                 device=self.device,
                 sampling_enabled=self._selector_sampling_enabled,
             )
-        if not hasattr(lm_head, "weight"):
+        if lm_head.weight is None:
             return _eager("quantized lm_head has no dense weight")
         if not is_dense_head_weight(lm_head.weight):
             # Quantized lm_head (FP8/INT) would break the static matmul.
@@ -1767,7 +1768,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         # requests' cache slots.
         expected_tokens = int(cache_loc.numel())
         if num_tokens > expected_tokens:
-            if not getattr(self, "_logged_padding_trim", False):
+            if not self._logged_padding_trim:
                 logger.warning(
                     "DFLASH target_hidden has %d trailing padding row(s); trimming "
                     "to cache_loc length=%d (target_hidden=%d). Logged once per worker.",
@@ -2365,7 +2366,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         )
         lm_head = unwrap_lora_layer(getattr(target_model, "lm_head", None))
         if lm_head is None or not (
-            hasattr(lm_head, "weight")
+            lm_head.weight is not None
             or callable(getattr(getattr(lm_head, "quant_method", None), "apply", None))
         ):
             raise RuntimeError(

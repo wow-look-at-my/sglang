@@ -61,6 +61,18 @@ _KNOWN_BROKEN_AUTOMODEL_ERROR = "Could not find VoxtralRealtimeTextModel"
 
 
 class LlavaBaseForCausalLM(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.vision_tower = None
+        self.vision_feature_layer = None
+        self.vision_feature_select_strategy = None
+        self.image_size = None
+        self.patch_size = None
+        self.mm_patch_merge_type = None
+        self.image_aspect_ratio = None
+        self.image_grid_pinpoints = None
+        self.image_feature_len = None
+
     @staticmethod
     def _infer_image_aspect_ratio(mm_items):
         """Determine image_aspect_ratio from processor metadata or item count."""

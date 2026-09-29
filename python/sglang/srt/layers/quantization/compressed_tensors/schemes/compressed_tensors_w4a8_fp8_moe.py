@@ -97,6 +97,18 @@ class CompressedTensorsW4AFP8MoE(CompressedTensorsMoEScheme):
         ), (
             f"W4AFP8MoE requires pack-quantized format, got {self.quant_config.quant_format}"
         )
+        self.moe_runner_config = None
+        self.a_strides1 = None
+        self.c_strides1 = None
+        self.a_strides2 = None
+        self.c_strides2 = None
+        self.b_strides1 = None
+        self.s_strides13 = None
+        self.b_strides2 = None
+        self.s_strides2 = None
+        self.expert_offsets = None
+        self.problem_sizes1 = None
+        self.problem_sizes2 = None
 
     @classmethod
     def get_min_capability(cls) -> int:

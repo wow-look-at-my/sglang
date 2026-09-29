@@ -1604,6 +1604,7 @@ class MoriKVSender(CommonKVSender):
         )
         self.conclude_state: Optional[KVPoll] = None
         self.init_time = time.time()
+        self._early_send_wait_event = None
 
     def send(
         self,
@@ -1628,7 +1629,7 @@ class MoriKVSender(CommonKVSender):
             else None
         )
         self._record_transfer_indices(kv_indices, transfer_state_indices)
-        wait_event = getattr(self, "_early_send_wait_event", None)
+        wait_event = self._early_send_wait_event
         self._early_send_wait_event = None
 
         if not is_last_chunk:

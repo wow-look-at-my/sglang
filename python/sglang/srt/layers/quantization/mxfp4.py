@@ -427,6 +427,20 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
                     "or SM120."
                 )
 
+        self.num_experts: Optional[int] = None
+        self.hidden_size: Optional[int] = None
+        self.intermediate_size_per_partition: Optional[int] = None
+        self.hidden_pad = 0
+        self.intermediate_pad = 0
+        self._padded_intermediate: Optional[int] = None
+        self._padded_hidden: Optional[int] = None
+        self._unpadded_hidden: Optional[int] = None
+        self.w13_precision_config = None
+        self.w2_precision_config = None
+        self.w13_weight_triton_tensor: Optional[torch.Tensor] = None
+        self.w2_weight_triton_tensor: Optional[torch.Tensor] = None
+        self.moe_runner_config: Optional[MoeRunnerConfig] = None
+
     def create_weights(
         self,
         layer: torch.nn.Module,
@@ -1716,8 +1730,8 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
                 ),
                 w13_bias=getattr(layer, "w13_weight_bias", None),
                 w2_bias=getattr(layer, "w2_weight_bias", None),
-                w13_precision_config=getattr(self, "w13_precision_config", None),
-                w2_precision_config=getattr(self, "w2_precision_config", None),
+                w13_precision_config=self.w13_precision_config,
+                w2_precision_config=self.w2_precision_config,
             )
         else:
             quant_info = TritonMoeQuantInfo(

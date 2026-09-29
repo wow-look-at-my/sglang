@@ -1188,6 +1188,7 @@ class MQALayer(MqaAttentionBase):
             and self.wo_a.weight.shape == (self.n_local_groups * self.o_lora_rank, 4096)
             and (self.n_local_groups, self.o_lora_rank) == (2, 1024)
         )
+        self._accepts_mxfp8_swizzled_input = None
 
         # KV cache write is always fused into the K kernel
         # (`_compute_kv_to_cache`), so the legacy "overlap store cache" flag
@@ -1224,9 +1225,8 @@ class MQALayer(MqaAttentionBase):
 
     def accepts_mxfp8_swizzled_input(self) -> bool:
         """Whether the first projection consumes a 128x4 MXFP8 activation tuple."""
-        cached = getattr(self, "_accepts_mxfp8_swizzled_input", None)
-        if cached is not None:
-            return cached
+        if self._accepts_mxfp8_swizzled_input is not None:
+            return self._accepts_mxfp8_swizzled_input
         if self.fuse_wqa_wkv:
             linears = [getattr(self, "wqkv_a", None)]
         else:
@@ -2690,6 +2690,8 @@ class DeepseekV4DecoderLayer(nn.Module):
             )
         self._input_layernorm_weight_bf16 = None
         self._post_attention_layernorm_weight_bf16 = None
+        self._hc_attn_tf32_parts = self._hc_ffn_tf32_parts = None
+        self._hc_attn_bf16_parts = self._hc_ffn_bf16_parts = None
 
     def _build_self_attn(
         self,
@@ -3319,11 +3321,11 @@ class DeepseekV4DecoderLayer(nn.Module):
                     and not is_batch_invariant_mode_enabled()
                 ):
                     if hc_fn is self.hc_attn_fn:
-                        parts = getattr(self, "_hc_attn_tf32_parts", None)
-                        bf16_parts = getattr(self, "_hc_attn_bf16_parts", None)
+                        parts = self._hc_attn_tf32_parts
+                        bf16_parts = self._hc_attn_bf16_parts
                     elif hc_fn is self.hc_ffn_fn:
-                        parts = getattr(self, "_hc_ffn_tf32_parts", None)
-                        bf16_parts = getattr(self, "_hc_ffn_bf16_parts", None)
+                        parts = self._hc_ffn_tf32_parts
+                        bf16_parts = self._hc_ffn_bf16_parts
                 if bf16_parts is not None and 4096 <= x_flat.shape[0] <= 65536:
                     from sglang.kernels.ops.layernorm.mhc import (
                         hc_mix_stats_sinkhorn_bf16x3,

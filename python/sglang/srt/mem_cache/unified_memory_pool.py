@@ -994,6 +994,7 @@ class UnifiedMambaPool(MambaPool):
         self.replayssm_spec_fold = False
         self.replayssm_cache_base = None
         self.replayssm_is_flush = None
+        self.replayssm_spec_write_pos = None
         self.debug_memory_pool = False
         self.conv_shard_groups = None
         self.conv_slice_axis = spec.conv_slice_axis
@@ -1011,6 +1012,8 @@ class UnifiedMambaPool(MambaPool):
         conv_state_shape = spec.conv_state_shapes
         conv_dtype = spec.conv_dtype
         ssm_dtype = spec.temporal_dtype
+        self._raw = None
+        self._intermediate_conv_window_phys = []
         if speculative_num_draft_tokens is not None:
             with self.memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE):
                 intermediate_ssm_state_cache = torch.zeros(
@@ -1039,6 +1042,7 @@ class UnifiedMambaPool(MambaPool):
                     )
                     for cshape in conv_state_shape
                 ]
+            self._intermediate_conv_window_phys = intermediate_conv_window_cache
             self.mamba_cache = self.SpeculativeState(
                 conv=list(conv_views),
                 temporal=temporal_view,
@@ -2031,6 +2035,18 @@ class UnifiedSWAKVPool(SWAKVPool):
         # disagg/nvlink disabled; keep attrs present to avoid AttributeError.
         self.enable_custom_mem_pool = False
         self.custom_mem_pool = None
+        self.kernel_page_blocks = 1
+        self.kernel_page_stride = page_size
+        self.store_dtype = full_spec.store_dtype
+        self.end_layer = end_layer if end_layer is not None else self.layer_num - 1
+        self.allocation_label = None
+        self.memory_saver_adapter = TorchMemorySaverAdapter.create(
+            enable=enable_memory_saver
+        )
+        self.cpu_offloading_chunk_size = 8192
+        self.dsa_kv_cache_store_fp8 = False
+        self.kv_cache_dim = None
+        self.index_head_dim = None
 
         # {global_layer_id: (per-pool index, is_swa_layer)}
         self.layers_mapping: Dict[int, Tuple[int, bool]] = {}

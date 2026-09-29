@@ -171,6 +171,12 @@ class UnifiedSWAAllocatorBase(SWATokenToKVPoolAllocator):
         self.free_group = None
         self.free_page_reps_group: Optional[List[torch.Tensor]] = None
         self.full_free_group: List[torch.Tensor] = []
+        self.swa_free_group: List[torch.Tensor] = []
+        self.swa_page_ids_group: List[torch.Tensor] = []
+        self._req_to_token_pool = None
+        self._swa_ring_cost = 0
+        # Virtual ids translate through the allocators, not a flat mapping.
+        self.full_to_swa_index_mapping: Optional[torch.Tensor] = None
         # Empty (not None) for the leak checker.
         self.free_pages = torch.empty(0, dtype=torch.int64, device=device)
         self.release_pages = torch.empty(0, dtype=torch.int64, device=device)

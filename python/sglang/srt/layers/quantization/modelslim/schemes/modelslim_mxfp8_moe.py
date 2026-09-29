@@ -52,6 +52,7 @@ class ModelSlimMXFP8MoEScheme(ModelSlimMoEScheme):
         self.quant_config = quant_config
         self.weight_prefix = weight_prefix
         self.kernel = NPUMXFP8MoEMethod(weight_prefix)
+        self.num_experts = None
 
     def create_weights(
         self,

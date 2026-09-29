@@ -57,6 +57,10 @@ class LMCacheUnifiedRadixCache(UnifiedRadixCache):
     ) -> None:
         # The parent constructor calls reset() before the connector exists.
         self.lmcache_connector: Optional[UnifiedLMCacheMPConnector] = None
+        self._external_flows: dict[str, LMCacheExternalFlow] = {}
+        self._pending_stores: list[LMCachePendingStore] = []
+        self._pending_store_counts: dict[str, int] = {}
+        self._session_finish_requested: set[str] = set()
         super().__init__(params)
         self._mamba_component = self._find_mamba_component()
         self.lmcache_connector = UnifiedLMCacheMPConnector(
@@ -75,11 +79,7 @@ class LMCacheUnifiedRadixCache(UnifiedRadixCache):
             mamba_component=self._mamba_component,
             sliding_window_size=self._sliding_window_size,
         )
-        self._external_flows: dict[str, LMCacheExternalFlow] = {}
         self._forward_stream = forward_stream
-        self._pending_stores: list[LMCachePendingStore] = []
-        self._pending_store_counts: dict[str, int] = {}
-        self._session_finish_requested: set[str] = set()
         self._lmcache_closed = False
         atexit.register(self.shutdown)
 
@@ -422,7 +422,6 @@ class LMCacheUnifiedRadixCache(UnifiedRadixCache):
             self._pending_stores.clear()
             self._pending_store_counts.clear()
             self._session_finish_requested.clear()
-            self.prefetch_loaded_tokens_by_reqid.clear()
             connector.end_all_sessions()
         super().reset()
 

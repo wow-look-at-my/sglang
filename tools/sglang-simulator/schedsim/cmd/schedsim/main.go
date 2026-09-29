@@ -4,17 +4,26 @@
 // Usage:
 //
 //	go run ./cmd/schedsim                 # embedded log at internal/trace/live_log.txt
-//	go run ./cmd/schedsim -log FILE       # a different log
+//	go run ./cmd/schedsim -log FILE       # a different log, bare or production format
 //	go run ./cmd/schedsim -chunk-size 2048 -prefill-share 0.5
+//	go run ./cmd/schedsim -log FILE -replay-boots 4 -replay-seconds 0
+//
+// A production log (timestamped lines, several boots) adds three sections:
+// the boots it holds, every cold prompt with its measured stall beside the
+// policies, and a replay of each stalled boot's own traffic through the
+// engine. docs/replaying-a-serving-log.md describes them.
 package main
 
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"time"
 
 	"schedsim/internal/report"
 	"schedsim/internal/sched"
+	"schedsim/internal/sim"
 	"schedsim/internal/trace"
 )
 
@@ -26,6 +35,7 @@ func main() {
 	decodePerReq := flag.Float64("decode-per-req", 0.0, "ASSUMED: fractional decode cost added per extra running request")
 	interference := flag.Float64("prefill-interference", 0.0, "ASSUMED: fractional prefill slowdown from sharing the GPU with decode")
 	policy := registerPolicyFlags(flag.CommandLine)
+	replay := registerReplayFlags(flag.CommandLine)
 	flag.Parse()
 
 	logName, text := "internal/trace/live_log.txt (embedded)", trace.EmbeddedLog
@@ -37,15 +47,27 @@ func main() {
 		logName, text = *logPath, string(b)
 	}
 
-	steps, err := trace.Parse(text)
+	boots, err := trace.ParseBoots(text)
 	if err != nil {
 		fail("parse log: %v", err)
 	}
-	metrics := trace.Summarize(steps, *chunkSize)
-	if metrics.ColdStart < 0 {
+	// The single-window report models the longest cold prompt in the log,
+	// taken within one boot so a restart never splices two prompts together.
+	anchor := longestRunBoot(boots, *chunkSize)
+	if anchor < 0 {
 		fail("no %d-token cold prefill stretch found in %s", *chunkSize, logName)
 	}
+	steps := boots[anchor].Steps
+	metrics := boots[anchor].Summarize(*chunkSize)
 	work := sched.WorkloadFromLog(steps, metrics, *chunkSize)
+	var incident *report.Incident
+	if *logPath == "" {
+		incident = report.EmbeddedIncident
+	}
+	pageSize := PageSize
+	if boots[anchor].ArgsKnown && boots[anchor].Args.PageSize > 0 {
+		pageSize = boots[anchor].Args.PageSize
+	}
 
 	params := work.Params(sched.PolicyTimeBalance)
 	params.PrefillShare = *prefillShare
@@ -69,7 +91,8 @@ func main() {
 		LogName:       logName,
 		ColdFirstLine: steps[metrics.ColdStart].Line,
 		ColdLastLine:  steps[metrics.ColdEnd-1].Line,
-		Fidelities:    report.DefaultFidelities(metrics),
+		Fidelities:    report.DefaultFidelities(metrics, incident),
+		Incident:      incident,
 	}
 	if work.RunningReqs != metrics.RunningDecode {
 		in.Params.RunningReqs = work.RunningReqs
@@ -119,11 +142,78 @@ func main() {
 	report.Write(os.Stdout, in)
 	fmt.Fprintln(os.Stdout)
 	report.Summary(os.Stdout, oldRes, newRes, revisedRes)
-	printPolicies(os.Stdout, trace.Calibrate(steps, *chunkSize, PageSize), policy)
+
+	if len(boots) > 1 || boots[0].Timestamped() {
+		printBoots(os.Stdout, boots, *chunkSize)
+	}
+	paramsFor := func(w sched.Workload, p sched.Policy) sched.Params {
+		q := w.Params(p)
+		q.PrefillShare = *prefillShare
+		q.DecodePerReqFraction = *decodePerReq
+		q.PrefillInterference = *interference
+		return q
+	}
+	eps := collectEpisodes(boots, *chunkSize, paramsFor)
+	if len(eps) > 1 {
+		printEpisodes(os.Stdout, boots, eps, *chunkSize)
+	}
+
+	cal, calRep := trace.CalibrateBoots(boots, *chunkSize, pageSize)
+	fmt.Fprintf(os.Stdout, "\nCalibration: %s\n", calRep)
+	if replay.on && boots[anchor].Timestamped() {
+		printReplay(os.Stdout, boots, sim.NewCost(cal), *chunkSize, replay, policy.workers)
+	}
+	printPolicies(os.Stdout, cal, steps, policy)
 }
 
-// PageSize is the deployment's page_size, which the log's server arguments fix at 64.
+// PageSize is the page_size to assume when the log carries no server_args
+// line to read it from.
 const PageSize = 64
+
+// longestRunBoot is the boot holding the longest run of cold chunks, or -1.
+func longestRunBoot(boots []trace.Boot, chunkSize int) int {
+	best, bestLen := -1, 0
+	for i := range boots {
+		for _, r := range boots[i].ColdRunsAll(chunkSize) {
+			if r.Chunks() > bestLen {
+				best, bestLen = i, r.Chunks()
+			}
+		}
+	}
+	return best
+}
+
+// printBoots lists the process lifetimes the log holds, with what each one
+// measured: its stalls and its serving-time kernel compiles.
+func printBoots(w io.Writer, boots []trace.Boot, chunkSize int) {
+	fmt.Fprintf(w, "\n=== Boots in the log ===\n\n")
+	fmt.Fprintf(w, "  %-4s %-16s %-15s %-15s %-7s %6s %5s %8s %6s %8s %5s %7s\n",
+		"boot", "worker", "start", "end", "ended", "steps", "cold", "stalls>5", "sum s", "longest", "jit", "jit s")
+	for _, b := range boots {
+		stalls := b.Stalls(5)
+		var sum, longest, jit float64
+		for _, s := range stalls {
+			sum += s.Seconds
+			longest = maxF(longest, s.Seconds)
+		}
+		for _, j := range b.JITCompiles {
+			jit += j.Seconds
+		}
+		cold := len(b.PrefillStretches(chunkSize, minEpisodeChunks))
+		fmt.Fprintf(w, "  %-4d %-16s %-15s %-15s %-7s %6d %5d %8d %6.0f %8.1f %5d %7.1f\n",
+			b.Index, b.Worker, stamp(b.Start), stamp(b.End), b.EndedBy, len(b.Steps), cold,
+			len(stalls), sum, longest, len(b.JITCompiles), jit)
+	}
+	fmt.Fprintf(w, "  'cold' counts prefill stretches of %d+ cold chunks; 'stalls>5' the windows where decode stopped\n", minEpisodeChunks)
+	fmt.Fprintf(w, "  for over 5 s with requests running; 'jit' the kernels compiled after serving started.\n")
+}
+
+func stamp(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Format("01-02T15:04:05")
+}
 
 func splitLines(s string) []string {
 	var out []string

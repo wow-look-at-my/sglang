@@ -1248,6 +1248,7 @@ class CompressedTensorsFusedMoEMethod(FusedMoEMethodBase):
     def __init__(self, quantization_config: CompressedTensorsConfig):
         self.quantization_config = quantization_config
         self.quant_config = quantization_config
+        self.load_up_proj_weight_first = False
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         layer.scheme.process_weights_after_loading(layer)

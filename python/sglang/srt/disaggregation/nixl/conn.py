@@ -3212,6 +3212,7 @@ class NixlKVReceiver(CommonKVReceiver):
         self.started_transfer = False
         super().__init__(mgr, bootstrap_addr, bootstrap_room)
         self.init_time = None
+        self.chunk_staging_infos = []
 
     def clear(self) -> None:
         super().clear()

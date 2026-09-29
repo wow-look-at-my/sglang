@@ -59,6 +59,7 @@ class QuarkInt4Fp8Config(QuantizationConfig):
         is_checkpoint_fp8_serialized: bool = False,
         activation_scheme: str = "dynamic",
     ):
+        super().__init__()
         self.is_checkpoint_fp8_serialized = is_checkpoint_fp8_serialized
         self.activation_scheme = activation_scheme
 
@@ -139,6 +140,9 @@ class QuarkInt4Fp8MoEMethod(FusedMoEMethodBase):
         self.online_quant_progress_bar = self.quant_config.online_quant_progress_bar
 
         self.tp_rank = get_parallel().tp_rank
+        self.w13_shard_size = None
+        self.w2_shard_size = None
+        self.moe_runner_config = None
 
         if not _is_hip:
             raise NotImplementedError(
