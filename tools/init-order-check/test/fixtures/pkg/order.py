@@ -292,6 +292,34 @@ class AlwaysRaises:
         self.late = 1
 
 
+class NamedSetter:
+    def __init__(self):
+        self._set_field("_status", 0)
+        self.copy = self._status
+
+    def _set_field(self, name, value):
+        if value == getattr(self, name, None):
+            return
+        setattr(self, name, value)
+
+    def pause(self):
+        self._paused = True
+        self._status = 1
+
+
+class RaisesOnlyUnderCondition:
+    def __init__(self, fast):
+        if fast:
+            self.build()
+        self.after = self.late
+
+    def build(self):
+        raise NotImplementedError
+
+    def load(self):
+        self.late = 1
+
+
 @dataclass
 class Record(Resettable):
     size: int

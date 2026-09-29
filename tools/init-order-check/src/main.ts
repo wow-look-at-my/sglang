@@ -55,7 +55,7 @@ for (const file of files) {
 			continue;
 		}
 		checked++;
-		if (report.dynamic) partial.push(`${rel(report.classFile)}:${report.className}`);
+		if (report.dynamic) partial.push(`${rel(report.classFile)}:${report.className}: ${report.partialReason}`);
 		for (const f of report.findings) {
 			const where = f.assignedAt ? `first assigned at ${rel(f.assignedAt.file)}:${f.assignedAt.line} in ${f.assignedAt.method}` : "never assigned";
 			add(report, f.file, f.line, `self.${f.attr} is read before ${report.className}.__init__ assigns it (${where}; via ${f.chain.join(" -> ")})`);

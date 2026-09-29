@@ -49,6 +49,8 @@ const CASES: Record<string, Expect> = {
 	OverridesClear: { file: "pkg/order.py", reads: [], uninitialized: [] },
 	ExplicitOther: { file: "pkg/order.py", reads: [], uninitialized: [] },
 	AlwaysRaises: { file: "pkg/order.py", reads: [], uninitialized: [], dynamic: true },
+	NamedSetter: { file: "pkg/order.py", reads: [], uninitialized: ["_paused"] },
+	RaisesOnlyUnderCondition: { file: "pkg/order.py", reads: ["late"], uninitialized: ["late"] },
 	Record: { file: "pkg/order.py", reads: [], uninitialized: ["free", "ready"] },
 	UsesCycle: { file: "pkg/order.py", reads: [], uninitialized: [] },
 	OnCycle: { file: "pkg/cycle_a.py", reads: ["second"], uninitialized: [] },

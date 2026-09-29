@@ -40,6 +40,7 @@ export interface Report {
 	opaque: boolean;
 	// True when the constructor path can assign any name; reads after that point are not reported.
 	dynamic: boolean;
+	partialReason: string | undefined;
 }
 
 interface Method {
@@ -381,6 +382,8 @@ interface Context {
 	method: Method;
 	selfName: string;
 	chain: string[];
+	// Parameters bound to a string literal at the call, e.g. name="_server_status".
+	literals: Map<string, string>;
 }
 
 function cloneState(s: State): State {
@@ -446,6 +449,14 @@ class Simulator {
 	private opaque: boolean;
 	// Set once the constructor path can assign any name. Later reads and omissions are then trusted.
 	private dynamic = false;
+	private partialReason: string | undefined;
+	// Nesting of conditional code on the current path; a raise inside it does not end the constructor.
+	private branchDepth = 0;
+
+	private markPartial(reason: string): void {
+		this.dynamic = true;
+		this.partialReason ??= reason;
+	}
 
 	constructor(cls: ClassInfo, workspace: Workspace) {
 		this.cls = cls;
@@ -500,6 +511,7 @@ class Simulator {
 			unresolvedBases: this.mro.flatMap((c) => c.unresolvedBases.map((b) => `${c.name}(${b})`)),
 			opaque: this.opaque,
 			dynamic: this.dynamic,
+			partialReason: this.partialReason,
 		};
 	}
 
@@ -589,7 +601,7 @@ class Simulator {
 					else out.add(attr);
 				});
 			} else if (node.type === "call") {
-				const callee = this.calleeOf(node, { method: m, selfName, chain: [] });
+				const callee = this.calleeOf(node, { method: m, selfName, chain: [], literals: new Map() });
 				if (callee && !callee.deferred) for (const w of this.writesOf(callee)) out.add(w);
 				const attr = namedWrite(node, selfName);
 				if (attr) out.add(attr);
@@ -658,15 +670,16 @@ class Simulator {
 		return helper;
 	}
 
-	private inline(m: Method, state: State, chain: string[]): void {
+	private inline(m: Method, state: State, chain: string[], literals = new Map<string, string>()): void {
 		if (this.stack.includes(m) || !m.selfName || m.deferred) return;
-		if (this.inlined.has(m)) {
+		// A call with bound literals can assign a different name each time, so it is walked every time.
+		if (this.inlined.has(m) && literals.size === 0) {
 			for (const w of this.writesOf(m)) state.assigned.add(w);
 			return;
 		}
 		this.inlined.add(m);
 		this.stack.push(m);
-		const ctx: Context = { method: m, selfName: m.selfName, chain: [...chain, this.label(m)] };
+		const ctx: Context = { method: m, selfName: m.selfName, chain: [...chain, this.label(m)], literals };
 		this.visitBlock(field(m.node, "body")!, state, ctx);
 		this.stack.pop();
 	}
@@ -676,12 +689,24 @@ class Simulator {
 			this.visitStatement(stmt, state, ctx);
 			if (stmt.type !== "raise_statement") continue;
 			// A raise at a method body's top level means the constructor never returns.
-			if (block.id === field(ctx.method.node, "body")?.id) this.dynamic = true;
+			if (this.branchDepth === 0 && block.id === field(ctx.method.node, "body")?.id) {
+				this.markPartial(`${ctx.chain.join(" -> ")} always raises`);
+			}
 			return;
 		}
 	}
 
 	private visitStatement(node: Node, state: State, ctx: Context): void {
+		const conditional = ["if_statement", "for_statement", "while_statement", "try_statement", "match_statement"].includes(node.type);
+		if (conditional) this.branchDepth++;
+		try {
+			this.visitStatementBody(node, state, ctx);
+		} finally {
+			if (conditional) this.branchDepth--;
+		}
+	}
+
+	private visitStatementBody(node: Node, state: State, ctx: Context): void {
 		switch (node.type) {
 			case "function_definition":
 			case "class_definition":
@@ -808,6 +833,16 @@ class Simulator {
 
 	private visitExpr(node: Node | null, state: State, ctx: Context): void {
 		if (!node) return;
+		const conditional = node.type === "boolean_operator" || node.type === "conditional_expression";
+		if (conditional) this.branchDepth++;
+		try {
+			this.visitExprBody(node, state, ctx);
+		} finally {
+			if (conditional) this.branchDepth--;
+		}
+	}
+
+	private visitExprBody(node: Node, state: State, ctx: Context): void {
 		switch (node.type) {
 			case "lambda":
 				return;
@@ -873,24 +908,38 @@ class Simulator {
 		const fn = field(node, "function")!;
 		const args = callArgs(node);
 		if (fn.type === "identifier" && ["getattr", "hasattr", "setattr"].includes(fn.text) && args[0]?.text === ctx.selfName) {
-			const attr = stringLiteral(args[1]);
+			const attr = stringLiteral(args[1]) ?? (args[1]?.type === "identifier" ? ctx.literals.get(args[1].text) : undefined);
 			if (fn.text === "getattr" && args.length === 2 && attr) this.read(attr, node, state, ctx);
 			for (const arg of args.slice(1)) this.visitExpr(arg, state, ctx);
 			if (fn.text === "setattr" && attr) state.assigned.add(attr);
-			else if (fn.text === "setattr") this.dynamic = true;
+			else if (fn.text === "setattr") this.markPartial(`${ctx.chain.join(" -> ")} calls setattr with a computed name`);
 			return;
 		}
 		const callee = this.calleeOf(node, ctx);
 		if (callee) {
 			for (const arg of args) this.visitExpr(arg, state, ctx);
-			this.inline(callee, state, ctx.chain);
+			this.inline(callee, state, ctx.chain, this.bindLiterals(fn, callee, args, ctx));
 			return;
 		}
-		if (this.opensUnknownScope(fn, args, ctx)) this.dynamic = true;
+		if (this.opensUnknownScope(fn, args, ctx)) this.markPartial(`${ctx.chain.join(" -> ")} calls ${fn.text} past the known MRO`);
 		this.visitExpr(fn, state, ctx);
 		for (const arg of args) this.visitExpr(arg, state, ctx);
 		const registered = namedWrite(node, ctx.selfName);
 		if (registered) state.assigned.add(registered);
+	}
+
+	// For self.m("x", ...), the parameters of m that receive a string literal.
+	private bindLiterals(fn: Node, callee: Method, args: Node[], ctx: Context): Map<string, string> {
+		const out = new Map<string, string>();
+		if (fn.type !== "attribute" || field(fn, "object")?.text !== ctx.selfName) return out;
+		const params = named(field(callee.node, "parameters")!).slice(1).map(paramName);
+		args.forEach((arg, i) => {
+			const value = arg.type === "keyword_argument" ? field(arg, "value") : arg;
+			const name = arg.type === "keyword_argument" ? field(arg, "name")?.text : params[i];
+			const literal = stringLiteral(value ?? undefined) ?? (value?.type === "identifier" ? ctx.literals.get(value.text) : undefined);
+			if (name && literal) out.set(name, literal);
+		});
+		return out;
 	}
 
 	// A super() call with no target in the known MRO goes to whatever class follows a mixin at runtime.
