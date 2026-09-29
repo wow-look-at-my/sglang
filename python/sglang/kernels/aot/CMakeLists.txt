@@ -276,7 +276,11 @@ if (SGL_KERNEL_CUDA_ARCHS)
     message(STATUS "sgl-kernel: building only for ${SGL_KERNEL_CUDA_ARCHS}")
 endif()
 # sgl_kernel/load_utils.py reads this list to refuse a GPU that no built arch runs on.
-string(REPLACE ". " "\n" SGL_KERNEL_CUDA_ARCHS_LINES "${SGL_KERNEL_CUDA_ARCHS}") file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/cuda_archs.txt" "${SGL_KERNEL_CUDA_ARCHS_LINES}\n") install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cuda_archs.txt" DESTINATION sgl_kernel)
+list(JOIN SGL_KERNEL_CUDA_ARCHS "\n" SGL_KERNEL_CUDA_ARCHS_LINES)
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/cuda_archs.txt" "${SGL_KERNEL_CUDA_ARCHS_LINES}\n")
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cuda_archs.txt" DESTINATION sgl_kernel)
 
 # All source files
 # NOTE: Please sort the filenames alphabetically
