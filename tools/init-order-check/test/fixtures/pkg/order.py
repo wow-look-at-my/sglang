@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from torch import nn
@@ -256,6 +257,48 @@ class CommentedParams:
 
     def grow(self):
         self.size = 1
+
+
+class Resettable:
+    def __init__(self):
+        self.ready = True
+
+    def clear(self):
+        self.free = []
+
+
+class OverridesClear(Resettable):
+    """Resettable.clear never runs here, so its fields are not this class's."""
+
+    def clear(self):
+        pass
+
+
+class ExplicitOther:
+    def __init__(self):
+        Resettable.__init__(self)
+        self.copy = self.ready
+
+
+class AlwaysRaises:
+    def __init__(self):
+        self.build()
+        self.after = self.late
+
+    def build(self):
+        raise NotImplementedError
+
+    def load(self):
+        self.late = 1
+
+
+@dataclass
+class Record(Resettable):
+    size: int
+    name: str = ""
+
+    def __post_init__(self):
+        self.total = self.size
 
 
 class UsesCycle:

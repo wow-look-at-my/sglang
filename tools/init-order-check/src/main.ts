@@ -73,7 +73,9 @@ if (json) {
 	for (const p of problems) console.log(`${p.file}:${p.line}: ${p.message}`);
 	console.log(`checked ${checked} classes in ${files.length} files: ${problems.length} problem(s)`);
 	console.log(`not checked: ${opaque} classes with a base outside the repo that may set attributes`);
-	console.log(`checked only up to code that can set any attribute (computed setattr, super() past the MRO): ${partial.length} classes`);
+	console.log(
+		`checked only up to a point the check cannot follow (computed setattr, super() past the MRO, a constructor that always raises): ${partial.length} classes`,
+	);
 	for (const name of partial) console.log(`    ${name}`);
 }
 process.exitCode = problems.length > 0 ? 1 : 0;

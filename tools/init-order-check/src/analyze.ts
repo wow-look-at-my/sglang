@@ -81,6 +81,8 @@ interface ClassInfo {
 	getters: Map<string, Method>;
 	setters: Map<string, Method>;
 	classAttrs: Set<string>;
+	// A @dataclass without its own __init__ gets a generated one: fields, then __post_init__.
+	dataclass: boolean;
 }
 
 type Candidate =
@@ -281,6 +283,7 @@ class Workspace {
 			getters: new Map(),
 			setters: new Map(),
 			classAttrs: new Set(),
+			dataclass: false,
 		};
 		this.classes.set(node, info);
 		const superclasses = field(node, "superclasses");
@@ -294,11 +297,15 @@ class Workspace {
 			info.bases.push(...classes);
 			if (classes.length === 0 && external) info.unresolvedBases.push(base.text);
 		}
-		this.collectClassBody(field(node, "body")!, info);
+		const decorated = node.parent?.type === "decorated_definition" ? node.parent : null;
+		const dataclass = decorated !== null && named(decorated).some((d) => d.type === "decorator" && /\bdataclass\b/.test(d.text));
+		info.dataclass = dataclass;
+		this.collectClassBody(field(node, "body")!, info, dataclass);
 		return info;
 	}
 
-	private collectClassBody(body: Node, info: ClassInfo): void {
+	// In a @dataclass body, `x: T` declares a field that the generated __init__ sets.
+	private collectClassBody(body: Node, info: ClassInfo, dataclass: boolean): void {
 		for (const child of named(body)) {
 			if (child.type === "function_definition") {
 				this.addMethod(info, child, []);
@@ -317,12 +324,12 @@ class Workspace {
 					while (assignment?.type === "assignment") {
 						const left = field(assignment, "left")!;
 						const right = field(assignment, "right");
-						if (left.type === "identifier" && right) info.classAttrs.add(left.text);
+						if (left.type === "identifier" && (right || dataclass)) info.classAttrs.add(left.text);
 						assignment = right;
 					}
 				}
 			} else if (child.type === "if_statement" || child.type === "block" || child.type === "else_clause") {
-				this.collectClassBody(child, info);
+				this.collectClassBody(child, info, dataclass);
 			}
 		}
 	}
@@ -434,6 +441,7 @@ class Simulator {
 	private cls: ClassInfo;
 	private workspace: Workspace;
 	private helpers = new Map<string, Method>();
+	private superCalled: Set<string> | undefined;
 	// A base outside the repo, such as nn.Conv2d, can set any attribute; the check then trusts every read.
 	private opaque: boolean;
 	// Set once the constructor path can assign any name. Later reads and omissions are then trusted.
@@ -445,19 +453,39 @@ class Simulator {
 		this.mro = linearize(cls);
 		this.opaque = this.mro.some((c) => c.unresolvedBases.some((b) => !EMPTY_BASES.test(b)));
 		for (const c of this.mro) {
-			for (const m of [...c.methods.values(), ...c.getters.values(), ...c.setters.values()]) this.collectKnown(m);
+			for (const m of [...c.methods.values(), ...c.getters.values(), ...c.setters.values()]) {
+				if (this.runs(m)) this.collectKnown(m);
+			}
 		}
 	}
 
+	// A base method that this class overrides never runs, unless some override reaches it through super().
+	private runs(m: Method): boolean {
+		if (!m.cls.methods.has(m.name) || this.findMethod(m.name) === m) return true;
+		this.superCalled ??= new Set(
+			this.mro.flatMap((c) => [...c.methods.values()].flatMap((x) => [...x.node.text.matchAll(/super\([^)]*\)\s*\.\s*(\w+)\s*\(/g)].map((r) => r[1]!))),
+		);
+		return this.superCalled.has(m.name);
+	}
+
+	private generatedInit(): boolean {
+		return this.cls.dataclass && !this.cls.methods.has("__init__");
+	}
+
 	hasInit(): boolean {
-		return this.findMethod("__init__") !== undefined;
+		return this.generatedInit() || this.findMethod("__init__") !== undefined;
 	}
 
 	run(): Report {
-		const init = this.findMethod("__init__");
-		if (!init) throw new Error(`${this.cls.file}: ${this.cls.name} has no __init__ in its resolved MRO`);
 		const state: State = { assigned: new Set(), guarded: new Set() };
-		this.inline(init, state, []);
+		if (this.generatedInit()) {
+			const post = this.findMethod("__post_init__");
+			if (post) this.inline(post, state, []);
+		} else {
+			const init = this.findMethod("__init__");
+			if (!init) throw new Error(`${this.cls.file}: ${this.cls.name} has no __init__ in its resolved MRO`);
+			this.inline(init, state, []);
+		}
 		const uninitialized: Uninitialized[] = [];
 		for (const [attr, assignedAt] of this.known) {
 			if (this.opaque || this.dynamic || state.assigned.has(attr) || this.isClassLevel(attr) || this.findSetter(attr)) continue;
@@ -594,6 +622,9 @@ class Simulator {
 					if (m) return m;
 				}
 			}
+			// Other.__init__(self, ...) runs a class that is not a base on this instance.
+			const other = this.workspace.resolveClass(ctx.method.file, obj.text).classes[0];
+			if (other) for (const c of linearize(other)) if (c.methods.has(name)) return c.methods.get(name);
 		}
 		return undefined;
 	}
@@ -641,7 +672,13 @@ class Simulator {
 	}
 
 	private visitBlock(block: Node, state: State, ctx: Context): void {
-		for (const stmt of named(block)) this.visitStatement(stmt, state, ctx);
+		for (const stmt of named(block)) {
+			this.visitStatement(stmt, state, ctx);
+			if (stmt.type !== "raise_statement") continue;
+			// A raise at a method body's top level means the constructor never returns.
+			if (block.id === field(ctx.method.node, "body")?.id) this.dynamic = true;
+			return;
+		}
 	}
 
 	private visitStatement(node: Node, state: State, ctx: Context): void {
