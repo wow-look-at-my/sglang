@@ -196,6 +196,16 @@ class MultiLayerEagleDraftWorker(EagleDraftWorkerBase):
         self.tree_mask_mode = default_tree_mask_mode()
         self.plan_stream, self.plan_stream_ctx = get_plan_stream(self.device)
 
+        self.req_to_token_pool = None
+        self.token_to_kv_pool_allocator = None
+        self.draft_extend_num_front_tokens = 0
+        self.draft_extend_num_warmup_tokens = 0
+        self.boundary_kv_stash_tokens = None
+        self.boundary_kv_stash_hiddens = None
+        self.boundary_kv_stash_valid_lens = None
+        self.cuda_graph_runner = None
+        self.cuda_graph_runner_for_draft_extend = None
+
     @property
     def draft_runners(self) -> List[ModelRunner]:
         # One runner per draft step (len == speculative_num_steps).

@@ -388,6 +388,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         self._warned_sampling_fallback = False
         self._draft_probs_buf = None
         self._logged_first_verify = False
+        self._logged_padding_trim = False
         self._full_embed_gpu: Optional[torch.Tensor] = None
         # Under dp attention, peer DP ranks run different (idle) paths, so
         # spec broadcasts must stay within the attn-TP group.
@@ -1767,7 +1768,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         # requests' cache slots.
         expected_tokens = int(cache_loc.numel())
         if num_tokens > expected_tokens:
-            if not getattr(self, "_logged_padding_trim", False):
+            if not self._logged_padding_trim:
                 logger.warning(
                     "DFLASH target_hidden has %d trailing padding row(s); trimming "
                     "to cache_loc length=%d (target_hidden=%d). Logged once per worker.",

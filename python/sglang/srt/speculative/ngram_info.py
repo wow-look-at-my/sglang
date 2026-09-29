@@ -70,7 +70,7 @@ class NgramVerifyInput(SpecInput):
         paged_kernel_lens = paged_kernel_lens + self.draft_token_num
         cum_kv_seq_len[1:] = torch.cumsum(paged_kernel_lens, dim=0)
 
-        self.qo_indptr = (
+        qo_indptr = (
             torch.arange(0, bs + 1, dtype=torch.int32, device=self.device)
             * self.draft_token_num
         )
@@ -111,7 +111,7 @@ class NgramVerifyInput(SpecInput):
                 dim=0,
             )
 
-        return kv_indices, cum_kv_seq_len, self.qo_indptr, custom_mask
+        return kv_indices, cum_kv_seq_len, qo_indptr, custom_mask
 
     def filter_batch(
         self,
