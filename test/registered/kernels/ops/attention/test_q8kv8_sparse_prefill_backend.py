@@ -183,6 +183,7 @@ def _make_backend(
     backend.softmax_scale = 512**-0.5
     backend.head_dim_v = 512
     backend.dsv4_prefill_backend = dsv4_prefill_backend
+    backend._q8kv8_sparse_prefill_log_emitted = False
     return backend
 
 
