@@ -116,8 +116,9 @@ function errorNodes(node: Node, out: Node[]): void {
 	for (const child of node.children) if (child) errorNodes(child, out);
 }
 
+// Named children without comments, which tree-sitter places anywhere, even inside a parameter list.
 function named(node: Node): Node[] {
-	return node.namedChildren.filter((c): c is Node => c !== null);
+	return node.namedChildren.filter((c): c is Node => c !== null && c.type !== "comment");
 }
 
 function field(node: Node, name: string): Node | null {
@@ -855,12 +856,15 @@ class Simulator {
 		if (registered) state.assigned.add(registered);
 	}
 
-	// A mixin forwards *args to whatever class follows it at runtime, which the check cannot see.
+	// A super() call with no target in the known MRO goes to whatever class follows a mixin at runtime.
 	private opensUnknownScope(fn: Node, args: Node[], ctx: Context): boolean {
 		if (fn.type !== "attribute") return false;
 		const obj = field(fn, "object")!;
 		if (obj.type === "call" && field(obj, "function")?.text === "super") {
-			return args.some((a) => a.type === "list_splat" || a.type === "dictionary_splat");
+			// With no base outside the repo, an unresolved super() call only makes sense in a mixin.
+			const mixin = this.mro.every((c) => c.unresolvedBases.length === 0);
+			const unresolved = this.findMethod(field(fn, "attribute")!.text, ctx.method.cls) === undefined;
+			return (mixin && unresolved) || args.some((a) => a.type === "list_splat" || a.type === "dictionary_splat");
 		}
 		return obj.text === `${ctx.selfName}.__dict__` && field(fn, "attribute")!.text === "update";
 	}

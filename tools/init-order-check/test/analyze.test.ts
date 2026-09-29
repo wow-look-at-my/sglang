@@ -43,6 +43,8 @@ const CASES: Record<string, Expect> = {
 	Diamond: { file: "pkg/order.py", reads: [], uninitialized: [] },
 	HelperFills: { file: "pkg/order.py", reads: [], uninitialized: [] },
 	SwapsClass: { file: "pkg/order.py", reads: [], uninitialized: [] },
+	NoSplatMixin: { file: "pkg/order.py", reads: [], uninitialized: [], dynamic: true },
+	CommentedParams: { file: "pkg/order.py", reads: ["size"], uninitialized: ["size"] },
 	UsesCycle: { file: "pkg/order.py", reads: [], uninitialized: [] },
 	OnCycle: { file: "pkg/cycle_a.py", reads: ["second"], uninitialized: [] },
 	Base: { file: "pkg/base.py", reads: [], uninitialized: [] },

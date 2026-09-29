@@ -42,7 +42,7 @@ interface Problem {
 const problems: Problem[] = [];
 let checked = 0;
 let opaque = 0;
-let partial = 0;
+const partial: string[] = [];
 const add = (report: Report, file: string, line: number, message: string) =>
 	problems.push({ file: rel(file), line, className: report.className, classFile: rel(report.classFile), message });
 
@@ -55,7 +55,7 @@ for (const file of files) {
 			continue;
 		}
 		checked++;
-		if (report.dynamic) partial++;
+		if (report.dynamic) partial.push(`${rel(report.classFile)}:${report.className}`);
 		for (const f of report.findings) {
 			const where = f.assignedAt ? `first assigned at ${rel(f.assignedAt.file)}:${f.assignedAt.line} in ${f.assignedAt.method}` : "never assigned";
 			add(report, f.file, f.line, `self.${f.attr} is read before ${report.className}.__init__ assigns it (${where}; via ${f.chain.join(" -> ")})`);
@@ -73,6 +73,7 @@ if (json) {
 	for (const p of problems) console.log(`${p.file}:${p.line}: ${p.message}`);
 	console.log(`checked ${checked} classes in ${files.length} files: ${problems.length} problem(s)`);
 	console.log(`not checked: ${opaque} classes with a base outside the repo that may set attributes`);
-	console.log(`checked only up to a computed-name assignment: ${partial} classes`);
+	console.log(`checked only up to code that can set any attribute (computed setattr, super() past the MRO): ${partial.length} classes`);
+	for (const name of partial) console.log(`    ${name}`);
 }
 process.exitCode = problems.length > 0 ? 1 : 0;

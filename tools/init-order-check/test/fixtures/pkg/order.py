@@ -238,6 +238,26 @@ class SwapsClass:
         self.__class__ = Ordered
 
 
+class NoSplatMixin:
+    def __init__(self):
+        super().__init__()
+        self.head = self.embed
+
+    def load(self):
+        self.embed = 1
+
+
+class CommentedParams:
+    def __init__(  # pylint: disable-all
+        self,
+        size,
+    ):
+        self.first = self.size
+
+    def grow(self):
+        self.size = 1
+
+
 class UsesCycle:
     def __init__(self, other: "Cycled"):
         self.other = other

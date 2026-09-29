@@ -115,6 +115,8 @@ class FrozenKVMTPCudaGraphRunner(DecodeCudaGraphRunner):
 
         self.capture_forward_mode = ForwardMode.DECODE
         self.capture_hidden_mode = CaptureHiddenMode.LAST
+        self.raw_bs = 0
+        self.bs = 0
 
         # Static capture width.
         self.captured_req_width = resolve_num_tokens_per_req(phase="draft_decode")

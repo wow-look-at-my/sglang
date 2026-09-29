@@ -214,6 +214,11 @@ class MultiLayerEagleDraftExtendCudaGraphRunner(DecodeCudaGraphRunner):
             self.step
         ].get_cuda_graph_seq_len_fill_value()
 
+        self.buffers: Optional[MultiLayerEagleDraftExtendInputBuffers] = None
+        self.backend = None
+        self.raw_bs = 0
+        self.bs = 0
+
     def init_buffers_and_capture(self, buffers: MultiLayerEagleDraftExtendInputBuffers):
         """Attach the shared buffer set and capture this step's graphs."""
         self.buffers = buffers
@@ -542,6 +547,13 @@ class MultiLayerEagleMultiStepDraftExtendCudaGraphRunner:
         self.captured_req_width = 1
         self.num_front_tokens = 0
         self.prune_draft_extend_logits = False
+        self._staged_bs: Optional[int] = None
+        self.seq_lens_cpu: Optional[torch.Tensor] = None
+        self._replay_spec_info = None
+        self.raw_bs = 0
+        self.bs = 0
+        self.raw_num_tokens = 0
+        self.seq_lens_sum = 0
 
         self._init_and_capture()
 
@@ -918,6 +930,7 @@ class OneGraphMultiLayerEagleMultiStepDraftExtendCudaGraphRunner(
     rotates_in_graph = True
 
     def _init_and_capture(self):
+        self._cached = {}
         if self._cuda_graph_disabled():
             self.runners = [None] * self.speculative_num_steps
             return
