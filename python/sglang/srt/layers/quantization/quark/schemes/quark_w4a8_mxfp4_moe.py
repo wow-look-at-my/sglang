@@ -96,6 +96,13 @@ class QuarkW4A8MXFp4MoE(QuarkMoEScheme):
             )
 
         self.with_bias = False
+        self.num_experts: int | None = None
+        self.hidden_pad = 0
+        self.intermediate_pad = 0
+        self.intermediate_size_per_partition: int | None = None
+        self.hidden_size: int | None = None
+        self.moe_runner_config = None
+        self.runner = None
 
     @classmethod
     def get_min_capability(cls) -> int:

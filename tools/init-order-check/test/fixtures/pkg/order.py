@@ -159,6 +159,85 @@ class Buffered(nn.Module):
         self.cache = None
 
 
+class Middle(Base):
+    def __init__(self):
+        super().__init__()
+        self.copy = self.later
+
+    def load(self):
+        self.later = 0
+
+
+class SkipsMiddle(Middle):
+    """super(Middle, self) runs Base.__init__, so Middle's read of `later` never runs."""
+
+    def __init__(self):
+        super(Middle, self).__init__()
+        self.later = 1
+        self.copy = None
+
+
+class NestedSelf:
+    def __init__(self):
+        self.ready = True
+
+    def build(self):
+        def fset(self, value):
+            self._value = value
+
+        class Servicer:
+            def __init__(self):
+                self.collector = None
+
+        return fset, Servicer
+
+
+class DevBase:
+    def __init__(self):
+        self.base_ready = True
+
+
+class ReadsDevice(DevBase):
+    def __init__(self):
+        super().__init__()
+        self.where = self.device
+
+    def move(self):
+        self.device = "cuda"
+
+
+class SetsDevice(DevBase):
+    def __init__(self):
+        self.device = "cpu"
+        super().__init__()
+
+
+class Diamond(ReadsDevice, SetsDevice):
+    """C3 runs SetsDevice between ReadsDevice and DevBase; depth-first order would skip it."""
+
+
+def _fill(store, size):
+    store.size = size
+    store.table = [0] * size
+
+
+class HelperFills:
+    def __init__(self):
+        _fill(self, 4)
+        self.total = self.size + len(self.table)
+
+    def grow(self):
+        self.size += 1
+
+
+class SwapsClass:
+    def __init__(self):
+        self.ready = True
+
+    def demote(self):
+        self.__class__ = Ordered
+
+
 class UsesCycle:
     def __init__(self, other: "Cycled"):
         self.other = other

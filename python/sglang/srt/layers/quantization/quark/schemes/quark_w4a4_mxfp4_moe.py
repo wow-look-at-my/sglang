@@ -101,6 +101,9 @@ class QuarkW4A4MXFp4MoE(QuarkMoEScheme):
 
         self.static_input_scales = not self.input_quant.get("is_dynamic")
         self.with_bias = False
+        self.moe_runner_config: MoeRunnerConfig | None = None
+        self._owns_moe_runner = False
+        self.runner: MoeRunner | None = None
 
         if not self.is_checkpoint_mxfp4_serialized:
             if not is_gfx95_supported():
@@ -821,7 +824,7 @@ class QuarkW4A4MXFp4MoE(QuarkMoEScheme):
         layer.w2_weight = torch.nn.Parameter(qw2_weight, requires_grad=False)
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        if not getattr(self, "_owns_moe_runner", False):
+        if not self._owns_moe_runner:
             raise RuntimeError(
                 "Quark MXFP4 weight preshuffling requires an owned AITER runner."
             )

@@ -107,6 +107,7 @@ class NPUMHATokenToKVPool(MHATokenToKVPool):
         self.use_triton_prefix_kv_cache_store = (
             envs.SGLANG_NPU_USE_TRITON_PREFIX_KV_CACHE_STORE.get()
         )
+        self._debug_prefix_valid_backend: Optional[str] = None
         super().__init__(
             size=size,
             page_size=page_size,
@@ -183,6 +184,12 @@ class NPUMHATokenToKVPool(MHATokenToKVPool):
                     )
                     for i in range(self.layer_num)
                 ]
+        # The NPU paged layout builds no buffer descs and no slot-move pointer tables.
+        self._kv_buffer_descs = None
+        self.k_data_ptrs = None
+        self.v_data_ptrs = None
+        self.data_ptrs = None
+        self.data_strides = None
 
     def get_hicache_transfer_buffers(self):
         """Return contiguous all-layer KV tensors for NPU HiCache IO."""

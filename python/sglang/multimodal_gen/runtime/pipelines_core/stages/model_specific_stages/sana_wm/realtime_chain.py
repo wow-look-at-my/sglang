@@ -133,6 +133,10 @@ class SanaWMRefinerChainState(BaseRealtimeState):
 class SanaWMCondFrameEncodeStage(SanaWMRealtimeStage):
     """Encode the first frame and write the session input snapshot."""
 
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._pipeline_config = None
+
     @torch.no_grad()
     def forward(self, batch: Req, server_args: ServerArgs) -> Req:
         session = self.require_session(batch, context="SANA-WM realtime chain")

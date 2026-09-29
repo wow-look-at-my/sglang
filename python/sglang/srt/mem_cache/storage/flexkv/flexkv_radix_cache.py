@@ -88,6 +88,16 @@ class FlexKVRadixCache(RadixCache):
         attn_tp_group=None,
         attn_cp_group=None,
     ) -> None:
+        # RadixCache.__init__ calls reset(), which reads these.
+        self.flexkv_connector: Optional[FlexKVConnector] = None
+        # Two-phase MP load: stash marker between ``match_prefix`` and
+        # ``init_load_back``.
+        self._load_markers: dict[CacheRequestHandle, _LoadBackMarker] = {}
+        # ``store_kv`` is async — we keep a lock on the source node
+        # until FlexKV signals completion, draining in ``evict`` /
+        # ``check_hicache_events``.
+        self._inflight_store_nodes: dict[CacheRequestHandle, TreeNode] = {}
+        self._node_lock = threading.Lock()
         super().__init__(params)
 
         kvcache = self.token_to_kv_pool_allocator.get_kvcache()
@@ -122,31 +132,20 @@ class FlexKVRadixCache(RadixCache):
         self.load_stream = torch.cuda.Stream()
         self.store_stream = torch.cuda.Stream()
 
-        # Two-phase MP load: stash marker between ``match_prefix`` and
-        # ``init_load_back``.
-        self._load_markers: dict[CacheRequestHandle, _LoadBackMarker] = {}
-        # ``store_kv`` is async — we keep a lock on the source node
-        # until FlexKV signals completion, draining in ``evict`` /
-        # ``check_hicache_events``.
-        self._inflight_store_nodes: dict[CacheRequestHandle, TreeNode] = {}
-        self._node_lock = threading.Lock()
-
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def reset(self) -> None:  # type: ignore[override]
         super().reset()
-        if hasattr(self, "_load_markers"):
-            self._load_markers.clear()
-        if hasattr(self, "_inflight_store_nodes"):
-            with self._node_lock:
-                self._inflight_store_nodes.clear()
-        if hasattr(self, "flexkv_connector"):
+        self._load_markers.clear()
+        with self._node_lock:
+            self._inflight_store_nodes.clear()
+        if self.flexkv_connector is not None:
             self.flexkv_connector.reset()
 
     def shutdown(self) -> None:
-        if hasattr(self, "flexkv_connector"):
+        if self.flexkv_connector is not None:
             self.flexkv_connector.shutdown()
 
     # ------------------------------------------------------------------

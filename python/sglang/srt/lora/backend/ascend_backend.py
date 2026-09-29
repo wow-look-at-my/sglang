@@ -20,6 +20,7 @@ class AscendLoRABackend(BaseLoRABackend):
         **kwargs,
     ):
         super().__init__(max_loras_per_batch, device)
+        self.npu_graph_batch_info: LoRABatchInfo | None = None
 
     def run_lora_a_embedding(
         self, input_ids, weights, vocab_size, extra_embeddings=None, *args, **kwargs

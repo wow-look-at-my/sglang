@@ -44,6 +44,7 @@ class ChunkedSgmvLoRABackend(BaseLoRABackend):
     ):
         super().__init__(max_loras_per_batch, device)
         self.max_chunk_size = get_lora().max_lora_chunk_size
+        self.cuda_graph_batch_info: LoRABatchInfo | None = None
 
     def run_lora_a_embedding(
         self,

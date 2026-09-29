@@ -66,21 +66,13 @@ for (const file of files) {
 	}
 }
 
-// A mixin shared by several classes yields one problem per class; keep the first.
-const seen = new Set<string>();
-const unique = problems.filter((p) => {
-	const key = `${p.file}:${p.line}:${p.message.split(" ")[0]}`;
-	if (seen.has(key)) return false;
-	seen.add(key);
-	return true;
-});
-
+// Each class reports its own problems, so a line shared through a base appears once per class.
 if (json) {
-	console.log(JSON.stringify(unique, null, "\t"));
+	console.log(JSON.stringify(problems, null, "\t"));
 } else {
-	for (const p of unique) console.log(`${p.file}:${p.line}: ${p.message}`);
-	console.log(`checked ${checked} classes in ${files.length} files: ${unique.length} problem(s)`);
+	for (const p of problems) console.log(`${p.file}:${p.line}: ${p.message}`);
+	console.log(`checked ${checked} classes in ${files.length} files: ${problems.length} problem(s)`);
 	console.log(`not checked: ${opaque} classes with a base outside the repo that may set attributes`);
 	console.log(`checked only up to a computed-name assignment: ${partial} classes`);
 }
-process.exitCode = unique.length > 0 ? 1 : 0;
+process.exitCode = problems.length > 0 ? 1 : 0;

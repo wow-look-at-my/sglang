@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
@@ -9,6 +10,7 @@ from sglang.multimodal_gen.runtime.entrypoints.utils import (
     normalize_output_seeds,
 )
 from sglang.multimodal_gen.runtime.pipelines_core.schedule_batch import Req
+from sglang.multimodal_gen.runtime.pipelines_core.stages import base as stage_base
 from sglang.multimodal_gen.runtime.pipelines_core.stages.base import PipelineStage
 from sglang.multimodal_gen.runtime.pipelines_core.stages.input_validation import (
     InputValidationStage,
@@ -47,9 +49,13 @@ class CountingDedupStage(PipelineStage):
 
 class CountingLatentStage(LatentPreparationStage):
     def __init__(self):
-        self.server_args = SimpleNamespace(
+        server_args = SimpleNamespace(
             comfyui_mode=True, enable_layerwise_nvtx_marker=False
         )
+        with patch.object(
+            stage_base, "get_global_server_args", return_value=server_args
+        ):
+            super().__init__(scheduler=None, transformer=None)
         self.prepare_group_calls = 0
         self.forward_calls = 0
 

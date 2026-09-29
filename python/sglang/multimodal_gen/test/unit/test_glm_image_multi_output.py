@@ -7,6 +7,7 @@ from sglang.multimodal_gen.runtime.layers.layernorm import (
     _can_use_npu_fused_scale_shift,
 )
 from sglang.multimodal_gen.runtime.models.dits import glm_image as glm_model
+from sglang.multimodal_gen.runtime.pipelines_core.stages import base as stage_base
 from sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages import (
     glm_image as glm_stage,
 )
@@ -50,17 +51,20 @@ class _DummyScheduler:
 
 class _RecordingBeforeDenoisingStage(GlmImageBeforeDenoisingStage):
     def __init__(self):
-        self.text_encoder = None
-        self.transformer = SimpleNamespace(
-            config=SimpleNamespace(
-                in_channels=4,
-                num_layers=1,
-                patch_size=2,
+        with patch.object(stage_base, "get_global_server_args", return_value=None):
+            super().__init__(
+                tokenizer=None,
+                text_encoder=None,
+                vae=SimpleNamespace(config=SimpleNamespace(block_out_channels=[1])),
+                transformer=SimpleNamespace(
+                    config=SimpleNamespace(
+                        in_channels=4,
+                        num_layers=1,
+                        patch_size=2,
+                    )
+                ),
+                scheduler=_DummyScheduler(),
             )
-        )
-        self.vae = SimpleNamespace(config=SimpleNamespace(block_out_channels=[1]))
-        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
-        self.scheduler = _DummyScheduler()
 
     def encode_prompt(self, *args, **kwargs):
         return torch.ones(1, 3, 5), torch.zeros(1, 3, 5)

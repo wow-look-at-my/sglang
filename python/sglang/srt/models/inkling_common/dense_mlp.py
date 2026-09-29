@@ -229,6 +229,9 @@ class InklingBatchDenseMLP(nn.Module, FusedMoELoadingMixin):
             with_bias=False,
         )
         self._fp4_shared_processed = False
+        self._w13_linear = None
+        self._w2_linear = None
+        self._fp4_shared_intermediate = 0
         self._linearized_bf16_enabled = (
             linearized_bf16
             and self.inference_moe_w13_interleaved

@@ -81,6 +81,14 @@ def gptq_marlin_moe_repack(
 class GPTQMarlinLinearKernel:
     def __init__(self, quant_config: Optional[QuantizationConfig] = None):
         self.quant_config = quant_config
+        self.is_k_full: Optional[bool] = None
+        self.workspace: Optional[torch.Tensor] = None
+        # Default names since marlin requires empty parameters for these,
+        # TODO: remove this requirement from marlin (allow optional tensors)
+        self.w_q_name = "qweight"
+        self.w_s_name = "scales"
+        self.w_zp_name = "qzeros"
+        self.w_gidx_name = "g_idx"
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         device = getattr(layer, "qweight").device
@@ -98,13 +106,6 @@ class GPTQMarlinLinearKernel:
 
         # Allocate marlin workspace.
         self.workspace = marlin_make_workspace(device)
-
-        # Default names since marlin requires empty parameters for these,
-        # TODO: remove this requirement from marlin (allow optional tensors)
-        self.w_q_name = "qweight"
-        self.w_s_name = "scales"
-        self.w_zp_name = "qzeros"
-        self.w_gidx_name = "g_idx"
 
         def _transform_param(
             layer: torch.nn.Module, name: Optional[str], fn: Callable
@@ -221,6 +222,8 @@ class GPTQMarlinLinearKernel:
 class GPTQMarlinMoEKernel:
     def __init__(self, quant_config: Optional[QuantizationConfig] = None):
         self.quant_config = quant_config
+        self.moe_runner_config: Optional[MoeRunnerConfig] = None
+        self.runner: Optional[MoeRunner] = None
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
 

@@ -221,6 +221,9 @@ class TritonLoRABackend(BaseLoRABackend):
         self.sgemm_batch_info: Optional[LoRABatchInfo] = None
         self.global_batch_info: Optional[LoRABatchInfo] = None
         self.global_sgemm_batch_info: Optional[LoRABatchInfo] = None
+        self.cuda_graph_batch_info: LoRABatchInfo | None = None
+        self.cuda_graph_sgemm_batch_info: LoRABatchInfo | None = None
+        self.prefill_cuda_graph_sgemm_batch_info: LoRABatchInfo | None = None
         self.cuda_graph_global_batch_info: LoRABatchInfo | None = None
         self.cuda_graph_global_sgemm_batch_info: LoRABatchInfo | None = None
         self.has_global_active_lora = False
@@ -412,7 +415,7 @@ class TritonLoRABackend(BaseLoRABackend):
             )
 
     def init_dp_attention_cuda_graph_batch_info(self, max_num_tokens: int) -> None:
-        local_batch_info = getattr(self, "cuda_graph_batch_info", None)
+        local_batch_info = self.cuda_graph_batch_info
         assert local_batch_info is not None, (
             "init_cuda_graph_batch_info must run before DP-attention graph init"
         )

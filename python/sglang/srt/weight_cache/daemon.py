@@ -189,6 +189,7 @@ class WeightCacheDaemon:
         self.state_entries: Dict[str, Dict[str, Any]] = {}
         self.preloaded_weights_bytes = 0
         self.transport_backend = None
+        self._running = False
 
     def _init_distributed(self, server_args, model_config):
         """Initialize the distributed backend required for model loading.

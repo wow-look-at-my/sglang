@@ -157,6 +157,7 @@ class W8A8Int8Config(QuantizationConfig):
 class W8A8Int8LinearMethod(LinearMethodBase):
     def __init__(self, quantization_config: W8A8Int8Config):
         self.quantization_config = quantization_config
+        self.logical_widths = None
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         if _is_cpu:
@@ -247,6 +248,7 @@ class W8A8Int8MoEMethod(FusedMoEMethodBase):
 
     def __init__(self, quant_config: W8A8Int8Config):
         self.quant_config = quant_config
+        self.moe_runner_config = None
 
     def create_weights(
         self,

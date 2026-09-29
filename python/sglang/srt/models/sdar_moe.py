@@ -545,6 +545,15 @@ class SDARMoeForCausalLM(nn.Module):
 
         self.logits_processor = LogitsProcessor(config, return_full_logits=True)
 
+        self._cached_params_dict = None
+        self.routed_experts_weights_of_layer = LazyValue(
+            lambda: {
+                lid: self.model.layers[lid].mlp.get_moe_weights()
+                for lid in range(self.start_layer, self.end_layer)
+                if isinstance(self.model.layers[lid].mlp, SDARMoeSparseMoeBlock)
+            }
+        )
+
     @property
     def start_layer(self):
         return self.model.start_layer
@@ -591,7 +600,7 @@ class SDARMoeForCausalLM(nn.Module):
             num_experts=self.config.num_experts,
         )
 
-        if not hasattr(self, "_cached_params_dict"):
+        if self._cached_params_dict is None:
             self._cached_params_dict = dict(self.named_parameters())
         params_dict = self._cached_params_dict
 
@@ -690,15 +699,6 @@ class SDARMoeForCausalLM(nn.Module):
                         param, "weight_loader", default_weight_loader
                     )
                     weight_loader(param, loaded_weight)
-
-        if not hasattr(self, "routed_experts_weights_of_layer"):
-            self.routed_experts_weights_of_layer = LazyValue(
-                lambda: {
-                    lid: self.model.layers[lid].mlp.get_moe_weights()
-                    for lid in range(self.start_layer, self.end_layer)
-                    if isinstance(self.model.layers[lid].mlp, SDARMoeSparseMoeBlock)
-                }
-            )
 
     @classmethod
     def get_model_config_for_expert_location(cls, config):

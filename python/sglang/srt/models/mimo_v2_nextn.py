@@ -45,7 +45,7 @@ from sglang.srt.models.mimo_v2 import (
     load_mimo_v2_qkv_proj_weight,
 )
 from sglang.srt.runtime_context import get_parallel
-from sglang.srt.utils import add_prefix
+from sglang.srt.utils import LazyValue, add_prefix
 
 MiMoV2Config = None
 
@@ -248,9 +248,11 @@ class MiMoV2MTP(MiMoV2ForCausalLM):
         prefix: str = "",
     ) -> None:
         nn.Module.__init__(self)
+        self.pp_group = get_parallel().pp_group
         self.config = config
         self.tp_size = get_parallel().tp_size
         self.quant_config = quant_config
+        self._encoder_processor = None
 
         self.model = MiMoV2ModelNextN(
             config, quant_config, prefix=add_prefix("model", prefix)
@@ -263,6 +265,22 @@ class MiMoV2MTP(MiMoV2ForCausalLM):
             use_attn_tp_group=get_parallel().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        self.capture_aux_hidden_states = False
+
+        # The draft has no vision or audio encoder.
+        self._is_multimodal = False
+        self.visual = None
+        self.audio_channels = None
+        self.audio_group_size = None
+        self.audio_segment_size = None
+        self.audio_input_local_dim = None
+        self.audio_input_full_attention = None
+        self.audio_out_hidden_size = None
+        self.input_local_transformer = None
+        self.speech_embeddings = None
+        self.projection = None
+        self.audio_tokenizer = None
+        self._routed_experts_weights_of_layer = LazyValue(lambda: {})
 
     @torch.no_grad()
     def forward(

@@ -244,6 +244,9 @@ class QuarkW4A4MXFP4(QuarkLinearScheme):
         self.input_quant_spec = input_quant_spec
         self.is_checkpoint_mxfp4_serialized = is_checkpoint_mxfp4_serialized
         self.dequantization_config = dequantization_config
+        self.input_size_per_partition: int | None = None
+        self.output_size_per_partition: int | None = None
+        self.weight_block_size: list[int] | None = None
 
         if not self.is_checkpoint_mxfp4_serialized:
             if not is_gfx95_supported():

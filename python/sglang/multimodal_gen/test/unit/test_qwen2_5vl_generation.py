@@ -35,6 +35,8 @@ class _StubQwen2_5VL(Qwen2_5_VLForConditionalGeneration):
         nn.Module.__init__(self)
         self.model = nn.Module()
         self.model.rope_deltas = torch.tensor([99])
+        self.lm_head = None
+        self.enable_image_understanding = False
         self.config = SimpleNamespace(eos_token_id=eos_token_id, pad_token_id=0)
         self.generation_config = {
             "do_sample": True,

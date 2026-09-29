@@ -86,6 +86,8 @@ class SWAComponent(TreeComponent):
         ) // params.page_size
         # HiCache state: set to host SWA pool when HiCache enabled
         self._swa_kv_pool_host = None
+        self._evict_device_request_cnt = 0
+        self._evict_device_cursor = None
 
     component_type = ComponentType.SWA
     _independent = False

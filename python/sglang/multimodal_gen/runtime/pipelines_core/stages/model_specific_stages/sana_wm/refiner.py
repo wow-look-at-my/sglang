@@ -761,6 +761,10 @@ class SanaWMLTX2RefinerStage(PipelineStage):
 class SanaWMRefinerDecodingStage(SanaWMDecodingStage):
     """Decode refined latents and drop the clean sink anchor frame."""
 
+    def __init__(self, vae, pipeline=None, component_name: str = "vae") -> None:
+        super().__init__(vae, pipeline=pipeline, component_name=component_name)
+        self._drop_refiner_sink = True
+
     @torch.no_grad()
     def forward(self, batch: Req, server_args: ServerArgs):
         self._drop_refiner_sink = bool(
@@ -791,7 +795,7 @@ class SanaWMRefinerDecodingStage(SanaWMDecodingStage):
                 "SANA-WM refiner decoding expected a sink frame plus refined "
                 f"frames, got temporal length {frames.shape[2]}."
             )
-        if not getattr(self, "_drop_refiner_sink", True):
+        if not self._drop_refiner_sink:
             log_sana_wm_tensor_stats("refiner.decode.frames_output", frames)
             return frames
         # Match NVlabs `inference_sana_wm.py`: decode with the clean sink anchor,

@@ -219,7 +219,7 @@ class GLUPointWiseConv(nn.Module):
         elif glu_type == "swish":
             self.glu_act = Swish()
         else:
-            raise ValueError(f"Unsupported activation type {self.glu_act}")
+            raise ValueError(f"Unsupported activation type {glu_type}")
 
         if bias_in_glu:
             self.b1 = nn.Parameter(torch.zeros(1, output_dim, 1))

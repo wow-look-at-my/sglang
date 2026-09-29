@@ -46,6 +46,9 @@ class ARCluster(DisaggCluster):
     def _alloc_ports(self) -> None:
         self.api_port = find_free_port(HOST)
         self.ar_port = find_free_port(HOST)
+        # The disagg encoder/denoiser/decoder roles do not run here.
+        self.base_port = None
+        self._role_ports = {}
 
     # -- internals -----------------------------------------------------------
 

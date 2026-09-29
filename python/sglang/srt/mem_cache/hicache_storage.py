@@ -384,6 +384,8 @@ class HiCacheFile(HiCacheStorage):
     def __init__(
         self, storage_config: HiCacheStorageConfig, file_path: str = "/tmp/hicache"
     ):
+        self.mem_pool_host = None
+        self.registered_pools = {}
         self.file_path = envs.SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR.get() or file_path
 
         tp_rank, tp_size, pp_rank, pp_size, model_name, is_mla_model = (

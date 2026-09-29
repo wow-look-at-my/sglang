@@ -224,6 +224,9 @@ class HiCacheHF3FS(HiCacheStorage):
             self.rank = 0
 
         self.is_zero_copy = False
+        self.mha_zero_copy = False
+        self.mem_pool_host = None
+        self.registered_pools = {}
 
         logger.info(
             f"[Rank {self.rank}] HiCacheHF3FS Client Initializing: "

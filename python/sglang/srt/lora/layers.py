@@ -136,6 +136,9 @@ class VocabParallelEmbeddingWithLoRA(BaseLayerWithLoRA):
             device="cpu",
             pin_memory=True,
         )
+        self.new_embeddings_buffer: Optional[torch.Tensor] = None
+        self.embedding_A_buffer: Optional[torch.Tensor] = None
+        self.embedding_B_buffer: Optional[torch.Tensor] = None
 
     def set_lora_info(
         self,
@@ -183,12 +186,7 @@ class VocabParallelEmbeddingWithLoRA(BaseLayerWithLoRA):
             input_ids=input_,
             weights=self.embedding_A_buffer,
             vocab_size=self.vocab_size,
-            extra_embeddings=(
-                self.new_embeddings_buffer
-                if hasattr(self, "new_embeddings_buffer")
-                and self.new_embeddings_buffer is not None
-                else None
-            ),
+            extra_embeddings=self.new_embeddings_buffer,
         )
 
         return lora_a_output
@@ -235,10 +233,7 @@ class VocabParallelEmbeddingWithLoRA(BaseLayerWithLoRA):
 
         # [TODO] SGLang did not support extra/added token process; thus, self.extra_token_embedding only return original input_ now
         # Extra tokens - It will replace extra token embedding with self.new_embeddings_buffer's emb (Default is 0)
-        if (
-            hasattr(self, "new_embeddings_buffer")
-            and self.new_embeddings_buffer is not None
-        ):
+        if self.new_embeddings_buffer is not None:
             base_output = self.extra_token_embedding(input_, base_output)
 
         # Apply LoRA if configured; DP-attention idle forwards take the base
@@ -323,6 +318,8 @@ class ParallelLMHeadWithLoRA(BaseLayerWithLoRA):
             device="cpu",
             pin_memory=True,
         )
+        self.lm_head_A_buffer: Optional[torch.Tensor] = None
+        self.lm_head_B_buffer: Optional[torch.Tensor] = None
 
     def set_lora_info(
         self,
@@ -470,6 +467,8 @@ class ColumnParallelLinearWithLoRA(BaseLayerWithLoRA):
             device="cpu",
             pin_memory=True,
         )
+        self.A_buffer: Optional[torch.Tensor] = None
+        self.B_buffer: Optional[torch.Tensor] = None
 
     def set_lora_info(
         self,
@@ -536,6 +535,8 @@ class MergedColumnParallelLinearWithLoRA(ColumnParallelLinearWithLoRA):
     ) -> None:
         super().__init__(base_layer, lora_backend)
         self.n_slices = len(self.base_layer.output_partition_sizes)
+        self.max_out_dim: Optional[int] = None
+        self.use_gate_up_lora = False
 
     def set_lora_info(
         self,
@@ -703,6 +704,8 @@ class QKVParallelLinearWithLoRA(ColumnParallelLinearWithLoRA):
 
         # For computing number of launched blocks
         self.max_qkv_out_dim = max(q_proj_shard_size, kv_proj_shard_size)
+        self.A_buffer_qkv: Optional[torch.Tensor] = None
+        self.B_buffer_qkv: Optional[torch.Tensor] = None
 
     def set_lora_info(
         self,
@@ -770,6 +773,10 @@ class RowParallelLinearWithLoRA(BaseLayerWithLoRA):
         lora_backend: BaseLoRABackend,
     ) -> None:
         super().__init__(base_layer, lora_backend)
+        self.A_buffer: Optional[torch.Tensor] = None
+        self.B_buffer: Optional[torch.Tensor] = None
+        self.output_offset: Optional[torch.Tensor] = None
+        self.output_offset_cpu: Optional[torch.Tensor] = None
 
     def set_lora_info(self, A_buffer: torch.Tensor, B_buffer: torch.Tensor):
         self.set_lora = True
@@ -898,6 +905,11 @@ class ReplicatedLinearWithLoRA(BaseLayerWithLoRA):
     ) -> None:
         super().__init__(base_layer, lora_backend)
         self.output_size = base_layer.output_size
+        self.A_buffer: Optional[torch.Tensor] = None
+        self.B_buffer: Optional[torch.Tensor] = None
+        self._output_offset: Optional[torch.Tensor] = None
+        self._output_offset_cpu: Optional[torch.Tensor] = None
+        self._max_out_dim: Optional[int] = None
 
     def set_lora_info(self, A_buffer: torch.Tensor, B_buffer: torch.Tensor):
         self.set_lora = True
@@ -1012,6 +1024,10 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         self._uses_interleaved_gate_up = (
             base_layer.moe_runner_config.gemm1_alpha is not None
         )
+        self.gate_up_lora_a_weights: Optional[torch.Tensor] = None
+        self.gate_up_lora_b_weights: Optional[torch.Tensor] = None
+        self.down_lora_a_weights: Optional[torch.Tensor] = None
+        self.down_lora_b_weights: Optional[torch.Tensor] = None
 
         # Initialize triton_lora moe runner for batches with lora enabled
         from sglang.srt.layers.moe import MoeRunnerBackend

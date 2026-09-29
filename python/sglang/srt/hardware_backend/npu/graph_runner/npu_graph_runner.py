@@ -110,6 +110,9 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
         from sglang.srt.compilation import torch_compile_decoration
 
         torch_compile_decoration.patch_model = patch_model_npu
+        self.raw_bs: Optional[int] = None
+        self.raw_num_token: Optional[int] = None
+        self.bs: Optional[int] = None
         super().__init__(
             model_runner,
             attn_backend=attn_backend,

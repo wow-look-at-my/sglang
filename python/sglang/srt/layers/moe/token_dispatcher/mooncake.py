@@ -344,6 +344,8 @@ class MooncakeEPDispatcher(BaseDispatcher):
             raise NotImplementedError
 
         self._stage = _Stage.INITIAL
+        self._dispatch_intermediate_state = None
+        self._combine_intermediate_state = None
 
     def dispatch(
         self,
@@ -369,7 +371,7 @@ class MooncakeEPDispatcher(BaseDispatcher):
     def dispatch_b(self):
         self._update_stage(_Stage.AFTER_DISPATCH_A, _Stage.AFTER_DISPATCH_B)
         inner_state = self._dispatch_intermediate_state
-        del self._dispatch_intermediate_state
+        self._dispatch_intermediate_state = None
         return self._get_impl().dispatch_b(*inner_state)
 
     def combine(
@@ -396,7 +398,7 @@ class MooncakeEPDispatcher(BaseDispatcher):
     def combine_b(self):
         self._update_stage(_Stage.AFTER_COMBINE_A, _Stage.INITIAL)
         inner_state = self._combine_intermediate_state
-        del self._combine_intermediate_state
+        self._combine_intermediate_state = None
         return self._get_impl().combine_b(*inner_state)
 
     def _get_impl(self) -> _MooncakeEPDispatcherImpl:

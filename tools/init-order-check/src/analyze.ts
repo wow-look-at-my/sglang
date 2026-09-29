@@ -44,11 +44,22 @@ export interface Report {
 
 interface Method {
 	name: string;
+	// For a module function that receives the instance, the class whose constructor called it.
 	cls: ClassInfo;
+	file: string;
+	label: string;
 	node: Node;
 	selfName: string | undefined;
 	// An async or generator body does not run when called; the call only builds a coroutine or generator.
 	deferred: boolean;
+}
+
+function paramName(param: Node | undefined): string | undefined {
+	if (!param) return undefined;
+	if (param.type === "identifier") return param.text;
+	const name = field(param, "name");
+	if (name) return name.text;
+	return named(param).find((c) => c.type === "identifier")?.text;
 }
 
 function isDeferred(def: Node): boolean {
@@ -72,7 +83,10 @@ interface ClassInfo {
 	classAttrs: Set<string>;
 }
 
-type Candidate = { kind: "class"; node: Node } | { kind: "import"; module: Node; name: string };
+type Candidate =
+	| { kind: "class"; node: Node }
+	| { kind: "function"; node: Node }
+	| { kind: "import"; module: Node; name: string };
 
 interface ModuleInfo {
 	file: string;
@@ -160,9 +174,13 @@ class Workspace {
 				case "class_definition":
 					add(field(child, "name")!.text, { kind: "class", node: child });
 					break;
+				case "function_definition":
+					add(field(child, "name")!.text, { kind: "function", node: child });
+					break;
 				case "decorated_definition": {
 					const def = field(child, "definition");
 					if (def?.type === "class_definition") add(field(def, "name")!.text, { kind: "class", node: def });
+					if (def?.type === "function_definition") add(field(def, "name")!.text, { kind: "function", node: def });
 					break;
 				}
 				case "import_from_statement": {
@@ -218,6 +236,7 @@ class Workspace {
 		const classes: ClassInfo[] = [];
 		let external = candidates.length === 0;
 		for (const candidate of candidates) {
+			if (candidate.kind === "function") continue;
 			if (candidate.kind === "class") {
 				classes.push(this.classInfo(file, candidate.node));
 				continue;
@@ -232,6 +251,21 @@ class Workspace {
 			external ||= resolved.external;
 		}
 		return { classes, external };
+	}
+
+	// The module-level function a name refers to, followed through imports.
+	resolveFunction(file: string, name: string, visiting = new Set<string>()): { file: string; node: Node } | undefined {
+		const key = `${file}\0${name}`;
+		if (visiting.has(key)) return undefined;
+		visiting.add(key);
+		for (const candidate of this.module(file).names.get(name) ?? []) {
+			if (candidate.kind === "function") return { file, node: candidate.node };
+			if (candidate.kind !== "import") continue;
+			const target = this.resolveModule(file, candidate.module);
+			const found = target ? this.resolveFunction(target, candidate.name, visiting) : undefined;
+			if (found) return found;
+		}
+		return undefined;
 	}
 
 	classInfo(file: string, node: Node): ClassInfo {
@@ -302,7 +336,7 @@ class Workspace {
 			if (first.type === "identifier") selfName = first.text;
 			else if (first.type === "typed_parameter") selfName = named(first).find((c) => c.type === "identifier")?.text;
 		}
-		const method: Method = { name, cls: info, node: def, selfName, deferred: isDeferred(def) };
+		const method: Method = { name, cls: info, file: info.file, label: `${info.name}.${name}`, node: def, selfName, deferred: isDeferred(def) };
 		if (decorators.some((d) => d === "property" || d.endsWith("cached_property"))) {
 			info.getters.set(name, method);
 		} else if (decorators.some((d) => d === `${name}.setter`)) {
@@ -314,16 +348,20 @@ class Workspace {
 	}
 }
 
-// A left-to-right depth-first MRO; close enough to C3 for the mixin chains this runs on.
-function linearize(cls: ClassInfo): ClassInfo[] {
-	const out: ClassInfo[] = [];
-	const visit = (c: ClassInfo) => {
-		if (out.includes(c)) return;
-		out.push(c);
-		for (const base of c.bases) visit(base);
-	};
-	visit(cls);
-	return out;
+// Python's C3 MRO. An inconsistent hierarchy, which Python itself rejects, falls back to the first head.
+function linearize(cls: ClassInfo, visiting = new Set<ClassInfo>()): ClassInfo[] {
+	if (visiting.has(cls)) return [cls];
+	visiting.add(cls);
+	const seqs = [...cls.bases.map((b) => linearize(b, visiting)), [...cls.bases]].map((s) => [...s]);
+	visiting.delete(cls);
+	const out = [cls];
+	for (;;) {
+		const open = seqs.filter((s) => s.length > 0);
+		if (open.length === 0) return out;
+		const head = open.map((s) => s[0]!).find((h) => !open.some((s) => s.indexOf(h) > 0)) ?? open[0]![0]!;
+		if (!out.includes(head)) out.push(head);
+		for (const s of open) if (s[0] === head) s.shift();
+	}
 }
 
 interface State {
@@ -359,6 +397,15 @@ function binds(node: Node): boolean {
 	return node.type === "augmented_assignment" || (node.type === "assignment" && field(node, "right") !== null);
 }
 
+// A nested class, or a nested function with its own `self` parameter, refers to a different object.
+function shadows(node: Node, selfName: string): boolean {
+	if (node.type === "class_definition") return true;
+	if (node.type !== "function_definition" && node.type !== "lambda") return false;
+	const params = field(node, "parameters");
+	if (!params) return false;
+	return named(params).some((p) => (p.type === "identifier" ? p : named(p).find((c) => c.type === "identifier"))?.text === selfName);
+}
+
 // nn.Module methods that bind an attribute under the name in their first argument.
 const REGISTERS = new Set(["register_buffer", "register_parameter", "register_module", "add_module"]);
 
@@ -384,13 +431,16 @@ class Simulator {
 	private stack: Method[] = [];
 	private writesMemo = new Map<Method, Set<string>>();
 	private cls: ClassInfo;
+	private workspace: Workspace;
+	private helpers = new Map<string, Method>();
 	// A base outside the repo, such as nn.Conv2d, can set any attribute; the check then trusts every read.
 	private opaque: boolean;
 	// Set once the constructor path can assign any name. Later reads and omissions are then trusted.
 	private dynamic = false;
 
-	constructor(cls: ClassInfo) {
+	constructor(cls: ClassInfo, workspace: Workspace) {
 		this.cls = cls;
+		this.workspace = workspace;
 		this.mro = linearize(cls);
 		this.opaque = this.mro.some((c) => c.unresolvedBases.some((b) => !EMPTY_BASES.test(b)));
 		for (const c of this.mro) {
@@ -452,7 +502,7 @@ class Simulator {
 	}
 
 	private label(m: Method): string {
-		return `${m.cls.name}.${m.name}`;
+		return m.label;
 	}
 
 	// Every self.<attr> target in any method, nested functions included, so the check knows which names are instance attributes.
@@ -463,6 +513,7 @@ class Simulator {
 			if (!this.known.has(attr)) this.known.set(attr, { file: m.cls.file, line: node.startPosition.row + 1, method: this.label(m) });
 		};
 		const walk = (node: Node) => {
+			if (shadows(node, selfName)) return;
 			if (binds(node)) {
 				this.targetAttrs(field(node, "left")!, selfName, note);
 			} else if (node.type === "for_statement" || node.type === "for_in_clause") {
@@ -482,7 +533,9 @@ class Simulator {
 	private targetAttrs(target: Node, selfName: string, cb: (attr: string, node: Node) => void): void {
 		if (target.type === "attribute") {
 			const obj = field(target, "object")!;
-			if (obj.type === "identifier" && obj.text === selfName) cb(field(target, "attribute")!.text, target);
+			const attr = field(target, "attribute")!.text;
+			// self.__class__ = X swaps the class; it binds no field.
+			if (obj.type === "identifier" && obj.text === selfName && !/^__\w+__$/.test(attr)) cb(attr, target);
 			return;
 		}
 		if (["pattern_list", "tuple_pattern", "list_pattern", "tuple", "list", "parenthesized_expression", "list_splat_pattern"].includes(target.type)) {
@@ -521,11 +574,17 @@ class Simulator {
 	// The method a call runs on this instance: self.m(), super().m(), or Base.m(self).
 	private calleeOf(call: Node, ctx: Context): Method | undefined {
 		const fn = field(call, "function");
+		if (fn?.type === "identifier") return this.helperOf(call, fn.text, ctx);
 		if (fn?.type !== "attribute") return undefined;
 		const obj = field(fn, "object")!;
 		const name = field(fn, "attribute")!.text;
 		if (obj.type === "identifier" && obj.text === ctx.selfName) return this.findMethod(name);
-		if (obj.type === "call" && field(obj, "function")?.text === "super") return this.findMethod(name, ctx.method.cls);
+		if (obj.type === "call" && field(obj, "function")?.text === "super") {
+			// super(Base, self) starts the lookup after Base, not after the class that holds the call.
+			const [start] = callArgs(obj);
+			const after = start?.type === "identifier" ? this.mro.find((c) => c.name === start.text) : undefined;
+			return this.findMethod(name, after ?? ctx.method.cls);
+		}
 		if (obj.type === "identifier" && callArgs(call)[0]?.text === ctx.selfName) {
 			const cls = this.mro.find((c) => c.name === obj.text);
 			if (cls) {
@@ -536,6 +595,35 @@ class Simulator {
 			}
 		}
 		return undefined;
+	}
+
+	// A module function called with the instance as an argument, e.g. _init_state(self, size).
+	private helperOf(call: Node, name: string, ctx: Context): Method | undefined {
+		const args = callArgs(call);
+		const position = args.findIndex((a) => a.type === "identifier" && a.text === ctx.selfName);
+		const keyword = args.find((a) => a.type === "keyword_argument" && field(a, "value")?.text === ctx.selfName);
+		if (position < 0 && !keyword) return undefined;
+		if (args.slice(0, position < 0 ? args.length : position).some((a) => a.type === "list_splat" || a.type === "dictionary_splat")) return undefined;
+		const found = this.workspace.resolveFunction(ctx.method.file, name);
+		if (!found) return undefined;
+		const params = named(field(found.node, "parameters")!);
+		const selfName = keyword ? field(keyword, "name")?.text : paramName(params[position]);
+		if (!selfName) return undefined;
+		const key = `${found.file}:${found.node.startIndex}:${selfName}`;
+		let helper = this.helpers.get(key);
+		if (!helper) {
+			helper = {
+				name,
+				cls: ctx.method.cls,
+				file: found.file,
+				label: `${path.basename(found.file, ".py")}.${name}`,
+				node: found.node,
+				selfName,
+				deferred: isDeferred(found.node),
+			};
+			this.helpers.set(key, helper);
+		}
+		return helper;
 	}
 
 	private inline(m: Method, state: State, chain: string[]): void {
@@ -809,7 +897,7 @@ class Simulator {
 			return;
 		}
 		if (this.opaque || this.isClassLevel(attr) || !this.known.has(attr)) return;
-		const file = ctx.method.cls.file;
+		const file = ctx.method.file;
 		const key = `${file}:${node.startPosition.row}:${attr}`;
 		if (this.findings.has(key)) return;
 		this.findings.set(key, {
@@ -839,7 +927,7 @@ export type { Workspace };
 export function analyzeClass(workspace: Workspace, file: string, className: string): Report | undefined {
 	const cls = workspace.resolveClass(file, className).classes.find((c) => c.file === file);
 	if (!cls) throw new Error(`${file}: no class ${className}`);
-	const simulator = new Simulator(cls);
+	const simulator = new Simulator(cls, workspace);
 	if (!simulator.hasInit()) return undefined;
 	return simulator.run();
 }

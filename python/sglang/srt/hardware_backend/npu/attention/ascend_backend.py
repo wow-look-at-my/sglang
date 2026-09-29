@@ -407,6 +407,9 @@ class AscendAttnBackend(AttentionBackend):
             isinstance(self.token_to_kv_pool, SWAKVPool)
             and self.token_to_kv_pool.swa_layer_nums > 0
         )
+        self.cuda_graph_swa_out_cache_loc: Optional[torch.Tensor] = None
+        self.alibi_bias: Optional[torch.Tensor] = None
+        self.super_mask: Optional[torch.Tensor] = None
 
         # head num padding
         self.padding_size_list = [1, 2, 4, 8, 16, 32, 64, 128]
@@ -901,12 +904,12 @@ class AscendAttnBackend(AttentionBackend):
     ) -> torch.Tensor:
         MAX_LEN_ALB = 5000
         max_seq_len = max(kv_seq_len, q_seq_len, MAX_LEN_ALB)
-        if getattr(self, "alibi_bias", None) is None:
+        if self.alibi_bias is None:
             self.alibi_bias = self._generate_alibi_bias(
                 max_seq_len, slopes, num_heads, device, dtype
             )
 
-        if getattr(self, "super_mask", None) is None:
+        if self.super_mask is None:
             super_mask = torch.ones(size=(1, max_seq_len, max_seq_len), dtype=dtype)
             super_mask = super_mask.float().fill_(float("-inf")).type_as(super_mask)
             super_mask = torch.triu(super_mask, 1).to(device)

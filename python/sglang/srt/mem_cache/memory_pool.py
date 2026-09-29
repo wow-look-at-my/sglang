@@ -5664,6 +5664,15 @@ class MiniMaxSparseKVPool(KVCache):
         self.store_dtype = self.main_pool.store_dtype
         self.layer_transfer_counter = None
         self._enable_hisparse = enable_hisparse
+        self.kernel_page_blocks = 1
+        self.kernel_page_stride = page_size
+        self.allocation_label = None
+        self.memory_saver_adapter = TorchMemorySaverAdapter.create(
+            enable=enable_memory_saver
+        )
+        self.cpu_offloading_chunk_size = 8192
+        self.enable_custom_mem_pool = self.main_pool.enable_custom_mem_pool
+        self.custom_mem_pool = self.main_pool.custom_mem_pool
 
     def register_mapping(self, mapping: torch.Tensor) -> None:
         assert self._enable_hisparse
