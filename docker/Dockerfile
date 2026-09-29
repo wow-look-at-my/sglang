@@ -1,6 +1,6 @@
 ARG CUDA_VERSION=13.0.3
 # Kept in sync with python/sglang/kernels/aot by scripts/release/bump_kernel_version_to_sglang.py.
-ARG SGL_KERNEL_VERSION=0.4.9
+ARG SGL_KERNEL_VERSION=0.4.10
 # Semicolon-separated GPU archs the image must serve, e.g. "120a"; empty builds
 # every optional arch-specific component.
 ARG GPU_ARCHS=
