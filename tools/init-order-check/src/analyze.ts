@@ -35,6 +35,10 @@ export interface Report {
 	// The method bodies the simulation walked; a small number means the check saw little.
 	inlinedMethods: string[];
 	unresolvedBases: string[];
+	// True when a base outside the repo may set attributes, so no read or omission is reported.
+	opaque: boolean;
+	// True when the constructor path can assign any name; reads after that point are not reported.
+	dynamic: boolean;
 }
 
 interface Method {
@@ -42,6 +46,18 @@ interface Method {
 	cls: ClassInfo;
 	node: Node;
 	selfName: string | undefined;
+	// An async or generator body does not run when called; the call only builds a coroutine or generator.
+	deferred: boolean;
+}
+
+function isDeferred(def: Node): boolean {
+	if (def.children.some((c) => c?.type === "async")) return true;
+	const hasYield = (node: Node): boolean => {
+		if (node.type === "yield") return true;
+		if (node.type === "function_definition" || node.type === "lambda" || node.type === "class_definition") return false;
+		return named(node).some(hasYield);
+	};
+	return hasYield(field(def, "body")!);
 }
 
 interface ClassInfo {
@@ -123,6 +139,14 @@ class Workspace {
 		return info;
 	}
 
+	definedClasses(file: string): string[] {
+		const names: string[] = [];
+		for (const [name, candidates] of this.module(file).names) {
+			if (candidates.some((c) => c.kind === "class")) names.push(name);
+		}
+		return names;
+	}
+
 	// Top-level names, including those bound inside module-level if/try blocks.
 	private collectModuleNames(node: Node, info: ModuleInfo): void {
 		const add = (name: string, candidate: Candidate) => {
@@ -184,8 +208,11 @@ class Workspace {
 	}
 
 	// All class definitions a module-level name can refer to; empty when the name leaves the repo.
-	resolveClass(file: string, name: string, depth = 0): { classes: ClassInfo[]; external: boolean } {
-		if (depth > 20) throw new Error(`${file}: import cycle while resolving ${name}`);
+	resolveClass(file: string, name: string, visiting = new Set<string>()): { classes: ClassInfo[]; external: boolean } {
+		// A cycle of re-exports, often through TYPE_CHECKING imports, defines nothing on that path.
+		const key = `${file}\0${name}`;
+		if (visiting.has(key)) return { classes: [], external: false };
+		visiting.add(key);
 		const candidates = this.module(file).names.get(name) ?? [];
 		const classes: ClassInfo[] = [];
 		let external = candidates.length === 0;
@@ -199,7 +226,7 @@ class Workspace {
 				external = true;
 				continue;
 			}
-			const resolved = this.resolveClass(target, candidate.name, depth + 1);
+			const resolved = this.resolveClass(target, candidate.name, visiting);
 			classes.push(...resolved.classes);
 			external ||= resolved.external;
 		}
@@ -274,7 +301,7 @@ class Workspace {
 			if (first.type === "identifier") selfName = first.text;
 			else if (first.type === "typed_parameter") selfName = named(first).find((c) => c.type === "identifier")?.text;
 		}
-		const method: Method = { name, cls: info, node: def, selfName };
+		const method: Method = { name, cls: info, node: def, selfName, deferred: isDeferred(def) };
 		if (decorators.some((d) => d === "property" || d.endsWith("cached_property"))) {
 			info.getters.set(name, method);
 		} else if (decorators.some((d) => d === `${name}.setter`)) {
@@ -323,6 +350,14 @@ function stringLiteral(node: Node | undefined): string | undefined {
 		.join("");
 }
 
+// Bases outside the repo that set no attributes a subclass reads.
+const EMPTY_BASES = /^(object|ABC|abc\.ABC|nn\.Module|torch\.nn\.Module|(typing\.)?(Generic|Protocol)(\[.*\])?)$/s;
+
+// An assignment with a value; `self.x: T` alone declares a type and binds nothing.
+function binds(node: Node): boolean {
+	return node.type === "augmented_assignment" || (node.type === "assignment" && field(node, "right") !== null);
+}
+
 function callArgs(call: Node): Node[] {
 	const args = field(call, "arguments");
 	return args ? named(args) : [];
@@ -336,13 +371,22 @@ class Simulator {
 	private stack: Method[] = [];
 	private writesMemo = new Map<Method, Set<string>>();
 	private cls: ClassInfo;
+	// A base outside the repo, such as nn.Conv2d, can set any attribute; the check then trusts every read.
+	private opaque: boolean;
+	// Set once the constructor path can assign any name. Later reads and omissions are then trusted.
+	private dynamic = false;
 
 	constructor(cls: ClassInfo) {
 		this.cls = cls;
 		this.mro = linearize(cls);
+		this.opaque = this.mro.some((c) => c.unresolvedBases.some((b) => !EMPTY_BASES.test(b)));
 		for (const c of this.mro) {
 			for (const m of [...c.methods.values(), ...c.getters.values(), ...c.setters.values()]) this.collectKnown(m);
 		}
+	}
+
+	hasInit(): boolean {
+		return this.findMethod("__init__") !== undefined;
 	}
 
 	run(): Report {
@@ -352,7 +396,8 @@ class Simulator {
 		this.inline(init, state, []);
 		const uninitialized: Uninitialized[] = [];
 		for (const [attr, assignedAt] of this.known) {
-			if (!state.assigned.has(attr) && !this.isClassLevel(attr) && !this.findSetter(attr)) uninitialized.push({ attr, assignedAt });
+			if (this.opaque || this.dynamic || state.assigned.has(attr) || this.isClassLevel(attr) || this.findSetter(attr)) continue;
+			uninitialized.push({ attr, assignedAt });
 		}
 		return {
 			className: this.cls.name,
@@ -360,6 +405,8 @@ class Simulator {
 			uninitialized: uninitialized.sort((a, b) => a.assignedAt.file.localeCompare(b.assignedAt.file) || a.assignedAt.line - b.assignedAt.line),
 			inlinedMethods: [...this.inlined].map((m) => `${m.cls.name}.${m.name}`),
 			unresolvedBases: this.mro.flatMap((c) => c.unresolvedBases.map((b) => `${c.name}(${b})`)),
+			opaque: this.opaque,
+			dynamic: this.dynamic,
 		};
 	}
 
@@ -402,7 +449,7 @@ class Simulator {
 			if (!this.known.has(attr)) this.known.set(attr, { file: m.cls.file, line: node.startPosition.row + 1, method: this.label(m) });
 		};
 		const walk = (node: Node) => {
-			if (node.type === "assignment" || node.type === "augmented_assignment") {
+			if (binds(node)) {
 				this.targetAttrs(field(node, "left")!, selfName, note);
 			} else if (node.type === "for_statement" || node.type === "for_in_clause") {
 				this.targetAttrs(field(node, "left")!, selfName, note);
@@ -441,7 +488,7 @@ class Simulator {
 		if (!selfName) return out;
 		const walk = (node: Node) => {
 			if (node.type === "function_definition" || node.type === "lambda" || node.type === "class_definition") return;
-			if (node.type === "assignment" || node.type === "augmented_assignment" || node.type === "for_statement") {
+			if (binds(node) || node.type === "for_statement") {
 				this.targetAttrs(field(node, "left")!, selfName, (attr) => {
 					const setter = this.findSetter(attr);
 					if (setter) for (const w of this.writesOf(setter)) out.add(w);
@@ -449,7 +496,7 @@ class Simulator {
 				});
 			} else if (node.type === "call") {
 				const callee = this.calleeOf(node, { method: m, selfName, chain: [] });
-				if (callee) for (const w of this.writesOf(callee)) out.add(w);
+				if (callee && !callee.deferred) for (const w of this.writesOf(callee)) out.add(w);
 				const args = callArgs(node);
 				const attr = stringLiteral(args[1]);
 				if (field(node, "function")?.text === "setattr" && args[0]?.text === selfName && attr) out.add(attr);
@@ -481,7 +528,7 @@ class Simulator {
 	}
 
 	private inline(m: Method, state: State, chain: string[]): void {
-		if (this.stack.includes(m) || !m.selfName) return;
+		if (this.stack.includes(m) || !m.selfName || m.deferred) return;
 		if (this.inlined.has(m)) {
 			for (const w of this.writesOf(m)) state.assigned.add(w);
 			return;
@@ -629,7 +676,8 @@ class Simulator {
 				return;
 			case "assignment": {
 				const right = field(node, "right");
-				if (right) this.visitExpr(right, state, ctx);
+				if (!right) return;
+				this.visitExpr(right, state, ctx);
 				this.recordTarget(field(node, "left")!, state, ctx);
 				return;
 			}
@@ -692,6 +740,7 @@ class Simulator {
 			if (fn.text === "getattr" && args.length === 2 && attr) this.read(attr, node, state, ctx);
 			for (const arg of args.slice(1)) this.visitExpr(arg, state, ctx);
 			if (fn.text === "setattr" && attr) state.assigned.add(attr);
+			else if (fn.text === "setattr") this.dynamic = true;
 			return;
 		}
 		const callee = this.calleeOf(node, ctx);
@@ -700,8 +749,19 @@ class Simulator {
 			this.inline(callee, state, ctx.chain);
 			return;
 		}
+		if (this.opensUnknownScope(fn, args, ctx)) this.dynamic = true;
 		this.visitExpr(fn, state, ctx);
 		for (const arg of args) this.visitExpr(arg, state, ctx);
+	}
+
+	// A mixin forwards *args to whatever class follows it at runtime, which the check cannot see.
+	private opensUnknownScope(fn: Node, args: Node[], ctx: Context): boolean {
+		if (fn.type !== "attribute") return false;
+		const obj = field(fn, "object")!;
+		if (obj.type === "call" && field(obj, "function")?.text === "super") {
+			return args.some((a) => a.type === "list_splat" || a.type === "dictionary_splat");
+		}
+		return obj.text === `${ctx.selfName}.__dict__` && field(fn, "attribute")!.text === "update";
 	}
 
 	private recordTarget(target: Node, state: State, ctx: Context): void {
@@ -729,13 +789,13 @@ class Simulator {
 	}
 
 	private read(attr: string, node: Node, state: State, ctx: Context): void {
-		if (state.assigned.has(attr) || state.guarded.has(attr)) return;
+		if (this.dynamic || state.assigned.has(attr) || state.guarded.has(attr)) return;
 		const getter = this.findGetter(attr);
 		if (getter) {
 			this.inline(getter, state, ctx.chain);
 			return;
 		}
-		if (this.isClassLevel(attr) || !this.known.has(attr)) return;
+		if (this.opaque || this.isClassLevel(attr) || !this.known.has(attr)) return;
 		const file = ctx.method.cls.file;
 		const key = `${file}:${node.startPosition.row}:${attr}`;
 		if (this.findings.has(key)) return;
@@ -756,11 +816,29 @@ export interface Target {
 	className: string;
 }
 
+export async function createWorkspace(packageRoot: string): Promise<Workspace> {
+	return new Workspace(await getParser(), packageRoot);
+}
+
+export type { Workspace };
+
+// Reports undefined when the class has no __init__ inside the repo, e.g. one generated by msgspec.
+export function analyzeClass(workspace: Workspace, file: string, className: string): Report | undefined {
+	const cls = workspace.resolveClass(file, className).classes.find((c) => c.file === file);
+	if (!cls) throw new Error(`${file}: no class ${className}`);
+	const simulator = new Simulator(cls);
+	if (!simulator.hasInit()) return undefined;
+	return simulator.run();
+}
+
+// Top-level class names defined in a module.
+export function classNames(workspace: Workspace, file: string): string[] {
+	return workspace.definedClasses(file);
+}
+
 export async function analyze(repoRoot: string, packageRoot: string, target: Target): Promise<Report> {
-	const workspace = new Workspace(await getParser(), packageRoot);
-	const file = path.join(repoRoot, target.file);
-	const { classes } = workspace.resolveClass(file, target.className);
-	const cls = classes.find((c) => c.file === file);
-	if (!cls) throw new Error(`${target.file}: no class ${target.className}`);
-	return new Simulator(cls).run();
+	const workspace = await createWorkspace(packageRoot);
+	const report = analyzeClass(workspace, path.join(repoRoot, target.file), target.className);
+	if (!report) throw new Error(`${target.file}: ${target.className} has no __init__ in its resolved MRO`);
+	return report;
 }

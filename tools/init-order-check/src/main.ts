@@ -1,32 +1,85 @@
-// Checks the constructor order of the large runtime classes; exits non-zero on any finding.
+// Checks constructor order of every class under python/sglang; exits non-zero on any finding.
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { analyze, type Report, type Target } from "./analyze.ts";
+import { analyzeClass, classNames, createWorkspace, type Report } from "./analyze.ts";
 
-const TARGETS: Target[] = [
-	{ file: "python/sglang/srt/managers/scheduler.py", className: "Scheduler" },
-	{ file: "python/sglang/srt/managers/tokenizer_manager.py", className: "TokenizerManager" },
-	{ file: "python/sglang/srt/model_executor/model_runner.py", className: "ModelRunner" },
-];
-
-const repoRoot = path.resolve(process.argv[2] ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.."));
-const rel = (file: string) => path.relative(repoRoot, file);
-
-function print(report: Report): number {
-	for (const f of report.findings) {
-		const where = f.assignedAt ? `first assigned at ${rel(f.assignedAt.file)}:${f.assignedAt.line} in ${f.assignedAt.method}` : "never assigned";
-		console.log(`${rel(f.file)}:${f.line}:${f.column}: self.${f.attr} is read before ${report.className}.__init__ assigns it (${where})`);
-		console.log(`    via ${f.chain.join(" -> ")}`);
-	}
-	for (const u of report.uninitialized) {
-		console.log(`${rel(u.assignedAt.file)}:${u.assignedAt.line}: self.${u.attr} is assigned in ${u.assignedAt.method} but ${report.className}.__init__ never initializes it`);
-	}
-	const problems = report.findings.length + report.uninitialized.length;
-	const bases = report.unresolvedBases.length ? `; bases outside the repo: ${report.unresolvedBases.join(", ")}` : "";
-	console.log(`${report.className}: walked ${report.inlinedMethods.length} methods, ${problems} problem(s)${bases}`);
-	return problems;
+const args = process.argv.slice(2);
+let repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+let json = false;
+const only: string[] = [];
+for (let i = 0; i < args.length; i++) {
+	const arg = args[i]!;
+	if (arg === "--repo") repoRoot = path.resolve(args[++i] ?? "");
+	else if (arg === "--json") json = true;
+	else only.push(arg);
 }
 
-let problems = 0;
-for (const target of TARGETS) problems += print(await analyze(repoRoot, path.join(repoRoot, "python"), target));
-process.exitCode = problems > 0 ? 1 : 0;
+const packageRoot = path.join(repoRoot, "python");
+const rel = (file: string) => path.relative(repoRoot, file);
+
+function pythonFiles(dir: string): string[] {
+	const out: string[] = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) out.push(...pythonFiles(full));
+		else if (entry.name.endsWith(".py")) out.push(full);
+	}
+	return out.sort();
+}
+
+const files = only.length > 0 ? only.map((f) => path.resolve(repoRoot, f)) : pythonFiles(path.join(packageRoot, "sglang"));
+const workspace = await createWorkspace(packageRoot);
+
+interface Problem {
+	file: string;
+	line: number;
+	className: string;
+	message: string;
+}
+
+const problems: Problem[] = [];
+let checked = 0;
+let opaque = 0;
+let partial = 0;
+const add = (report: Report, file: string, line: number, message: string) =>
+	problems.push({ file: rel(file), line, className: report.className, message });
+
+for (const file of files) {
+	for (const className of classNames(workspace, file)) {
+		const report = analyzeClass(workspace, file, className);
+		if (!report) continue;
+		if (report.opaque) {
+			opaque++;
+			continue;
+		}
+		checked++;
+		if (report.dynamic) partial++;
+		for (const f of report.findings) {
+			const where = f.assignedAt ? `first assigned at ${rel(f.assignedAt.file)}:${f.assignedAt.line} in ${f.assignedAt.method}` : "never assigned";
+			add(report, f.file, f.line, `self.${f.attr} is read before ${report.className}.__init__ assigns it (${where}; via ${f.chain.join(" -> ")})`);
+		}
+		for (const u of report.uninitialized) {
+			add(report, u.assignedAt.file, u.assignedAt.line, `self.${u.attr} is assigned in ${u.assignedAt.method} but ${report.className}.__init__ never initializes it`);
+		}
+	}
+}
+
+// A mixin shared by several classes yields one problem per class; keep the first.
+const seen = new Set<string>();
+const unique = problems.filter((p) => {
+	const key = `${p.file}:${p.line}:${p.message.split(" ")[0]}`;
+	if (seen.has(key)) return false;
+	seen.add(key);
+	return true;
+});
+
+if (json) {
+	console.log(JSON.stringify(unique, null, "\t"));
+} else {
+	for (const p of unique) console.log(`${p.file}:${p.line}: ${p.message}`);
+	console.log(`checked ${checked} classes in ${files.length} files: ${unique.length} problem(s)`);
+	console.log(`not checked: ${opaque} classes with a base outside the repo that may set attributes`);
+	console.log(`checked only up to a computed-name assignment: ${partial} classes`);
+}
+process.exitCode = unique.length > 0 ? 1 : 0;
