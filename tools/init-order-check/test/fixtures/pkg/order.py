@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from torch import nn
-
 from pkg.base import Base, EagerBase
+from torch import nn
 
 if TYPE_CHECKING:
     from pkg.cycle_a import Cycled
