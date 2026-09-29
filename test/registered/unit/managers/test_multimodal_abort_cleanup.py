@@ -19,6 +19,7 @@ register_cpu_ci(est_time=10, suite="base-a-test-cpu")
 def _deferred_proxy():
     proxy = object.__new__(CudaIpcTensorTransportProxy)
     proxy.total_consumer_count = 1
+    proxy._borrowed_storage = None
     proxy.acknowledge_consumption = MagicMock()
     return proxy
 
