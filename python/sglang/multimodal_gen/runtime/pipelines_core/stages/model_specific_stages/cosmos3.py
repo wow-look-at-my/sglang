@@ -1233,7 +1233,9 @@ class Cosmos3DenoisingStage(PipelineStage, RolloutDenoisingMixin):
                 action_fps=action_fps,
                 action_start_frame_offset=action_start_frame_offset,
                 control_latents=control_latents,
-                transfer_share_vision_temporal_positions=self._share_vision_temporal_positions,
+                transfer_share_vision_temporal_positions=(
+                    self._share_vision_temporal_positions
+                ),
             )
 
     @staticmethod

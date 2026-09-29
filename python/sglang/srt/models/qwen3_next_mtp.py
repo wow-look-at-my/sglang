@@ -32,7 +32,7 @@ from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.models.qwen3_next import Qwen3NextForCausalLM, Qwen3NextModel
 from sglang.srt.runtime_context import get_model, get_parallel, get_spec
-from sglang.srt.utils import add_prefix, is_npu
+from sglang.srt.utils import LazyValue, add_prefix, is_npu
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,8 @@ class Qwen3NextForCausalLMMTP(Qwen3NextForCausalLM):
                 "a single fused MoE expert slot."
             )
         self.enable_shared_expert_fusion = self.num_fused_shared_experts > 0
+        self.capture_aux_hidden_states = False
+        self._routed_experts_weights_of_layer = LazyValue(lambda: {})
 
     @torch.no_grad()
     def forward(
