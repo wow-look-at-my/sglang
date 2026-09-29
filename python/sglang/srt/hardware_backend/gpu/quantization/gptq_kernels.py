@@ -222,6 +222,7 @@ class GPTQMarlinLinearKernel:
 class GPTQMarlinMoEKernel:
     def __init__(self, quant_config: Optional[QuantizationConfig] = None):
         self.quant_config = quant_config
+        self.is_k_full: Optional[bool] = None
         self.moe_runner_config: Optional[MoeRunnerConfig] = None
         self.runner: Optional[MoeRunner] = None
 

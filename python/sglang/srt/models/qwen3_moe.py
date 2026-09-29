@@ -1276,17 +1276,6 @@ class Qwen3MoeForCausalLM(nn.Module):
                     else:
                         logger.warning(f"Parameter {name} not found in params_dict")
 
-        if not hasattr(self, "routed_experts_weights_of_layer"):
-            self.routed_experts_weights_of_layer = LazyValue(
-                lambda: {
-                    layer_id: self.model.layers[layer_id].mlp.get_moe_weights()
-                    for layer_id in range(self.start_layer, self.end_layer)
-                    if isinstance(
-                        self.model.layers[layer_id].mlp, Qwen3MoeSparseMoeBlock
-                    )
-                }
-            )
-
     @classmethod
     def get_model_config_for_expert_location(cls, config):
         return ModelConfigForExpertLocation(

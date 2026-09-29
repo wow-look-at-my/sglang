@@ -868,6 +868,10 @@ class CudaVmmTensorTransportProxy(CudaIpcTensorTransportProxy):
         with torch.cuda.device(device_index):
             self._acknowledge_consumption(device_index, consumer_count)
 
+    def borrow_on_target_device(self, rebuild_device_idx: int) -> torch.Tensor | None:
+        """VMM features are never lent; None makes the caller reconstruct a copy."""
+        return None
+
     def reconstruct_on_target_device(
         self, rebuild_device_idx, consumer_count: int | None = None
     ):
