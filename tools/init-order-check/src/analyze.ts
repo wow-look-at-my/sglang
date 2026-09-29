@@ -29,6 +29,7 @@ export interface Uninitialized {
 
 export interface Report {
 	className: string;
+	classFile: string;
 	findings: Finding[];
 	// Instance attributes that some method assigns and no __init__ path assigns.
 	uninitialized: Uninitialized[];
@@ -401,6 +402,7 @@ class Simulator {
 		}
 		return {
 			className: this.cls.name,
+			classFile: this.cls.file,
 			findings: [...this.findings.values()].sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line),
 			uninitialized: uninitialized.sort((a, b) => a.assignedAt.file.localeCompare(b.assignedAt.file) || a.assignedAt.line - b.assignedAt.line),
 			inlinedMethods: [...this.inlined].map((m) => `${m.cls.name}.${m.name}`),

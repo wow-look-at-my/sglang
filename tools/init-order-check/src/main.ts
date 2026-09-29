@@ -35,6 +35,7 @@ interface Problem {
 	file: string;
 	line: number;
 	className: string;
+	classFile: string;
 	message: string;
 }
 
@@ -43,7 +44,7 @@ let checked = 0;
 let opaque = 0;
 let partial = 0;
 const add = (report: Report, file: string, line: number, message: string) =>
-	problems.push({ file: rel(file), line, className: report.className, message });
+	problems.push({ file: rel(file), line, className: report.className, classFile: rel(report.classFile), message });
 
 for (const file of files) {
 	for (const className of classNames(workspace, file)) {
