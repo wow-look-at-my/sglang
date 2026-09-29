@@ -326,6 +326,7 @@ class LogitsMetadata:
     global_num_tokens_for_logprob_gpu: Optional[torch.Tensor] = None
     # The gather mode for DP attention
     dp_padding_mode: Optional[DpPaddingMode] = None
+    gathered_buffer: Optional[torch.Tensor] = None
 
     # Whether this batch is prefill-only (no token generation needed)
     is_prefill_only: bool = False
