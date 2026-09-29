@@ -55,6 +55,10 @@ class ActionSamplingParams:
         default=False, metadata={"batch_sig_exclude": True}
     )
 
+    # Unannotated so it stays out of dataclasses.fields(); instances overwrite it.
+    # None means the caller did not record which fields were set explicitly.
+    _explicit_fields = None
+
     def __post_init__(self) -> None:
         self.data_type = DataType.ACTION
         self._validate()
@@ -68,9 +72,8 @@ class ActionSamplingParams:
         diffusers_kwargs = getattr(self, "diffusers_kwargs", None)
         if diffusers_kwargs:
             extra["diffusers_kwargs"] = diffusers_kwargs
-        explicit_fields = getattr(self, "_explicit_fields", None)
-        if explicit_fields is not None:
-            extra["explicit_fields"] = sorted(explicit_fields)
+        if self._explicit_fields is not None:
+            extra["explicit_fields"] = sorted(self._explicit_fields)
         return extra
 
     def apply_request_extra(self, req: Any) -> None:

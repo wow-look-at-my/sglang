@@ -471,7 +471,7 @@ class MiniMaxH3DenoisingStage(DenoisingStage):
         self, num_inference_steps: int | tuple[int, int], batch: Req
     ) -> None:
         quality = getattr(batch.sampling_params, "quality", "lossless")
-        explicit_fields = getattr(batch.sampling_params, "_explicit_fields", ())
+        explicit_fields = batch.sampling_params._explicit_fields or ()
         enable_override = batch.sampling_params.enable_cache_dit
         generic_enabled = (
             super()._cache_dit_requested()

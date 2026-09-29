@@ -96,6 +96,7 @@ class PipelineStage(StageDedupMixin, ABC):
     _component_residency_manager = None
     _registered_stage_name: str | None = None
     _profile_stage_name: str | None = None
+    _enable_logging: bool = True
 
     def __init__(self):
         self.server_args = get_global_server_args()

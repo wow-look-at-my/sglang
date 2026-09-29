@@ -86,9 +86,11 @@ def _replace_sampling_params_for_prompt(
 
     # dataclasses.replace() also drops non-field attributes. Keep the explicit
     # user fields so InputValidationStage honors values such as width/height.
-    sampling_params._explicit_fields = getattr(
-        sampling_params_orig, "_explicit_fields", set()
-    ) | {"prompt", "output_file_name", "image_path"}
+    sampling_params._explicit_fields = (sampling_params_orig._explicit_fields or set()) | {
+        "prompt",
+        "output_file_name",
+        "image_path",
+    }
     return sampling_params
 
 

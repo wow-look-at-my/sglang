@@ -274,7 +274,7 @@ class Cosmos3SamplingParams(SamplingParams):
         defaults = self._TRANSFER_DEFAULTS.get(hints[0])
         if defaults is None:
             return
-        explicit = getattr(self, "_explicit_fields", None) or set()
+        explicit = self._explicit_fields or set()
         if "control_guidance" not in explicit:
             self.control_guidance = defaults["control_guidance"]
         if "guidance_scale" not in explicit:
@@ -509,7 +509,7 @@ class Cosmos3SamplingParams(SamplingParams):
             raise ValueError("max_frames must be positive")
 
     def _guidance_is_explicit(self) -> bool:
-        explicit = getattr(self, "_explicit_fields", None)
+        explicit = self._explicit_fields
         return explicit is not None and "guidance_scale" in explicit
 
     def _resolve_variant_defaults(
