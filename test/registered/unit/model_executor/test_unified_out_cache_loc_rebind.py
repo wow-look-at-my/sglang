@@ -254,6 +254,8 @@ class TestReadRailTranslatesAtProduction(CustomTestCase):
         recorded = {}
 
         class _RecordingLeafPool:
+            store_dtype = torch.float16
+
             def get_mla_kv_buffer(self, layer, loc, dst_dtype):
                 recorded["loc"] = loc
                 return None, None

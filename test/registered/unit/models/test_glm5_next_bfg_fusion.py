@@ -117,6 +117,7 @@ class TestGlm5NextBfgFusion(unittest.TestCase):
                     model = SimpleNamespace(
                         config=SimpleNamespace(n_routed_experts=0),
                         num_fused_shared_experts=0,
+                        fuse_qkv_a_proj=False,
                         quant_config=quant,
                         named_parameters=lambda: (
                             (f"{PREFIX}.{name}", param)
