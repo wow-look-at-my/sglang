@@ -484,6 +484,7 @@ class SanaWMTransformer3DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
         self._plucker_emb_cache: Optional[Tuple[Tuple, torch.Tensor, torch.Tensor]] = (
             None
         )
+        self._block_probe_done = False
 
         # FSDP shard targets
         self.layer_names = ["blocks"]
@@ -854,7 +855,7 @@ class SanaWMTransformer3DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
         if (
             _probe_path
             and frame_index is not None
-            and not getattr(self, "_block_probe_done", False)
+            and not self._block_probe_done
         ):
             _ck = parity_probe.checksum
             _probe = {

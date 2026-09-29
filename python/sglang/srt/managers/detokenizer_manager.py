@@ -41,7 +41,10 @@ from sglang.srt.managers.io_struct import (
     sock_recv,
     sock_send,
 )
-from sglang.srt.managers.multi_tokenizer_mixin import MultiHttpWorkerDetokenizerMixin
+from sglang.srt.managers.multi_tokenizer_mixin import (
+    MultiHttpWorkerDetokenizerMixin,
+    SocketMapping,
+)
 from sglang.srt.observability.cpu_monitor import start_cpu_monitor_thread
 from sglang.srt.runtime_context import (
     get_device,
@@ -131,6 +134,7 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
             self.send_to_tokenizer = get_zmq_socket(
                 context, zmq.PUSH, port_args.tokenizer_ipc_name, False
             )
+        self.socket_mapping = SocketMapping()
 
     def init_tokenizer(self, server_args: ServerArgs):
         if get_serving().skip_tokenizer_init:

@@ -90,6 +90,17 @@ class CompressedTensorsWNA16(CompressedTensorsLinearScheme):
                            if not self.symmetric else
                            WNA16_SUPPORTED_TYPES_MAP[num_bits])
 
+        # Default names since marlin requires empty parameters for these,
+        # TODO: remove this requirement from marlin (allow optional tensors)
+        self.w_q_name = "weight_packed"
+        self.w_s_name = "weight_scale"
+        self.w_zp_name = "weight_zero_point"
+        self.w_gidx_name = "weight_g_idx"
+
+        self.kernel_config: Optional[MarlinLinearLayerConfig] = None
+        self.is_k_full: Optional[bool] = None
+        self.workspace: Optional[torch.Tensor] = None
+
     @classmethod
     def get_min_capability(cls) -> int:
         # ampere and up
@@ -208,13 +219,6 @@ class CompressedTensorsWNA16(CompressedTensorsLinearScheme):
     # Checkpoints are serialized in compressed-tensors format, which is
     # different from the format the kernel may want. Handle repacking here.
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        # Default names since marlin requires empty parameters for these,
-        # TODO: remove this requirement from marlin (allow optional tensors)
-        self.w_q_name = "weight_packed"
-        self.w_s_name = "weight_scale"
-        self.w_zp_name = "weight_zero_point"
-        self.w_gidx_name = "weight_g_idx"
-
         device = getattr(layer, self.w_q_name).device
         c = self.kernel_config
 

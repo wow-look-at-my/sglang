@@ -46,6 +46,9 @@ class NPUCompressedTensorsW4A8Int8DynamicMoE(CompressedTensorsMoEScheme):
             is_per_channel_weight=self.is_per_channel_weight,
             activation_use_clip=self.activation_use_clip,
         )
+        self.num_experts = None
+        self.moe_runner_config = None
+        self.runner = None
 
     def create_weights(
         self,

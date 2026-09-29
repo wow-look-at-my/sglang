@@ -378,6 +378,7 @@ class DiffusersPipeline(ComposedPipelineBase):
                 "Diffusers backend"
             )
         self.server_args = server_args
+        self._disagg_role = server_args.disagg_role
         self.model_path = model_path
         self._stages: list[PipelineStage] = []
         self._stage_name_mapping: dict[str, PipelineStage] = {}

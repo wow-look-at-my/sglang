@@ -73,6 +73,9 @@ class XPUAttentionBackend(AttentionBackend):
         self.device = model_runner.device
         self.decode_cuda_graph_metadata = {}
         self.target_verify_metadata = {}
+        self.encoder_metadata = {}
+        self.workspace_decode: Optional[torch.Tensor] = None
+        self.workspace_prefill: Optional[torch.Tensor] = None
         # Pool refs — captured at construction so they survive deletion of the
         # corresponding ForwardBatch fields.
         self.req_to_token_pool = model_runner.req_to_token_pool
@@ -443,7 +446,7 @@ class XPUAttentionBackend(AttentionBackend):
                 **workspace_kwargs
             )
             if (
-                not hasattr(self, "workspace_decode")
+                self.workspace_decode is None
                 or self.workspace_decode.numel() < workspace_decode_size
             ):
                 self.workspace_decode = torch.empty(
@@ -454,7 +457,7 @@ class XPUAttentionBackend(AttentionBackend):
                 **workspace_kwargs
             )
             if (
-                not hasattr(self, "workspace_prefill")
+                self.workspace_prefill is None
                 or self.workspace_prefill.numel() < workspace_prefill_size
             ):
                 self.workspace_prefill = torch.empty(
@@ -465,17 +468,17 @@ class XPUAttentionBackend(AttentionBackend):
         # Encoder-decoder page_table holds token-slot indices for the varlen
         # kernel (page_size=1 semantics), so it must not be page-strided.
         if self.page_size > 1 and forward_batch.encoder_lens is None:
-            self.strided_indices = torch.arange(
+            strided_indices = torch.arange(
                 0, metadata.page_table.shape[1], self.page_size, device=self.device
             )
 
             if self.use_sliding_window_kv_pool and metadata.swa_page_table is not None:
                 metadata.swa_page_table = (
-                    metadata.swa_page_table[:, self.strided_indices] // self.page_size
+                    metadata.swa_page_table[:, strided_indices] // self.page_size
                 )
 
             metadata.page_table = (
-                metadata.page_table[:, self.strided_indices] // self.page_size
+                metadata.page_table[:, strided_indices] // self.page_size
             )
 
         self.forward_metadata = metadata

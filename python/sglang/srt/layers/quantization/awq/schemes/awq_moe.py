@@ -27,6 +27,7 @@ class AWQMoEScheme(AWQMoESchemeBase):
         if self.quant_config.weight_bits != 4:
             raise ValueError("AWQMoEScheme only supports 4bit now.")
         self.kernel = self._init_kernel(quant_config)
+        self.moe_runner_config = None
 
     def _init_kernel(self, quant_config: AWQMarlinConfig):
         from sglang.srt.hardware_backend.gpu.quantization.awq_kernels import (
@@ -142,6 +143,10 @@ class AWQMoEScheme(AWQMoESchemeBase):
 
 
 class AWQAscendMoEScheme(AWQMoEScheme):
+    def __init__(self, quant_config: AWQConfig):
+        super().__init__(quant_config)
+        self.runner = None
+
     def _init_kernel(self, quant_config: AWQConfig):
         from sglang.srt.hardware_backend.npu.quantization.awq_kernels import (
             AWQAscendMoEKernel,

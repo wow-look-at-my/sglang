@@ -40,6 +40,8 @@ class CompressedTensorsW4A4Nvfp4MoE(CompressedTensorsMoEScheme):
             )
         self.group_size = 16
         self.use_flashinfer_trtllm = get_moe_runner_backend().is_flashinfer_trtllm()
+        self.moe_runner_config = None
+        self.runner = None
 
     @property
     def load_up_proj_weight_first(self) -> bool:

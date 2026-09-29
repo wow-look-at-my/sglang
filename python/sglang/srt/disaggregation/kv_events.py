@@ -486,7 +486,7 @@ class ZmqEventPublisher(EventPublisher):
 
     def _publisher_thread(self) -> None:
         """Background thread that processes the event queue."""
-        self._pack = msgspec.msgpack.Encoder()
+        pack = msgspec.msgpack.Encoder()
 
         assert self._pub is not None  # narrows type for mypy
 
@@ -509,7 +509,7 @@ class ZmqEventPublisher(EventPublisher):
             try:
                 seq = next(self._seq_gen)
 
-                payload = self._pack.encode(event)
+                payload = pack.encode(event)
                 seq_bytes = seq.to_bytes(8, "big")
                 self._pub.send_multipart((self._topic_bytes, seq_bytes, payload))
 

@@ -126,6 +126,7 @@ class GGUFLinearMethod(LinearMethodBase):
         self.metadata = metadata
         self.prefix = prefix
         self.weight_type = metadata.weight_type
+        self.params_dtype: torch.dtype | None = None
 
     def create_weights(
         self,

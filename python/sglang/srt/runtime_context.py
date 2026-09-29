@@ -1185,6 +1185,12 @@ class _ServerArgsOverride:
     def __init__(self, context: RuntimeContext, fields: dict):
         self._context = context
         self._fields = fields
+        self._prev_server_args = None
+        self._prev_bags = None
+        self._prev_overrides_log = None
+        self._prev_publish_role = None
+        self._prev_parallel_config = None
+        self._prev_capture = None
         self._installed = False
 
     def install(self) -> ServerArgs:

@@ -1,6 +1,11 @@
+from typing import Optional
+
 import torch
 
-from sglang.srt.sampling.penaltylib.orchestrator import _BatchedPenalizer
+from sglang.srt.sampling.penaltylib.orchestrator import (
+    BatchedPenalizerOrchestrator,
+    _BatchedPenalizer,
+)
 from sglang.srt.utils.common import is_pin_memory_available
 
 
@@ -8,6 +13,11 @@ class BatchedPresencePenalizer(_BatchedPenalizer):
     """
     Presence penalizer penalizes tokens based on their presence in the output.
     """
+
+    def __init__(self, orchestrator: BatchedPenalizerOrchestrator):
+        super().__init__(orchestrator)
+        self.cumulated_presence_penalties: Optional[torch.Tensor] = None
+        self.presence_penalties: Optional[torch.Tensor] = None
 
     def _is_required(self) -> bool:
         return any(

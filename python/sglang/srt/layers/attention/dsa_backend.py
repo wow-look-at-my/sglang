@@ -563,6 +563,9 @@ class DeepseekSparseAttnBackend(
         else:
             self.workspace_buffer = None
 
+        self.dsa_drop_wide_page_table = False
+        self.decode_cuda_graph_metadata: Dict = {}
+
     def _make_aiter_dsa_decode_metadata_buffer(
         self,
         max_seqlen_q: int,
@@ -1290,7 +1293,7 @@ class DeepseekSparseAttnBackend(
                 if self.dsa_decode_impl == "flashmla_kv"
                 else None
             )
-        self.decode_cuda_graph_metadata: Dict = {
+        self.decode_cuda_graph_metadata = {
             "cache_seqlens": torch.ones(
                 max_num_tokens, dtype=torch.int32, device=self.device
             ),

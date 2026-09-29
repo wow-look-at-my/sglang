@@ -176,6 +176,8 @@ class CausalDMDDenoisingStage(DenoisingStage):
         except Exception:
             self.local_attn_size = -1
         self.sink_size = self.transformer.config.sink_size
+        # Set per request by _prepare_frame_seq_length from the latent shape.
+        self.num_token_per_frame: int | None = None
 
         self._causal_attn_metadata_builder_cls = None
         self._causal_attn_metadata_builder = None

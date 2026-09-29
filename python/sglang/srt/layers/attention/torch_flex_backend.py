@@ -24,6 +24,8 @@ class TorchFlexAttnBackend(AttentionBackend):
         self.req_to_token_pool = model_runner.req_to_token_pool
         self.token_to_kv_pool = model_runner.token_to_kv_pool
         self.flex_attention = torch.compile(flex_attention, dynamic=True)
+        self.extend_block_masks = []
+        self.decode_block_masks = []
         torch._dynamo.config.cache_size_limit = 1024
         torch._dynamo.config.accumulated_cache_size_limit = 1024
 

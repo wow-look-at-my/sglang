@@ -50,6 +50,7 @@ class BaseFormatDetector(ABC):
         # Critical for serving layer to calculate remaining content when streaming ends.
         # Each index corresponds to a tool_id. Example: ['{"location": "San Francisco"', '{"temp": 72']
         self.streamed_args_for_tool: List[str] = []
+        self._tool_indices: Optional[Dict[str, int]] = None
 
         # Token configuration (override in subclasses)
         self.bot_token = ""
@@ -165,7 +166,7 @@ class BaseFormatDetector(ABC):
                 return StreamingParseResult()
 
         # Build tool indices if not already built
-        if not hasattr(self, "_tool_indices"):
+        if self._tool_indices is None:
             self._tool_indices = self._get_tool_indices(tools)
 
         flags = Allow.ALL if self.current_tool_name_sent else Allow.ALL & ~Allow.STR

@@ -626,6 +626,9 @@ class CPUGraphRunner:
         self.capture_hidden_mode = self.return_hidden_states_mode
         # Static capture width: CPU graphs are decode-only.
         self.captured_req_width = 1
+        self.raw_bs = 0
+        self.raw_num_token = 0
+        self.bs = 0
 
         assert not get_lora().enable_lora, "CPUGraphRunner does not support LoRA yet."
         assert not self.enable_two_batch_overlap, (

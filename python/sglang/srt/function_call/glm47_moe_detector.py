@@ -764,7 +764,7 @@ class Glm47MoeDetector(BaseFormatDetector):
             # Update buffer to only include from the bot token onwards
             self._buffer = current_text
 
-        if not hasattr(self, "_tool_indices"):
+        if self._tool_indices is None:
             self._tool_indices = self._get_tool_indices(tools)
 
         calls: list[ToolCallItem] = []

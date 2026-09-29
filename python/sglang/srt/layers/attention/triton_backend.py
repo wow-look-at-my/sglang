@@ -410,6 +410,22 @@ class TritonAttnBackend(AttentionBackend):
         )
         self.extend_attention_block_m = block_m
 
+        # Allocated by init_cuda_graph_state.
+        self.cuda_graph_attn_logits: Optional[torch.Tensor] = None
+        self.cuda_graph_swa_attn_logits: Optional[torch.Tensor] = None
+        self.cuda_graph_attn_lse: Optional[torch.Tensor] = None
+        self.cuda_graph_lean_Mp: Optional[torch.Tensor] = None
+        self.cuda_graph_lean_Lp: Optional[torch.Tensor] = None
+        self.cuda_graph_lean_Op: Optional[torch.Tensor] = None
+        self.cuda_graph_lean_locks: Optional[torch.Tensor] = None
+        self.cuda_graph_num_kv_splits: Optional[torch.Tensor] = None
+        self.cuda_graph_kv_indices: Optional[torch.Tensor] = None
+        self.cuda_graph_window_kv_indices: Optional[torch.Tensor] = None
+        self.cuda_graph_window_num_kv_splits: Optional[torch.Tensor] = None
+        self.cuda_graph_window_kv_offsets: Optional[torch.Tensor] = None
+        self.cuda_graph_swa_out_cache_loc: Optional[torch.Tensor] = None
+        self.cuda_graph_out_cache_loc_full_physical: Optional[torch.Tensor] = None
+
     def get_num_kv_splits(
         self,
         num_kv_splits: torch.Tensor,
@@ -2417,6 +2433,8 @@ class TritonMultiStepDraftBackend:
         self.draft_window_size, self.draft_sink_size = resolve_draft_decode_window(
             model_runner
         )
+        self.cuda_graph_kv_indices: Optional[torch.Tensor] = None
+        self.cuda_graph_num_kv_splits: Optional[torch.Tensor] = None
 
     def common_template(
         self,

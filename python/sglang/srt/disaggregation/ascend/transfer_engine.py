@@ -39,6 +39,8 @@ class AscendTransferEngine(MooncakeTransferEngine):
         self.engine = TransferEngine()
         self.hostname = hostname
         self.npu_id = npu_id
+        self.gpu_id = npu_id
+        self.ib_device = ""
 
         # Centralized storage address of the AscendTransferEngine
         self.store_url = os.getenv("ASCEND_MF_STORE_URL")

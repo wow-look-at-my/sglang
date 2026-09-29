@@ -48,6 +48,7 @@ class ExpertBackupClient:
         self.gpu_buffer = None
         self.buffer_size = 0
         self.use_backup = False
+        self.params_dict = {}
         local_ip = get_local_ip_auto()
         all_ips = [None] * get_parallel().launch_world_size
         torch.distributed.all_gather_object(

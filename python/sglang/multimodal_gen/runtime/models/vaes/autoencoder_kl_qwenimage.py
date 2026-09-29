@@ -975,6 +975,7 @@ class AutoencoderKLQwenImage(ParallelTiledVAE):
             .view(1, latent_channels, 1, 1, 1)
             .to(cuda_device, dtype)
         )
+        self.clear_cache()
 
 
 

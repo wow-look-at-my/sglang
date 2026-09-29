@@ -22,6 +22,8 @@ class RemoteInstanceConnector(BaseConnector):
         super().__init__(url)
         self.url = url
         self.device = device
+        self.device_id: Optional[torch.device] = None
+        self._model_update_group = None
 
     def build_group(
         self,

@@ -40,6 +40,7 @@ class ModelSlimW8A8Int8MoE(ModelSlimMoEScheme):
             raise ValueError(
                 f"weight_prefix must be 'w13' or 'w2', got '{weight_prefix}'"
             )
+        self.num_experts = None
 
     def create_weights(
         self,

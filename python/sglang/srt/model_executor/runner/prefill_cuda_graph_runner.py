@@ -1549,8 +1549,7 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
                 with graph_capture(
                     stream=get_or_create_global_graph_capture_stream()
                 ) as graph_capture_context:
-                    self.stream = graph_capture_context.stream
-                    with self.backend.capture_session(self.stream):
+                    with self.backend.capture_session(graph_capture_context.stream):
                         self._capture_one_stream()
         finally:
             dp_flags.capturing_prefill_graph = False

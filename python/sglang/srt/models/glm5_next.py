@@ -323,6 +323,8 @@ class Glm5NextVisionModel(GlmOcrVisionModel):
         self.post_layernorm = GlmOcrRMSNorm(
             vision_config.hidden_size, eps=vision_config.rms_norm_eps
         )
+        self.embeddings = None
+        self.post_conv_layernorm = None
 
 
 class Glm5NextLinearAttention(nn.Module):
@@ -1548,7 +1550,7 @@ class Glm5NextForConditionalGeneration(nn.Module):
                 "hnorm",
             ]
 
-        fuse_qkv_a_proj = getattr(self, "fuse_qkv_a_proj", False)
+        fuse_qkv_a_proj = self.fuse_qkv_a_proj
         cached_a_proj: dict[str, torch.Tensor] = {} if fuse_qkv_a_proj else None
         qc = self.quant_config
         if qc is not None and qc.get_name() in {"awq", "awq_marlin", "moe_wna16"}:

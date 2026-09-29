@@ -2026,6 +2026,12 @@ class MHATokenToKVPool(KVCache):
     ):
         self.k_buffer = None
         self.v_buffer = None
+        self.k_scale_buffer = None
+        self.v_scale_buffer = None
+        self.native_k_scale_buffer = None
+        self.native_v_scale_buffer = None
+        self.dq_k_buffer = None
+        self.dq_v_buffer = None
         if post_capture_active:
             # Reserved upper bound only (unbacked VA): page-align UP so
             # (size + page_size) % page_size == 0 holds for paged layouts.
@@ -3245,6 +3251,7 @@ class NoOpMHATokenToKVPool(MHATokenToKVPool):
             ],
             device=self.device,
         )
+        self._kv_buffer_descs = []
 
     def _finalize_allocation_log(self, num_tokens: int):
         self.mem_usage = 0.0
@@ -3341,6 +3348,8 @@ class MHATokenToKVPoolFP4(MHATokenToKVPool):
                     )
                     for _ in range(self.layer_num)
                 ]
+        self._kv_buffer_descs = self._build_kv_buffer_descs()
+        self._init_data_ptrs_and_strides()
 
     def _clear_buffers(self):
         del self.k_buffer
@@ -4036,6 +4045,19 @@ class HybridLinearKVPool(KVCache):
         self.full_attention_layer_id_mapping = {
             id: i for i, id in enumerate(full_attention_layer_ids)
         }
+        self.kernel_page_blocks = 1
+        self.kernel_page_stride = self.page_size
+        self.store_dtype = self.full_kv_pool.store_dtype
+        self.layer_num = self.full_layer_nums
+        self.end_layer = self.full_layer_nums - 1
+        self.allocation_label = None
+        self.memory_saver_adapter = TorchMemorySaverAdapter.create(
+            enable=enable_memory_saver
+        )
+        self.cpu_offloading_chunk_size = 8192
+        # The full pool owns the buffers, so it also owns the custom mem pool.
+        self.enable_custom_mem_pool = self.full_kv_pool.enable_custom_mem_pool
+        self.custom_mem_pool = self.full_kv_pool.custom_mem_pool
         if use_mla:
             self.mem_usage = self.get_kv_size_bytes() / GB
         else:

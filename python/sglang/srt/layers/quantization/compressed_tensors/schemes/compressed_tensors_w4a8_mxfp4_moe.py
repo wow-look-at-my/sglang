@@ -40,6 +40,8 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         self.group_size = 32
         self.w13_kernel = NPUW4A8MXFP4MoEMethod()
         self.w2_kernel = NPUW4A8MXFP4MoEMethod()
+        self.moe_runner_config = None
+        self.runner = None
 
     def create_weights(
         self,

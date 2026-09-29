@@ -484,6 +484,8 @@ class DSparkDraftMixin:
     def __init__(self, config, quant_config=None, prefix: str = "") -> None:
         super().__init__(config=config, quant_config=quant_config, prefix=prefix)
         self._fused_kv_write_cache = None
+        # False until the first _stacked_ctx_kv_params call; None means unavailable.
+        self._stacked_ctx_kv_cache = False
         self.logits_mup_width_multiplier = None
         dspark_config = parse_dspark_draft_config(draft_hf_config=config)
         if not dspark_config.require_markov():
@@ -695,9 +697,8 @@ class DSparkDraftMixin:
         """
         if not envs.SGLANG_DSPARK_STACKED_CTX_KV.get():
             return None
-        cached = getattr(self, "_stacked_ctx_kv_cache", False)
-        if cached is not False:
-            return cached
+        if self._stacked_ctx_kv_cache is not False:
+            return self._stacked_ctx_kv_cache
         weights, biases, k_norm_weights = [], [], []
         eps = None
         for layer in self.layers:

@@ -634,6 +634,21 @@ class DeepseekV4HipRadixBackend(
             DSV4RawVerifyMetadata,
             DSV4RawDecodeMetadata,
         ] = None
+        self.cuda_graph_metadata_of_bucket_and_bs: Dict[
+            _GraphBucket,
+            Dict[
+                int,
+                Union[
+                    DSV4Metadata,
+                    DSV4RawDecodeMetadata,
+                    DSV4RawVerifyMetadata,
+                ],
+            ],
+        ] = {bucket: {} for bucket in _GraphBucket}
+        self.draft_extend_num_tokens_per_req: Optional[int] = None
+        self._current_capture_raw: Optional[
+            Union[DSV4RawDecodeMetadata, DSV4RawVerifyMetadata]
+        ] = None
 
     def _move_to_device(self, x: List[int]) -> torch.Tensor:
         pin_tensor = torch.tensor(x, dtype=torch.int32, pin_memory=True)
@@ -1424,17 +1439,9 @@ class DeepseekV4HipRadixBackend(
         self._refresh_fp4_prefill_workspace(replay_batch)
 
     def init_cuda_graph_state(self, max_bs: int, max_num_tokens: int) -> None:
-        self.cuda_graph_metadata_of_bucket_and_bs: Dict[
-            _GraphBucket,
-            Dict[
-                int,
-                Union[
-                    DSV4Metadata,
-                    DSV4RawDecodeMetadata,
-                    DSV4RawVerifyMetadata,
-                ],
-            ],
-        ] = {bucket: {} for bucket in _GraphBucket}
+        self.cuda_graph_metadata_of_bucket_and_bs = {
+            bucket: {} for bucket in _GraphBucket
+        }
         self.draft_extend_num_tokens_per_req = (
             max_num_tokens // max_bs if max_bs > 0 else 1
         )
@@ -1473,9 +1480,8 @@ class DeepseekV4HipRadixBackend(
 
         # Warmup upgraded raw->full on the host;
         # restore raw so capture re-runs the upgrade inside the graph.
-        current_raw = getattr(self, "_current_capture_raw", None)
-        if current_raw is not None:
-            self.forward_metadata = current_raw
+        if self._current_capture_raw is not None:
+            self.forward_metadata = self._current_capture_raw
 
     def _attach_unified_kv_decode_streams(
         self,

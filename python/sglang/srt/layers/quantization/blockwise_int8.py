@@ -46,6 +46,7 @@ class BlockInt8Config(QuantizationConfig):
         ignored_layers: Optional[List[str]] = None,
         weight_block_size: List[int] = None,
     ) -> None:
+        super().__init__()
         self.is_checkpoint_int8_serialized = is_checkpoint_int8_serialized
         if is_checkpoint_int8_serialized:
             logger.warning(
@@ -257,6 +258,7 @@ class BlockInt8MoEMethod(FusedMoEMethodBase):
         self.quant_config = quant_config
         assert self.quant_config.weight_block_size is not None
         assert self.quant_config.is_checkpoint_int8_serialized
+        self.moe_runner_config = None
 
     def create_weights(
         self,

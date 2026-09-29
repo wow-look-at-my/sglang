@@ -36,7 +36,7 @@ from sglang.srt.models.glm4_moe_lite import (
     Glm4MoeLiteForCausalLM,
 )
 from sglang.srt.runtime_context import get_parallel, get_spec
-from sglang.srt.utils import BumpAllocator, add_prefix, is_npu
+from sglang.srt.utils import BumpAllocator, LazyValue, add_prefix, is_npu
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +148,7 @@ class Glm4MoeLiteForCausalLMNextN(Glm4MoeLiteForCausalLM):
         if is_npu() and get_spec().speculative_draft_model_quantization is None:
             quant_config = None
         self.quant_config = quant_config
+        self.pp_group = get_parallel().pp_group
 
         # The draft's own gate (its quantization can differ from the
         # target's); the decoder below reads the ACTIVE decision as it builds,
@@ -165,6 +166,8 @@ class Glm4MoeLiteForCausalLMNextN(Glm4MoeLiteForCausalLM):
             use_attn_tp_group=get_parallel().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        self._routed_experts_weights_of_layer = LazyValue(lambda: {})
+        self.capture_aux_hidden_states = False
 
     @torch.no_grad()
     def forward(

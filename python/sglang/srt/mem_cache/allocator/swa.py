@@ -753,6 +753,10 @@ class PureSWATokenToKVPoolAllocator(SWATokenToKVPoolAllocator):
         self.free_pages = None
         self.release_pages = None
         self.free_group = None
+        self.swa_free_group = []
+        self.swa_page_ids_group = []
+        self._req_to_token_pool = None
+        self._swa_ring_cost = 0
 
         self._kvcache = kvcache
         self.swa_attn_allocator.clear()
