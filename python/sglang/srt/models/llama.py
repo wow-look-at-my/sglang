@@ -537,6 +537,11 @@ class LlamaForCausalLM(nn.Module):
                 use_attn_tp_group=get_parallel().enable_dp_lm_head,
             )
         self.logits_processor = LogitsProcessor(config)
+        self._init_pooler_and_stacked_params_mapping()
+
+        self.capture_aux_hidden_states = False
+
+    def _init_pooler_and_stacked_params_mapping(self) -> None:
         self.pooler = Pooler(pooling_type=PoolingType.LAST, normalize=True)
         self.stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
@@ -546,8 +551,6 @@ class LlamaForCausalLM(nn.Module):
             (".gate_up_proj", ".gate_proj", 0),
             (".gate_up_proj", ".up_proj", 1),
         ]
-
-        self.capture_aux_hidden_states = False
 
     def _init_model(
         self,

@@ -286,6 +286,7 @@ class DSAMockModelRunner(ModelRunner):
         fp8_kv_cache: bool = False,
     ):
         pool_batch_size = runner_batch_size or case.batch_size
+        self.init_component_defaults()
         self.init_deferred_component_defaults()
         self.init_startup_observability()
         self.device = device

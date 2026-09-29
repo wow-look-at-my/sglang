@@ -177,6 +177,7 @@ class HostKVCache(abc.ABC):
         *,
         pool_label: str = "kv",
     ):
+        self._destroyed = False
         self.device_pool = device_pool
         self.pool_label = pool_label
         # page_size arrives widened (x dcp_size); size/page_size/page_num are physical.
@@ -260,7 +261,13 @@ class HostKVCache(abc.ABC):
 
         # A lock for synchronized operations on memory allocation and state transitions.
         self.lock = threading.RLock()
+        self._init_free_list_defaults()
         self.clear()
+
+    def _init_free_list_defaults(self):
+        self.free_slots = torch.empty((0,), dtype=torch.int64)
+        self.release_slots = []
+        self.num_release_slots = 0
 
     def destroy(self):
         """Unregister pinned host buffers in userspace before process exit.
@@ -270,7 +277,7 @@ class HostKVCache(abc.ABC):
         sleep for tens of seconds. Idempotent. (Only the host_register path
         needs this; npu/musa pin_memory buffers are freed by torch.)
         """
-        if getattr(self, "_destroyed", False):
+        if self._destroyed:
             return
         self._destroyed = True
         buffers = getattr(self, "kv_buffer", None)

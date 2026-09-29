@@ -755,6 +755,7 @@ class DeepSeekV4StateHostPool(HostKVCache):
         self.page_num = num_host_pages
         self.fd = getattr(self.allocator, "fd", None)
         self._destroyed = False
+        self._init_free_list_defaults()
 
         self.ring_size = 0
         self.state_page_bytes = 0

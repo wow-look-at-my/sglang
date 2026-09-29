@@ -695,6 +695,7 @@ class UnifiedPageEnvelopeHostPool(HostKVCache):
         self.fd = _shared_backing.fd
         self.lock = _shared_backing.lock
         self._destroyed = False
+        self._init_free_list_defaults()
         _shared_backing.retain(pool_label)
 
     @classmethod

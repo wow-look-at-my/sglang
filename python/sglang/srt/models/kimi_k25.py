@@ -305,6 +305,7 @@ class Rope2DPosEmbRepeated(nn.Module):
         self.max_height = max_height
         self.max_width = max_width
         self.theta_base = theta_base
+        self.register_buffer("freqs_cis", None, persistent=False)
 
     def extra_repr(self):
         return f"dim={self.dim}, max_height={self.max_height}, max_width={self.max_width}, theta_base={self.theta_base}"
@@ -345,10 +346,8 @@ class Rope2DPosEmbRepeated(nn.Module):
         Returns:
             freqs_cis: tensor of shape (sum(t * height * width), dim//2)
         """
-        if not hasattr(self, "freqs_cis"):
-            self.register_buffer(
-                "freqs_cis", self._precompute_freqs_cis(device), persistent=False
-            )
+        if self.freqs_cis is None:
+            self.freqs_cis = self._precompute_freqs_cis(device)
 
         shapes = grid_thws.tolist()
         assert all(

@@ -656,9 +656,15 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         self.kr_cache_dim = 0 if self.dsa_kv_cache_store_fp8 else qk_rope_head_dim
         self.index_k_scale_buffer = None
         self.indexer_hadamard_128 = None
+        self.use_dsa = False
+        self.data_ptrs = None
 
         self.custom_mem_pool = None
 
+        self._create_buffers()
+        self._finalize_allocation_log(size)
+
+    def _create_buffers(self):
         with self.memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE):
             # The padded slot 0 is used for writing dummy outputs from padded tokens.
             if self.enable_sparsity_driven_kv_offload:
@@ -667,7 +673,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
             else:
                 self.k_buffer = torch.zeros(
                     (
-                        layer_num,
+                        self.layer_num,
                         self.size // self.page_size + 1,
                         self.page_size,
                         1,
@@ -678,7 +684,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
                 )
                 self.v_buffer = torch.zeros(
                     (
-                        layer_num,
+                        self.layer_num,
                         self.size // self.page_size + 1,
                         self.page_size,
                         1,
@@ -717,8 +723,6 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
                     self.indexer_hadamard_128 = create_npu_hadamard_128(
                         self.index_head_dim, self.device
                     )
-
-        self._finalize_allocation_log(size)
 
     def get_kv_size_bytes(self):
         kv_size_bytes = 0

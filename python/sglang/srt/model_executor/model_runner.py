@@ -570,6 +570,54 @@ class ModelRunner:
             get_model=lambda: self.model,
         )
 
+    def init_component_defaults(self):
+        """Empty values for what the constructor's init_* steps and the forward
+        path fill in."""
+        self.memory_pool_config: Optional[MemoryPoolConfig] = None
+        # Set by maybe_init_lora_manager; stays None when LoRA is off and on
+        # draft runners, which serve adapters' target model unadapted.
+        self.lora_manager: Optional[LoRAManager] = None
+        self.uno_lora_id = None
+        self.forward_pass_id = 0
+        self._pending_elastic_scale_update = None
+        self._sampling_observer: Optional[SamplingObserver] = None
+        self.sampling_prewarm_result = SamplingPrewarmResult()
+        self.remote_instance_weight_transporter = None
+        self.msprobe_debugger = None
+        self.spec_aux_config = None
+        self.pre_model_load_memory = None
+        self.tp_group = None
+        self.pp_group = None
+        self.attention_tp_group = None
+        self.tp_rank = None
+        self.tp_size = None
+        self.dp_size = None
+        self.attn_dp_size = None
+        self.pp_rank = None
+        self.pp_size = None
+        self.attn_cp_rank = None
+        self.attn_dcp_rank = None
+        self.attn_dcp_size = None
+        self.moe_ep_size = None
+        self.dp_rank = None
+        self.memory_saver_adapter = None
+        self.eplb_manager = None
+        self.expert_location_updater = None
+        self._token_oracle_manager = None
+        self.sampler = None
+        self.load_config = None
+        self.loader = None
+        self.model = None
+        # The native overlap path replaces this during load_model(). Keep the
+        # no-pending-work invariant for lightweight backends that override the
+        # base initialization and weight-loading flow.
+        self.startup_weight_load = None
+        self.prefill_aware_swa = False
+        self.expert_backup_client = None
+        self.layer_info = None
+        self.weight_updater = None
+        self.weight_exporter = None
+
     def init_deferred_component_defaults(self):
         """Empty values for what alloc_memory_pool, init_attention_backends and
         init_cuda_graphs build after construction."""
@@ -1478,7 +1526,7 @@ class ModelRunner:
         resolved_kv_cache_dtype, self.kv_cache_dtype = (
             kv_cache_dtype.configure_kv_cache_dtype(
                 server_args_kv_cache_dtype=get_model().kv_cache_dtype,
-                model=getattr(self, "model", None),
+                model=self.model,
                 model_dtype=getattr(self, "dtype", torch.bfloat16),
                 is_draft_worker=getattr(self, "is_draft_worker", False),
                 is_dflash=(
