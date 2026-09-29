@@ -677,6 +677,7 @@ class Scheduler(
 
         # Init overlap schedule
         self.init_overlap()
+        self.init_pp_loop_defaults()
 
         # Init Ngram Embedding
         self.maybe_init_ngram_embedding()
@@ -1121,6 +1122,9 @@ class Scheduler(
             )
         device_module = torch.get_device_module(model_runner.device)
         self.schedule_stream = None if use_mlx() else device_module.Stream(priority=0)
+        # The global WAR barrier fences the scheduler's next shared-buffer write
+        # on the previous forward's read of the unified memory pool.
+        self._war_barrier_enabled = is_cuda() or envs.SGLANG_ENABLE_WAR_BARRIER.get()
         # Match run_batch / _pp_launch_batch so warmup allocations stay reusable.
         forward_stream = (
             model_runner.forward_stream
@@ -1561,6 +1565,9 @@ class Scheduler(
         self.disagg_decode_transfer_queue = None
 
         self.disaggregation_mode = DisaggregationMode(get_disagg().disaggregation_mode)
+        # PD decode pulls finished KV transfers every polling_interval iterations.
+        self.polling_count = 0
+        self.polling_interval = get_disagg().disaggregation_decode_polling_interval
         self.transfer_backend = TransferBackend(
             get_disagg().disaggregation_transfer_backend
         )
@@ -1985,9 +1992,6 @@ class Scheduler(
                 self.schedule_stream = allocate_distinct_stream(
                     self.device_module, (self.forward_stream,)
                 )
-        # The global WAR barrier fences the scheduler's next shared-buffer write
-        # on the previous forward's read of the unified memory pool.
-        self._war_barrier_enabled = is_cuda() or envs.SGLANG_ENABLE_WAR_BARRIER.get()
         with self.device_module.StreamContext(self.schedule_stream):
             self.metrics_reporter.start_scheduler_time_accounting()
             dispatch_event_loop(self)
@@ -3743,8 +3747,7 @@ class Scheduler(
         self.process_pending_chunked_abort()
         self._process_hicache_events()
 
-        if self.enable_fpm:
-            self._fpm_batch_t0 = time.monotonic()
+        fpm_batch_t0 = time.monotonic() if self.enable_fpm else None
         if self.dllm_config is not None:
             self.dllm_manager.filter_finished_reqs()
 
@@ -3878,7 +3881,7 @@ class Scheduler(
         if ret:
             set_schedule_time_batch(ret)
             if self.enable_fpm:
-                ret.fpm_start_time = self._fpm_batch_t0
+                ret.fpm_start_time = fpm_batch_t0
 
         return NextBatchPlan(batch_to_run=ret, running_batch=running_batch)
 

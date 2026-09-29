@@ -387,6 +387,7 @@ class ModelRunner:
         self.enable_hisparse = get_memory().enable_hisparse
         self._sampling_observer: Optional[SamplingObserver] = None
         self.sampling_prewarm_result = SamplingPrewarmResult()
+        self.init_deferred_component_defaults()
 
         self.init_startup_observability()
 
@@ -578,6 +579,31 @@ class ModelRunner:
             get_model_path=lambda: self.model_config.model_path,
             get_model=lambda: self.model,
         )
+
+    def init_deferred_component_defaults(self):
+        """Empty values for what alloc_memory_pool, init_attention_backends and
+        init_cuda_graphs build after construction."""
+        self.kv_cache_configurator = None
+        self.max_total_num_tokens = None
+        self.max_running_requests = None
+        self.token_to_kv_pool = None
+        self.full_max_total_num_tokens = None
+        self.swa_max_total_num_tokens = None
+        self._unified_memory_pool = None
+        self.kv_index_translator = None
+        self.canary_manager = None
+        self.ngram_embedding_manager = None
+        self.graph_shared_output = None
+        self.decode_cuda_graph_captured = False
+        self.decode_cuda_graph_capture_bs: list[int] = []
+        self.prefill_attention_backend_str = None
+        self.decode_attention_backend_str = None
+        self.attn_backend = None
+        self.decode_attn_backend = None
+        self.decode_attn_backend_group = None
+        self.eager_runner = None
+        self.prefill_cuda_graph_runner = None
+        self.decode_cuda_graph_runner = None
 
     def init_remote_instance_weight_transporter(self):
         self.remote_instance_weight_transporter = RemoteInstanceWeightTransporter(

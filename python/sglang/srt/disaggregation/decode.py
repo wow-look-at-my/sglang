@@ -3175,10 +3175,6 @@ class SchedulerDisaggregationDecodeMixin:
             # if there are still retracted requests, we do not allocate new requests
             return
 
-        if not hasattr(self, "polling_count"):
-            self.polling_count = 0
-            self.polling_interval = get_disagg().disaggregation_decode_polling_interval
-
         self.polling_count = (self.polling_count + 1) % self.polling_interval
 
         if self.polling_count % self.polling_interval == 0:
