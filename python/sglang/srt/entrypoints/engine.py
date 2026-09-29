@@ -1120,6 +1120,7 @@ class Engine(EngineScoreMixin, EngineBase):
             # Allocate ports for inter-process communications
             if port_args is None:
                 port_args = PortArgs.init_new(server_args)
+            logger.info(f"sglang build commit={envs.SGLANG_BUILD_COMMIT.get()}")
             logger.info(f"server_args={server_args.resolved_dict()}")
 
             # Start the engine info bootstrap server if per-rank info is needed.

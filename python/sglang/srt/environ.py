@@ -284,6 +284,8 @@ class Envs:
     # Record mode: append each newly observed (role, namespace) pair to this
     # file so the audit survives signal-killed workers.
     SGLANG_ROLE_NAMESPACES_OUT = EnvStr(None)
+    # Commit the serving image was built from; docker/Dockerfile sets it.
+    SGLANG_BUILD_COMMIT = EnvStr("unknown")
     IS_H200 = EnvBool(False)
     SGLANG_ENABLE_TORCH_INFERENCE_MODE = EnvBool(False)
 
