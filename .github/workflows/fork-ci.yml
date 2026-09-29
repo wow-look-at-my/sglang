@@ -478,7 +478,8 @@ jobs:
           USE_CCACHE: 1
           # Empty lets build.sh size jobs to cores and RAM + swap.
           BUILD_JOBS: ${{ vars.FORK_KERNEL_BUILD_JOBS || '' }}
-          NVCC_THREADS: ${{ vars.FORK_KERNEL_NVCC_THREADS || '2' }}
+          # Each nvcc thread compiles one arch of a translation unit at up to 10 GB.
+          NVCC_THREADS: ${{ vars.FORK_KERNEL_NVCC_THREADS || '1' }}
           CMAKE_ARGS: -DSGL_KERNEL_CUDA_ARCHS=${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}
         run: |
           cd python/sglang/kernels/aot
