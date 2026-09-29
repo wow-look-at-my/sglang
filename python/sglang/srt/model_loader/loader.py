@@ -1590,7 +1590,7 @@ class QuantizedRLModelLoader(DefaultModelLoader):
             layer_id = get_layer_id(name)
             if (
                 layer_id is not None
-                and hasattr(model, "start_layer")
+                and getattr(model, "start_layer", None) is not None
                 and (layer_id < model.start_layer or layer_id >= model.end_layer)
             ):
                 continue

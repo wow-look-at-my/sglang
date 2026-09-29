@@ -153,6 +153,8 @@ class MultiLayerEagleDraftExtendCudaGraphRunner(DecodeCudaGraphRunner):
     """
 
     def __init__(self, eagle_worker: MultiLayerEagleDraftWorker, step: int):
+        self._init_runner_defaults()
+        self._init_decode_runner_defaults()
         # Parse args
         self.step = step
         self.eagle_worker = eagle_worker

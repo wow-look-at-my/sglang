@@ -384,6 +384,7 @@ class MooncakeStore(HiCacheStorage, MooncakeBaseStore):
     def __init__(
         self, storage_config: HiCacheStorageConfig = None, mem_pool: HostKVCache = None
     ):
+        HiCacheStorage.__init__(self)
         MooncakeBaseStore.__init__(self)
         MooncakeDistributedStore = self._import_mooncake_store()
         self._replicate_config_cls, self._supports_group_ids = (
@@ -764,7 +765,7 @@ class MooncakeStore(HiCacheStorage, MooncakeBaseStore):
     def _get_hybrid_page_component_keys(
         self, page_keys: List[str], transfer: PoolTransfer
     ) -> Tuple[List[str], int]:
-        host_pool = getattr(self, "registered_pools", {}).get(transfer.name)
+        host_pool = self.registered_pools.get(transfer.name)
         if host_pool is None:
             raise ValueError(f"Unregistered Mooncake hybrid pool: {transfer.name}")
 
@@ -927,7 +928,7 @@ class MooncakeStore(HiCacheStorage, MooncakeBaseStore):
         # storage objects per logical page, but API still reports page-level result.
         results: dict = {}
         for transfer in transfers:
-            host_pool = getattr(self, "registered_pools", {}).get(transfer.name)
+            host_pool = self.registered_pools.get(transfer.name)
             keys = transfer.keys
             page_size = getattr(host_pool, "page_size", 1) or 1
             host_indices = transfer.host_indices

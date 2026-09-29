@@ -242,6 +242,10 @@ class DeepseekV4ForCausalLMNextN(DeepseekV4ForCausalLM):
         self.logits_processor = LogitsProcessor(config)
         self.capture_aux_hidden_states = False
         self._routed_experts_weights_of_layer = LazyValue(lambda: {})
+        # None means no PP layer range, so loaders keep the NextN layer that
+        # sits past num_hidden_layers.
+        self.start_layer: Optional[int] = None
+        self.end_layer: Optional[int] = None
         self._mhc_prewarmed_at_load = False
 
     @torch.no_grad()

@@ -132,6 +132,7 @@ class HiCacheSiMM(HiCacheStorage):
     def __init__(
         self, storage_config: HiCacheStorageConfig = None, mem_pool: HostKVCache = None
     ):
+        super().__init__()
         try:
             extra_config = (
                 getattr(storage_config, "extra_config", None)

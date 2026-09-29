@@ -64,13 +64,14 @@ _deep_gemm_layout_memory_budget_initialized = False
 
 
 def _align_pipeline_layers(layers: list, layer_model) -> list:
-    has_start_layer = hasattr(layer_model, "start_layer")
-    has_end_layer = hasattr(layer_model, "end_layer")
-    assert has_start_layer == has_end_layer, (
+    start_layer = getattr(layer_model, "start_layer", None)
+    end_layer = getattr(layer_model, "end_layer", None)
+    assert (start_layer is None) == (end_layer is None), (
         "pipeline layer ranges must define start_layer and end_layer together"
     )
-    start_layer = layer_model.start_layer if has_start_layer else 0
-    end_layer = layer_model.end_layer if has_end_layer else len(layer_model.layers)
+    if start_layer is None:
+        start_layer = 0
+        end_layer = len(layer_model.layers)
     assert isinstance(start_layer, int) and isinstance(end_layer, int), (
         "pipeline layer ranges must define integer start_layer and end_layer"
     )

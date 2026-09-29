@@ -769,6 +769,11 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # forward-path re-plan would clobber their metadata.
     forward_metadata_replan_equivalent: bool = False
 
+    def __post_init__(self):
+        # Not dataclass fields: the TBO child split rejects a set field it does not copy.
+        self.output_cache_loc_backup: Optional[torch.Tensor] = None
+        self.hidden_states_backup: Optional[torch.Tensor] = None
+
     def mark_forward_metadata_ready(self, replan_equivalent: bool = False):
         """Record that attention metadata was pre-planned for this batch.
 
@@ -1737,12 +1742,12 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         # padding
         self._pad_inputs_to_size(model_runner, num_tokens, bs)
         self.global_num_tokens_cpu = global_num_tokens
-        self.use_pin_memory = not _is_cpu
+        use_pin_memory = not _is_cpu
         global_num_tokens_pinned = torch.tensor(
-            global_num_tokens, pin_memory=self.use_pin_memory
+            global_num_tokens, pin_memory=use_pin_memory
         )
         self.global_num_tokens_gpu.copy_(
-            global_num_tokens_pinned, non_blocking=self.use_pin_memory
+            global_num_tokens_pinned, non_blocking=use_pin_memory
         )
 
         TboForwardBatchPreparer.prepare(
@@ -1995,9 +2000,8 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                     ]
                 logits_output.hidden_states = logits_output.hidden_states[:bs]
 
-            if hasattr(self, "hidden_states_backup"):
+            if self.output_cache_loc_backup is not None:
                 self.spec_info.hidden_states = self.hidden_states_backup
-            if hasattr(self, "output_cache_loc_backup"):
                 self.out_cache_loc = self.output_cache_loc_backup
 
         elif self.forward_mode.is_decode() or self.forward_mode.is_idle():

@@ -240,10 +240,8 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         record_nolora_graph: bool = False,
     ):
         super().__init__(model_runner)
+        self._init_decode_runner_defaults()
         self.record_nolora_graph = record_nolora_graph
-
-        # In-graph metadata prep: shared buffers -> in-graph private data
-        self.in_graph_metadata_prep_done: Optional[torch.cuda.Event] = None
 
         # --- core state ------------------------------------------------
         self.enable_torch_compile = get_flags().capture.enable_torch_compile
@@ -340,15 +338,11 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             and (self.capture_forward_mode == ForwardMode.TARGET_VERIFY)
             and not self.model_runner.is_draft_worker
         )
-        self.capture_num_tokens: Optional[list[int]] = (
+        self.capture_num_tokens = (
             self._build_ragged_verify_token_buckets()
             if self.ragged_verify_mode
             else None
         )
-        self._ragged_graph_size = 0
-        # Per-tier capture layouts; their verify_lens / qo_indptr tensors are
-        # baked into the captured graphs and refreshed in place each replay.
-        self._captured_ragged_layouts: dict[int, object] = {}
         if self.ragged_verify_mode and (
             self.enable_two_batch_overlap
             or model_runner.lora_manager is not None
@@ -446,7 +440,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # FB-shared slot registry adopting DecodeInputBuffers storage (same
         # physical tensors, stable data_ptr for capture vs replay). Provides
         # the unified fill_from / slot access surface for capture/replay.
-        self.buffer_registry: CudaGraphBufferRegistry = build_decode_registry(
+        self.buffer_registry = build_decode_registry(
             device=self.device,
             max_bs=self.max_bs,
             max_num_token=self.max_num_token,
@@ -488,6 +482,38 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
 
         # --- capture --------------------------------------------------
         self._capture_all_graphs(failure_label="Capture cuda graph failed")
+
+    def _init_decode_runner_defaults(self) -> None:
+        """Empty values for the fields __init__, capture and load_batch set;
+        a subclass that skips __init__ calls this first."""
+        # In-graph metadata prep: shared buffers -> in-graph private data
+        self.in_graph_metadata_prep_done: Optional[torch.cuda.Event] = None
+        self.is_encoder_decoder = False
+        self.enable_two_batch_overlap = False
+        self.use_ngram_embedding = False
+        self.speculative_algorithm = None
+        self.enable_prefill_cp = False
+        self.dllm_config = None
+        self.dllm_uses_input_embeds = False
+        self.speculative_num_draft_tokens = None
+        self.ragged_verify_mode = False
+        self.capture_num_tokens: Optional[list[int]] = None
+        self._ragged_graph_size = 0
+        # Per-tier capture layouts; their verify_lens / qo_indptr tensors are
+        # baked into the captured graphs and refreshed in place each replay.
+        self._captured_ragged_layouts: dict[int, object] = {}
+        self.encoder_len_fill_value = 0
+        self.buffer_registry: Optional[CudaGraphBufferRegistry] = None
+        self._metadata_glue = None
+        self.stream_groups = None
+        self._profile_bs_list: list[int] = []
+        self._profile_bs_idx = 0
+        self._profiler = None
+        self.stream = None
+        self._replay_graph_key = None
+        self.raw_bs: Optional[int] = None
+        self.raw_num_token: Optional[int] = None
+        self.bs: Optional[int] = None
 
     def _capture_all_graphs(self, *, failure_label: str) -> None:
         """Capture every graph, recapturing when custom all-reduce drops out."""
