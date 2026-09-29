@@ -274,6 +274,26 @@ class OverridesClear(Resettable):
         pass
 
 
+class ResizableBase:
+    def __init__(self):
+        self.size = 0
+
+    def resize(self):
+        self.pages = 1
+
+
+class SkipsBaseResize(ResizableBase):
+    def resize(self):
+        self.size = 2
+
+
+class ChainsPastSkip(SkipsBaseResize):
+    """super().resize() reaches SkipsBaseResize.resize, which never calls ResizableBase.resize."""
+
+    def resize(self):
+        super().resize()
+
+
 class ExplicitOther:
     def __init__(self):
         Resettable.__init__(self)

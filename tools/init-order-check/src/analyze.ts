@@ -444,7 +444,6 @@ class Simulator {
 	private cls: ClassInfo;
 	private workspace: Workspace;
 	private helpers = new Map<string, Method>();
-	private superCalled: Set<string> | undefined;
 	// A base outside the repo, such as nn.Conv2d, can set any attribute; the check then trusts every read.
 	private opaque: boolean;
 	// Set once the constructor path can assign any name. Later reads and omissions are then trusted.
@@ -470,13 +469,18 @@ class Simulator {
 		}
 	}
 
-	// A base method that this class overrides never runs, unless some override reaches it through super().
+	// A base method that this class overrides runs only if the override's own super() chain reaches it.
 	private runs(m: Method): boolean {
-		if (!m.cls.methods.has(m.name) || this.findMethod(m.name) === m) return true;
-		this.superCalled ??= new Set(
-			this.mro.flatMap((c) => [...c.methods.values()].flatMap((x) => [...x.node.text.matchAll(/super\([^)]*\)\s*\.\s*(\w+)\s*\(/g)].map((r) => r[1]!))),
-		);
-		return this.superCalled.has(m.name);
+		if (!m.cls.methods.has(m.name)) return true;
+		let current = this.findMethod(m.name);
+		const seen = new Set<Method>();
+		while (current && !seen.has(current)) {
+			if (current === m) return true;
+			seen.add(current);
+			const calls = new RegExp(`super\\([^)]*\\)\\s*\\.\\s*${m.name}\\s*\\(`).test(current.node.text);
+			current = calls ? this.findMethod(m.name, current.cls) : undefined;
+		}
+		return false;
 	}
 
 	private generatedInit(): boolean {

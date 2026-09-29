@@ -1246,6 +1246,7 @@ def _store_without_registry(
     family: str = "mha",
 ) -> TensorcastStore:
     store = object.__new__(TensorcastStore)
+    HiCacheStorage.__init__(store)
     store._storage_config = _storage_config(family=family, extra_config=source)
     store._tensorcast_config = normalize_tensorcast_config(source)
     store._registered = None
