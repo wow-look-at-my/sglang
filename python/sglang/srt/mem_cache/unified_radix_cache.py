@@ -273,8 +273,6 @@ class UnifiedRadixCache(BasePrefixCache):
         # Owns the storage backend lifecycle; built by init_hicache.
         self._storage_attachment: Optional[StorageAttachment] = None
         self.linker: Optional[UnifiedCacheLinkerWrapper] = None
-        self.load_cache_event: Optional[threading.Event] = None
-        self.load_back_threshold = 10
         self.prefetch_stop_policy = "best_effort"
         self.prefetch_threshold = 256
         self.prefetch_timeout_base = 1.0
@@ -534,6 +532,7 @@ class UnifiedRadixCache(BasePrefixCache):
                     reason=reason,
                     pool=PoolName.KV.value,
                 )
+        self.load_back_threshold = 10
         self.prefetch_stop_policy = get_memory().hicache_storage_prefetch_policy
 
         # Runtime attach/detach of the L3 backend (startup, admin API, atexit).
