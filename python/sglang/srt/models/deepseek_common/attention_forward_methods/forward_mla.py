@@ -132,6 +132,7 @@ class DeepseekMLAForwardMixin:
         self.flashinfer_mla_disable_ragged = (
             get_exec().kernel.flashinfer_mla_disable_ragged
         )
+        self._q8kv8_qprep_overlap_pending = False
 
     def should_run_indexer(
         self: DeepseekV2AttentionMLA,

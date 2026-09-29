@@ -476,6 +476,9 @@ class Flux2PipelineConfig(FluxPipelineConfig):
         ]
     )
 
+    def __post_init__(self):
+        self._vae_has_bn_cache: bool | None = None
+
     def is_flux_v1(self) -> bool:
         return False
 
@@ -685,7 +688,7 @@ class Flux2PipelineConfig(FluxPipelineConfig):
 
     def _check_vae_has_bn(self, vae):
         """Check if VAE has bn attribute (cached check to avoid repeated hasattr calls)."""
-        if not hasattr(self, "_vae_has_bn_cache"):
+        if self._vae_has_bn_cache is None:
             self._vae_has_bn_cache = hasattr(vae, "bn") and vae.bn is not None
         return self._vae_has_bn_cache
 

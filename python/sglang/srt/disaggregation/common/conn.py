@@ -1491,6 +1491,7 @@ class CommonKVSender(BaseKVSender):
     ):
         self.kv_mgr = mgr
         self.bootstrap_room = bootstrap_room
+        self.num_kv_indices: Optional[int] = None
         self.aux_index = None
         self.bootstrap_server_url = bootstrap_addr
         self.conclude_state: Optional[KVPoll] = None
@@ -1696,6 +1697,15 @@ class CommonKVReceiver(BaseKVReceiver):
         self.init_time: Optional[float] = None
         self.abort_notified: bool = False
         self._connection_pool_entries: Dict[str, List[Dict]] = {}
+        self.prefill_info: Optional[PrefillServerInfo] = None
+        self.target_tp_rank: Optional[int] = None
+        self.target_tp_ranks: Optional[List[int]] = None
+        self.target_cp_ranks: Optional[List[int]] = None
+        self.target_pp_ranks: Optional[List[int]] = None
+        self.required_dst_info_num: Optional[int] = None
+        self.required_prefill_response_num: Optional[int] = None
+        self.prefill_dp_rank: Optional[int] = None
+        self.bootstrap_infos: Optional[List[Dict]] = None
         self.kv_mgr.addr_to_rooms_tracker[self.bootstrap_addr].add(self.bootstrap_room)
         self.kv_mgr.update_status(self.bootstrap_room, KVPoll.Bootstrapping)
 
@@ -1954,11 +1964,7 @@ class CommonKVReceiver(BaseKVReceiver):
         )
         self.kv_mgr.update_status(self.bootstrap_room, KVPoll.Failed)
         self.invalidate_cached_bootstrap_infos()
-        if (
-            not self.abort_notified
-            and hasattr(self, "bootstrap_infos")
-            and self.bootstrap_infos is not None
-        ):
+        if not self.abort_notified and self.bootstrap_infos is not None:
             self._send_abort_notification()
             self.abort_notified = True
         return KVPoll.Failed
@@ -1978,11 +1984,7 @@ class CommonKVReceiver(BaseKVReceiver):
         )
         self.kv_mgr.update_status(self.bootstrap_room, KVPoll.Failed)
         self.conclude_state = KVPoll.Failed
-        if (
-            not self.abort_notified
-            and hasattr(self, "bootstrap_infos")
-            and self.bootstrap_infos is not None
-        ):
+        if not self.abort_notified and self.bootstrap_infos is not None:
             self._send_abort_notification()
             self.abort_notified = True
 
@@ -2039,6 +2041,8 @@ class CommonKVBootstrapServer(BaseKVBootstrapServer):
         self.entry_cleanup_interval = (
             envs.SGLANG_DISAGGREGATION_BOOTSTRAP_ENTRY_CLEANUP_INTERVAL.get()
         )
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._runner: Optional[web.AppRunner] = None
 
         # Start bootstrap server
         self.thread = threading.Thread(target=self._run_server, daemon=True)

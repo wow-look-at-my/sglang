@@ -4978,6 +4978,7 @@ class DSATokenToKVPool(MLATokenToKVPool):
             kv_cache_dim if kv_cache_dim != kv_lora_rank + qk_rope_head_dim else None
         )
 
+        self.index_key_cache: Optional[IndexKeyCache] = None
         super().__init__(
             size,
             page_size,

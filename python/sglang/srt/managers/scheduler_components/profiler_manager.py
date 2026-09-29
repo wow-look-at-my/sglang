@@ -65,6 +65,9 @@ class SchedulerProfilerManager:
         self.torch_profiler_output_dir: Optional[Path] = None
         self.profiler_activities: Optional[List[str]] = None
         self.profile_id: Optional[str] = None
+        self.profile_prefix: str = ""
+        self.torch_profiler_with_stack: Optional[bool] = None
+        self.torch_profiler_record_shapes: Optional[bool] = None
 
         self.profiler_start_forward_ct: Optional[int] = None
         self.profiler_target_forward_ct: Optional[int] = None
@@ -81,6 +84,7 @@ class SchedulerProfilerManager:
 
         # For ROCM
         self.rpd_profiler = None
+        self.rpd_profile_path: Optional[str] = None
 
     def _init_profile(
         self,

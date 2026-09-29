@@ -102,6 +102,7 @@ class PipelineStage(StageDedupMixin, ABC):
         self._component_residency_manager = None
         self._registered_stage_name: str | None = None
         self._profile_stage_name: str | None = None
+        self._enable_logging: bool = True
 
     def log_info(self, msg, *args):
         """Logs an informational message with the stage name as a prefix."""

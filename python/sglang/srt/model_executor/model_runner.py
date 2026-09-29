@@ -334,6 +334,7 @@ class ModelRunner:
         draft_model_idx: Optional[int] = None,
         draft_attention_backend: Optional[str] = None,
     ):
+        self.init_component_defaults()
         # Parse args
         self.mem_fraction_static = mem_fraction_static
         # Set on target by `_resolve_memory_pool_config`; passed in for draft
@@ -349,9 +350,6 @@ class ModelRunner:
         # clobber the target's config), so only the target checks.
         if not is_draft_worker:
             assert_published(server_args, role="scheduler")
-        # Set by maybe_init_lora_manager; stays None when LoRA is off and on
-        # draft runners, which serve adapters' target model unadapted.
-        self.lora_manager: Optional[LoRAManager] = None
         self.device = get_device().device
         self.draft_attention_backend = resolve_draft_attention_backend(
             draft_attention_backend=draft_attention_backend,
@@ -380,13 +378,9 @@ class ModelRunner:
         self.use_mla_backend = self.model_config.attention_arch == AttentionArch.MLA
         self.attention_chunk_size = model_config.attention_chunk_size
         self.enable_elastic_ep = get_exec().moe.elastic_ep_backend is not None
-        self.forward_pass_id = 0
-        self._pending_elastic_scale_update = None
         self.init_new_workspace = False
         self.draft_model_idx = draft_model_idx
         self.enable_hisparse = get_memory().enable_hisparse
-        self._sampling_observer: Optional[SamplingObserver] = None
-        self.sampling_prewarm_result = SamplingPrewarmResult()
         self.init_deferred_component_defaults()
 
         self.init_startup_observability()
@@ -455,11 +449,6 @@ class ModelRunner:
         # For hisparse (must be set before initialize() so CUDA graph capture can see it)
         self.hisparse_coordinator = None
 
-        # The native overlap path replaces this during load_model(). Keep the
-        # no-pending-work invariant for lightweight backends that override the
-        # base initialization and weight-loading flow.
-        self.startup_weight_load = None
-
         # Load model weights and configure
         self.initialize()
         self.check_quantized_moe_compatibility()
@@ -486,6 +475,7 @@ class ModelRunner:
 
     def init_startup_observability(self) -> None:
         self.weight_load_time = 0.0
+        self.weight_load_mem_usage = 0.0
         self.graph_memory_usage: dict[str, float] = {}
         self.graph_time_usage: dict[str, float] = {}
 

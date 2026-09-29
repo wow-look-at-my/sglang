@@ -51,6 +51,7 @@ class BaseTokenToKVPoolAllocator(abc.ABC):
     ):
         self.size = size
         self.page_size = page_size
+        self.num_pages = size // page_size
         self.dtype = dtype
         self.device = device
         self._kvcache = kvcache
@@ -236,8 +237,7 @@ class BaseTokenToKVPoolAllocator(abc.ABC):
 
     def resize(self, config) -> None:
         self.size = config.max_total_num_tokens
-        if self.page_size > 1:
-            self.num_pages = config.max_total_num_tokens // self.page_size
+        self.num_pages = config.max_total_num_tokens // self.page_size
         self.clear()
 
     @abc.abstractmethod

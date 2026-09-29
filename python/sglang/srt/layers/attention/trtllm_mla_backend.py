@@ -490,17 +490,17 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
 
         if is_float4_e2m1fn_x2(self.data_type):
             # Buffer for padded query: (max_bs, max_draft_tokens, num_q_heads, v_head_dim)
-            self.store_dtype = torch.uint8
+            store_dtype = torch.uint8
             self.padded_q_buffer = torch.zeros(
                 (max_bs, num_tokens_per_req // 2, self.num_q_heads, self.kv_cache_dim),
-                dtype=self.store_dtype,
+                dtype=store_dtype,
                 device=self.device,
             )
 
             # Buffer for unpadded output: (max_num_tokens, num_q_heads, v_head_dim)
             self.unpad_output_buffer = torch.zeros(
                 (max_num_tokens // 2, self.num_q_heads, 512),
-                dtype=self.store_dtype,
+                dtype=store_dtype,
                 device=self.device,
             )
         else:

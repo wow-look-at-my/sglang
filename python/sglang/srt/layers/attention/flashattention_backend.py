@@ -182,6 +182,18 @@ class FlashAttentionBackend(AttentionBackend):
         self.device = model_runner.device
         self.decode_cuda_graph_metadata = {}
         self.target_verify_metadata = {}
+        self.decode_cuda_graph_local_attn_metadata = {}
+        self.draft_decode_metadata_topk_normal = {}
+        self.draft_decode_metadata_topk_expand = {}
+        self.draft_extend_metadata = {}
+        self.target_verify_metadata_topk_normal = {}
+        self.target_verify_metadata_topk_expand = {}
+        self.target_verify_metadata_topk_swa = {}
+        self.encoder_metadata = {}
+        self._sched_meta_buf: Optional[torch.Tensor] = None
+        self.cuda_graph_swa_out_cache_loc: Optional[torch.Tensor] = None
+        self.full_cg_prefill_strided_indices: Optional[torch.Tensor] = None
+        self.full_cg_prefill_swa_out_cache_loc: Optional[torch.Tensor] = None
         # Pool refs — captured at construction so they survive deletion of the
         # corresponding ForwardBatch fields.
         self.req_to_token_pool = model_runner.req_to_token_pool
@@ -651,7 +663,7 @@ class FlashAttentionBackend(AttentionBackend):
           work extents from the cu_seqlens / cache_seqlens device buffers.
         """
         bs = forward_batch.batch_size
-        if in_capture and getattr(self, "full_cg_prefill_metadata", None) is None:
+        if in_capture and self.full_cg_prefill_metadata is None:
             device = forward_batch.seq_lens.device
             m = FlashAttentionMetadata()
             m.cache_seqlens_int32 = torch.zeros((bs,), dtype=torch.int32, device=device)
@@ -1195,17 +1207,17 @@ class FlashAttentionBackend(AttentionBackend):
 
         # Convert the page table to a strided format which is needed by FA3 API
         if self.page_size > 1 and not _unified_read:
-            self.strided_indices = torch.arange(
+            strided_indices = torch.arange(
                 0, metadata.page_table.shape[1], self.page_size, device=self.device
             )
 
             if self.use_sliding_window_kv_pool:
                 metadata.swa_page_table = (
-                    metadata.swa_page_table[:, self.strided_indices] // self.page_size
+                    metadata.swa_page_table[:, strided_indices] // self.page_size
                 )
 
             metadata.page_table = (
-                metadata.page_table[:, self.strided_indices] // self.page_size
+                metadata.page_table[:, strided_indices] // self.page_size
             )
 
             if (
