@@ -28,9 +28,13 @@ class CountingDedupStage(PipelineStage):
     deduplicated_extra_tensor_tree_output_keys = ("mu",)
 
     def __init__(self):
-        self.server_args = SimpleNamespace(
+        server_args = SimpleNamespace(
             comfyui_mode=True, enable_layerwise_nvtx_marker=False
         )
+        with patch.object(
+            stage_base, "get_global_server_args", return_value=server_args
+        ):
+            super().__init__()
         self.forward_calls = 0
 
     def build_dedup_fingerprint(self, batch: Req, server_args):

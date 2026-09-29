@@ -222,6 +222,12 @@ class DeepseekV4ForCausalLMNextN(DeepseekV4ForCausalLM):
         self.quant_config = quant_config
         self.wo_a_fp8 = wo_a_fp8_gemm_enabled(quant_config)
         self.determine_num_fused_shared_experts()
+        # The draft has no vision tower.
+        self.vision = None
+        self.aligner = None
+        self.image_start = None
+        self.image_end = None
+        self.image_newline = None
 
         self.model = DeepseekV4ModelNextN(
             config, quant_config, prefix=add_prefix("model", prefix)
@@ -234,6 +240,9 @@ class DeepseekV4ForCausalLMNextN(DeepseekV4ForCausalLM):
             use_attn_tp_group=get_parallel().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        self.capture_aux_hidden_states = False
+        self._routed_experts_weights_of_layer = LazyValue(lambda: {})
+        self._mhc_prewarmed_at_load = False
 
     @torch.no_grad()
     def forward(
