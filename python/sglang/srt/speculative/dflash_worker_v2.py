@@ -830,7 +830,7 @@ class DFlashWorkerV2(BaseSpecWorker):
                 device=self.device,
                 sampling_enabled=self._selector_sampling_enabled,
             )
-        if not hasattr(lm_head, "weight"):
+        if lm_head.weight is None:
             return _eager("quantized lm_head has no dense weight")
         if not is_dense_head_weight(lm_head.weight):
             # Quantized lm_head (FP8/INT) would break the static matmul.
@@ -2366,7 +2366,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         )
         lm_head = unwrap_lora_layer(getattr(target_model, "lm_head", None))
         if lm_head is None or not (
-            hasattr(lm_head, "weight")
+            lm_head.weight is not None
             or callable(getattr(getattr(lm_head, "quant_method", None), "apply", None))
         ):
             raise RuntimeError(

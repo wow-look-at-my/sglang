@@ -22,6 +22,12 @@ class InklingBatchDenseMLPWithLoRA(InklingBatchDenseMLP):
     down_lora_a_weights: torch.Tensor | None = None
     down_lora_b_weights: torch.Tensor | None = None
 
+    def __init__(self, *args, **kwargs) -> None:
+        raise TypeError(
+            "InklingBatchDenseMLPWithLoRA is made by a __class__ swap of an "
+            "InklingBatchDenseMLP; initialize_lora is its constructor"
+        )
+
     def initialize_lora(self, lora_backend: BaseLoRABackend) -> None:
         problems = []
         if (

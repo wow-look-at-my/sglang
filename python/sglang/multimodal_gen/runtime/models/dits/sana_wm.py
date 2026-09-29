@@ -852,11 +852,7 @@ class SanaWMTransformer3DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
         # block to localize where the two execution paths first diverge.
         _probe_path = os.environ.get(parity_probe.ENV_BLOCK_PROBE)
         _probe = None
-        if (
-            _probe_path
-            and frame_index is not None
-            and not self._block_probe_done
-        ):
+        if _probe_path and frame_index is not None and not self._block_probe_done:
             _ck = parity_probe.checksum
             _probe = {
                 "x_embed": _ck(x),

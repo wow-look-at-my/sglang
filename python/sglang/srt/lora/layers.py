@@ -46,7 +46,7 @@ class BaseLayerWithLoRA(nn.Module):
         self.base_layer: nn.Module = base_layer
         self.set_lora: bool = False
         self.lora_backend: BaseLoRABackend = lora_backend
-        if hasattr(self.base_layer, "weight"):
+        if hasattr(self.base_layer, "weight") and self.base_layer.weight is not None:
             self.weight = self.base_layer.weight
         if hasattr(self.base_layer, "bias") and self.base_layer.bias is not None:
             self.bias = self.base_layer.bias
@@ -103,6 +103,10 @@ class VocabParallelEmbeddingWithLoRA(BaseLayerWithLoRA):
         lora_backend: BaseLoRABackend,
     ) -> None:
         super().__init__(base_layer, lora_backend)
+        if base_layer.weight is None:
+            raise ValueError(
+                "LoRA on a quantized embedding is not supported: the base layer has no dense weight"
+            )
         self.weight = base_layer.weight
         self.embed_dim = base_layer.embedding_dim
         self.vocab_size = base_layer.org_vocab_size
@@ -277,6 +281,10 @@ class ParallelLMHeadWithLoRA(BaseLayerWithLoRA):
         lora_backend: BaseLoRABackend,
     ) -> None:
         super().__init__(base_layer, lora_backend)
+        if base_layer.weight is None:
+            raise ValueError(
+                "LoRA on a quantized LM head is not supported: the base layer has no dense weight"
+            )
         self.weight = base_layer.weight
         self.embed_dim = base_layer.embedding_dim
         self.vocab_size = base_layer.org_vocab_size

@@ -475,7 +475,7 @@ class HummingConfig(QuantizationConfig):
             else self.full_config.get("weight_block_size")
         )
         self.is_fp4_experts: bool = False
-        self.hf_to_sglang_mapper: "WeightsMapper | None" = None
+        self.hf_to_sglang_mapper: WeightsMapper | None = None
 
     @classmethod
     def get_name(cls) -> str:

@@ -166,7 +166,7 @@ class KTEPWrapperMethod(FusedMoEMethodBase):
         self.global_num_experts: Optional[int] = None
         self.hidden_size: Optional[int] = None
         self.intermediate_size_per_partition: Optional[int] = None
-        self.moe_runner_config: Optional["MoeRunnerConfig"] = None
+        self.moe_runner_config: Optional[MoeRunnerConfig] = None
 
     def create_weights(
         self,
