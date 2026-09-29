@@ -66,6 +66,9 @@ logger = logging.getLogger(__name__)
 
 
 class LoRAManager:
+    # Set by init_cuda_graph_batch_info; None means no decode CUDA graph.
+    max_bs_in_cuda_graph: Optional[int] = None
+
     def __init__(
         self,
         base_model: torch.nn.Module,
@@ -560,7 +563,7 @@ class LoRAManager:
 
     def _use_cuda_graph_batch(self, forward_batch: ForwardBatch) -> bool:
         return (
-            hasattr(self, "max_bs_in_cuda_graph")
+            self.max_bs_in_cuda_graph is not None
             and forward_batch.batch_size <= self.max_bs_in_cuda_graph
             and forward_batch.forward_mode.is_cuda_graph()
             and (

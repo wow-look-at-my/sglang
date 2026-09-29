@@ -235,6 +235,7 @@ class MoeWNA16Method(FusedMoEMethodBase):
 
     def __init__(self, quant_config: MoeWNA16Config):
         self.quant_config = quant_config
+        self.moe_runner_config = None
 
     def create_weights(
         self,

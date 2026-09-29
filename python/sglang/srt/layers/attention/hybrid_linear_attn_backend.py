@@ -104,6 +104,8 @@ class MambaAttnBackendBase(AttentionBackend):
         self.cached_cuda_graph_decode_query_start_loc: torch.Tensor = None
         self.cached_cuda_graph_verify_query_start_loc: torch.Tensor = None
         self.conv_states_shape: tuple[int, int] = None
+        # False means _track_pools has not run yet; None means the layout does not match.
+        self._track_pools_cache = False
         # Constant (== 1) for mamba-like backends; hoisted so the replay path
         # skips the per-cycle method dispatch.
         self._graph_seq_len_fill_value = self.get_cuda_graph_seq_len_fill_value()
@@ -924,7 +926,7 @@ class MambaAttnBackendBase(AttentionBackend):
         """Full [num_layers, pool_size, ...] conv/ssm pools plus the pool index
         of the last mamba layer, for the fused all-layers track launch. None if
         the pool shape is not the expected layout."""
-        cached = getattr(self, "_track_pools_cache", False)
+        cached = self._track_pools_cache
         if cached is False:
             pools = None
             try:

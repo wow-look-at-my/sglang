@@ -91,6 +91,7 @@ class HeliosScheduler:
             time_shift_type=time_shift_type,
         )
 
+        self.shift = shift
         self.timestep_ratios = {}
         self.timesteps_per_stage = {}
         self.sigmas_per_stage = {}
@@ -110,6 +111,7 @@ class HeliosScheduler:
         self.model_outputs = [None] * solver_order
         self.timestep_list = [None] * solver_order
         self.lower_order_nums = 0
+        self.this_order = 0
         self.disable_corrector = disable_corrector
         self.solver_p = None
         self.last_sample = None

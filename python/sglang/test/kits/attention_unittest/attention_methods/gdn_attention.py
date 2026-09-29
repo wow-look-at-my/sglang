@@ -217,6 +217,9 @@ class MockGDNModelRunner(ModelRunner):
         runner_batch_size: int | None = None,
     ):
         pool_batch_size = runner_batch_size or case.batch_size
+        self.init_component_defaults()
+        self.init_deferred_component_defaults()
+        self.init_startup_observability()
         self.device = device
         self.dtype = dtype
         self.kv_cache_dtype = dtype
@@ -228,9 +231,12 @@ class MockGDNModelRunner(ModelRunner):
         self.draft_attention_backend = None
         self.gpu_id = 0
         self.spec_algorithm = SpeculativeAlgorithm.NONE
-        self.canary_manager = None
         self.page_size = case.page_size
         self.model_config = model_config
+        self.model = None
+        self.tp_size = 1
+        self.dp_size = 1
+        self.pp_size = 1
         speculative_num_draft_tokens = (
             case.input_lens[0]
             if case.forward_mode.is_target_verify()

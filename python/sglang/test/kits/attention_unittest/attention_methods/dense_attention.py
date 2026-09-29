@@ -318,6 +318,9 @@ class MockModelRunner(ModelRunner):
         runner_batch_size: int | None = None,
     ):
         pool_batch_size = runner_batch_size or case.batch_size
+        self.init_component_defaults()
+        self.init_deferred_component_defaults()
+        self.init_startup_observability()
         self.device = device
         self.dtype = dtype
         self.kv_cache_dtype = dtype
@@ -328,7 +331,6 @@ class MockModelRunner(ModelRunner):
         self.decode_attention_backend_str = case.backend
         self.draft_attention_backend = None
         self.gpu_id = 0
-        self.canary_manager = None
         self.page_size = case.page_size
         self.model_config = model_config
         self.tp_size = 1

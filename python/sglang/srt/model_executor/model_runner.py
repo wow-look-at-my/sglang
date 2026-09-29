@@ -334,6 +334,7 @@ class ModelRunner:
         draft_model_idx: Optional[int] = None,
         draft_attention_backend: Optional[str] = None,
     ):
+        self.init_component_defaults()
         # Parse args
         self.mem_fraction_static = mem_fraction_static
         # Set on target by `_resolve_memory_pool_config`; passed in for draft
@@ -349,9 +350,6 @@ class ModelRunner:
         # clobber the target's config), so only the target checks.
         if not is_draft_worker:
             assert_published(server_args, role="scheduler")
-        # Set by maybe_init_lora_manager; stays None when LoRA is off and on
-        # draft runners, which serve adapters' target model unadapted.
-        self.lora_manager: Optional[LoRAManager] = None
         self.device = get_device().device
         self.draft_attention_backend = resolve_draft_attention_backend(
             draft_attention_backend=draft_attention_backend,
@@ -380,13 +378,10 @@ class ModelRunner:
         self.use_mla_backend = self.model_config.attention_arch == AttentionArch.MLA
         self.attention_chunk_size = model_config.attention_chunk_size
         self.enable_elastic_ep = get_exec().moe.elastic_ep_backend is not None
-        self.forward_pass_id = 0
-        self._pending_elastic_scale_update = None
         self.init_new_workspace = False
         self.draft_model_idx = draft_model_idx
         self.enable_hisparse = get_memory().enable_hisparse
-        self._sampling_observer: Optional[SamplingObserver] = None
-        self.sampling_prewarm_result = SamplingPrewarmResult()
+        self.init_deferred_component_defaults()
 
         self.init_startup_observability()
 
@@ -454,11 +449,6 @@ class ModelRunner:
         # For hisparse (must be set before initialize() so CUDA graph capture can see it)
         self.hisparse_coordinator = None
 
-        # The native overlap path replaces this during load_model(). Keep the
-        # no-pending-work invariant for lightweight backends that override the
-        # base initialization and weight-loading flow.
-        self.startup_weight_load = None
-
         # Load model weights and configure
         self.initialize()
         self.check_quantized_moe_compatibility()
@@ -485,6 +475,7 @@ class ModelRunner:
 
     def init_startup_observability(self) -> None:
         self.weight_load_time = 0.0
+        self.weight_load_mem_usage = 0.0
         self.graph_memory_usage: dict[str, float] = {}
         self.graph_time_usage: dict[str, float] = {}
 
@@ -578,6 +569,79 @@ class ModelRunner:
             get_model_path=lambda: self.model_config.model_path,
             get_model=lambda: self.model,
         )
+
+    def init_component_defaults(self):
+        """Empty values for what the constructor's init_* steps and the forward
+        path fill in."""
+        self.memory_pool_config: Optional[MemoryPoolConfig] = None
+        # Set by maybe_init_lora_manager; stays None when LoRA is off and on
+        # draft runners, which serve adapters' target model unadapted.
+        self.lora_manager: Optional[LoRAManager] = None
+        self.uno_lora_id = None
+        self.forward_pass_id = 0
+        self._pending_elastic_scale_update = None
+        self._sampling_observer: Optional[SamplingObserver] = None
+        self.sampling_prewarm_result = SamplingPrewarmResult()
+        self.remote_instance_weight_transporter = None
+        self.msprobe_debugger = None
+        self.spec_aux_config = None
+        self.pre_model_load_memory = None
+        self.tp_group = None
+        self.pp_group = None
+        self.attention_tp_group = None
+        self.tp_rank = None
+        self.tp_size = None
+        self.dp_size = None
+        self.attn_dp_size = None
+        self.pp_rank = None
+        self.pp_size = None
+        self.attn_cp_rank = None
+        self.attn_dcp_rank = None
+        self.attn_dcp_size = None
+        self.moe_ep_size = None
+        self.dp_rank = None
+        self.memory_saver_adapter = None
+        self.eplb_manager = None
+        self.expert_location_updater = None
+        self._token_oracle_manager = None
+        self.sampler = None
+        self.load_config = None
+        self.loader = None
+        self.model = None
+        # The native overlap path replaces this during load_model(). Keep the
+        # no-pending-work invariant for lightweight backends that override the
+        # base initialization and weight-loading flow.
+        self.startup_weight_load = None
+        self.prefill_aware_swa = False
+        self.expert_backup_client = None
+        self.layer_info = None
+        self.weight_updater = None
+        self.weight_exporter = None
+
+    def init_deferred_component_defaults(self):
+        """Empty values for what alloc_memory_pool, init_attention_backends and
+        init_cuda_graphs build after construction."""
+        self.kv_cache_configurator = None
+        self.max_total_num_tokens = None
+        self.max_running_requests = None
+        self.token_to_kv_pool = None
+        self.full_max_total_num_tokens = None
+        self.swa_max_total_num_tokens = None
+        self._unified_memory_pool = None
+        self.kv_index_translator = None
+        self.canary_manager = None
+        self.ngram_embedding_manager = None
+        self.graph_shared_output = None
+        self.decode_cuda_graph_captured = False
+        self.decode_cuda_graph_capture_bs: list[int] = []
+        self.prefill_attention_backend_str = None
+        self.decode_attention_backend_str = None
+        self.attn_backend = None
+        self.decode_attn_backend = None
+        self.decode_attn_backend_group = None
+        self.eager_runner = None
+        self.prefill_cuda_graph_runner = None
+        self.decode_cuda_graph_runner = None
 
     def init_remote_instance_weight_transporter(self):
         self.remote_instance_weight_transporter = RemoteInstanceWeightTransporter(
@@ -1462,7 +1526,7 @@ class ModelRunner:
         resolved_kv_cache_dtype, self.kv_cache_dtype = (
             kv_cache_dtype.configure_kv_cache_dtype(
                 server_args_kv_cache_dtype=get_model().kv_cache_dtype,
-                model=getattr(self, "model", None),
+                model=self.model,
                 model_dtype=getattr(self, "dtype", torch.bfloat16),
                 is_draft_worker=getattr(self, "is_draft_worker", False),
                 is_dflash=(

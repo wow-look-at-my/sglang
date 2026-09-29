@@ -56,6 +56,7 @@ class W8A8Fp8Config(QuantizationConfig):
     """
 
     def __init__(self, is_checkpoint_fp8_serialized: bool = False):
+        super().__init__()
         self.is_checkpoint_fp8_serialized = is_checkpoint_fp8_serialized
 
     @classmethod
@@ -104,6 +105,7 @@ class W8A8Fp8LinearMethod(LinearMethodBase):
     def __init__(self, quantization_config: W8A8Fp8Config):
         self.cutlass_fp8_supported = cutlass_fp8_supported()
         self.quantization_config = quantization_config
+        self.logical_widths = None
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         weight = layer.weight
@@ -206,6 +208,7 @@ class W8A8FP8MoEMethod(FusedMoEMethodBase):
 
     def __init__(self, quant_config: W8A8Fp8Config):
         self.quant_config = quant_config
+        self.moe_runner_config = None
 
     def create_weights(
         self,

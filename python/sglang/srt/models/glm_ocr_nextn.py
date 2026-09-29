@@ -136,9 +136,12 @@ class GlmOcrForConditionalGenerationNextN(GlmOcrForConditionalGeneration):
         prefix: str = "",
     ) -> None:
         nn.Module.__init__(self)
+        self.pp_group = get_parallel().pp_group
         self.config = config
         self.tp_size = get_parallel().tp_size
         self.quant_config = quant_config
+        self.use_data_parallel = False
+        self.visual = None
         _, rope_scaling = get_rope_config(config)
         self.is_mrope_enabled = "mrope_section" in (rope_scaling or {})
         self.model = GlmOcrModelNextN(
@@ -152,6 +155,8 @@ class GlmOcrForConditionalGenerationNextN(GlmOcrForConditionalGeneration):
             use_attn_tp_group=get_parallel().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        self.pooler = None
+        self.capture_aux_hidden_states = False
 
         self.num_fused_shared_experts = 0 if is_shared_experts_fusion_disabled() else 1
 

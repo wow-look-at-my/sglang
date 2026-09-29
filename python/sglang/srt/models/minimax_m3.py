@@ -747,6 +747,7 @@ class MiniMaxM3Attention(nn.Module):
             _is_cuda or _is_hip
         )
         self._fused_qkv_index = None
+        self.add_module("fused_qkv_index_proj", None)
         self._fused_main_size = self.q_size + 2 * self.kv_size
 
         self._combined_qknorm_ok = (

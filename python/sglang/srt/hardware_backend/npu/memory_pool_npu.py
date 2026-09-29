@@ -107,6 +107,7 @@ class NPUMHATokenToKVPool(MHATokenToKVPool):
         self.use_triton_prefix_kv_cache_store = (
             envs.SGLANG_NPU_USE_TRITON_PREFIX_KV_CACHE_STORE.get()
         )
+        self._debug_prefix_valid_backend: Optional[str] = None
         super().__init__(
             size=size,
             page_size=page_size,
@@ -183,6 +184,12 @@ class NPUMHATokenToKVPool(MHATokenToKVPool):
                     )
                     for i in range(self.layer_num)
                 ]
+        # The NPU paged layout builds no buffer descs and no slot-move pointer tables.
+        self._kv_buffer_descs = None
+        self.k_data_ptrs = None
+        self.v_data_ptrs = None
+        self.data_ptrs = None
+        self.data_strides = None
 
     def get_hicache_transfer_buffers(self):
         """Return contiguous all-layer KV tensors for NPU HiCache IO."""
@@ -649,9 +656,15 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         self.kr_cache_dim = 0 if self.dsa_kv_cache_store_fp8 else qk_rope_head_dim
         self.index_k_scale_buffer = None
         self.indexer_hadamard_128 = None
+        self.use_dsa = False
+        self.data_ptrs = None
 
         self.custom_mem_pool = None
 
+        self._create_buffers()
+        self._finalize_allocation_log(size)
+
+    def _create_buffers(self):
         with self.memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE):
             # The padded slot 0 is used for writing dummy outputs from padded tokens.
             if self.enable_sparsity_driven_kv_offload:
@@ -660,7 +673,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
             else:
                 self.k_buffer = torch.zeros(
                     (
-                        layer_num,
+                        self.layer_num,
                         self.size // self.page_size + 1,
                         self.page_size,
                         1,
@@ -671,7 +684,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
                 )
                 self.v_buffer = torch.zeros(
                     (
-                        layer_num,
+                        self.layer_num,
                         self.size // self.page_size + 1,
                         self.page_size,
                         1,
@@ -710,8 +723,6 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
                     self.indexer_hadamard_128 = create_npu_hadamard_128(
                         self.index_head_dim, self.device
                     )
-
-        self._finalize_allocation_log(size)
 
     def get_kv_size_bytes(self):
         kv_size_bytes = 0

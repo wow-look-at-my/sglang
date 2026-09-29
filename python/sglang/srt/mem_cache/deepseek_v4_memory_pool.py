@@ -436,6 +436,7 @@ class HiSparseC4DevicePool(DeepSeekV4SingleKVPool):
             device=self.device,
         )
         self.compress_ratio = 4
+        self.full_to_hisparse_device_index_mapping: Optional[torch.Tensor] = None
 
     def register_mapping(self, full_to_hisparse_device_index_mapping: torch.Tensor):
         self.full_to_hisparse_device_index_mapping = (
@@ -1008,6 +1009,7 @@ class DeepSeekV4TokenToKVPool(BaseSWAKVPool):
             self.online_c128_mtp_pending_seq_lens = torch.empty(
                 self.online_c128_state_num_req_slots, dtype=torch.int64, device=device
             )
+        self.full_to_swa_index_mapping: Optional[torch.Tensor] = None
 
         # Determine this PP stage's absolute layer range
         if (

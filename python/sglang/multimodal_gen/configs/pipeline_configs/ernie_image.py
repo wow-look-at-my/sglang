@@ -97,6 +97,9 @@ class ErnieImagePipelineConfig(ImagePipelineConfig):
         ]
     )
 
+    def __post_init__(self):
+        self._vae_has_bn_cache: bool | None = None
+
     def tokenize_prompt(self, prompt: list[str], tokenizer, tok_kwargs) -> dict:
         max_length = tok_kwargs.get("max_length")
         if max_length is not None:
@@ -247,7 +250,7 @@ class ErnieImagePipelineConfig(ImagePipelineConfig):
         )
 
     def _check_vae_has_bn(self, vae):
-        if not hasattr(self, "_vae_has_bn_cache"):
+        if self._vae_has_bn_cache is None:
             self._vae_has_bn_cache = hasattr(vae, "bn") and vae.bn is not None
         return self._vae_has_bn_cache
 

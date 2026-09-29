@@ -76,6 +76,8 @@ class CompressedTensorsW8A8Fp8MoE(CompressedTensorsMoEScheme):
                 "For FP8 Fused MoE layer, we require either per tensor or "
                 "channelwise, dynamic per token quantization."
             )
+        self.moe_runner_config = None
+        self.runner = None
 
     @classmethod
     def get_min_capability(cls) -> int:

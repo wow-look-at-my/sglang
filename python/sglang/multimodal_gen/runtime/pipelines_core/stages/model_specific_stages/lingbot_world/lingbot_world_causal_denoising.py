@@ -8,6 +8,7 @@ from typing import Any
 import torch
 
 from sglang.multimodal_gen import envs
+from sglang.multimodal_gen.configs.quantization.qvg_kv import QVGKVQuantArgs
 from sglang.multimodal_gen.runtime.distributed.parallel_state import (
     get_ring_parallel_world_size,
     get_ulysses_parallel_world_size,
@@ -51,6 +52,11 @@ class LingBotWorldCausalDMDDenoisingStage(CausalDMDDenoisingStage):
     ``[noise(16ch), condition(20ch)]`` concatenated along channel dim.
     Each call processes one chunk (num_frames_per_block frames).
     """
+
+    def __init__(self, transformer, scheduler) -> None:
+        super().__init__(transformer, scheduler)
+        # Quantization off until _apply_causal_cache_overrides reads server_args.
+        self._kv_quant_args = QVGKVQuantArgs()
 
     def _supports_qvg_kv_cache_quantization(self) -> bool:
         return True

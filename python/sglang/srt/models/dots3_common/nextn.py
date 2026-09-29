@@ -23,7 +23,7 @@ from sglang.srt.models.dots3_common.modeling import (
     Dots3LanguageModelForCausalLM,
 )
 from sglang.srt.runtime_context import get_parallel
-from sglang.srt.utils import BumpAllocator, add_prefix
+from sglang.srt.utils import BumpAllocator, LazyValue, add_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +172,7 @@ class Dots3NoteForCausalLMNextN(Dots3LanguageModelForCausalLM):
             use_attn_tp_group=get_parallel().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        self._routed_experts_weights_of_layer = LazyValue(lambda: {})
         self._mtp_loaded_embed = False
 
     @torch.no_grad()

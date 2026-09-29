@@ -318,6 +318,7 @@ class _ProfilerTorch(_ProfilerConcreteBase):
         self.with_stack = with_stack
         self.record_shapes = record_shapes
         self.activities = activities
+        self.torch_profiler: Optional[torch.profiler.profile] = None
 
     def start(self):
         activity_map = {
@@ -413,6 +414,11 @@ class _ProfilerCudart(_ProfilerConcreteBase):
 
 
 class _ProfilerRPD(_ProfilerConcreteBase):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.rpd_profile_path: Optional[str] = None
+        self.rpd_profiler = None
+
     def start(self):
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
 

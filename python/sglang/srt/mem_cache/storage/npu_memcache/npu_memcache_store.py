@@ -162,6 +162,7 @@ class NpuMemcacheStore(HiCacheStorage):
         storage_config: HiCacheStorageConfig = None,
         mem_pool: HostKVCache = None,
     ):
+        super().__init__()
         self.store = None
         self.storage_config = storage_config
 
@@ -443,7 +444,7 @@ class NpuMemcacheStore(HiCacheStorage):
         if name == PoolName.INDEXER:
             suffixes = [f"_{self.mla_suffix}_{PoolName.INDEXER}"]
         elif name == PoolName.MAMBA:
-            mamba_pool = getattr(self, "registered_pools", {}).get(PoolName.MAMBA)
+            mamba_pool = self.registered_pools.get(PoolName.MAMBA)
             conv_num = len(getattr(mamba_pool, "conv_buffer", None) or [])
             base_suffix = f"_{self.mha_suffix}"
             # Must stay aligned with MambaPoolHost.get_page_buffer_meta(): it
@@ -516,7 +517,7 @@ class NpuMemcacheStore(HiCacheStorage):
         # storage objects per logical page, but API still reports page-level result.
         results: dict = {}
         for transfer in transfers:
-            host_pool = getattr(self, "registered_pools", {}).get(transfer.name)
+            host_pool = self.registered_pools.get(transfer.name)
             if host_pool is None:
                 raise RuntimeError(
                     f"Host pool '{transfer.name}' is not registered. "

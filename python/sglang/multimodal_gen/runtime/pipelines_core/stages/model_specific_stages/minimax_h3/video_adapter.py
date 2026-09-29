@@ -303,7 +303,7 @@ class MiniMaxH3VideoModelAdapter:
                 int(queued_frame_count) / float(shape["fps"])
             )
         quality = getattr(batch.sampling_params, "quality", None)
-        explicit_fields = getattr(batch.sampling_params, "_explicit_fields", ())
+        explicit_fields = batch.sampling_params._explicit_fields or ()
         if quality and "quality" in explicit_fields:
             fields["quality"] = str(quality)
         return fields

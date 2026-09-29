@@ -1,6 +1,11 @@
+from typing import Optional
+
 import torch
 
-from sglang.srt.sampling.penaltylib.orchestrator import _BatchedPenalizer
+from sglang.srt.sampling.penaltylib.orchestrator import (
+    BatchedPenalizerOrchestrator,
+    _BatchedPenalizer,
+)
 from sglang.srt.utils.common import is_pin_memory_available
 
 
@@ -8,6 +13,12 @@ class BatchedMinNewTokensPenalizer(_BatchedPenalizer):
     """
     Min new tokens penalizer penalizes tokens based on the length of the output.
     """
+
+    def __init__(self, orchestrator: BatchedPenalizerOrchestrator):
+        super().__init__(orchestrator)
+        self.min_new_tokens: Optional[torch.Tensor] = None
+        self.stop_token_penalties: Optional[torch.Tensor] = None
+        self.len_output_tokens: Optional[torch.Tensor] = None
 
     def _is_required(self) -> bool:
         return any(

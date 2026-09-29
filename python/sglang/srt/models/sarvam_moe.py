@@ -1202,6 +1202,7 @@ class SarvamMLAForCausalLM(nn.Module):
             use_attn_tp_group=get_parallel().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        self.routed_experts_weights_of_layer = None
 
     @staticmethod
     def _remap_config(config: PretrainedConfig) -> None:
@@ -1379,7 +1380,7 @@ class SarvamMLAForCausalLM(nn.Module):
             weight_loader(param, loaded_weight)
 
         self._set_mla_wkc_wvc()
-        if not hasattr(self, "routed_experts_weights_of_layer"):
+        if self.routed_experts_weights_of_layer is None:
             self.routed_experts_weights_of_layer = {
                 layer_id: self.model.layers[layer_id].mlp.get_moe_weights()
                 for layer_id in range(self.start_layer, self.end_layer)

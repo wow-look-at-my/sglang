@@ -745,6 +745,7 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
         self.return_recv_hook = return_recv_hook
         self.device_module = torch.get_device_module()
         self.quant_config = {}
+        self.packed_recv_count = None
 
     def dispatch_a(
         self,
@@ -1010,6 +1011,8 @@ class DeepEPDispatcher(BaseDispatcher):
             )
 
         self._stage = _Stage.INITIAL
+        self._dispatch_intermediate_state = None
+        self._combine_intermediate_state = None
         self._deepep_dispatch_hooks = DeepEPPDispatchHooks()
 
         # DeepEP/Mooncake/Nixl mark invalid topk slots with -1; the AITER
@@ -1051,7 +1054,7 @@ class DeepEPDispatcher(BaseDispatcher):
     def dispatch_b(self):
         self._update_stage(_Stage.AFTER_DISPATCH_A, _Stage.AFTER_DISPATCH_B)
         inner_state = self._dispatch_intermediate_state
-        del self._dispatch_intermediate_state
+        self._dispatch_intermediate_state = None
         return self._get_impl().dispatch_b(*inner_state)
 
     def combine(
@@ -1078,7 +1081,7 @@ class DeepEPDispatcher(BaseDispatcher):
     def combine_b(self):
         self._update_stage(_Stage.AFTER_COMBINE_A, _Stage.INITIAL)
         inner_state = self._combine_intermediate_state
-        del self._combine_intermediate_state
+        self._combine_intermediate_state = None
         return self._get_impl().combine_b(*inner_state)
 
     def _get_impl(self) -> _DeepEPDispatcherImplBase:

@@ -84,7 +84,9 @@ class MambaPoolHost(HostKVCache):
         layout: str = "layer_first",
     ):
         self.device_pool = device_pool
+        self.pool_label = "mamba"
         self.page_size = 1
+        self._destroyed = False
 
         assert layout in [
             "page_first",
@@ -95,7 +97,10 @@ class MambaPoolHost(HostKVCache):
         self.pin_memory = pin_memory
         self.device = device
         self.allocator = get_allocator_from_storage(allocator_type)
+        self.fd = getattr(self.allocator, "fd", None)
         self.num_mamba_layers = device_pool.num_mamba_layers
+        self.start_layer = 0
+        self.end_layer = self.num_mamba_layers
 
         self.conv_state_shapes = [
             conv_state.shape[2:] for conv_state in device_pool.mamba_cache.conv
@@ -119,6 +124,7 @@ class MambaPoolHost(HostKVCache):
         device_capacity = getattr(device_pool, "host_capacity_tokens", None)
         if device_capacity is None:
             device_capacity = device_pool.size
+        self.device_capacity_tokens = device_capacity
         if host_size > 0:
             self.size = sync_fixed_hicache_size(
                 int(host_size * 1e9 // self.size_per_token), host_size

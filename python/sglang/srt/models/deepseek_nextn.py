@@ -25,6 +25,7 @@ from torch import nn
 from transformers import PretrainedConfig
 
 from sglang.kernels.ops.layernorm.fused_eh_norm import fused_eh_norm
+from sglang.srt.configs.model_config import is_deepseek_dsa
 from sglang.srt.environ import envs
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.layers.attention.index_topk_share import IndexTopKShareState
@@ -43,7 +44,7 @@ from sglang.srt.models.deepseek_common.utils import enable_nextn_moe_bf16_cast_t
 from sglang.srt.models.deepseek_v2 import DeepseekV2DecoderLayer, DeepseekV3ForCausalLM
 from sglang.srt.models.utils import WeightsMapper
 from sglang.srt.runtime_context import get_model, get_parallel, get_spec
-from sglang.srt.utils import BumpAllocator, add_prefix, is_cuda, is_npu
+from sglang.srt.utils import BumpAllocator, LazyValue, add_prefix, is_cuda, is_npu
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +287,10 @@ class DeepseekV3ForCausalLMNextN(DeepseekV3ForCausalLM):
         self.quant_config = quant_config
         # if not set, model load will be broken in DeepseekV3ForCausalLM load_weights()
         self.pp_group = get_parallel().pp_group
+        self.fuse_qkv_a_proj = (
+            hasattr(config, "q_lora_rank") and config.q_lora_rank is not None
+        )
+        self.use_dsa = is_deepseek_dsa(config)
         self.determine_num_fused_shared_experts()
         nextn_quant_config = self._resolve_nextn_quant_config(config, quant_config)
 
@@ -300,6 +305,8 @@ class DeepseekV3ForCausalLMNextN(DeepseekV3ForCausalLM):
             use_attn_tp_group=get_parallel().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        self._routed_experts_weights_of_layer = LazyValue(lambda: {})
+        self.capture_aux_hidden_states = False
 
     @torch.no_grad()
     def forward(

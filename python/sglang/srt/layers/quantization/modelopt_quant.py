@@ -1096,6 +1096,7 @@ class ModelOptFp8MoEMethod(FusedMoEMethodBase):
     def __init__(self, quant_config: ModelOptFp8Config):
         self.quant_config = quant_config
         self.cutlass_fp8_supported = cutlass_fp8_supported()
+        self.moe_runner_config = None
 
     def create_weights(
         self,
@@ -2357,6 +2358,8 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             or get_moe_runner_backend().is_flashinfer_trtllm_routed()
         )
         self._cache_permute_indices = {}
+        self.moe_runner_config = None
+        self._moe_runner_backend = None
 
     @property
     def enable_flashinfer_cutlass_moe(self) -> bool:
@@ -2648,9 +2651,9 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
 
         # GEMM1 scale processing is deferred until the input scale is known;
         # see _compute_gemm1_alphas, which splits w13's gate/up weight scales.
-        moe_runner_backend = getattr(
-            self, "_moe_runner_backend", get_moe_runner_backend()
-        )
+        moe_runner_backend = self._moe_runner_backend
+        if moe_runner_backend is None:
+            moe_runner_backend = get_moe_runner_backend()
         use_nvfp4_dispatch = _use_nvfp4_dispatch()
         if moe_runner_backend.is_marlin():
             # Marlin supports only a single shared w1/w3 weight scale, so collapse
@@ -3093,9 +3096,9 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
         # consume them.
         activation = self.moe_runner_config.activation
         # Use the cached backend: the global differs under speculative decoding.
-        moe_runner_backend = getattr(
-            self, "_moe_runner_backend", get_moe_runner_backend()
-        )
+        moe_runner_backend = self._moe_runner_backend
+        if moe_runner_backend is None:
+            moe_runner_backend = get_moe_runner_backend()
 
         assert activation in _SUPPORTED_ACT_STRS or (
             activation == "situ" and moe_runner_backend.is_flashinfer_trtllm()

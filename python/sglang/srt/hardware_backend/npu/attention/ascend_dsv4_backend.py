@@ -641,11 +641,9 @@ class C4IndexerAscendBackendMixin:
         return envs.SGLANG_NPU_USE_MULTI_STREAM.get()
 
     def _get_npu_indexer_q_stream(self):
-        s = getattr(self, "_npu_indexer_q_stream_obj", None)
-        if s is None:
-            s = torch.npu.Stream()
-            self._npu_indexer_q_stream_obj = s
-        return s
+        if self._npu_indexer_q_stream_obj is None:
+            self._npu_indexer_q_stream_obj = torch.npu.Stream()
+        return self._npu_indexer_q_stream_obj
 
     def _forward_prepare_multi_stream(
         self,
@@ -981,6 +979,7 @@ class DeepseekV4AscendAttnBackend(
         # High-water mark of written page-table columns per shared graph
         # buffer; see _copy_page_table_into_graph.
         self._graph_table_high_water: dict[str, int] = {}
+        self._npu_indexer_q_stream_obj = None
 
     def _is_dspark_draft_block(self, forward_batch: ForwardBatch) -> bool:
         spec_algorithm = forward_batch.spec_algorithm

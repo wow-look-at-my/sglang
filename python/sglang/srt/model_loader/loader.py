@@ -1590,7 +1590,7 @@ class QuantizedRLModelLoader(DefaultModelLoader):
             layer_id = get_layer_id(name)
             if (
                 layer_id is not None
-                and hasattr(model, "start_layer")
+                and getattr(model, "start_layer", None) is not None
                 and (layer_id < model.start_layer or layer_id >= model.end_layer)
             ):
                 continue
@@ -2726,6 +2726,8 @@ class BitsAndBytesModelLoader(BaseModelLoader):
 
     def __init__(self, load_config: LoadConfig):
         super().__init__(load_config)
+        self.column_parallel_weights_modules: List[str] = []
+        self.model_type: Optional[str] = None
 
         # we don't need to quantize the whole model, only the target modules
         # that are specified in the adapter config file. If the adapter config
@@ -3808,7 +3810,7 @@ class ModelOptModelLoader(DefaultModelLoader):
 
     def __init__(self, load_config: LoadConfig):
         super().__init__(load_config)
-        # Any ModelOpt specific initialization if needed
+        self._original_model_path: Optional[str] = None
 
     def _setup_modelopt_quantization(
         self,
@@ -3912,10 +3914,8 @@ class ModelOptModelLoader(DefaultModelLoader):
         """Export model to HuggingFace format if export_path is provided."""
         if export_path:
             try:
-                # Get the original model path from the model config
-                original_model_path = getattr(self, "_original_model_path", None)
                 self._export_modelopt_checkpoint(
-                    model, export_path, original_model_path
+                    model, export_path, self._original_model_path
                 )
                 rank0_log(
                     f"Quantized model exported to HuggingFace format at {export_path}"
@@ -4132,6 +4132,7 @@ class RunaiModelStreamerLoader(BaseModelLoader):
 
         set_runai_streamer_env(load_config)
 
+        self.target_device_str: Optional[str] = None
         self._is_distributed = None
         if load_config.model_loader_extra_config:
             extra_config = load_config.model_loader_extra_config

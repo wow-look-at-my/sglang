@@ -300,6 +300,18 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         self.tree_mask_mode = default_tree_mask_mode()
 
         self.plan_stream, self.plan_stream_ctx = get_plan_stream(self.device)
+        self._init_deferred_component_defaults()
+
+    def _init_deferred_component_defaults(self) -> None:
+        """Empty values for fields that alloc_memory_pool, init_attention_backend
+        and _capture_cuda_graphs fill in later."""
+        self.req_to_token_pool = None
+        self.token_to_kv_pool_allocator = None
+        self.hot_token_id = None
+        self.draft_attn_backend = None
+        self.draft_extend_attn_backend = None
+        self.cuda_graph_runner = None
+        self.cuda_graph_runner_for_draft_extend = None
 
     def alloc_memory_pool(
         self,

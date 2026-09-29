@@ -51,6 +51,8 @@ class EnvField:
         # whether the env var is explicitly set to None.
         self._set_to_none = False
         self.secret = secret
+        # Set by __set_name__ when the owning class body finishes.
+        self.name: Optional[str] = None
 
     def __set_name__(self, owner, name):
         assert EnvField._allow_set_name, "Usage like `a = envs.A` is not allowed"
@@ -282,6 +284,8 @@ class Envs:
     # Record mode: append each newly observed (role, namespace) pair to this
     # file so the audit survives signal-killed workers.
     SGLANG_ROLE_NAMESPACES_OUT = EnvStr(None)
+    # Commit the serving image was built from; docker/Dockerfile sets it.
+    SGLANG_BUILD_COMMIT = EnvStr("unknown")
     IS_H200 = EnvBool(False)
     SGLANG_ENABLE_TORCH_INFERENCE_MODE = EnvBool(False)
 

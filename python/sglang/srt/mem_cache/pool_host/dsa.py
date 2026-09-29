@@ -64,11 +64,16 @@ class DSAIndexerPoolHost(HostKVCache):
     ):
         self._is_dummy = is_dummy
         self.device_pool = device_pool
+        self.pool_label = "indexer"
+        self.device_capacity_tokens = None
+        self.kv_buffer = None
+        self._destroyed = False
         self.page_size = anchor_host.page_size
         self.layout = layout
         self.pin_memory = pin_memory
         self.device = device
         self.allocator = get_allocator_from_storage(allocator_type)
+        self.fd = getattr(self.allocator, "fd", None)
         self.dtype = device_pool.store_dtype
         self.start_layer = device_pool.start_layer
         self.end_layer = device_pool.end_layer

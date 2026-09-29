@@ -192,6 +192,12 @@ class DiffusionServer:
         self._ready = threading.Event()
         self._thread: threading.Thread | None = None
 
+        # Sockets owned by the event loop thread, bound in _event_loop.
+        self._frontend: zmq.Socket | None = None
+        self._encoder_pushes: list[zmq.Socket] = []
+        self._denoiser_pushes: list[zmq.Socket] = []
+        self._decoder_pushes: list[zmq.Socket] = []
+
         self._pending: dict[str, bytes] = {}  # request_id -> client ZMQ identity
         self._lock = threading.Lock()
 

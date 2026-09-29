@@ -438,6 +438,11 @@ class MiniMaxH3AdalnCache(nn.Module):
         self._host_tier: MiniMaxH3AdalnHostTier | None = None
         self.stats = MiniMaxH3AdalnCacheStats()
         self.rebuilds = 0
+        # Filled by load().
+        self.register_buffer("plan_timesteps", None, persistent=False)
+        self.register_buffer("plan_lengths", None, persistent=False)
+        self.register_buffer("block_params", None, persistent=False)
+        self.register_buffer("final_params", None, persistent=False)
 
     def load(self, device: torch.device) -> None:
         if self.path is None:

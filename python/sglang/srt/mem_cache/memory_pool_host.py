@@ -240,6 +240,12 @@ class DeepSeekV4PagedHostPool(HiSparseHostPoolMixin, HostKVCache):
         self.start_layer = 0
         self.end_layer = self.layer_num
         self.lock = threading.RLock()
+        self.device_pool = None
+        self.pool_label = pool_name
+        self.device_capacity_tokens = None
+        self.page_num = num_host_pages
+        self.fd = getattr(self.allocator, "fd", None)
+        self._destroyed = False
 
         self.device_buffers = device_buffers
         self.gpu_device = device_buffers[0].device if device_buffers else device
@@ -743,6 +749,13 @@ class DeepSeekV4StateHostPool(HostKVCache):
         self.start_layer = 0
         self.end_layer = self.layer_num
         self.lock = threading.RLock()
+        self.device_pool = None
+        self.pool_label = pool_name
+        self.device_capacity_tokens = None
+        self.page_num = num_host_pages
+        self.fd = getattr(self.allocator, "fd", None)
+        self._destroyed = False
+        self._init_free_list_defaults()
 
         self.ring_size = 0
         self.state_page_bytes = 0

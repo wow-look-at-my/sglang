@@ -131,6 +131,7 @@ class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
         if is_npu() and get_spec().speculative_draft_model_quantization is None:
             quant_config = None
         self.quant_config = quant_config
+        self.pp_group = get_parallel().pp_group
 
         # The draft's own gate: its quantization can differ from the
         # target's, and the decoder below reads the ACTIVE decision while it
@@ -150,6 +151,7 @@ class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
             use_attn_tp_group=get_parallel().enable_dp_lm_head,
         )
         self.logits_processor = LogitsProcessor(config)
+        self.capture_aux_hidden_states = False
 
     @torch.no_grad()
     def forward(

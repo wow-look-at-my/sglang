@@ -124,6 +124,9 @@ class Mxfp4FlashinferTrtllmMoEMethod:
         self.flashinfer_mxfp4_moe_precision = (
             get_exec().moe.flashinfer_mxfp4_moe_precision
         )
+        self.moe_runner_config = None
+        self.runner = None
+        self._gemm1_clamp_limit_tensor: Optional[torch.Tensor] = None
 
     def create_moe_runner(self, layer, moe_runner_config):
         self.moe_runner_config = moe_runner_config

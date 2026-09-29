@@ -3,6 +3,7 @@ from typing import Optional
 
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.layers.moe.utils import (
     draft_model_build_scope,
     speculative_moe_backend_context,
@@ -108,6 +109,7 @@ class StandaloneDraftWorker(EagleDraftWorker):
         self.dsa_seed_topk_width = None
         self.seed_dsa_topk_from_draft_extend = False
         self.dsa_extend_topk_buf = None
+        self._init_deferred_component_defaults()
 
     def alloc_memory_pool(
         self,
@@ -175,6 +177,10 @@ class StandaloneWorkerV2(EAGLEWorkerV2):
         self.speculative_algorithm = SpeculativeAlgorithm.from_string(
             get_spec().speculative_algorithm
         )
+        self.enable_dp_spec_prefill_coordination = (
+            envs.SGLANG_ENABLE_DP_SPEC_PREFILL_COORDINATION.get()
+        )
+        self._hosts_draft = True
 
         # Create our custom draft worker that doesn't share embeddings/lm_head
         self._draft_worker = StandaloneDraftWorker(

@@ -75,9 +75,9 @@ InklingSharedSinkWithLoRA = _load_sink_lora_class()
 
 
 def _new_sink(*, slots: int = 1, moe_tp_size: int = 1, intermediate: int = _SHARD):
-    layer = InklingSharedSinkWithLoRA(
-        moe_tp_size=moe_tp_size, intermediate=intermediate
-    )
+    # Same construction as LoRAManager: a __class__ swap of the dense sink.
+    layer = _FakeSharedSink(moe_tp_size=moe_tp_size, intermediate=intermediate)
+    layer.__class__ = InklingSharedSinkWithLoRA
     # initialize_lora() reads only these two backend fields (and flips
     # is_moe_lora on the backend it is handed).
     layer.initialize_lora(

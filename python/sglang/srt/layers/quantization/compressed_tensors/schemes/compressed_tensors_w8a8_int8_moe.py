@@ -52,6 +52,8 @@ class NPUCompressedTensorsW8A8Int8DynamicMoE(CompressedTensorsMoEScheme):
                 "For INT8 Fused MoE layers, we require channelwise, "
                 "dynamic per token quantization. Found static input scales."
             )
+        self.moe_runner_config = None
+        self.runner = None
 
     def create_weights(
         self,

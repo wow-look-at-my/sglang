@@ -924,6 +924,10 @@ class ZImageTransformer2DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
         )
         self.layer_names = ["layers"]
 
+        self._cached_batched_freqs_cis = None
+        self._cached_joint_attn_mask_meta = None
+        self._bcg_pinned_cache_values = []
+
     def unpatchify(
         self, x: List[torch.Tensor], size: List[Tuple], patch_size, f_patch_size
     ) -> List[torch.Tensor]:
@@ -1207,7 +1211,7 @@ class ZImageTransformer2DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
             int(cap_target_len),
             self._device_cache_key(device),
         )
-        cached = getattr(self, "_cached_batched_freqs_cis", None)
+        cached = self._cached_batched_freqs_cis
         if cached is not None and cached[0] == cache_key:
             return self._pin_for_active_capture(cached[1])
 
@@ -1240,11 +1244,7 @@ class ZImageTransformer2DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
         if is_in_breakable_cuda_graph() or (
             _is_cuda and torch.cuda.is_current_stream_capturing()
         ):
-            pinned = getattr(self, "_bcg_pinned_cache_values", None)
-            if pinned is None:
-                pinned = []
-                self._bcg_pinned_cache_values = pinned
-            pinned.append(value)
+            self._bcg_pinned_cache_values.append(value)
         return value
 
     def _get_rope_cache(
@@ -1348,7 +1348,7 @@ class ZImageTransformer2DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
             int(cap_target_len),
             self._device_cache_key(device),
         )
-        cached = getattr(self, "_cached_joint_attn_mask_meta", None)
+        cached = self._cached_joint_attn_mask_meta
         if cached is not None and cached[0] == cache_key:
             return self._pin_for_active_capture(cached[1])
 

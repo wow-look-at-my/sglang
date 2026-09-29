@@ -262,7 +262,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         else:
             target_model = self.target_worker.model_runner.model
             lm_head = unwrap_lora_layer(getattr(target_model, "lm_head", None))
-            if lm_head is None or not hasattr(lm_head, "weight"):
+            if lm_head is None or lm_head.weight is None:
                 raise RuntimeError(
                     "DSpark requires the target model to expose `lm_head` with `weight`."
                 )

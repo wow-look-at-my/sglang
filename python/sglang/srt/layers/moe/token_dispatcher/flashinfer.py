@@ -262,6 +262,11 @@ class FlashinferDispatcher(BaseDispatcher):
 
         self.moe_a2a = make_moe_a2a()
 
+        # Set by dispatch and cleared by the matching combine.
+        self.prefill_source_sizes: Optional[list[int]] = None
+        self.active_moe_a2a: Optional[MoeAlltoAll] = None
+        self.runtime_max_tokens_per_rank: Optional[int] = None
+
     def set_quant_config(self, quant_config: dict) -> None:
         super().set_quant_config(quant_config)
         self.prefill_dispatcher.set_quant_config(quant_config)
@@ -523,7 +528,7 @@ class FlashinferDispatcher(BaseDispatcher):
             hidden_states = get_parallel().tp_group.reduce_scatterv(
                 hidden_states, sizes=source_sizes
             )
-            del self.prefill_source_sizes
+            self.prefill_source_sizes = None
             return hidden_states
 
         weight_dtype = self.quant_config.get("weight_dtype")
@@ -550,6 +555,6 @@ class FlashinferDispatcher(BaseDispatcher):
             payload_in_workspace=self.payload_in_workspace,
         )
 
-        del self.runtime_max_tokens_per_rank
-        del self.active_moe_a2a
+        self.runtime_max_tokens_per_rank = None
+        self.active_moe_a2a = None
         return hidden_states

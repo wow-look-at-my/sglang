@@ -345,8 +345,9 @@ class NemotronHForCausalLMMTP(NemotronHForCausalLM):
             prefix=add_prefix("mtp", prefix),
         )
 
+        self.unpadded_vocab_size = self.config.vocab_size
         self.lm_head = ParallelLMHead(
-            self.config.vocab_size,
+            self.unpadded_vocab_size,
             self.config.hidden_size,
             quant_config=quant_config,
             prefix=add_prefix("lm_head", prefix),
@@ -354,6 +355,7 @@ class NemotronHForCausalLMMTP(NemotronHForCausalLM):
         )
 
         self.logits_processor = LogitsProcessor(config)
+        self.capture_aux_hidden_states = False
 
     @torch.no_grad()
     def forward(

@@ -153,6 +153,8 @@ class BaseSpecWorker(ABC):
     def __init__(self) -> None:
         self._additional_graph_memory_usage: dict[str, float] = {}
         self._additional_graph_time_usage: dict[str, float] = {}
+        self.req_to_token_pool = None
+        self.token_to_kv_pool_allocator = None
 
     @property
     def hicache_draft_plan(self) -> HiCacheDraftPlan:

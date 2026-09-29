@@ -386,6 +386,7 @@ class InklingAttention(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("attn", prefix),
         )
+        self._qk_gamma_bf16 = None
 
     def _project_qkvr(
         self,
@@ -426,7 +427,7 @@ class InklingAttention(nn.Module):
             get_token_to_kv_pool,
         )
 
-        if not hasattr(self, "_qk_gamma_bf16"):
+        if self._qk_gamma_bf16 is None:
             self._qk_gamma_bf16 = (
                 self.q_norm.weight.to(torch.bfloat16),
                 self.k_norm.weight.to(torch.bfloat16),
@@ -529,7 +530,7 @@ class InklingAttention(nn.Module):
             get_token_to_kv_pool,
         )
 
-        if not hasattr(self, "_qk_gamma_bf16"):
+        if self._qk_gamma_bf16 is None:
             self._qk_gamma_bf16 = (
                 self.q_norm.weight.to(torch.bfloat16),
                 self.k_norm.weight.to(torch.bfloat16),
@@ -662,7 +663,7 @@ class InklingAttention(nn.Module):
             get_token_to_kv_pool,
         )
 
-        if not hasattr(self, "_qk_gamma_bf16"):
+        if self._qk_gamma_bf16 is None:
             self._qk_gamma_bf16 = (
                 self.q_norm.weight.to(torch.bfloat16),
                 self.k_norm.weight.to(torch.bfloat16),

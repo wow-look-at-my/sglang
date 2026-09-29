@@ -887,9 +887,15 @@ class MHATokenToKOnlyPoolHost(HostKVCache):
         self.pin_memory = pin_memory
         self.device = device
         self.allocator = get_allocator_from_storage(allocator_type)
+        self.fd = getattr(self.allocator, "fd", None)
         self.dtype = device_pool.store_dtype
         self.start_layer = device_pool.start_layer
         self.end_layer = device_pool.end_layer
+        self.pool_label = "index_k"
+        self.device_capacity_tokens = anchor_host.device_capacity_tokens
+        self.can_use_write_back_jit = False
+        self.kv_buffer = None
+        self._destroyed = False
 
         self.head_num = device_pool.head_num
         self.head_dim = device_pool.head_dim

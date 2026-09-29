@@ -948,3 +948,5 @@ class MusaFlashAttentionMultiStepBackend(FlashAttentionMultiStepBackend):
                     fa_impl_ver=fa_impl_ver,
                 )
             )
+        self.attn_backend_list = self.attn_backends
+        self.forward_metadata = None

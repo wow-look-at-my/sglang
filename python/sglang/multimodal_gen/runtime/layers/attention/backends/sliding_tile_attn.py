@@ -145,6 +145,11 @@ class SlidingTileAttentionImpl(AttentionImpl):
             "36x48x48": [6, 6, 6],
             "18x48x80": [3, 6, 10],
         }
+        # Set per forward by preprocess_qkv from the incoming sequence length.
+        self.dit_seq_shape_str: str | None = None
+        self.full_window_size: list[int] | None = None
+        self.dit_seq_shape_int: list[int] | None = None
+        self.img_seq_length: int | None = None
 
     def tile(self, x: torch.Tensor) -> torch.Tensor:
         return rearrange(

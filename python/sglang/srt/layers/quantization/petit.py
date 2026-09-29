@@ -43,6 +43,7 @@ class PetitNvFp4Config(QuantizationConfig):
         group_size: int = None,
         exclude_modules: List[str] = None,
     ) -> None:
+        super().__init__()
         self.is_checkpoint_nvfp4_serialized = is_checkpoint_nvfp4_serialized
         if is_checkpoint_nvfp4_serialized:
             logger.info("Detected nvfp4 checkpoint.")

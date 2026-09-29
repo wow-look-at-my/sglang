@@ -241,6 +241,7 @@ class BaseBreakableCudaGraphRunner:
         # (video/audio self, video/audio prompt-cross, a2v, v2a), so 48 blocks
         # capture ~289 segments; keep headroom above that.
         self.max_segments = max(0, _env_int("SGLANG_DIFFUSION_BCG_MAX_SEGMENTS", 512))
+        self._miss_logged = False
 
     def __getattr__(self, name: str) -> Any:
         # Only reached for attributes the runner itself does not define; proxy
@@ -319,7 +320,7 @@ class BaseBreakableCudaGraphRunner:
 
     def _log_signature_miss(self, key: tuple) -> None:
         """One-shot diagnostic: serving signature missed every captured graph."""
-        if getattr(self, "_miss_logged", False) or not self.entries:
+        if self._miss_logged or not self.entries:
             return
         self._miss_logged = True
         key_d = dict(key)

@@ -188,6 +188,30 @@ class BlackwellFusedMultiHeadAttentionForward:
 
         self.buffer_align_bytes = 1024
 
+        # Set at JIT trace time by _setup_attributes and __call__.
+        self.q_stage = None
+        self.kv_stage = None
+        self.qk_acc_stage = None
+        self.mma_corr_stage = None
+        self.num_clc_stage = None
+        self.num_clc_response_bytes = None
+        self.q_dtype = None
+        self.k_dtype = None
+        self.v_dtype = None
+        self.o_dtype = None
+        self.tilePlikeFP32 = None
+        self.tile_sched_params = None
+        self.q_major_mode = None
+        self.k_major_mode = None
+        self.v_major_mode = None
+        self.o_layout = None
+        self.cluster_shape_mnk = None
+        self.cluster_layout_vmnk = None
+        self.epi_tile = None
+        self.tma_copy_q_bytes = None
+        self.tma_copy_kv_bytes = None
+        self.shared_storage = None
+
     def _setup_attributes(self):
         self.q_stage = self.iterations_qk
         self.kv_stage = 4

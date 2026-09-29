@@ -1521,6 +1521,12 @@ class AutoencoderKLWan(ParallelTiledVAE):
 
         self.use_feature_cache = config.use_feature_cache
         self._causal_decode_initialized = False
+        self._conv_num = 0
+        self._conv_idx = 0
+        self._feat_map = []
+        self._enc_conv_num = 0
+        self._enc_conv_idx = 0
+        self._enc_feat_map = []
 
     def _should_use_spatial_parallel_decode(self, z: torch.Tensor) -> bool:
         return should_run_spatial_shard_parallel_decode(self.config, z)

@@ -433,6 +433,7 @@ class SglArgument(SglExpr):
 
 class SglImage(SglExpr):
     def __init__(self, path: str):
+        super().__init__()
         self.path = path
 
     def __repr__(self) -> str:
@@ -441,6 +442,7 @@ class SglImage(SglExpr):
 
 class SglVideo(SglExpr):
     def __init__(self, path: str, num_frames: int):
+        super().__init__()
         self.path = path
         self.num_frames = num_frames
 

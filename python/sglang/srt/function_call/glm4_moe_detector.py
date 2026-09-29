@@ -475,7 +475,7 @@ class Glm4MoeDetector(BaseFormatDetector):
                 # Could be start of tool call, keep buffering
                 return StreamingParseResult(normal_text="", calls=[])
 
-        if not hasattr(self, "_tool_indices"):
+        if self._tool_indices is None:
             self._tool_indices = self._get_tool_indices(tools)
 
         calls: list[ToolCallItem] = []

@@ -152,10 +152,13 @@ class Step3p5MTP(Step3p5ForCausalLM):
         prefix: str = "",
     ) -> None:
         nn.Module.__init__(self)
+        self.pp_group = get_parallel().pp_group
         self.config = config
         self.tp_size = get_parallel().tp_size
         self.quant_config = quant_config
         self.draft_model_idx = draft_model_idx
+        self.tie_word_embeddings = False
+        self.num_fused_shared_experts = 0
 
         self.model = Step3p5AMultiTokenPredictor(
             config=config, quant_config=quant_config, prefix=add_prefix("model", prefix)

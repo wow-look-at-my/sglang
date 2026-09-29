@@ -175,13 +175,15 @@ class HiCacheStorage(ABC):
     It abstracts the underlying storage mechanism, allowing different implementations to be used.
     """
 
+    def __init__(self):
+        self.mem_pool_host: Optional[HostKVCache] = None
+        self.registered_pools: dict = {}
+
     # todo, the page size of storage backend does not have to be the same as the same as host memory pool
     def register_mem_pool_host(self, mem_pool_host: HostKVCache):
         self.mem_pool_host = mem_pool_host
 
     def register_mem_host_pool_v2(self, host_pool: HostKVCache, host_pool_name):
-        if not hasattr(self, "registered_pools"):
-            self.registered_pools = {}
         self.registered_pools[host_pool_name] = host_pool
 
     def batch_exists_v2(
@@ -384,6 +386,7 @@ class HiCacheFile(HiCacheStorage):
     def __init__(
         self, storage_config: HiCacheStorageConfig, file_path: str = "/tmp/hicache"
     ):
+        super().__init__()
         self.file_path = envs.SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR.get() or file_path
 
         tp_rank, tp_size, pp_rank, pp_size, model_name, is_mla_model = (

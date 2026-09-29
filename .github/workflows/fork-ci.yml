@@ -178,6 +178,25 @@ jobs:
       run_timeout_minutes: '30'
       rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
 
+  # ------------------------------------------------------ constructor order Fails when an __init__ step reads a self field before an earlier step sets it, or when a method creates a field the constructor never initializes.
+  fork-init-order-check:
+    needs: fork-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tools/init-order-check
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run check
+
   # ------------------------------------------------------------ sglang wheel
   fork-sglang-wheel:
     needs: fork-plan
@@ -558,9 +577,10 @@ jobs:
   # Built for the fork's deployment only: x86_64, CUDA 13, FORK_KERNEL_CUDA_ARCHS
   # (default 120a), served with sglang.launch_server, so the image leaves out the
   # sm90-only hpc-ops kernels and the sgl-model-gateway router.
+  # Publishes only a tree that passed the constructor-order check and the CPU suite.
   fork-docker-image:
-    needs: [fork-plan, fork-sgl-kernel-wheel]
-    if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' }}
+    needs: [fork-plan, fork-sgl-kernel-wheel, fork-init-order-check, base-a-test-cpu]
+    if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' && needs.fork-init-order-check.result == 'success' && needs.base-a-test-cpu.result == 'success' }}
     name: fork-docker-image (${{ matrix.arch }})
     strategy:
       fail-fast: false

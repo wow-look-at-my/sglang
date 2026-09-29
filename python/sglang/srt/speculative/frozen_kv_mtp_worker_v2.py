@@ -713,6 +713,9 @@ class FrozenKVMTPWorkerV2(EAGLEWorkerV2):
         self.speculative_algorithm = SpeculativeAlgorithm.from_string(
             get_spec().speculative_algorithm
         )
+        # forward_batch_generation below has no DP spec/prefill coordination path.
+        self.enable_dp_spec_prefill_coordination = False
+        self._hosts_draft = True
 
         self.req_to_token_pool, self.token_to_kv_pool_allocator = (
             target_worker.get_memory_pool()

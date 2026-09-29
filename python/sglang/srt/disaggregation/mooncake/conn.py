@@ -2870,6 +2870,7 @@ class MooncakeKVReceiver(MooncakeFailureExceptionMixin, CommonKVReceiver):
         self.session_id = mgr.get_session_id()
         self.init_time = None
         super().__init__(mgr, bootstrap_addr, bootstrap_room)
+        self.chunk_staging_infos = []
 
     def _register_kv_args(self) -> bool:
         for bootstrap_info in self.bootstrap_infos:

@@ -57,6 +57,7 @@ class TestQwen3VLFeatureMaterialization(CustomTestCase):
         torch.nn.Module.__init__(model)
         model.visual = visual
         model.use_data_parallel = use_data_parallel
+        model._mm_feature_copy_stream = None
         return model
 
     def test_processor_defers_gpu_transport_for_encoder_dp(self):

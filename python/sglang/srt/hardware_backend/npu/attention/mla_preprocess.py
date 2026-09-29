@@ -108,6 +108,25 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         )
         self.is_npu_arch35 = is_npu_arch35()
 
+        # Built on the first forward by preprocess_weights (MLAPO).
+        self.dummy = None
+        self.qkv_a_proj_input_offset = None
+        self.q_b_proj_input_offset = None
+        self.qkv_a_proj_weight_nz = None
+        self.qkv_a_proj_deq_scale_kvq = None
+        self.qkv_a_proj_quant_bias_kvq = None
+        self.q_b_proj_weight_nz = None
+        self.q_b_proj_deq_scale = None
+        self.q_b_proj_quant_bias = None
+        # Built on the first forward by mlaprolog_preprocess_weight (MLAProlog).
+        self.qkv_a_proj_scale_q = None
+        self.qkv_a_proj_scale_kv = None
+        self.q_b_proj_scale = None
+        self.q_b_proj_weight = None
+        self.weight_quant_mode: Optional[int] = None
+        self.q_a_proj_weight = None
+        self.kv_a_proj_weight = None
+
     def preprocess_weights(self, hidden_states):
         self.dummy = torch.zeros(
             (hidden_states.shape[-1]),
@@ -356,19 +375,17 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         bsz, _ = hidden_states.view(-1, hidden_states.shape[-1]).shape
         self.dtype = hidden_states.dtype
         if self.layer_id == 0:
-            self.cos, self.sin = self.get_sin_cos(positions)
-            self.rotary_emb.cos_cached, self.rotary_emb.sin_cache = self.cos, self.sin
+            cos, sin = self.get_sin_cos(positions)
+            self.rotary_emb.cos_cached, self.rotary_emb.sin_cache = cos, sin
         else:
-            self.cos, self.sin = self.rotary_emb.cos_cached, self.rotary_emb.sin_cache
+            cos, sin = self.rotary_emb.cos_cached, self.rotary_emb.sin_cache
 
-        self.kvCache, self.kvCacheRope, self.slotmapping = (
-            self.get_kv_cache_and_cache_idx(forward_batch)
+        kv_cache, kv_cache_rope, slot_mapping = self.get_kv_cache_and_cache_idx(
+            forward_batch
         )
 
         if not self.has_preprocess_weights:
             self.has_preprocess_weights = True
-
-        cos, sin = self.cos, self.sin
 
         if self.q_lora_rank is not None:
             fused_qkv_a_proj_out = self.qkv_a_proj(hidden_states)[0]
@@ -401,13 +418,13 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         )  # (B*S,N,1,D)
 
         cache_mode = "PA_NZ" if is_fia_nz() else "PA_BNSD"
-        self.kvCache = self.kvCache.view(
+        kv_cache = kv_cache.view(
             -1,
             get_attn_backend().page_size,
             1,
             get_attn_backend().kv_lora_rank,
         )
-        self.kvCacheRope = self.kvCacheRope.view(
+        kv_cache_rope = kv_cache_rope.view(
             -1,
             get_attn_backend().page_size,
             1,
@@ -418,9 +435,9 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             self.kv_a_layernorm.weight,
             cos,
             sin,
-            self.slotmapping.to(torch.int64),
-            self.kvCacheRope,
-            self.kvCache,
+            slot_mapping.to(torch.int64),
+            kv_cache_rope,
+            kv_cache,
             epsilon=self.kv_a_layernorm.variance_epsilon,
             cache_mode=cache_mode,
         )
@@ -517,7 +534,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         if not self.has_preprocess_weights:
             self.mlaprolog_preprocess_weight()
             self.has_preprocess_weights = True
-        self.cos, self.sin = self.get_sin_cos(positions)
+        cos, sin = self.get_sin_cos(positions)
         k_cache, v_cache, slot_mapping = self.get_kv_cache_and_cache_idx(forward_batch)
         pool = get_token_to_kv_pool()
         packed = pool.dsa_kv_cache_store_fp8
@@ -544,8 +561,8 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             "weight_dkv_kr": self.kv_a_proj_weight,
             "rmsnorm_gamma_cq": self.q_a_layernorm.weight,
             "rmsnorm_gamma_ckv": self.kv_a_layernorm.weight,
-            "rope_sin": self.sin,
-            "rope_cos": self.cos,
+            "rope_sin": sin,
+            "rope_cos": cos,
             "kv_cache": k_cache,
             "kr_cache": v_cache,
             "cache_index": slot_mapping.to(dtype=torch.int64),

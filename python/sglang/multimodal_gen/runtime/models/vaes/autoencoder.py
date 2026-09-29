@@ -155,6 +155,7 @@ class AutoencoderKL(nn.Module, LayerwiseOffloadableModuleMixin):
             sample_size / (2 ** (len(self.config.block_out_channels) - 1))
         )
         self.tile_overlap_factor = 0.25
+        self.original_attn_processors = None
 
     def enable_tiling(self, use_tiling: bool = True):
         r"""

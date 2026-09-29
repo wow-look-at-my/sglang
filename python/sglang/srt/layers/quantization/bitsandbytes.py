@@ -446,6 +446,7 @@ class BitsAndBytesMoEMethod(FusedMoEMethodBase):
                 "bitsandbytes quantizer."
             ) from err
         self.quant_config = quant_config
+        self.moe_runner_config = None
 
     def create_weights(
         self,

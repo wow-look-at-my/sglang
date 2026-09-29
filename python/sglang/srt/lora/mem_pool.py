@@ -132,6 +132,8 @@ class LoRAMemoryPool:
     """Class for memory pool management of lora modules"""
 
     supports_dp_attention_overlap_loading = False
+    # (module name, layer id) -> base linear; built on first _dense_local_dim.
+    _dense_linears: Optional[dict] = None
 
     def __init__(
         self,
@@ -293,7 +295,7 @@ class LoRAMemoryPool:
         """Per-rank LoRA width of a dense linear along ``axis``, read from its base layer."""
         if module_name in ATTN_TP_LORA_MODULE_NAMES or self.is_moe_module(module_name):
             return None
-        linears = getattr(self, "_dense_linears", None)
+        linears = self._dense_linears
         if linears is None:
             linears = {}
             for name, module in base_model.named_modules():

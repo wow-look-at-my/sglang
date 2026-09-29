@@ -84,6 +84,8 @@ class FrozenKVMTPCudaGraphRunner(DecodeCudaGraphRunner):
     """
 
     def __init__(self, frozen_kv_mtp_worker: FrozenKVMTPDraftWorker):
+        self._init_runner_defaults()
+        self._init_decode_runner_defaults()
         self.frozen_kv_mtp_worker = frozen_kv_mtp_worker
         self.model_runner = model_runner = frozen_kv_mtp_worker.draft_model_runner
 
@@ -115,6 +117,8 @@ class FrozenKVMTPCudaGraphRunner(DecodeCudaGraphRunner):
 
         self.capture_forward_mode = ForwardMode.DECODE
         self.capture_hidden_mode = CaptureHiddenMode.LAST
+        self.raw_bs = 0
+        self.bs = 0
 
         # Static capture width.
         self.captured_req_width = resolve_num_tokens_per_req(phase="draft_decode")

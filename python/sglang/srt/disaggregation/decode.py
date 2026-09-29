@@ -316,6 +316,7 @@ class HybridMambaDecodeReqToTokenPool(HybridReqToTokenPool):
             effective_mamba_size = max_slots_needed
         self.start_layer = start_layer if start_layer is not None else 0
         self.layer_transfer_counter = None
+        self.ple_window_cache = None
         self._init_mamba_pool(
             mamba_size=effective_mamba_size,
             mamba_spec_state_size=size + pre_alloc_size,
@@ -3174,10 +3175,6 @@ class SchedulerDisaggregationDecodeMixin:
         if len(self.disagg_decode_prealloc_queue.retracted_queue) > 0:
             # if there are still retracted requests, we do not allocate new requests
             return
-
-        if not hasattr(self, "polling_count"):
-            self.polling_count = 0
-            self.polling_interval = get_disagg().disaggregation_decode_polling_interval
 
         self.polling_count = (self.polling_count + 1) % self.polling_interval
 

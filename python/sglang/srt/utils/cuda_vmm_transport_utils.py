@@ -800,6 +800,18 @@ class CudaVmmTensorTransportProxy(CudaIpcTensorTransportProxy):
         self.dtype = dtype
         self.reconstruct_tensor = None
         self._consumer_acknowledged = False
+        # This class skips the CUDA IPC base constructor. The VMM pool has no
+        # ready word and no IPC handle, so the inherited IPC fields stay empty.
+        self.ready_byte_offset = None
+        self.ack_byte_offset = None
+        self.generation = None
+        self.total_consumer_count = consumer_count
+        self.transport_name = "CUDA VMM"
+        self.proxy_state = None
+        self._pool_storage = None
+        self._borrowed_storage = None
+        self._borrowed_base_address = None
+        self._borrowed_device_id = None
 
     def _pool(self, device_index: int) -> _ImportedCudaVmmPool:
         return _get_imported_pool(
@@ -855,6 +867,10 @@ class CudaVmmTensorTransportProxy(CudaIpcTensorTransportProxy):
         device_index = torch.cuda.current_device()
         with torch.cuda.device(device_index):
             self._acknowledge_consumption(device_index, consumer_count)
+
+    def borrow_on_target_device(self, rebuild_device_idx: int) -> torch.Tensor | None:
+        """VMM features are never lent; None makes the caller reconstruct a copy."""
+        return None
 
     def reconstruct_on_target_device(
         self, rebuild_device_idx, consumer_count: int | None = None

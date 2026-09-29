@@ -221,11 +221,15 @@ class QwenSparseAttnBackend(AttentionBackend):
         self._graph_dummy_token_slot_table = None
         self._graph_dummy_out_cache_loc = None
         self._graph_row_req_pool_indices = None
+        self._graph_logical_positions = None
+        self._graph_state_slots = None
+        self._graph_ring_group_locs = None
         self._trtllm_sparse_tables = {}
         self._mtp_shared_sparse_indices = None
         self._trtllm_workspace = None
         self._graph_extend_lens = None
         self._graph_extend_lens_pin = None
+        self._extend_lens_pin_idx = 0
 
     @staticmethod
     def _is_speculative_paged_mode(forward_mode) -> bool:

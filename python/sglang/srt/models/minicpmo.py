@@ -1451,6 +1451,7 @@ class MiniCPMO(MiniCPMBaseModel):
                 in_dim=audio_output_dim, out_dim=self.embed_dim
             )
             self.audio_encoder_layer = -1
+        self.audio_past_key_values = None
 
         # init tts module
         self.config.init_tts = False

@@ -68,6 +68,9 @@ class QSACompressedKPoolHost(DSAIndexerPoolHost):
     ):
         self._is_dummy = False
         self.device_pool = device_pool
+        self.pool_label = "qsa_compressed_k"
+        self.device_capacity_tokens = None
+        self._destroyed = False
         self.page_size = anchor_host.page_size
         if self.page_size != device_pool.page_size:
             raise ValueError(
@@ -78,7 +81,11 @@ class QSACompressedKPoolHost(DSAIndexerPoolHost):
         self.pin_memory = pin_memory
         self.device = device
         self.allocator = get_allocator_from_storage(allocator_type)
+        self.fd = getattr(self.allocator, "fd", None)
         self.indexer_dtype = torch.uint8
+        self.index_head_dim = None
+        self.indexer_quant_block_size = None
+        self.indexer_size_per_token = None
         self.dtype = self.indexer_dtype
         self.mtp_draft_device_pools = tuple(mtp_draft_device_pools)
         self._page_views = {id(device_pool): qsa_compressed_page_views(device_pool)}

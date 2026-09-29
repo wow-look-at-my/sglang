@@ -75,6 +75,7 @@ class HiCacheNixl(HiCacheStorage):
         file_path: str = "/tmp/hicache_storage",
     ):
         """Initialize NIXL storage connector."""
+        super().__init__()
 
         # create nixlconfig from the --hicache-storage-backend-extra-config
         nixlconfig = NixlBackendConfig(storage_config.extra_config)

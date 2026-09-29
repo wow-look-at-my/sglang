@@ -574,6 +574,23 @@ class AiterAttnBackend(AttentionBackend):
 
             self.fix_max_split_per_batch = self.max_split_per_batch
 
+        # Allocated by init_cuda_graph_state.
+        self.cuda_graph_kv_last_page_len: Optional[torch.Tensor] = None
+        self.cuda_graph_verify_local_kv_lens: Optional[torch.Tensor] = None
+        self.cuda_graph_verify_token_table: Optional[torch.Tensor] = None
+        self.cuda_graph_dcp_static_local_kv_lens: Optional[torch.Tensor] = None
+        self.cuda_graph_kv_indices: Optional[torch.Tensor] = None
+        self.cuda_graph_page_table: Optional[torch.Tensor] = None
+        self.cuda_graph_custom_mask: Optional[torch.Tensor] = None
+        self.cuda_graph_swa_page_table: Optional[torch.Tensor] = None
+        self.cuda_graph_swa_out_cache_loc: Optional[torch.Tensor] = None
+        self.work_metadata: Optional[torch.Tensor] = None
+        self.work_indptr: Optional[torch.Tensor] = None
+        self.work_info_set: Optional[torch.Tensor] = None
+        self.reduce_indptr: Optional[torch.Tensor] = None
+        self.reduce_final_map: Optional[torch.Tensor] = None
+        self.reduce_partial_map: Optional[torch.Tensor] = None
+
     def pad_heads(self, x: torch.Tensor, padded: int) -> torch.Tensor:
         num_head = x.shape[1]
         reps = -(-padded // num_head)  # ceil(padded / num_head)
@@ -4286,6 +4303,7 @@ class AiterMultiStepDraftBackend:
         self.req_to_token_pool = model_runner.req_to_token_pool
         self.pool_len = model_runner.req_to_token_pool.req_to_token.shape[1]
         self.page_size = get_schedule().page_size
+        self.cuda_graph_kv_indices: Optional[torch.Tensor] = None
 
     def common_template(
         self, forward_batch: ForwardBatch, kv_indices_buffer: torch.Tensor, call_fn: int

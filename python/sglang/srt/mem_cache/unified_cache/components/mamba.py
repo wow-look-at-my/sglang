@@ -78,6 +78,8 @@ class MambaComponent(TreeComponent):
         self.mamba_max_states_per_path = get_exec().mamba.mamba_max_states_per_path
         # HiCache state
         self._mamba_pool_host = None  # set to host mamba pool when HiCache enabled
+        self._evict_device_request_cnt = 0
+        self._evict_device_cursor: Optional[UnifiedTreeNode] = None
 
     def needs_incremental_backup(self, node: UnifiedTreeNode) -> bool:
         data = node.component_data[self.component_type]

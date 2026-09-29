@@ -66,6 +66,7 @@ class Sm120UniformBatchScheduler:
         self._is_first_block = True
         self._loc = loc
         self._ip = ip
+        self._values_pos = []
 
     @staticmethod
     def to_underlying_arguments(

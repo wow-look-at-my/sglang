@@ -41,6 +41,7 @@ class TorchNativeLoRABackend(BaseLoRABackend):
         **kwargs,
     ):
         super().__init__(max_loras_per_batch, device)
+        self.cuda_graph_batch_info: TorchNativeLoRABatchInfo | None = None
 
     def run_lora_a_embedding(
         self,

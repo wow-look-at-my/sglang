@@ -74,6 +74,7 @@ def trace_program(program, arguments, backend):
 
 class TracerProgramState(ProgramState):
     def __init__(self, backend, arguments, only_trace_prefix):
+        super().__init__(stream_executor=None)
         self.pid = uuid.uuid4().hex
         self.backend = backend
         self.arguments: Dict[str, Any] = arguments

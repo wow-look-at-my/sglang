@@ -47,6 +47,8 @@ class QuarkW8A8FP8MoE(QuarkMoEScheme):
         self.weight_qscheme = weight_config.get("qscheme")
         self.is_weight_per_channel = self.weight_qscheme == "per_channel"
         self.out_dtype = torch.get_default_dtype()
+        self.moe_runner_config = None
+        self.runner = None
 
     @classmethod
     def get_min_capability(cls) -> int:

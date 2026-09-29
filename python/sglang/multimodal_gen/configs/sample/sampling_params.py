@@ -292,6 +292,10 @@ class SamplingParams:
     _default_height: ClassVar[int | None] = None
     _default_width: ClassVar[int | None] = None
 
+    # Unannotated so it stays out of dataclasses.fields(); instances overwrite it.
+    # None means the caller did not record which fields were set explicitly.
+    _explicit_fields = None
+
     height: int | None = None
     width: int | None = None
     fps: int = 24
@@ -472,9 +476,8 @@ class SamplingParams:
         diffusers_kwargs = getattr(self, "diffusers_kwargs", None)
         if diffusers_kwargs:
             extra["diffusers_kwargs"] = diffusers_kwargs
-        explicit_fields = getattr(self, "_explicit_fields", None)
-        if explicit_fields is not None:
-            extra["explicit_fields"] = sorted(explicit_fields)
+        if self._explicit_fields is not None:
+            extra["explicit_fields"] = sorted(self._explicit_fields)
         return extra
 
     def apply_request_extra(self, req: Any) -> None:
@@ -807,7 +810,6 @@ class SamplingParams:
             except ImportError:
                 self.guidance_scale = 1.0
         self.return_frames = False
-        self.return_video = False
         self.num_frames = 1
         self.adjust_frames = False
         if self.save_output and not server_args.comfyui_mode:

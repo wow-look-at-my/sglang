@@ -914,6 +914,11 @@ class GlmImageBeforeDenoisingStage(PipelineStage):
             else 128
         )
 
+        self._guidance_scale = None
+        self._current_timestep = None
+        self._interrupt = False
+        self._num_timesteps = 0
+
     def component_uses(
         self, server_args: ServerArgs, stage_name: str | None = None
     ) -> list[ComponentUse]:

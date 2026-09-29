@@ -36,6 +36,7 @@ class HiSparseTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         self.dtype = dtype
         self.device = device
         self.page_size = page_size
+        self.num_pages = self._size_full // page_size
         self.need_sort = need_sort
 
         self.logical_attn_allocator = PagedTokenToKVPoolAllocator(
@@ -288,6 +289,7 @@ class DeepSeekV4HiSparseTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         # C4 HiSparse allocation/device-buffer code must use the compressed page size.
         self.page_size = logical_attn_allocator.page_size
         self.hisparse_page_size = self.hisparse_kvcache.page_size
+        self.num_pages = logical_attn_allocator.size // self.page_size
 
         self.logical_attn_allocator = logical_attn_allocator
         self._kvcache = logical_attn_allocator._kvcache

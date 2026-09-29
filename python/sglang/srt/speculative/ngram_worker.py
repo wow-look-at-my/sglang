@@ -111,6 +111,21 @@ class NGRAMWorker(BaseSpecWorker):
         # req_to_token_pool / token_to_kv_pool_allocator are set in
         # alloc_memory_pool(), after the target pools are allocated.
         self.device = get_device().device
+        self.max_batch_size = 0
+        self.draft_tokens: Optional[torch.Tensor] = None
+        self.retrieve_indexes: Optional[torch.Tensor] = None
+        self.retrieve_next_token: Optional[torch.Tensor] = None
+        self.retrieve_next_sibling: Optional[torch.Tensor] = None
+        self.positions: Optional[torch.Tensor] = None
+        self.tree_mask: Optional[torch.Tensor] = None
+        self.draft_tokens_batch = []
+        self.tree_mask_batch = []
+        self.retrieve_indexes_batch = []
+        self.retrieve_next_token_batch = []
+        self.retrieve_next_sibling_batch = []
+        self.positions_batch = []
+        self.prev_token_ids = []
+        self.prev_accept_lens = []
 
         self.adaptive_controller = None
         # rids of the last decode batch; used to erase corpus match state for

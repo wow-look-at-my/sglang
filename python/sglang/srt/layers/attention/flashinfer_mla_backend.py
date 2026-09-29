@@ -320,6 +320,13 @@ class FlashInferMLAAttnBackend(AttentionBackend):
         self.forward_metadata: Union[PrefillMetadata, DecodeMetadata] = None
         self.decode_cuda_graph_metadata = {}
         self.prefill_cuda_graph_metadata = {}  # For verify
+        self.cuda_graph_kv_indices: Optional[torch.Tensor] = None
+        self.cuda_graph_qo_indptr: Optional[torch.Tensor] = None
+        self.cuda_graph_kv_indptr: Optional[torch.Tensor] = None
+        self.cuda_graph_kv_lens: Optional[torch.Tensor] = None
+        self.cuda_graph_qo_indptr_cpu: Optional[torch.Tensor] = None
+        self.cuda_graph_kv_indptr_cpu: Optional[torch.Tensor] = None
+        self.fast_decode_kwargs = {}
 
         # Pinned host buffers for the fast prefill path plan
         if not skip_prefill:
@@ -1210,6 +1217,7 @@ class FlashInferMLAMultiStepDraftBackend:
         self.max_context_len = self.attn_backends[0].max_context_len
         self.attn_backend_list = self.attn_backends
         self.forward_metadata = None
+        self.cuda_graph_kv_indices: Optional[torch.Tensor] = None
 
         # Cached variables for generate_draft_decode_kv_indices
         self.req_to_token_pool = model_runner.req_to_token_pool

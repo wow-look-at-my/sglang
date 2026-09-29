@@ -23,7 +23,7 @@ class HiCacheShm(HiCacheStorage):
     def __init__(
         self, storage_config: HiCacheStorageConfig, mem_pool_host: Optional[Any] = None
     ):
-        pass
+        super().__init__()
 
     def get(
         self,

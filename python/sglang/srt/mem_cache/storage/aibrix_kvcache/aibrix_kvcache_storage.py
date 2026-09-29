@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 class AibrixKVCacheStorage(HiCacheStorage):
     def __init__(self, storage_config: HiCacheStorageConfig, mem_pool: HostKVCache):
+        super().__init__()
         if storage_config is not None:
             self.is_mla_backend = storage_config.is_mla_model
             self.local_rank = storage_config.tp_rank

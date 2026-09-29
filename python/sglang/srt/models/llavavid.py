@@ -59,6 +59,14 @@ class LlavaVidForCausalLM(nn.Module):
             self.language_model.model.image_newline = nn.Parameter(
                 torch.empty(config.text_config.hidden_size, dtype=torch.float16)
             )
+        self.vision_feature_layer = None
+        self.vision_feature_select_strategy = None
+        self.image_size = None
+        self.patch_size = None
+        self.mm_patch_merge_type = None
+        self.image_aspect_ratio = None
+        self.image_grid_pinpoints = None
+        self.image_feature_len = None
 
     def pad_input_ids(
         self, input_ids: array[int], image_inputs: MultimodalInputs

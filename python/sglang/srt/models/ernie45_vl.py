@@ -639,13 +639,12 @@ class Ernie4_5_VLMoeForConditionalGeneration(nn.Module):
         video_embeds = self.resampler_model(video_feature, video_grid_thw)
         return video_embeds
 
-    def _set_visual_token_mask(
+    def _build_visual_token_mask(
         self, input_ids: torch.Tensor, forward_batch: ForwardBatch
-    ) -> None:
-        """Set mask for visual tokens (image/video patches and delimiters)."""
+    ) -> Optional[torch.Tensor]:
+        """Build mask for visual tokens (image/video patches and delimiters)."""
         if self._visual_token_ids_tensor_cache is None:
-            self.visual_token_mask = None
-            return
+            return None
         # Create tensor on the correct device
         visual_token_ids_tensor = self._visual_token_ids_tensor_cache.to(
             device=input_ids.device,
@@ -666,9 +665,7 @@ class Ernie4_5_VLMoeForConditionalGeneration(nn.Module):
         pad_visual_token_ids_tensor = torch.cat(
             [visual_token_ids_tensor, placeholder_tensor], dim=0
         )
-        self.visual_token_mask = torch.isin(
-            input_ids, pad_visual_token_ids_tensor
-        ).reshape(-1, 1)
+        return torch.isin(input_ids, pad_visual_token_ids_tensor).reshape(-1, 1)
 
     def get_input_embeddings(self):
         return self.model.embed_tokens
@@ -709,7 +706,7 @@ class Ernie4_5_VLMoeForConditionalGeneration(nn.Module):
                     f"(3, seq_len) positions, but got {positions.size()}"
                 )
 
-        self._set_visual_token_mask(input_ids, forward_batch)
+        visual_token_mask = self._build_visual_token_mask(input_ids, forward_batch)
 
         assert input_ids.numel() == positions.shape[-1], (
             f"input_ids {input_ids.shape} and position_ids {positions.shape} should have the same length"
@@ -721,10 +718,8 @@ class Ernie4_5_VLMoeForConditionalGeneration(nn.Module):
             language_model=self.model,
             multimodal_model=self,
             positions=positions,
-            visual_token_mask=self.visual_token_mask,
+            visual_token_mask=visual_token_mask,
         )
-
-        self.visual_token_mask = None
 
         return self.logits_processor(
             input_ids, hidden_states, self.lm_head, forward_batch

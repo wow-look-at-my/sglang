@@ -81,6 +81,9 @@ class CompilerManager:
         self.cache = dict()
         self.is_cache_updated = False
         self.compiler = make_compiler(config)
+        self.disable_cache = False
+        self.cache_dir: Optional[str] = None
+        self.cache_file_path: Optional[str] = None
 
     def compute_hash(self):
         return self.compiler.compute_hash()
@@ -366,9 +369,9 @@ class SGLangBackend:
     graph_pool: Any
     _called: bool = False
     # the graph we compiled
-    graph: fx.GraphModule
+    graph: Optional[fx.GraphModule]
     # the stiching graph module for all the piecewise graphs
-    split_gm: fx.GraphModule
+    split_gm: Optional[fx.GraphModule]
     piecewise_graphs: list[SplitItem]
     returned_callable: Callable
     # Inductor passes to run on the graph pre-defunctionalization
@@ -384,6 +387,9 @@ class SGLangBackend:
     ):
         assert graph_pool is not None
         self.graph_pool = graph_pool
+        self.graph = None
+        self.split_gm = None
+        self.piecewise_graphs = []
 
         self.post_grad_pass_manager = PostGradPassManager()
         self.sym_tensor_indices = []

@@ -32,6 +32,7 @@ from sglang.srt.model_executor.runner_backend.base_cuda_graph_backend import (
 )
 from sglang.srt.model_executor.runner_backend.cuda_graph_dedup_mixin import (
     DedupedCudaGraphMixin,
+    DedupedCudaGraphRegistry,
 )
 from sglang.srt.model_executor.runner_backend_utils.breakable_cuda_graph import (
     BreakableCUDAGraph,
@@ -80,6 +81,7 @@ class BreakableCudaGraphBackend(DedupedCudaGraphMixin, BaseCudaGraphBackend):
         self._debug_eager = debug_eager
         self._shared_output_buffer: Optional[Any] = None
         self._precarve = GraphPoolPrecarve()
+        self._deduped_cuda_graph_registries: list[DedupedCudaGraphRegistry] = []
         self._memory_saver_adapter: Optional[Any] = TorchMemorySaverAdapter.create(
             enable=enable_memory_saver
             and get_bool_env_var("SGLANG_MEMORY_SAVER_CUDA_GRAPH")

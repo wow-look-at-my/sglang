@@ -50,6 +50,7 @@ class ModelSlimW4A8Int8MoE(ModelSlimMoEScheme):
             is_per_channel_weight=self.is_per_channel_weight,
             activation_use_clip=self.activation_use_clip,
         )
+        self.num_experts = None
 
     def create_weights(
         self,

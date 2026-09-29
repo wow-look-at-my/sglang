@@ -130,6 +130,8 @@ logger = logging.getLogger(__name__)
 class SiluAndMul(BaseFusedOp):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # MUSA: nn.SwishGLU seems to have better performance than silu_and_mul on MUSA, we can switch to it for now. We can consider implementing a silu_and_mul kernel for MUSA in the future if needed.
+        self._musa_swish_glu = nn.SwishGLU() if _is_musa else None
         if (
             publish_role() is not None
             and get_exec().deterministic.rl_on_policy_target is not None
@@ -178,9 +180,6 @@ class SiluAndMul(BaseFusedOp):
         if check_cuda_graph_backend(Phase.PREFILL, Backend.TC_PIECEWISE):
             return self.forward_native(x)
 
-        if not hasattr(self, "_musa_swish_glu"):
-            # XXX (MUSA): nn.SwishGLU seems to have better performance than silu_and_mul on MUSA, we can switch to it for now. We can consider implementing a silu_and_mul kernel for MUSA in the future if needed.
-            self._musa_swish_glu = nn.SwishGLU()
         return self._musa_swish_glu(x)
 
 

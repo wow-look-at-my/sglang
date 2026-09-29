@@ -128,6 +128,18 @@ def interleave_scales(scales: torch.Tensor) -> torch.Tensor:
 class W4AFp8MoEMethod(FusedMoEMethodBase):
     def __init__(self, quant_config: W4AFp8Config):
         self.quant_config = quant_config
+        self.moe_runner_config = None
+        self.a_strides1 = None
+        self.c_strides1 = None
+        self.a_strides2 = None
+        self.c_strides2 = None
+        self.b_strides1 = None
+        self.s_strides13 = None
+        self.b_strides2 = None
+        self.s_strides2 = None
+        self.expert_offsets = None
+        self.problem_sizes1 = None
+        self.problem_sizes2 = None
 
     def create_weights(
         self,

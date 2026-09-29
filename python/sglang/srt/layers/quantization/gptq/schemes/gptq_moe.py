@@ -32,6 +32,8 @@ class GPTQMoEAscendScheme(GPTQMoESchemeBase):
         )
 
         self.kernel = GPTQMoEAscendKernel(quant_config)
+        self.moe_runner_config = None
+        self.runner = None
 
     def create_weights(
         self,

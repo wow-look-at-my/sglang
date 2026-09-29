@@ -100,6 +100,8 @@ class EAGLEDraftCudaGraphRunner(DecodeCudaGraphRunner):
         draft_attn_backend=None,
         speculative_num_steps: Optional[int] = None,
     ):
+        self._init_runner_defaults()
+        self._init_decode_runner_defaults()
         # Parse args
         self.eagle_worker = eagle_worker
         if not hasattr(eagle_worker, "model_runner"):
