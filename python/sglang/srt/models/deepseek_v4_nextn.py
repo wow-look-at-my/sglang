@@ -37,7 +37,7 @@ from sglang.srt.models.deepseek_v4 import (
     wo_a_fp8_gemm_enabled,
 )
 from sglang.srt.runtime_context import get_parallel
-from sglang.srt.utils import add_prefix
+from sglang.srt.utils import LazyValue, add_prefix
 
 logger = logging.getLogger(__name__)
 
