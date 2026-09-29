@@ -345,6 +345,9 @@ class VocabParallelEmbedding(torch.nn.Module):
             params_dtype=params_dtype,
             weight_loader=self.weight_loader,
         )
+        # GGUF, AWQ and GPTQ heads store packed tensors and no dense weight.
+        if "weight" not in self._parameters:
+            self.register_parameter("weight", None)
 
     @classmethod
     def _get_indices(
@@ -646,7 +649,7 @@ class ParallelLMHead(VocabParallelEmbedding):
 
         # We only support pack LMHead if it's not quantized.
         if _is_cpu and _is_cpu_amx_available:
-            if hasattr(self, "weight") and self.weight.dtype in [
+            if self.weight is not None and self.weight.dtype in [
                 torch.bfloat16,
                 torch.float16,
             ]:

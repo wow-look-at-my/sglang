@@ -135,7 +135,7 @@ def _has_lm_head_runtime_attrs(lm_head, attr_names: Tuple[str, ...]) -> bool:
 def should_apply_lm_head_quant_method(lm_head, quant_method) -> bool:
     if (
         quant_method is None
-        or not hasattr(lm_head, "weight")
+        or lm_head.weight is None
         or not callable(getattr(quant_method, "apply", None))
     ):
         return False
@@ -965,7 +965,7 @@ class LogitsProcessor(nn.Module):
             logits = lm_head(hidden_states)
         elif should_apply_lm_head_quant_method(lm_head, quant_method):
             logits = quant_method.apply(lm_head, hidden_states, embedding_bias)
-        elif hasattr(lm_head, "weight"):
+        elif lm_head.weight is not None:
             # Normal linear layer
             if self.use_fp32_lm_head:
                 # Avoid materializing FP32 copies for same-dtype CUDA FP16/BF16
@@ -1390,7 +1390,7 @@ def _has_lm_head_runtime_attrs(lm_head, attr_names: Tuple[str, ...]) -> bool:
 def should_apply_lm_head_quant_method(lm_head, quant_method) -> bool:
     if (
         quant_method is None
-        or not hasattr(lm_head, "weight")
+        or lm_head.weight is None
         or not callable(getattr(quant_method, "apply", None))
     ):
         return False
