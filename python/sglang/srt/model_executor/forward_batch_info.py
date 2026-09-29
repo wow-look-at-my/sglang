@@ -770,7 +770,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     forward_metadata_replan_equivalent: bool = False
 
     def __post_init__(self):
-        # Not dataclass fields: the TBO child split rejects a set field it does not copy.
+        # Not dataclass fields: the TBO split rejects a set field it does not copy.
         self.output_cache_loc_backup: Optional[torch.Tensor] = None
         self.hidden_states_backup: Optional[torch.Tensor] = None
 
