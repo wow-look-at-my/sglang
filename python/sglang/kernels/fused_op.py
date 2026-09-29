@@ -399,6 +399,7 @@ class BaseFusedOp(nn.Module, ABC):
         # so module-level op instances never trigger platform detection at
         # import time. Subclass __init__ may overwrite it to pin a path.
         self._forward_method: Optional[Callable] = None
+        self._dynamic_backend_candidates: Tuple[KernelBackend, ...] = ()
         # torch.compile mode bookkeeping (see enter/leave_torch_compile).
         self._original_forward_method: Optional[Callable] = None
         self.is_torch_compile = False

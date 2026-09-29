@@ -78,6 +78,16 @@ class ShearingBias:
         # (decode blocks hold qhead_per_kvhead*seqlen_q rows, not tile_m).
         self.clamp_subtiles = clamp_subtiles
 
+        # Set at JIT trace time by __call__.
+        self.bias_dtype = None
+        self.vec_size = None
+        self.cols_per_iter = None
+        self.num_g2s_threads = None
+        self.num_s2g_threads = None
+        self.shared_storage = None
+        self.use_block_packed_scheduling = None
+        self.tile_scheduler_cls = None
+
     @cute.jit
     def __call__(
         self,

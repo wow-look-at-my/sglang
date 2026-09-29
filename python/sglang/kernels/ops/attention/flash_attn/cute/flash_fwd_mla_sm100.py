@@ -255,10 +255,32 @@ class FlashAttentionMLAForwardSm100:
         assert (
             self.total_tmem <= self.tmem_alloc_cols
         ), f"Total TMEM columns allocated {self.total_tmem} exceeds capacity {self.tmem_alloc_cols}"
-
-    def _get_shared_storage_cls(self):
         self.buffer_align_bytes = 1024
 
+        # Set at JIT trace time by __call__.
+        self.store_P = None
+        self.store_row_max = None
+        self.dtype_Q = None
+        self.dtype_K = None
+        self.dtype_Qv = None
+        self.dtype_V = None
+        self.dtype_P = None
+        self.dtype_O = None
+        self.o_layout = None
+        self.p_layout = None
+        self.sStats_layout = None
+        self.sScale_layout = None
+        self.sBitmask_layout = None
+        self.ragged_tma_O = None
+        self.overlap_sO_sV = None
+        self.tile_scheduler_cls = None
+        self.cpasync_barrier = None
+        self.softmax_barrier = None
+        self.epi_barrier = None
+        self.sm_stats_barrier_full = None
+        self.sm_stats_barrier_empty = None
+
+    def _get_shared_storage_cls(self):
         def smem_struct_align(dtype, staged_layout, disabled=False):
             if disabled:
                 return cute.struct.MemRange[dtype, 0]

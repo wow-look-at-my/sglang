@@ -55,6 +55,14 @@ class FlashAttentionForwardCombine:
         self.is_even_k = head_dim % k_block_size == 0
         self.stages = stages
         self.use_pdl = use_pdl
+        # Set at JIT trace time by _setup_attributes.
+        self.gmem_tiled_copy_O_partial = None
+        self.gmem_tiled_copy_O = None
+        self.gmem_tiled_copy_LSE = None
+        self.smem_threads_per_col_lse = None
+        self.s2r_tiled_copy_LSE = None
+        self.smem_layout_lse = None
+        self.smem_layout_o = None
 
     @staticmethod
     def can_implement(

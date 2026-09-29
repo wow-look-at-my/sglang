@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING
 
+from torch import nn
+
 from pkg.base import Base, EagerBase
 
 if TYPE_CHECKING:
@@ -145,6 +147,16 @@ class CooperativeMixin:
 
     def rebuild(self):
         self.base_mapper = None
+
+
+class Buffered(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("cache", None)
+        self.size = self.cache
+
+    def reset(self):
+        self.cache = None
 
 
 class UsesCycle:

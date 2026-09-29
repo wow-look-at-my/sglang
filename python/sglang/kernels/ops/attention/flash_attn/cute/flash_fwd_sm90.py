@@ -84,6 +84,19 @@ class FlashAttentionForwardSm90(FlashAttentionForwardBase):
         ), "Paged KV does not support irregular head dim"
         self.cluster_shape_mn = (1, 1)
         assert self.arch.is_family_of(Arch.sm_90a), "Only SM 9.x is supported"
+        # Set at JIT trace time by __call__.
+        self.varlen_q = None
+        self.bias_dtype = None
+        self.num_threads_per_warp_group = None
+        self.num_wg_mma = None
+        self.num_mma_regs = None
+        self.num_producer_regs = None
+        self.use_block_sparsity = None
+        self.use_scheduler_barrier = None
+        self.use_tma_Q = None
+        self.rescale_O_before_gemm = None
+        self.sBias_layout = None
+        self.tma_copy_bytes = None
 
     def _get_smem_layout_atom(self):
         sQ_layout_atom = warpgroup.make_smem_layout_atom(

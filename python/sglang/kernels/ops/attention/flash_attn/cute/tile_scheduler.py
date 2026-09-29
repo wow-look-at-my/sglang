@@ -207,6 +207,7 @@ class SingleTileScheduler:
         self._is_first_block = True
         self._loc = loc
         self._ip = ip
+        self._values_pos = []
 
     @staticmethod
     def to_underlying_arguments(
@@ -324,6 +325,7 @@ class StaticPersistentTileScheduler:
         self._tile_idx = tile_idx
         self._loc = loc
         self._ip = ip
+        self._values_pos = []
 
     @staticmethod
     def to_underlying_arguments(
@@ -495,6 +497,7 @@ class SingleTileLPTScheduler:
         self.clc = clc
         self._loc = loc
         self._ip = ip
+        self._values_pos = []
 
     @staticmethod
     def to_underlying_arguments(
@@ -729,6 +732,7 @@ class SingleTileLPTBwdScheduler:
         self._tile_idx = tile_idx
         self._loc = loc
         self._ip = ip
+        self._values_pos = []
 
     @staticmethod
     def to_underlying_arguments(
@@ -898,6 +902,7 @@ class SingleTileVarlenScheduler:
         self.clc = clc
         self._loc = loc
         self._ip = ip
+        self._values_pos = []
 
     @staticmethod
     def to_underlying_arguments(
@@ -1205,6 +1210,7 @@ class Sm100FmhaStaticTileSchedulerParams:
         self.problem_shape_mbh = problem_shape_mbh
         self._loc = loc
         self._ip = ip
+        self._values_pos = []
 
     def __extract_mlir_values__(self):
         values, self._values_pos = [], []
@@ -1476,6 +1482,7 @@ class Sm100FmhaClcDynamicTileSchedulerParams:
         self.cluster_shape_mn = cluster_shape_mnk[:2]
         self._loc = loc
         self._ip = ip
+        self._values_pos = []
 
         # FMHA uses linear indexing over (M, B, H), convert to (M, N, L) style
         # For FMHA: M dim is tile count along sequence, N=1, L=(B*H)

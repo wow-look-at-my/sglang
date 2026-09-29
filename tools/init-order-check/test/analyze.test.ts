@@ -33,6 +33,7 @@ const CASES: Record<string, Expect> = {
 	Derived: { file: "pkg/order.py", reads: ["lock"], uninitialized: [] },
 	ExternalBase: { file: "pkg/order.py", reads: [], uninitialized: [], opaque: true },
 	CooperativeMixin: { file: "pkg/order.py", reads: [], uninitialized: [], dynamic: true },
+	Buffered: { file: "pkg/order.py", reads: [], uninitialized: [] },
 	UsesCycle: { file: "pkg/order.py", reads: [], uninitialized: [] },
 	OnCycle: { file: "pkg/cycle_a.py", reads: ["second"], uninitialized: [] },
 	Base: { file: "pkg/base.py", reads: [], uninitialized: [] },

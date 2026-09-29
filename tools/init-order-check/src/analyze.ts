@@ -359,6 +359,18 @@ function binds(node: Node): boolean {
 	return node.type === "augmented_assignment" || (node.type === "assignment" && field(node, "right") !== null);
 }
 
+// nn.Module methods that bind an attribute under the name in their first argument.
+const REGISTERS = new Set(["register_buffer", "register_parameter", "register_module", "add_module"]);
+
+// The attribute a call binds by a literal name: setattr(self, "x", v) or self.register_buffer("x", t).
+function namedWrite(call: Node, selfName: string): string | undefined {
+	const fn = field(call, "function");
+	const args = callArgs(call);
+	if (fn?.text === "setattr" && args[0]?.text === selfName) return stringLiteral(args[1]);
+	if (fn?.type !== "attribute" || field(fn, "object")?.text !== selfName) return undefined;
+	return REGISTERS.has(field(fn, "attribute")!.text) ? stringLiteral(args[0]) : undefined;
+}
+
 function callArgs(call: Node): Node[] {
 	const args = field(call, "arguments");
 	return args ? named(args) : [];
@@ -459,10 +471,8 @@ class Simulator {
 				const target = named(node).find((c) => c.type === "as_pattern_target");
 				if (target) for (const t of named(target)) this.targetAttrs(t, selfName, note);
 			} else if (node.type === "call") {
-				const fn = field(node, "function");
-				const args = callArgs(node);
-				const attr = stringLiteral(args[1]);
-				if (fn?.text === "setattr" && args[0]?.text === selfName && attr) note(attr, node);
+				const attr = namedWrite(node, selfName);
+				if (attr) note(attr, node);
 			}
 			for (const child of named(node)) walk(child);
 		};
@@ -499,9 +509,8 @@ class Simulator {
 			} else if (node.type === "call") {
 				const callee = this.calleeOf(node, { method: m, selfName, chain: [] });
 				if (callee && !callee.deferred) for (const w of this.writesOf(callee)) out.add(w);
-				const args = callArgs(node);
-				const attr = stringLiteral(args[1]);
-				if (field(node, "function")?.text === "setattr" && args[0]?.text === selfName && attr) out.add(attr);
+				const attr = namedWrite(node, selfName);
+				if (attr) out.add(attr);
 			}
 			for (const child of named(node)) walk(child);
 		};
@@ -754,6 +763,8 @@ class Simulator {
 		if (this.opensUnknownScope(fn, args, ctx)) this.dynamic = true;
 		this.visitExpr(fn, state, ctx);
 		for (const arg of args) this.visitExpr(arg, state, ctx);
+		const registered = namedWrite(node, ctx.selfName);
+		if (registered) state.assigned.add(registered);
 	}
 
 	// A mixin forwards *args to whatever class follows it at runtime, which the check cannot see.

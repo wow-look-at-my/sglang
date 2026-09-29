@@ -518,6 +518,44 @@ class FlashAttentionForwardSm100:
 
         self.buffer_align_bytes = 1024
 
+        # Set at JIT trace time by _setup_attributes and __call__.
+        self.kv_stage = None
+        self.v_mma_stage = None
+        self.s_stage = None
+        self.uneven_kv_smem = None
+        self.uneven_kv_smem_offset = None
+        self.q_dtype = None
+        self.k_dtype = None
+        self.v_dtype = None
+        self.o_dtype = None
+        self.v_mma_dtype = None
+        self.kv_size_ratio = None
+        self.qk_sf_vec_size = None
+        self.v_sf_vec_size = None
+        self.sfq_dtype = None
+        self.sfk_dtype = None
+        self.sfv_dtype = None
+        self.bias_dtype = None
+        self.bias_major_mode = None
+        self.o_layout = None
+        self.num_sfq_tmem_cols = None
+        self.num_sfk_tmem_cols = None
+        self.tmem_sfq_offset = None
+        self.tmem_sfk_offset = None
+        self.ex2_emu_freq = None
+        self.ex2_emu_start_frg = None
+        self.mma_tiler_qk_sfk = None
+        self.tiled_mma_qk_sfk = None
+        self.mma_tiler_pv_sfv = None
+        self.tiled_mma_pv_sfv = None
+        self.cluster_shape_mnk = None
+        self.epi_tile = None
+        self.tma_copy_bytes = None
+        self.num_epilogue_threads = None
+        self.tile_scheduler_cls = None
+        self.shared_storage = None
+        self.use_block_sparsity = None
+
     def _setup_attributes(self):
         """Set up configurations and parameters for the FMHA kernel operation.
 

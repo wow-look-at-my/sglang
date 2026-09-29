@@ -277,6 +277,23 @@ class _Qwen3xNvfp4Sm120Kernel:
         self.a_smem_layout_staged = None
         self.b_smem_layout_staged = None
         self.epi_smem_layout_staged = None
+        self.sfa_smem_layout_staged = None
+        self.sfb_smem_layout_staged = None
+        self.mma_atom = None
+        self.num_m_tiles = None
+        self.num_n_tiles = None
+        self.num_k_blocks = None
+        self.cta_layout_mnk = None
+        self.a_dtype = None
+        self.b_dtype = None
+        self.c_dtype = None
+        self.sf_dtype = None
+        self.a_layout = None
+        self.b_layout = None
+        self.c_layout = None
+        self.sfa_layout = None
+        self.sfb_layout = None
+        self.shared_storage = None
 
         self.buffer_align_bytes = 1024
 
