@@ -72,6 +72,14 @@ class GemmUniversalBaseCompat {
   /// Kernel parameters object
   typename GemmKernel::Params params_;
 
+  /// The CUDA error behind the last kErrorInternal; the Status alone drops it.
+  cudaError_t last_cuda_error_ = cudaSuccess;
+
+ public:
+  cudaError_t last_cuda_error() const {
+    return last_cuda_error_;
+  }
+
  protected:
   /// Private helper to obtain the grid dimensions with fix-up for split-K
   static void get_grid_shape_(gemm::GemmCoord& grid_tiled_shape, int& gemm_k_size, Arguments const& args) {
@@ -248,6 +256,7 @@ class GemmUniversalBaseCompat {
 
         if (result != cudaSuccess) {
           CUTLASS_TRACE_HOST("  cudaMemsetAsync() returned error " << cudaGetErrorString(result));
+          last_cuda_error_ = result;
 
           return Status::kErrorInternal;
         }
@@ -271,6 +280,7 @@ class GemmUniversalBaseCompat {
           cudaFuncSetAttribute(Kernel<GemmKernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
 
       if (result != cudaSuccess) {
+        last_cuda_error_ = result;
         return Status::kErrorInternal;
       }
     }
@@ -324,6 +334,7 @@ class GemmUniversalBaseCompat {
 
     if (result != cudaSuccess) {
       CUTLASS_TRACE_HOST("  grid launch failed with error " << cudaGetErrorString(result));
+      last_cuda_error_ = result;
       return Status::kErrorInternal;
     }
 
