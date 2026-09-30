@@ -28,47 +28,34 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "schedsim: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// run is the program: it parses args, reads the log and writes every
-// section of the report to w. main exits 1 on the error it returns.
-func run(args []string, w io.Writer) error {
-	fs := flag.NewFlagSet("schedsim", flag.ContinueOnError)
-	fs.SetOutput(w)
-	logPath := fs.String("log", "", "log to read (default: the embedded live serving log)")
-	chunkSize := fs.Int("chunk-size", 4096, "tokens per cold-prefill chunk to look for")
-	prefillShare := fs.Float64("prefill-share", 0.5, "prefill's share of contended GPU time under the time-balance policy")
-	sweep := fs.Bool("sweep", true, "print the fixed-interval sensitivity table")
-	decodePerReq := fs.Float64("decode-per-req", 0.0, "ASSUMED: fractional decode cost added per extra running request")
-	interference := fs.Float64("prefill-interference", 0.0, "ASSUMED: fractional prefill slowdown from sharing the GPU with decode")
-	policy := registerPolicyFlags(fs)
-	replay := registerReplayFlags(fs)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
+	logPath := flag.String("log", "", "log to read (default: the embedded live serving log)")
+	chunkSize := flag.Int("chunk-size", 4096, "tokens per cold-prefill chunk to look for")
+	prefillShare := flag.Float64("prefill-share", 0.5, "prefill's share of contended GPU time under the time-balance policy")
+	sweep := flag.Bool("sweep", true, "print the fixed-interval sensitivity table")
+	decodePerReq := flag.Float64("decode-per-req", 0.0, "ASSUMED: fractional decode cost added per extra running request")
+	interference := flag.Float64("prefill-interference", 0.0, "ASSUMED: fractional prefill slowdown from sharing the GPU with decode")
+	policy := registerPolicyFlags(flag.CommandLine)
+	replay := registerReplayFlags(flag.CommandLine)
+	flag.Parse()
 
 	logName, text := "internal/trace/live_log.txt (embedded)", trace.EmbeddedLog
 	if *logPath != "" {
 		b, err := os.ReadFile(*logPath)
 		if err != nil {
-			return fmt.Errorf("read log: %w", err)
+			fail("read log: %v", err)
 		}
 		logName, text = *logPath, string(b)
 	}
 
 	boots, err := trace.ParseBoots(text)
 	if err != nil {
-		return fmt.Errorf("parse log: %w", err)
+		fail("parse log: %v", err)
 	}
 	// The single-window report models the longest cold prompt in the log,
 	// taken within one boot so a restart never splices two prompts together.
 	anchor := longestRunBoot(boots, *chunkSize)
 	if anchor < 0 {
-		return fmt.Errorf("no %d-token cold prefill stretch found in %s", *chunkSize, logName)
+		fail("no %d-token cold prefill stretch found in %s", *chunkSize, logName)
 	}
 	steps := boots[anchor].Steps
 	metrics := boots[anchor].Summarize(*chunkSize)
@@ -152,12 +139,12 @@ func run(args []string, w io.Writer) error {
 		}
 	}
 
-	report.Write(w, in)
-	fmt.Fprintln(w)
-	report.Summary(w, oldRes, newRes, revisedRes)
+	report.Write(os.Stdout, in)
+	fmt.Fprintln(os.Stdout)
+	report.Summary(os.Stdout, oldRes, newRes, revisedRes)
 
 	if len(boots) > 1 || boots[0].Timestamped() {
-		printBoots(w, boots, *chunkSize)
+		printBoots(os.Stdout, boots, *chunkSize)
 	}
 	paramsFor := func(w sched.Workload, p sched.Policy) sched.Params {
 		q := w.Params(p)
@@ -168,16 +155,15 @@ func run(args []string, w io.Writer) error {
 	}
 	eps := collectEpisodes(boots, *chunkSize, paramsFor)
 	if len(eps) > 1 {
-		printEpisodes(w, boots, eps, *chunkSize)
+		printEpisodes(os.Stdout, boots, eps, *chunkSize)
 	}
 
 	cal, calRep := trace.CalibrateBoots(boots, *chunkSize, pageSize)
-	fmt.Fprintf(w, "\nCalibration: %s\n", calRep)
+	fmt.Fprintf(os.Stdout, "\nCalibration: %s\n", calRep)
 	if replay.on && boots[anchor].Timestamped() {
-		printReplay(w, boots, sim.NewCost(cal), *chunkSize, replay, policy.workers)
+		printReplay(os.Stdout, boots, sim.NewCost(cal), *chunkSize, replay, policy.workers)
 	}
-	printPolicies(w, cal, steps, policy)
-	return nil
+	printPolicies(os.Stdout, cal, steps, policy)
 }
 
 // PageSize is the page_size to assume when the log carries no server_args
@@ -242,4 +228,9 @@ func splitLines(s string) []string {
 		out = append(out, s[start:])
 	}
 	return out
+}
+
+func fail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "schedsim: "+format+"\n", args...)
+	os.Exit(1)
 }

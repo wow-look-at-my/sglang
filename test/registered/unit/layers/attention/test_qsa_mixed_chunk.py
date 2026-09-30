@@ -159,59 +159,6 @@ class TestQsaMixedChunk(unittest.TestCase):
         self.assertEqual(indexer.rope_starts[entry], 4)
 
 
-class TestQsaMixedBatchRunAsExtend(unittest.TestCase):
-    """The eager runner runs a MIXED batch as EXTEND (EagerRunner.execute
-    rewrites the mode before attention metadata is built), so the backend
-    sees the decode tails under EXTEND. A tail extends from wherever its
-    decode left off, which is not a compress-group boundary; the backend
-    must plan it as a mixed tail rather than apply the aligned-prefix rule
-    a prefix-cache hit satisfies. This is the first-request crash of the
-    Qwen3.8-Flash-Next deployment with mixed chunk on: a device-side assert
-    from `_qsa_build_write_plan` as soon as a prompt arrived while another
-    request was decoding."""
-
-    def _plan(self, mode, prefix_cpu, tail_prefix=7):
-        pool = _Pool(ring_slots=4 * RATIO)
-        backend = QwenSparseAttnBackend.__new__(QwenSparseAttnBackend)
-        backend.token_to_kv_pool = pool
-        lengths = torch.tensor([8, tail_prefix + 1])
-        extend_lens = torch.tensor([8, 1])
-        slot_table = torch.arange(2 * 8, dtype=torch.int32).reshape(2, 8)
-        forward_batch = SimpleNamespace(
-            forward_mode=mode,
-            extend_seq_lens=extend_lens,
-            extend_seq_lens_cpu=[8, 1],
-            extend_prefix_lens_cpu=prefix_cpu,
-            input_ids=torch.zeros(9, dtype=torch.long),
-        )
-        return backend._qsa_build_write_plan(
-            forward_batch=forward_batch,
-            speculative_paged=False,
-            token_slot_table=slot_table,
-            sequence_lengths=lengths,
-            row_req_pool_indices=torch.tensor([2, 1]),
-        )
-
-    def test_tail_run_as_extend_plans_like_a_mixed_batch(self):
-        mixed = self._plan(ForwardMode.MIXED, [0, 7])
-        as_extend = self._plan(ForwardMode.EXTEND, [0, 7])
-        self.assertIsNotNone(as_extend[4], "tail members must come from the ring")
-        for got, want in zip(as_extend[:4], mixed[:4]):
-            torch.testing.assert_close(got, want)
-        torch.testing.assert_close(as_extend[4][0], mixed[4][0])
-        torch.testing.assert_close(as_extend[4][1], mixed[4][1])
-
-    def test_aligned_prefixes_keep_the_plain_extend_plan(self):
-        # A page-granular prefix hit is group-aligned and needs no ring.
-        plan = self._plan(ForwardMode.EXTEND, [0, 4], tail_prefix=4)
-        self.assertIsNone(plan[4])
-
-    def test_extend_without_host_lengths_still_rejects_misaligned_prefix(self):
-        # gpu_only batches carry no host lists: the aligned-prefix rule stays.
-        with self.assertRaises(RuntimeError):
-            self._plan(ForwardMode.EXTEND, None)
-
-
 class TestQsaUnifiedPoolReads(unittest.TestCase):
     def test_kv_reads_and_compressed_writes_translate(self):
         """On the unified pool req_to_token holds virtual slots: the sparse K/V

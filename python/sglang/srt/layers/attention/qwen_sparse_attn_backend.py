@@ -541,21 +541,9 @@ class QwenSparseAttnBackend(AttentionBackend):
         prefix_lens = (lengths - extend_lens).clamp_min(0)
         is_mixed = forward_batch.forward_mode.is_mixed()
         if not is_mixed:
-            # The eager runner runs a mixed batch as EXTEND (EagerRunner.execute
-            # rewrites the mode before this metadata is built), so the mode
-            # alone does not say whether a row is a decode tail. A tail
-            # extends from wherever its decode left off; a prefix-cache hit is
-            # page-granular and the page is a ratio multiple, so it always
-            # covers whole groups. The host copy of the prefix lengths tells
-            # the two apart without a device sync.
-            prefix_cpu = getattr(forward_batch, "extend_prefix_lens_cpu", None)
-            if prefix_cpu is not None:
-                is_mixed = any(
-                    int(p) % ratio for p in prefix_cpu[: int(lengths.numel())]
-                )
-        if not is_mixed:
-            # Every prefix is group-aligned; a misaligned one would leave a
-            # shared group half-written, so the device checks it.
+            # Prefix sharing is page-granular and the page is a ratio
+            # multiple, so a matched prefix always covers whole groups. A
+            # misaligned prefix would leave a shared group half-written.
             torch._assert_async((prefix_lens % ratio == 0).all())
         # Each row spans at most ceil(extend_len / ratio) blocks, so the
         # token count and row count bound the plan without a sync.
