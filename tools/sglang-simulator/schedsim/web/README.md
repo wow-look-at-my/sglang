@@ -33,7 +33,13 @@ conversations where the server evicts pages.
 Rebuild after editing `sim.ts`:
 
 ```
+npm install     # typescript and c8, once
 npm run check   # tsc, then a headless 600 s comparison printed by node
+npm test        # node:test suites under c8, 95% line coverage required
 ```
 
-Fork CI runs the same and fails if the committed `sim.js` is stale.
+The tests in `test/` load `sim.js` twice: as a module, for the cost model,
+balancer, pool, engine and traffic feed, and as the page would, against a
+fake document built from `index.html`'s own elements, for the controls,
+the injectors and the drawing. Fork CI runs all of it and fails if the
+committed `sim.js` is stale.
