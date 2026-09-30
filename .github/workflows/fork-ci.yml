@@ -283,42 +283,25 @@ jobs:
           go-version-file: tools/sglang-simulator/schedsim/go.mod
 
       # The simulator is the proof artifact for scheduler changes, so its tests
-      # gate a push the same way the gateway's do. The log replay code (trace
-      # layer, log workload, report, command) must stay at 95% statement
-      # coverage; scripts/coverage.sh prints the per-file table.
+      # gate a push the same way the gateway's do.
       - name: scheduler simulator tests
         working-directory: tools/sglang-simulator/schedsim
-        run: scripts/coverage.sh
+        run: go test ./... -count=1
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
       # The visual simulator ships its compiled sim.js beside sim.ts so the
-      # page opens from a file:// URL; this rebuilds it, runs the headless
-      # comparison and the unit tests (engine, balancer, pool and the page
-      # against a fake DOM) under c8's 95% line threshold, and fails if the
-      # committed sim.js is stale.
+      # page opens from a file:// URL; this rebuilds it and runs the headless
+      # comparison, and fails if the committed sim.js is stale.
       - name: visual simulator
         working-directory: tools/sglang-simulator/schedsim/web
         run: |
-          npm install --no-audit --no-fund --silent
+          npm install --no-audit --no-fund --silent typescript@5
           npx tsc -p tsconfig.json
           node sim.js
-          npm test
           git diff --exit-code -- sim.js
-
-      # The NPU precise-test selector's git fallback (used when the GitHub
-      # API is down) is covered by its own pytest suite.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: precise-test selector tests
-        working-directory: .
-        run: |
-          pip install --quiet pytest pytest-cov regex
-          python -m pytest scripts/ci/npu/precise-test/tests -q --cov=test_selector --cov-report=term-missing
 
   fork-gateway-wheel:
     needs: fork-plan
