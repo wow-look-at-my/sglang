@@ -25,6 +25,35 @@ def _get_compute_capability():
     return properties.major * 10 + properties.minor
 
 
+def _arch_runs_on(arch: str, compute_capability: int) -> bool:
+    """Whether SASS built for ``arch`` (e.g. "80", "100f", "120a") runs on the GPU."""
+    suffix = arch[-1] if arch[-1] in "af" else ""
+    number = int(arch[: len(arch) - len(suffix)])
+    major, minor = divmod(number, 10)
+    gpu_major, gpu_minor = divmod(compute_capability, 10)
+    if suffix == "a":
+        return (gpu_major, gpu_minor) == (major, minor)
+    return gpu_major == major and gpu_minor >= minor
+
+
+def _check_built_archs(sgl_kernel_dir: Path, compute_capability: int) -> None:
+    archs_file = sgl_kernel_dir / "cuda_archs.txt"
+    if not archs_file.exists():
+        return
+    archs = archs_file.read_text().split()
+    # An empty list means a build for every arch the CUDA version supports.
+    if not archs or any(_arch_runs_on(a, compute_capability) for a in archs):
+        return
+    raise ImportError(
+        f"sglang-kernel at {sgl_kernel_dir} was built only for CUDA archs "
+        f"{';'.join(archs)}, and none of them runs on this GPU "
+        f"(compute capability {compute_capability // 10}.{compute_capability % 10}). "
+        f"Every AOT kernel launch would fail. Rebuild with "
+        f"-DSGL_KERNEL_CUDA_ARCHS naming this GPU's arch "
+        f"(the fork CI reads it from the FORK_KERNEL_CUDA_ARCHS variable)."
+    )
+
+
 def _filter_compiled_extensions(file_list):
     """Filter and prioritize compiled extensions over Python source files."""
     compiled_extensions = [".so", ".pyd", ".dll"]  # Common compiled extension suffixes
@@ -55,6 +84,8 @@ def _load_architecture_specific_ops():
     # Get the directory where sgl_kernel is installed
     sgl_kernel_dir = Path(__file__).parent
     logger.debug(f"[sgl_kernel] sgl_kernel directory: {sgl_kernel_dir}")
+    if compute_capability is not None:
+        _check_built_archs(sgl_kernel_dir, compute_capability)
 
     # Determine which version to load based on GPU architecture
     if compute_capability == 90:

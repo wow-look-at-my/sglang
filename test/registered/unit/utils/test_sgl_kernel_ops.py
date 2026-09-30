@@ -12,8 +12,10 @@ from sglang.test.ci.ci_register import register_cpu_ci
 register_cpu_ci(est_time=30, suite="base-a-test-cpu")
 
 import ast
+import importlib.util
 import re
 import sys
+import tempfile
 import types
 import unittest
 from collections import defaultdict
@@ -401,6 +403,46 @@ class TestWarnMissingSglKernelOps(CustomTestCase):
         with patch.object(sgl_kernel_ops, "_current_backend", return_value=None):
             with self.assertNoLogs(sgl_kernel_ops.logger, level="WARNING"):
                 sgl_kernel_ops.warn_missing_sgl_kernel_ops()
+
+
+def _import_load_utils() -> types.ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "_sgl_kernel_load_utils", _PY_ROOT / "load_utils.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestBuiltArchCheck(CustomTestCase):
+    """A wheel built for other GPU archs must fail at import, not at the first launch."""
+
+    def setUp(self):
+        self.load_utils = _import_load_utils()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def _check(self, archs: str, compute_capability: int) -> None:
+        (self.dir / "cuda_archs.txt").write_text(archs)
+        self.load_utils._check_built_archs(self.dir, compute_capability)
+
+    def test_blackwell_only_wheel_refuses_ada(self):
+        # A 120a-only wheel on sm89 failed int8_scaled_mm with "Error Internal".
+        with self.assertRaisesRegex(ImportError, r"120a.*compute capability 8\.9"):
+            self._check("120a\n", 89)
+
+    def test_arch_specific_sass_needs_the_exact_arch(self):
+        with self.assertRaises(ImportError):
+            self._check("120a\n", 121)
+
+    def test_plain_and_family_sass_run_on_later_minors(self):
+        self._check("80\n120a\n", 86)
+        self._check("100f\n", 103)
+
+    def test_unrestricted_build_is_not_checked(self):
+        self._check("\n", 75)
+        self.load_utils._check_built_archs(self.dir / "absent", 75)
 
 
 if __name__ == "__main__":

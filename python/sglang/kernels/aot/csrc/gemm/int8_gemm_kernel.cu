@@ -148,8 +148,28 @@ void cutlass_int8_scaled_mm(
       "gemm cannot implement, error: ",
       cutlassGetStatusString(can_implement));
 
+  // run() reads cudaGetLastError, so an error that an earlier call left behind looks like a failure of this GEMM.
+  cudaError_t pending = cudaGetLastError();
+  TORCH_CHECK(
+      pending == cudaSuccess,
+      "int8_scaled_mm: a CUDA error from an earlier call was pending before the launch: ",
+      cudaGetErrorString(pending));
+
   auto status = gemm_op(args, workspace.data_ptr(), stream);
-  TORCH_CHECK(status == cutlass::Status::kSuccess, "gemm executioin failed, error: ", cutlassGetStatusString(status));
+  TORCH_CHECK(
+      status == cutlass::Status::kSuccess,
+      "gemm execution failed, error: ",
+      cutlassGetStatusString(status),
+      ", CUDA error: ",
+      cudaGetErrorString(gemm_op.last_cuda_error()),
+      ", m=",
+      m,
+      " n=",
+      n,
+      " k=",
+      k,
+      " smem_bytes=",
+      sizeof(typename GemmKernel::SharedStorage));
 }
 
 template <typename ElementOutput, typename ArchTag, typename InstructionShape>
