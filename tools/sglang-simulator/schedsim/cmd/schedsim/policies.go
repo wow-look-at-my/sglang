@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"schedsim/internal/sim"
@@ -84,13 +83,4 @@ func seedList(n int) []int64 {
 		out[i] = int64(i + 1)
 	}
 	return out
-}
-
-func mustSteps() []trace.Step {
-	steps, err := trace.Parse(trace.EmbeddedLog)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "schedsim: "+err.Error())
-		os.Exit(1)
-	}
-	return steps
 }
