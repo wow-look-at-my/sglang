@@ -640,12 +640,11 @@ class Side {
 
 // ---------------------------------------------------------------- headless check
 
-// `node sim.js` runs a short comparison and prints it; the browser skips
-// this, and so does a test that loads the file as a module.
+// `node sim.js` runs a short comparison and prints it; the browser skips this.
 declare const process: any;
 declare const require: any;
 declare const module: any;
-if (typeof document === "undefined" && typeof require !== "undefined" && require.main === module) {
+if (typeof document === "undefined" && typeof process !== "undefined") {
   const traffic: TrafficParams = {
     seed: 7, agents: 5, ctxMin: 100000, ctxMax: 250000, newMin: 200, newMax: 1400, outMin: 200, outMax: 800,
     thinkMin: 1, thinkMax: 5, coldEvery: 90, coldMin: 150000, coldMax: 400000, shared: 12288,
@@ -916,11 +915,4 @@ if (typeof document !== "undefined") {
     reset();
     requestAnimationFrame(frame);
   });
-}
-
-// ---------------------------------------------------------------- exports
-
-// The tests load sim.js with require; the page gets none of this.
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { LOG_CALIBRATION, prefillSeconds, decodeSeconds, Balancer, Pool, Engine, Feed, Side, rng };
 }
