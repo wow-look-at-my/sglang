@@ -171,7 +171,7 @@ class TestDiffFromGit:
         assert "git fallback failed:" in capsys.readouterr().out
 
     def test_success_writes_raw_bytes(self, tmp_path, monkeypatch, capsys):
-        payload = b"diff --git a/x b/x\r\n+caf\xc3\xa9\n"
+        payload = b"diff --git a/x b/x\r\n+na\xc3\xafve\n"
         git = FakeGit(completed(0), completed(0, stdout=payload, stderr=b""))
         monkeypatch.setattr(ts.subprocess, "run", git)
         out = tmp_path / "pr.diff"
