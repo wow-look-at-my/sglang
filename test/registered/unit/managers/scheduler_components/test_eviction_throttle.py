@@ -144,6 +144,29 @@ class TestEvictionThrottle(unittest.TestCase):
         throttle.begin_pass(present_rids={"a2", "c1"})
         self.assertFalse(_hold(throttle, "c1", input_len=300, queued_at=self.clock.now))
 
+    def test_every_rank_enters_consensus_whatever_its_local_memory_view(self):
+        """Ranks can disagree on would_evict and device_hit: free pages depend on
+        rank-local CUDA event timing. A rank that skipped the broadcast while
+        another entered it deadlocked the TP scheduler with requests queued."""
+        calls = {"evicts": 0, "fits": 0, "resident": 0}
+        views = {
+            "evicts": dict(would_evict=True, device_hit=0),
+            "fits": dict(would_evict=False, device_hit=0),
+            "resident": dict(would_evict=True, device_hit=300),
+        }
+        for rank, view in views.items():
+
+            def consensus(verdict, rank=rank):
+                calls[rank] += 1
+                return verdict
+
+            throttle = _throttle(self.clock, consensus=consensus)
+            self._two_live_conversations(throttle)
+            throttle.on_request_queued(rid="c1", token_ids=list(range(50_000, 50_300)))
+            throttle.begin_pass(present_rids={"a2", "c1"})
+            _hold(throttle, "c1", input_len=300, queued_at=self.clock.now, **view)
+        self.assertEqual(calls, {"evicts": 1, "fits": 1, "resident": 1})
+
     def test_aborted_request_stops_keeping_its_conversation_live(self):
         throttle = _throttle(self.clock)
         self._two_live_conversations(throttle)

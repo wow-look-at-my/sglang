@@ -38,6 +38,11 @@ from __future__ import annotations
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
+from sglang.srt.managers.scheduler_components.rank0_consensus import (
+    SITE_EVICTION_THROTTLE,
+    rank0_broadcast,
+)
+
 # Tokens compared to recognize a returning conversation: the tail of its
 # previous context at the same offset. Arbitrary; long enough that unrelated
 # contexts do not collide.
@@ -201,13 +206,17 @@ class EvictionThrottle:
     ) -> bool:
         """``total_tokens`` is what admission reserves for the request;
         ``queued_at`` its wait-queue entry time on the scheduler clock."""
+        if self._head_taken:
+            return True
+        # would_evict and device_hit read rank-local allocator state, so they feed
+        # the verdict instead of gating the collective every rank must enter.
         # Half the input separates a conversation's own resident context from
         # a hit on nothing but a shared system prompt.
         if not would_evict or 2 * device_hit >= input_len:
-            return False
-        if self._head_taken:
-            return True
-        verdict = self._consensus(self._local_verdict(rid, total_tokens, queued_at))
+            local = _ADMIT
+        else:
+            local = self._local_verdict(rid, total_tokens, queued_at)
+        verdict = self._consensus(local)
         self._head_taken = verdict != _ADMIT
         return verdict == _HOLD
 
@@ -228,18 +237,5 @@ class EvictionThrottle:
 
 def rank0_verdict_consensus(cpu_group) -> Callable[[int], int]:
     """Agree on the first rank's verdict across ``cpu_group``."""
-    import torch
-    import torch.distributed as dist
-
-    if cpu_group is None or dist.get_world_size(group=cpu_group) == 1:
-        return lambda verdict: verdict
-
-    src = dist.get_global_rank(cpu_group, 0)
-    buffer = torch.zeros(1, dtype=torch.int64)
-
-    def consensus(verdict: int) -> int:
-        buffer[0] = verdict
-        dist.broadcast(buffer, src=src, group=cpu_group)
-        return int(buffer[0])
-
-    return consensus
+    broadcast = rank0_broadcast(cpu_group, site=SITE_EVICTION_THROTTLE)
+    return lambda verdict: int(broadcast((verdict,))[0])

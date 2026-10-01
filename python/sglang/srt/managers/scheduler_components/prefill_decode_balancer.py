@@ -57,6 +57,11 @@ import time
 from collections import deque
 from typing import Callable, Deque, Optional, Tuple
 
+from sglang.srt.managers.scheduler_components.rank0_consensus import (
+    SITE_PREFILL_DECODE_BALANCER,
+    rank0_broadcast,
+)
+
 # (prefill seconds, decode seconds, seconds of the latest decode batch).
 Elapsed = Tuple[float, float, float]
 
@@ -232,18 +237,10 @@ def rank0_consensus(cpu_group) -> Callable[[Elapsed], Elapsed]:
     Called only while prefill and decode contend, which every rank of the
     group derives from the same replicated scheduler state, so all ranks
     enter the broadcast together."""
-    import torch
-    import torch.distributed as dist
-
-    if cpu_group is None or dist.get_world_size(group=cpu_group) == 1:
-        return lambda elapsed: elapsed
-
-    src = dist.get_global_rank(cpu_group, 0)
-    buffer = torch.zeros(3, dtype=torch.float64)
+    broadcast = rank0_broadcast(cpu_group, site=SITE_PREFILL_DECODE_BALANCER)
 
     def consensus(elapsed: Elapsed) -> Elapsed:
-        buffer[0], buffer[1], buffer[2] = elapsed
-        dist.broadcast(buffer, src=src, group=cpu_group)
-        return float(buffer[0]), float(buffer[1]), float(buffer[2])
+        prefill_s, decode_s, last_decode_s = broadcast(elapsed)
+        return prefill_s, decode_s, last_decode_s
 
     return consensus
