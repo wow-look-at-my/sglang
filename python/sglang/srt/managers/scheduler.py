@@ -471,6 +471,7 @@ class Scheduler(
         self.is_initializing = True
         # init_soft_watchdog starts a daemon thread that reads these on its first tick.
         self.forward_ct: int = 0
+        self.event_loop_ct: int = 0
         # Prefill tokens processed so far; used as the aging axis for the HRRN scheduling policy. Reqs snapshot this at waiting_queue entry.
         self.processed_tokens_counter: int = 0
         self.cur_batch_for_debug: Optional[ScheduleBatch] = None
@@ -2015,6 +2016,7 @@ class Scheduler(
         while True:
             if self.gracefully_exit:
                 break
+            self.event_loop_ct += 1
 
             # Receive requests
             self.ingest_requests()
@@ -2059,6 +2061,7 @@ class Scheduler(
         while True:
             if self.gracefully_exit:
                 break
+            self.event_loop_ct += 1
 
             # Receive requests
             self.ingest_requests()

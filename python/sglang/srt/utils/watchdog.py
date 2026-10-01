@@ -8,7 +8,7 @@ import threading
 import time
 from contextlib import contextmanager
 from multiprocessing import Process
-from typing import Callable, List, Optional
+from typing import Callable, Hashable, List, Optional
 
 import psutil
 
@@ -104,7 +104,7 @@ class WatchdogRaw:
     def __init__(
         self,
         debug_name: str,
-        get_counter: Callable[[], int],
+        get_counter: Callable[[], Hashable],
         is_active: Callable[[], bool],
         watchdog_timeout: float,
         soft: bool = False,
