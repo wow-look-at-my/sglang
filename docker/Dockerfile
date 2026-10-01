@@ -40,11 +40,31 @@ RUN if [ -n "$UBUNTU_MIRROR" ]; then \
     sed -i "s|http://.*security.ubuntu.com|$UBUNTU_MIRROR|g" /etc/apt/sources.list; \
 fi
 
+# Package mirrors (Ubuntu, NVIDIA) serve a truncated or mismatched index
+# while a mirror sync is in progress, and apt fails the whole build on that
+# one fetch ("File has unexpected size ... Mirror sync in progress?"). Every
+# apt update below goes through apt-retry, which retries with a growing delay;
+# Acquire::Retries covers the package downloads themselves.
+RUN printf '%s\n' '#!/bin/sh' \
+      '# Retries apt-get while a package mirror is mid-sync (see docker/Dockerfile).' \
+      'attempt=1' \
+      'while :; do' \
+      '  apt-get "$@" && exit 0' \
+      '  [ "$attempt" -ge 6 ] && exit 1' \
+      '  echo "apt-get $1 failed (attempt $attempt of 6); retrying in $((attempt * 15))s" >&2' \
+      '  sleep $((attempt * 15))' \
+      '  attempt=$((attempt + 1))' \
+      'done' > /usr/local/bin/apt-retry \
+    && chmod +x /usr/local/bin/apt-retry \
+    && printf '%s\n' 'Acquire::Retries "5";' 'Acquire::Retries::Delay::Maximum "60";' \
+       > /etc/apt/apt.conf.d/80-retries
+
+
 # Python setup (combined with apt update to reduce layers)
 # Ubuntu 24.04 ships Python 3.12 in main, so we no longer need the deadsnakes
 # PPA. Dropping it avoids transient Launchpad 504s in `add-apt-repository`.
 RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
-    apt update && apt install -y --no-install-recommends wget software-properties-common \
+    apt-retry update && apt install -y --no-install-recommends wget software-properties-common \
     && apt install -y --no-install-recommends python3.12-full python3.12-dev \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 2 \
     && update-alternatives --set python3 /usr/bin/python3.12 \
@@ -58,7 +78,7 @@ ENV PATH="/opt/sglang/bin:${PATH}"
 
 # Install system dependencies (organized by category for better caching)
 RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-retry update && apt-get install -y --no-install-recommends \
     # Core system utilities
     ca-certificates \
     software-properties-common \
@@ -337,7 +357,7 @@ WORKDIR /tools
 # Minimal apt deps needed for oh-my-zsh install in this stage
 # Full dev apt packages (gdb, vim, tmux, nsight, etc.) are installed in the framework stage
 RUN --mount=type=cache,target=/var/cache/apt,id=devtools-apt \
-    apt-get update && apt-get install -y --no-install-recommends zsh git \
+    apt-retry update && apt-get install -y --no-install-recommends zsh git \
     && rm -rf /var/lib/apt/lists/*
 
 # Download CLI tools (each in its own layer for parallel downloads)
@@ -468,7 +488,7 @@ COPY --from=devtools_builder /root/.oh-my-zsh /root/.oh-my-zsh
 
 # Install dev apt packages (need to re-run since we're in a different stage)
 RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-retry update && apt-get install -y --no-install-recommends \
     gdb \
     ninja-build \
     vim \
@@ -497,11 +517,11 @@ RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
 
 # Install NVIDIA development tools
 RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
-    apt update -y \
+    apt-retry update -y \
     && apt install -y --no-install-recommends gnupg \
     && echo "deb http://developer.download.nvidia.com/devtools/repos/ubuntu2004/$(if [ "$(uname -m)" = "aarch64" ]; then echo "arm64"; else echo "amd64"; fi) /" | tee /etc/apt/sources.list.d/nvidia-devtools.list \
     && apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/$(if [ "$(uname -m)" = "aarch64" ]; then echo "arm64"; else echo "x86_64"; fi)/7fa2af80.pub \
-    && apt update -y \
+    && apt-retry update -y \
     && apt install -y --no-install-recommends nsight-systems-cli \
     && rm -rf /var/lib/apt/lists/*
 
@@ -588,7 +608,7 @@ COPY docker/configs/.zshrc /root/.zshrc
 # dpkg:            CVE-2025-6297
 RUN python3 -m pip install --upgrade "urllib3>=2.6.3" "pillow>=12.1.1"
 RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
-    apt-get update && apt-get install -y --only-upgrade \
+    apt-retry update && apt-get install -y --only-upgrade \
     binutils binutils-common binutils-x86-64-linux-gnu libbinutils \
     libctf0 libctf-nobfd0 libgprofng0 libsframe1 \
     libgnutls30t64 \
@@ -728,10 +748,30 @@ ENV DEBIAN_FRONTEND=noninteractive \
 ENV PATH="${PATH}:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/cuda/nvvm/bin" \
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
 
+# Package mirrors (Ubuntu, NVIDIA) serve a truncated or mismatched index
+# while a mirror sync is in progress, and apt fails the whole build on that
+# one fetch ("File has unexpected size ... Mirror sync in progress?"). Every
+# apt update below goes through apt-retry, which retries with a growing delay;
+# Acquire::Retries covers the package downloads themselves.
+RUN printf '%s\n' '#!/bin/sh' \
+      '# Retries apt-get while a package mirror is mid-sync (see docker/Dockerfile).' \
+      'attempt=1' \
+      'while :; do' \
+      '  apt-get "$@" && exit 0' \
+      '  [ "$attempt" -ge 6 ] && exit 1' \
+      '  echo "apt-get $1 failed (attempt $attempt of 6); retrying in $((attempt * 15))s" >&2' \
+      '  sleep $((attempt * 15))' \
+      '  attempt=$((attempt + 1))' \
+      'done' > /usr/local/bin/apt-retry \
+    && chmod +x /usr/local/bin/apt-retry \
+    && printf '%s\n' 'Acquire::Retries "5";' 'Acquire::Retries::Delay::Maximum "60";' \
+       > /etc/apt/apt.conf.d/80-retries
+
+
 # Install runtime dependencies (devel base provides gcc/g++/build tools)
 # Python 3.12 ships in Ubuntu 24.04 main, so no deadsnakes PPA needed.
 RUN --mount=type=cache,target=/var/cache/apt,id=runtime-apt \
-    apt-get update && apt-get install -y --no-install-recommends --allow-change-held-packages \
+    apt-retry update && apt-get install -y --no-install-recommends --allow-change-held-packages \
     # Python runtime
     python3.12-full \
     python3.12-dev \
@@ -786,7 +826,7 @@ RUN python3 -m venv /opt/sglang
 ENV PATH="/opt/sglang/bin:${PATH}"
 
 # Set up locale
-RUN apt-get update && apt-get install -y --no-install-recommends locales \
+RUN apt-retry update && apt-get install -y --no-install-recommends locales \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -796,7 +836,7 @@ ENV LANG=en_US.UTF-8 \
 
 # Fix Trivy-reported CVEs (see framework stage for full CVE list)
 RUN --mount=type=cache,target=/var/cache/apt,id=runtime-apt \
-    apt-get update && apt-get install -y --only-upgrade \
+    apt-retry update && apt-get install -y --only-upgrade \
     binutils binutils-common binutils-x86-64-linux-gnu libbinutils \
     libctf0 libctf-nobfd0 libgprofng0 libsframe1 \
     libgnutls30t64 \

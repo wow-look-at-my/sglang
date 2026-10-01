@@ -4,6 +4,11 @@
   "description": "Visual side-by-side scheduler simulator (old prefill-priority vs time-share balancer)",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "tsc -p tsconfig.json && node sim.js"
+    "check": "tsc -p tsconfig.json && node sim.js",
+    "test": "c8 --check-coverage node --test \"test/*.test.mjs\""
+  },
+  "devDependencies": {
+    "c8": "^10",
+    "typescript": "^5"
   }
 }

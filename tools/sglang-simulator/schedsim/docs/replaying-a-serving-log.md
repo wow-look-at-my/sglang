@@ -106,3 +106,14 @@ what the chunk took, and its ratio to `#new-token / input throughput` is
 1.01 at the median with a 2 ms base overhead, against the assumed
 `PrefillBaseSeconds` of 10 ms. The page size comes from the boot's
 `server_args` when the log has one.
+
+## Tests
+
+`scripts/coverage.sh` runs the module's tests with a coverage profile and
+fails if any file of this work (the trace layer, `WorkloadFromRun`, the log
+replay, the report, the command) is under 95% statement coverage; fork CI
+runs it on every push. `internal/trace/tracetest` writes production-format
+logs for the tests, so a test states the traffic (a boot header, decode
+lines, a chunked cold prompt behind running requests, completions, a drain)
+and checks what the parser, the stall measurement, the calibration and the
+replay make of it, without carrying a corpus around.
