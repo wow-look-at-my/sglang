@@ -152,8 +152,22 @@ jobs:
       skip_pr_test_health_check: ${{ inputs.skip_pr_test_health_check == true }}
     secrets: inherit
 
+  sched-policy-build:
+    needs: [check-changes, call-gate]
+    if: ${{ !cancelled() && needs.check-changes.result == 'success' }}
+    permissions:
+      id-token: write
+      contents: write
+      actions: read
+      checks: read
+      deployments: write
+      artifact-metadata: write
+    uses: ./.github/workflows/_sched-policy-build.yml
+    with:
+      git_ref: ${{ inputs.git_ref || '' }}
+
   simulator-test-cpu:
-    needs: [check-changes, call-gate, rust-ext-build]
+    needs: [check-changes, call-gate, rust-ext-build, sched-policy-build]
     if: ${{ !failure() && !cancelled() && needs.check-changes.result == 'success' && (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') }}
     uses: ./.github/workflows/_pr-test-simulator-cpu.yml
     with:
@@ -205,6 +219,7 @@ jobs:
         call-gate,
         sgl-kernel-build-wheels,
         rust-ext-build,
+        sched-policy-build,
         simulator-test-cpu,
         extra-test,
       ]

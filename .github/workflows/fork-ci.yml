@@ -166,9 +166,20 @@ jobs:
       runs_on: ubuntu-22.04
       artifact_name: fork-rust-ext-x86_64
 
+  sched-policy-build:
+    needs: fork-plan
+    permissions:
+      id-token: write
+      contents: write
+      actions: read
+      checks: read
+      deployments: write
+      artifact-metadata: write
+    uses: ./.github/workflows/_sched-policy-build.yml
+
   base-a-test-cpu:
-    needs: [fork-check-changes, fork-rust-ext-build]
-    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' }}
+    needs: [fork-check-changes, fork-rust-ext-build, sched-policy-build]
+    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' && needs.sched-policy-build.result == 'success' }}
     uses: ./.github/workflows/_pr-test-stage-cpu.yml
     with:
       self_name: base-a-test-cpu
@@ -597,7 +608,7 @@ jobs:
   # sm90-only hpc-ops kernels and the sgl-model-gateway router.
   # Publishes only a tree that passed the constructor-order check and the CPU suite.
   fork-docker-image:
-    needs: [fork-plan, fork-sgl-kernel-wheel, fork-init-order-check, base-a-test-cpu]
+    needs: [fork-plan, fork-sgl-kernel-wheel, fork-init-order-check, base-a-test-cpu, sched-policy-build]
     if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' && needs.fork-init-order-check.result == 'success' && needs.base-a-test-cpu.result == 'success' }}
     name: fork-docker-image (${{ matrix.arch }})
     strategy:
@@ -657,13 +668,10 @@ jobs:
       - uses: actions/checkout@v4
 
       # The scheduler's policy process ships in the image as an APE; the Dockerfile reads docker/sched-policy/.
-      - name: Build sched-policy
-        uses: wow-look-at-my/go-toolchain@master
+      - uses: actions/download-artifact@v4
         with:
-          working-directory: tools/sched-policy
-
-      - name: Stage sched-policy for the image
-        run: cp tools/sched-policy/build/sglang-sched-policy docker/sched-policy/
+          name: sglang-sched-policy
+          path: docker/sched-policy
 
       - uses: actions/download-artifact@v4
         continue-on-error: true

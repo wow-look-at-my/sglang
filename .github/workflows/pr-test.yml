@@ -337,11 +337,26 @@ jobs:
       rust_ext_artifact: ${{ needs.rust-ext-build.outputs.artifact_name }}
     secrets: inherit
 
+  sched-policy-build:
+    needs: [check-changes, call-gate]
+    if: ${{ !cancelled() && needs.check-changes.result == 'success' }}
+    permissions:
+      id-token: write
+      contents: write
+      actions: read
+      checks: read
+      deployments: write
+      artifact-metadata: write
+    uses: ./.github/workflows/_sched-policy-build.yml
+    with:
+      git_ref: ${{ inputs.git_ref || '' }}
+
   base-a-test-cpu:
-    needs: [check-changes, call-gate, rust-ext-build]
+    needs: [check-changes, call-gate, rust-ext-build, sched-policy-build]
     if: |
       always() &&
       needs.check-changes.result == 'success' &&
+      needs.sched-policy-build.result == 'success' &&
       ((github.event_name == 'schedule' || inputs.test_parallel_dispatch == true) || (!failure() && !cancelled()))
     uses: ./.github/workflows/_pr-test-stage-cpu.yml
     with:
@@ -488,6 +503,7 @@ jobs:
         call-multimodal-gen-tests,
 
         base-a-test,
+        sched-policy-build,
         base-a-test-cpu,
         base-b-test,
         base-c-test,
