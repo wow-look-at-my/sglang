@@ -144,7 +144,7 @@ func TestEveryOpRoundTripsAndRankZeroDecides(t *testing.T) {
 	r.send(0, &schedpolicy.BatchFinished{Now: 1}, schedpolicy.BatchFinishedType)
 	r.send(1, &schedpolicy.BatchFinished{Now: 99}, schedpolicy.BatchFinishedType)
 	r.replies()
-	require.True(t, boolReply(t, r.call(&schedpolicy.ShouldDeferPrefill{PrefillPending: true, DecodeRunnable: true}, schedpolicy.ShouldDeferPrefillType)))
+	require.True(t, boolReply(t, r.call(&schedpolicy.ShouldDeferPrefill{PrefillPending: true, DecodeRunnable: true, ContinuesChunk: true}, schedpolicy.ShouldDeferPrefillType)))
 
 	f = r.call(&schedpolicy.PrefillTokenBudget{}, schedpolicy.PrefillTokenBudgetType)
 	err = budget.UnmarshalBinary(f.payload)
