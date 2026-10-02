@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"github.com/wow-look-at-my/go-containers/set"
 	"math"
 	"slices"
 	"sort"
@@ -181,12 +182,12 @@ func (l *Ledger) OnFinished(rid string, length int, tail []int32, now float64) {
 }
 
 func (l *Ledger) DropAbsent(present []string) {
-	keep := make(map[string]bool, len(present))
+	keep := set.New[string]()
 	for _, rid := range present {
-		keep[rid] = true
+		keep.Add(rid)
 	}
 	for rid, conv := range l.byRid {
-		if !keep[rid] {
+		if !keep.Contains(rid) {
 			delete(l.byRid, rid)
 			delete(conv.activeRids, rid)
 		}
