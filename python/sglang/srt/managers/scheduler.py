@@ -229,10 +229,6 @@ from sglang.srt.managers.scheduler_components.dp_attn import SchedulerDPAttnAdap
 from sglang.srt.managers.scheduler_components.dynamic_chunk_sizer import (
     DynamicChunkSizer,
 )
-from sglang.srt.managers.scheduler_components.eviction_throttle import (
-    EvictionThrottle,
-    rank0_verdict_consensus,
-)
 from sglang.srt.managers.scheduler_components.flush_wrapper import SchedulerFlushWrapper
 from sglang.srt.managers.scheduler_components.idle_sleeper import (
     IdleSleeper,
@@ -271,10 +267,11 @@ from sglang.srt.managers.scheduler_components.output_streamer import (
 from sglang.srt.managers.scheduler_components.pool_stats_observer import (
     SchedulerPoolStatsObserver,
 )
-from sglang.srt.managers.scheduler_components.prefill_decode_balancer import (
-    PrefillDecodeBalancer,
+from sglang.srt.managers.scheduler_components.sched_policy import (
+    SchedPolicy,
     batch_class,
-    rank0_consensus,
+    new_name,
+    spawn,
 )
 from sglang.srt.managers.scheduler_components.profiler_manager import (
     SchedulerProfilerManager,
@@ -1361,44 +1358,56 @@ class Scheduler(
             self.dynamic_chunk_sizer = sizer
 
     def maybe_init_prefill_decode_balancer(self) -> None:
-        """Time-share prefill and decode unless an explicit interval is set."""
-        self.prefill_decode_balancer: Optional[PrefillDecodeBalancer] = None
+        """Start the sched-policy process that time-shares prefill and decode."""
+        self.prefill_decode_balancer: Optional[SchedPolicy] = None
+        self.sched_policy_process = None
         if (
             self.prefill_decode_interval
             or self.dllm_config is not None
             or get_parallel().pp_size > 1
         ):
             return
-        self.prefill_decode_balancer = PrefillDecodeBalancer(
-            burst_tokens=self.chunked_prefill_size,
-            consensus_elapsed=rank0_consensus(self.attn_tp_cpu_group),
+        world = get_parallel().attn_tp_size
+        timeout = float(self.server_args.watchdog_timeout or 300)
+        # One process per TP group; rank 0 starts it and tells the others its name.
+        name = [new_name() if get_parallel().attn_tp_rank == 0 else None]
+        if get_parallel().attn_tp_rank == 0:
+            self.sched_policy_process = spawn(
+                name=name[0], ranks=world, lockstep_timeout=timeout
+            )
+        if world > 1:
+            torch.distributed.broadcast_object_list(
+                name, src=0, group=self.attn_tp_cpu_group
+            )
+        self.prefill_decode_balancer = SchedPolicy(
+            name=name[0], rank=get_parallel().attn_tp_rank, world=world, timeout=timeout
         )
 
     def maybe_init_eviction_throttle(self) -> None:
         """Hold back conversations whose admission would thrash the prefix cache."""
-        self.eviction_throttle: Optional[EvictionThrottle] = None
-        # Runs before init_disaggregation sets self.disaggregation_mode.
-        if (
-            self.prefill_decode_balancer is None
-            or DisaggregationMode(get_disagg().disaggregation_mode)
-            != DisaggregationMode.NULL
-            or self.tree_cache.disable
-        ):
+        self.eviction_throttle: Optional[SchedPolicy] = None
+        if self.prefill_decode_balancer is None:
             return
+        # Runs before init_disaggregation sets self.disaggregation_mode.
+        throttle = (
+            DisaggregationMode(get_disagg().disaggregation_mode)
+            == DisaggregationMode.NULL
+            and not self.tree_cache.disable
+        )
         cache_controller = (
             self.tree_cache.cache_controller if self.enable_hierarchical_cache else None
         )
         host_tokens = (
             cache_controller.mem_pool_host.size if cache_controller is not None else 0
         )
-        self.eviction_throttle = EvictionThrottle(
+        self.prefill_decode_balancer.init(
+            burst_tokens=self.chunked_prefill_size,
             device_tokens=self.token_to_kv_pool_allocator.size_full,
             host_tokens=host_tokens,
-            prefill_seconds_per_token=lambda: (
-                self.prefill_decode_balancer.prefill_seconds_per_token
-            ),
-            consensus=rank0_verdict_consensus(self.attn_tp_cpu_group),
+            throttle=throttle,
         )
+        if throttle:
+            self.eviction_throttle = self.prefill_decode_balancer
 
     def _should_defer_prefill(self, running_batch: ScheduleBatch) -> bool:
         if self.prefill_decode_balancer is not None:
@@ -1459,7 +1468,7 @@ class Scheduler(
                     else 0
                 )
                 self.prefill_decode_balancer.on_batch_launched(
-                    is_prefill=batch_class(batch.forward_mode),
+                    batch_class=batch_class(batch.forward_mode),
                     num_tokens=batch.extend_num_tokens or 0,
                     num_decode_rows=decode_rows,
                 )

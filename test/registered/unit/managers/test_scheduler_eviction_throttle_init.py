@@ -19,8 +19,11 @@ def _scheduler_before_disaggregation() -> Scheduler:
     """A scheduler at the point __init__ reaches maybe_init_eviction_throttle:
     the balancer exists and self.disaggregation_mode does not yet."""
     scheduler = Scheduler.__new__(Scheduler)
-    scheduler.prefill_decode_balancer = object()
+    scheduler.prefill_decode_balancer = SimpleNamespace(init=lambda **kwargs: None)
     scheduler.tree_cache = SimpleNamespace(disable=True)
+    scheduler.enable_hierarchical_cache = False
+    scheduler.token_to_kv_pool_allocator = SimpleNamespace(size_full=0)
+    scheduler.chunked_prefill_size = 0
     return scheduler
 
 

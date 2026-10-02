@@ -1,4 +1,0 @@
-[run]
-# The two-rank consensus tests run their ranks in spawned processes.
-patch = subprocess
-parallel = true

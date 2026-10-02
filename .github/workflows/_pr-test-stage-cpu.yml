@@ -163,11 +163,11 @@ jobs:
           cd test/
           python3 run_suite.py --hw cpu --suite ${{ inputs.self_name }} --auto-partition-id ${{ matrix.partition }} --auto-partition-size ${{ fromJson(inputs.partitions)[inputs.self_name].size }} --partition-model-file /tmp/partition-model.json --fork-worker-batch-size 20 $CONTINUE_ON_ERROR_FLAG
 
-      - name: Scheduler consensus coverage gate
+      - name: Build and test sched-policy
         if: matrix.partition == 0
-        env:
-          UV_SYSTEM_PYTHON: "1"
-        run: bash scripts/ci/utils/fork_coverage_gate.sh
+        uses: wow-look-at-my/go-toolchain@v1
+        with:
+          working-directory: tools/sched-policy
 
       # PRs save only what the base lacks; the implicit if: success() keeps a
       # half-downloaded cache unpublished.

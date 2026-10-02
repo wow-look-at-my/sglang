@@ -625,6 +625,13 @@ RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
 FROM scratch AS local_src
 COPY . /src
 
+# libgoipc for the goipc Python binding; the spec submodule supplies wire.json.
+FROM base AS goipc_builder
+ARG GO_IPC_REF=master
+RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*
+ADD https://github.com/wow-look-at-my/go-ipc.git#${GO_IPC_REF} /go-ipc
+RUN make -C /go-ipc/c build/libgoipc.so
+
 FROM framework AS framework_final
 
 ARG BRANCH_TYPE
@@ -684,6 +691,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 ENV SGLANG_RUST_BUILD_MODE=never
 
+
+# The scheduler's policy process (tools/sched-policy) and the goipc binding it talks over.
+COPY --from=local_src /src/docker/sched-policy/ /opt/sglang/sched-policy/
+COPY --from=goipc_builder /go-ipc/c/build/libgoipc.so /opt/sglang/lib/libgoipc.so
+COPY --from=goipc_builder /go-ipc/python/goipc /opt/sglang/lib/python3.12/site-packages/goipc
+ENV SGLANG_SCHED_POLICY_BIN=/opt/sglang/sched-policy/sglang-sched-policy \
+    GOIPC_LIBRARY=/opt/sglang/lib/libgoipc.so
 
 # Install pre-built gateway artifacts from parallel builder (none when INSTALL_GATEWAY=0)
 COPY --from=gateway_artifacts /build/gateway_bin/ /opt/sglang/bin/
@@ -859,6 +873,12 @@ COPY --from=framework_final /opt/sglang/bin/sglang /opt/sglang/bin/sglang
 
 # Copy py-spy binary
 COPY --from=framework_final /opt/sglang/bin/py-spy /opt/sglang/bin/py-spy
+
+# Copy the scheduler policy process and the goipc library it is reached over
+COPY --from=framework_final /opt/sglang/sched-policy /opt/sglang/sched-policy
+COPY --from=framework_final /opt/sglang/lib/libgoipc.so /opt/sglang/lib/libgoipc.so
+ENV SGLANG_SCHED_POLICY_BIN=/opt/sglang/sched-policy/sglang-sched-policy \
+    GOIPC_LIBRARY=/opt/sglang/lib/libgoipc.so
 
 # Copy cache for kernels from kernels community
 COPY --from=framework_final /root/.cache/huggingface /root/.cache/huggingface
