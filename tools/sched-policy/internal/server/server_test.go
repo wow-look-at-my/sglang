@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/wow-look-at-my/sglang/tools/sched-policy/internal/schedpolicy"
 )
 
@@ -108,13 +109,11 @@ func (r *rig) failure() string {
 
 func boolReply(t *testing.T, f frame) bool {
 	t.Helper()
-	if f.typ != schedpolicy.BoolReplyType {
-		t.Fatalf("reply type %d, want bool", f.typ)
-	}
+	require.Equal(t, schedpolicy.BoolReplyType, f.typ)
+
 	var b schedpolicy.BoolReply
-	if err := b.UnmarshalBinary(f.payload); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, b.UnmarshalBinary(f.payload))
+
 	return b.Value
 }
 
@@ -129,30 +128,27 @@ func tokenBytes(from, n int) []byte {
 func TestEveryOpRoundTripsAndRankZeroDecides(t *testing.T) {
 	r := start(t, 2, time.Second)
 	r.hello()
-	if f := r.call(&schedpolicy.Init{BurstTokens: 4096, DeviceTokens: 1000, HostTokens: 0, Throttle: true}, schedpolicy.InitType); f.typ != schedpolicy.AckType {
-		t.Fatalf("init reply %d", f.typ)
-	}
-	if boolReply(t, r.call(&schedpolicy.ShouldDeferPrefill{PrefillPending: true, DecodeRunnable: true}, schedpolicy.ShouldDeferPrefillType)) {
-		t.Fatal("deferred with no debt")
-	}
-	f := r.call(&schedpolicy.PrefillTokenBudget{}, schedpolicy.PrefillTokenBudgetType)
+	f := r.call(&schedpolicy.Init{BurstTokens: 4096, DeviceTokens: 1000, HostTokens: 0, Throttle: true}, schedpolicy.InitType)
+	require.Equal(t, schedpolicy.AckType, f.typ)
+
+	require.False(t, boolReply(t, r.call(&schedpolicy.ShouldDeferPrefill{PrefillPending: true, DecodeRunnable: true}, schedpolicy.ShouldDeferPrefillType)))
+
+	f = r.call(&schedpolicy.PrefillTokenBudget{}, schedpolicy.PrefillTokenBudgetType)
 	var budget schedpolicy.OptIntReply
-	if err := budget.UnmarshalBinary(f.payload); err != nil || budget.Present {
-		t.Fatalf("budget %+v %v", budget, err)
-	}
+	err := budget.UnmarshalBinary(f.payload)
+	require.False(t, err != nil || budget.Present)
+
 	r.send(0, &schedpolicy.BatchLaunched{BatchClass: 1, Tokens: 1000, Now: 0}, schedpolicy.BatchLaunchedType)
 	r.send(1, &schedpolicy.BatchLaunched{BatchClass: 1, Tokens: 1000, Now: 50}, schedpolicy.BatchLaunchedType)
 	r.replies()
 	r.send(0, &schedpolicy.BatchFinished{Now: 1}, schedpolicy.BatchFinishedType)
 	r.send(1, &schedpolicy.BatchFinished{Now: 99}, schedpolicy.BatchFinishedType)
 	r.replies()
-	if !boolReply(t, r.call(&schedpolicy.ShouldDeferPrefill{PrefillPending: true, DecodeRunnable: true}, schedpolicy.ShouldDeferPrefillType)) {
-		t.Fatal("a 1 s prefill left no debt")
-	}
+	require.True(t, boolReply(t, r.call(&schedpolicy.ShouldDeferPrefill{PrefillPending: true, DecodeRunnable: true}, schedpolicy.ShouldDeferPrefillType)))
+
 	f = r.call(&schedpolicy.PrefillTokenBudget{}, schedpolicy.PrefillTokenBudgetType)
-	if err := budget.UnmarshalBinary(f.payload); err != nil || !budget.Present || budget.Value != 4096-1000 {
-		t.Fatalf("budget %+v %v", budget, err)
-	}
+	err = budget.UnmarshalBinary(f.payload)
+	require.False(t, err != nil || !budget.Present || budget.Value != 4096-1000)
 
 	r.call(&schedpolicy.RequestQueued{Rid: "a", Tokens: tokenBytes(0, 400), Now: 1}, schedpolicy.RequestQueuedType)
 	r.call(&schedpolicy.RequestFinished{Rid: "a", Length: 410, Tail: tokenBytes(346, 64), Now: 2}, schedpolicy.RequestFinishedType)
@@ -163,12 +159,11 @@ func TestEveryOpRoundTripsAndRankZeroDecides(t *testing.T) {
 	r.call(&schedpolicy.BeginPass{Present: "a2\nc"}, schedpolicy.BeginPassType)
 	r.send(0, &schedpolicy.ShouldHold{Rid: "c", InputLen: 300, TotalTokens: 350, WouldEvict: true, QueuedAt: 3, Now: 3}, schedpolicy.ShouldHoldType)
 	r.send(1, &schedpolicy.ShouldHold{Rid: "c", InputLen: 300, TotalTokens: 350, WouldEvict: false, QueuedAt: 3, Now: 3}, schedpolicy.ShouldHoldType)
-	if !boolReply(t, r.replies()) {
-		t.Fatal("rank 0's eviction view did not decide")
-	}
-	if f := r.call(&schedpolicy.Admitted{Evicted: true, Now: 3}, schedpolicy.AdmittedType); f.typ != schedpolicy.AckType {
-		t.Fatalf("admitted reply %d", f.typ)
-	}
+	require.True(t, boolReply(t, r.replies()))
+
+	f = r.call(&schedpolicy.Admitted{Evicted: true, Now: 3}, schedpolicy.AdmittedType)
+	require.Equal(t, schedpolicy.AckType, f.typ)
+
 }
 
 func TestInitWithoutThrottleRejectsShouldHold(t *testing.T) {
@@ -178,49 +173,49 @@ func TestInitWithoutThrottleRejectsShouldHold(t *testing.T) {
 	r.call(&schedpolicy.RequestQueued{Rid: "a"}, schedpolicy.RequestQueuedType)
 	r.call(&schedpolicy.BeginPass{}, schedpolicy.BeginPassType)
 	r.send(0, &schedpolicy.ShouldHold{Rid: "a"}, schedpolicy.ShouldHoldType)
-	if msg := r.failure(); !strings.Contains(msg, "without an eviction throttle") {
-		t.Fatal(msg)
-	}
+	msg := r.failure()
+	require.Contains(t, msg, "without an eviction throttle")
+
 }
 
 func TestProtocolMismatchIsRefused(t *testing.T) {
 	r := start(t, 1, time.Second)
 	r.send(0, &schedpolicy.Hello{Protocol: schedpolicy.ProtocolVersion + 1, World: 1}, schedpolicy.HelloType)
-	if msg := r.failure(); !strings.Contains(msg, "speaks protocol") {
-		t.Fatal(msg)
-	}
+	msg := r.failure()
+	require.Contains(t, msg, "speaks protocol")
+
 }
 
 func TestWrongRankOrWorldIsRefused(t *testing.T) {
 	r := start(t, 1, time.Second)
 	r.send(0, &schedpolicy.Hello{Protocol: schedpolicy.ProtocolVersion, Rank: 1, World: 2}, schedpolicy.HelloType)
-	if msg := r.failure(); !strings.Contains(msg, "connected as rank 1 of 2") {
-		t.Fatal(msg)
-	}
+	msg := r.failure()
+	require.Contains(t, msg, "connected as rank 1 of 2")
+
 }
 
 func TestRequestBeforeHelloIsRefused(t *testing.T) {
 	r := start(t, 1, time.Second)
 	r.send(0, &schedpolicy.Init{}, schedpolicy.InitType)
-	if msg := r.failure(); !strings.Contains(msg, "before hello") {
-		t.Fatal(msg)
-	}
+	msg := r.failure()
+	require.Contains(t, msg, "before hello")
+
 }
 
 func TestRequestBeforeInitAndDoubleInitAreRefused(t *testing.T) {
 	r := start(t, 1, time.Second)
 	r.hello()
 	r.send(0, &schedpolicy.BeginPass{}, schedpolicy.BeginPassType)
-	if msg := r.failure(); !strings.Contains(msg, "before init") {
-		t.Fatal(msg)
-	}
+	msg := r.failure()
+	require.Contains(t, msg, "before init")
+
 	r = start(t, 1, time.Second)
 	r.hello()
 	r.call(&schedpolicy.Init{}, schedpolicy.InitType)
 	r.send(0, &schedpolicy.Init{}, schedpolicy.InitType)
-	if msg := r.failure(); !strings.Contains(msg, "init sent twice") {
-		t.Fatal(msg)
-	}
+	msg = r.failure()
+	require.Contains(t, msg, "init sent twice")
+
 }
 
 func TestMalformedAndUnknownMessagesAreRefused(t *testing.T) {
@@ -228,29 +223,29 @@ func TestMalformedAndUnknownMessagesAreRefused(t *testing.T) {
 	r.hello()
 	r.call(&schedpolicy.Init{}, schedpolicy.InitType)
 	r.ranks[0].in <- frame{schedpolicy.BatchLaunchedType, []byte{1}}
-	if msg := r.failure(); !strings.Contains(msg, "shorter than the fixed section") {
-		t.Fatal(msg)
-	}
+	msg := r.failure()
+	require.Contains(t, msg, "shorter than the fixed section")
+
 	r = start(t, 1, time.Second)
 	r.hello()
 	r.ranks[0].in <- frame{schedpolicy.AckType, nil}
-	if msg := r.failure(); !strings.Contains(msg, "not a request") {
-		t.Fatal(msg)
-	}
+	msg = r.failure()
+	require.Contains(t, msg, "not a request")
+
 	r = start(t, 1, time.Second)
 	r.hello()
 	r.call(&schedpolicy.Init{}, schedpolicy.InitType)
 	r.send(0, &schedpolicy.BatchLaunched{BatchClass: 7}, schedpolicy.BatchLaunchedType)
-	if msg := r.failure(); !strings.Contains(msg, "batch class 7") {
-		t.Fatal(msg)
-	}
+	msg = r.failure()
+	require.Contains(t, msg, "batch class 7")
+
 	r = start(t, 1, time.Second)
 	r.hello()
 	r.call(&schedpolicy.Init{}, schedpolicy.InitType)
 	r.send(0, &schedpolicy.Hello{Protocol: schedpolicy.ProtocolVersion, World: 1}, schedpolicy.HelloType)
-	if msg := r.failure(); !strings.Contains(msg, "after hello") {
-		t.Fatal(msg)
-	}
+	msg = r.failure()
+	require.Contains(t, msg, "after hello")
+
 }
 
 func TestRanksThatDivergeAreToldSoInsteadOfHanging(t *testing.T) {
@@ -259,26 +254,26 @@ func TestRanksThatDivergeAreToldSoInsteadOfHanging(t *testing.T) {
 	r.call(&schedpolicy.Init{Throttle: true}, schedpolicy.InitType)
 	r.send(0, &schedpolicy.BeginPass{Present: "a"}, schedpolicy.BeginPassType)
 	r.send(1, &schedpolicy.ShouldHold{Rid: "a"}, schedpolicy.ShouldHoldType)
-	if msg := r.failure(); !strings.Contains(msg, "ranks diverged") {
-		t.Fatal(msg)
-	}
+	msg := r.failure()
+	require.Contains(t, msg, "ranks diverged")
+
 	// Same op, different replicated argument.
 	r = start(t, 2, time.Second)
 	r.hello()
 	r.call(&schedpolicy.Init{Throttle: true}, schedpolicy.InitType)
 	r.send(0, &schedpolicy.BeginPass{Present: "a"}, schedpolicy.BeginPassType)
 	r.send(1, &schedpolicy.BeginPass{Present: "b"}, schedpolicy.BeginPassType)
-	if msg := r.failure(); !strings.Contains(msg, "ranks diverged") {
-		t.Fatal(msg)
-	}
+	msg = r.failure()
+	require.Contains(t, msg, "ranks diverged")
+
 }
 
 func TestARankThatNeverSendsTripsTheLockstepTimeout(t *testing.T) {
 	r := start(t, 2, 50*time.Millisecond)
 	r.send(0, &schedpolicy.Hello{Protocol: schedpolicy.ProtocolVersion, World: 2}, schedpolicy.HelloType)
-	if msg := r.failure(); !strings.Contains(msg, "lockstep timeout: rank(s) [1] did not send") {
-		t.Fatal(msg)
-	}
+	msg := r.failure()
+	require.Contains(t, msg, "lockstep timeout: rank(s) [1] did not send")
+
 }
 
 func TestAnEndpointErrorEndsServe(t *testing.T) {
@@ -286,7 +281,7 @@ func TestAnEndpointErrorEndsServe(t *testing.T) {
 	r.hello()
 	close(r.ranks[0].in)
 	// A closed inbox makes Recv return a zero frame forever; decode refuses it.
-	if msg := r.failure(); !strings.Contains(msg, "not a request") {
-		t.Fatal(msg)
-	}
+	msg := r.failure()
+	require.Contains(t, msg, "not a request")
+
 }

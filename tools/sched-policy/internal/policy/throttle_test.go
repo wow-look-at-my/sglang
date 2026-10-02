@@ -1,6 +1,9 @@
 package policy
 
-import "testing"
+import (
+	"github.com/stretchr/testify/require"
+	"testing"
+)
 
 const (
 	deviceTokens    = 1000
@@ -50,9 +53,8 @@ func TestNewConversationIsHeldWhenItWouldEvictALiveOne(t *testing.T) {
 	twoLive(th, c)
 	th.OnRequestQueued("c1", seq(50000, 300), c.now)
 	th.BeginPass([]string{"a2", "c1"})
-	if !hold(th, c, "c1", 300, holdOpts{wouldEvict: true, queuedAt: c.now}) {
-		t.Fatal("a thrashing admission was not held")
-	}
+	require.True(t, hold(th, c, "c1", 300, holdOpts{wouldEvict: true, queuedAt: c.now}))
+
 }
 
 func TestAdmittedOnceItFitsWhatHostMemoryCanRestore(t *testing.T) {
@@ -61,9 +63,8 @@ func TestAdmittedOnceItFitsWhatHostMemoryCanRestore(t *testing.T) {
 	twoLive(th, c)
 	th.OnRequestQueued("c1", seq(50000, 300), c.now)
 	th.BeginPass([]string{"a2", "c1"})
-	if hold(th, c, "c1", 300, holdOpts{wouldEvict: true, queuedAt: c.now}) {
-		t.Fatal("held although the host tier keeps every prefix")
-	}
+	require.False(t, hold(th, c, "c1", 300, holdOpts{wouldEvict: true, queuedAt: c.now}))
+
 }
 
 func TestNeverHoldsWithoutEvictionOrForAResidentConversation(t *testing.T) {
@@ -71,12 +72,10 @@ func TestNeverHoldsWithoutEvictionOrForAResidentConversation(t *testing.T) {
 	th := throttle(0)
 	twoLive(th, c)
 	th.BeginPass([]string{"a2"})
-	if hold(th, c, "a2", 420, holdOpts{queuedAt: c.now}) {
-		t.Fatal("held without eviction")
-	}
-	if hold(th, c, "a2", 420, holdOpts{deviceHit: 410, wouldEvict: true, queuedAt: c.now}) {
-		t.Fatal("held a resident conversation")
-	}
+	require.False(t, hold(th, c, "a2", 420, holdOpts{queuedAt: c.now}))
+
+	require.False(t, hold(th, c, "a2", 420, holdOpts{deviceHit: 410, wouldEvict: true, queuedAt: c.now}))
+
 }
 
 func TestIdleConversationPastTheLongestReturnGapIsNotLive(t *testing.T) {
@@ -86,9 +85,8 @@ func TestIdleConversationPastTheLongestReturnGapIsNotLive(t *testing.T) {
 	c.now += 5
 	th.OnRequestQueued("c1", seq(50000, 300), c.now)
 	th.BeginPass([]string{"a2", "c1"})
-	if hold(th, c, "c1", 300, holdOpts{wouldEvict: true, queuedAt: c.now}) {
-		t.Fatal("an idle conversation counted as live")
-	}
+	require.False(t, hold(th, c, "c1", 300, holdOpts{wouldEvict: true, queuedAt: c.now}))
+
 }
 
 func TestOnlyTheOldestHeldRequestAgesInToEvict(t *testing.T) {
@@ -105,19 +103,16 @@ func TestOnlyTheOldestHeldRequestAgesInToEvict(t *testing.T) {
 
 	c.now = queuedAt + 0.5*rebuild
 	th.BeginPass([]string{"a2", "c1", "d1"})
-	if !evict("c1") || !evict("d1") {
-		t.Fatal("evicted before the pool rebuild time")
-	}
+	require.False(t, !evict("c1") || !evict("d1"))
+
 	c.now = queuedAt + rebuild
 	th.BeginPass([]string{"a2", "c1", "d1"})
-	if evict("c1") || !evict("d1") {
-		t.Fatal("FIFO aging broke")
-	}
+	require.False(t, evict("c1") || !evict("d1"))
+
 	th.OnAdmitted(true, c.now)
 	th.BeginPass([]string{"a2", "d1"})
-	if !evict("d1") {
-		t.Fatal("a second eviction did not wait a full rebuild")
-	}
+	require.True(t, evict("d1"))
+
 }
 
 func TestAbortedRequestStopsKeepingItsConversationLive(t *testing.T) {
@@ -127,13 +122,11 @@ func TestAbortedRequestStopsKeepingItsConversationLive(t *testing.T) {
 	c.now += 5
 	th.OnRequestQueued("c1", seq(50000, 600), c.now)
 	th.BeginPass([]string{"a2", "c1"})
-	if !hold(th, c, "c1", 600, holdOpts{wouldEvict: true, queuedAt: c.now}) {
-		t.Fatal("not held with a2 queued")
-	}
+	require.True(t, hold(th, c, "c1", 600, holdOpts{wouldEvict: true, queuedAt: c.now}))
+
 	th.BeginPass([]string{"c1"})
-	if hold(th, c, "c1", 600, holdOpts{wouldEvict: true, queuedAt: c.now}) {
-		t.Fatal("an aborted request kept its conversation live")
-	}
+	require.False(t, hold(th, c, "c1", 600, holdOpts{wouldEvict: true, queuedAt: c.now}))
+
 }
 
 func TestLedgerRecognizesTheLongestReturningContextAndPrunes(t *testing.T) {
@@ -145,15 +138,14 @@ func TestLedgerRecognizesTheLongestReturningContextAndPrunes(t *testing.T) {
 	th.OnRequestQueued("r", seq(0, 450), c.now)
 	th.OnRequestQueued("r", seq(0, 450), c.now)
 	conv := th.ledger.ConversationOf("r")
-	if conv == nil || conv.length != 450 {
-		t.Fatalf("returning conversation %+v", conv)
-	}
+	require.False(t, conv == nil || conv.length != 450)
+
 	th.OnRequestFinished("unknown", 10, seq(0, 10), c.now)
 	// More 400-token conversations exceed what the pool retains.
 	for i, base := range []int{20000, 30000, 40000} {
 		serveTurn(th, c, string(rune('x'+i)), seq(base, 400))
 	}
-	if n := len(th.ledger.conversations); n > 3 {
-		t.Fatalf("%d conversations retained for a %d-token pool", n, deviceTokens)
-	}
+	n := len(th.ledger.conversations)
+	require.LessOrEqual(t, n, 3)
+
 }

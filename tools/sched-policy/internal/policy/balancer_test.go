@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"github.com/stretchr/testify/require"
 	"math"
 	"strings"
 	"testing"
@@ -106,9 +107,8 @@ func longestPrefillRun(launched []bool) int {
 
 func near(t *testing.T, got, want, delta float64) {
 	t.Helper()
-	if math.Abs(got-want) > delta {
-		t.Fatalf("got %v, want %v +- %v", got, want, delta)
-	}
+	require.LessOrEqual(t, math.Abs(got-want), delta)
+
 }
 
 func pending(b *Balancer, continues bool) bool { return b.ShouldDeferPrefill(true, true, continues) }
@@ -119,18 +119,16 @@ func TestLongChunkedPrefillDoesNotStarveDecode(t *testing.T) {
 	c := &clock{}
 	launched := run(balancer(), c, runOpts{steps: 2000, prefillPending: true})
 	near(t, prefillShare(launched), 0.5, 0.02)
-	if longestPrefillRun(launched) != 1 {
-		t.Fatal("prefill chunks ran back to back")
-	}
+	require.Equal(t, 1, longestPrefillRun(launched))
+
 }
 
 func TestOverlapStallsDecodeForOneChunkAtMost(t *testing.T) {
 	c := &clock{}
 	launched := run(balancer(), c, runOpts{steps: 2000, overlap: true, prefillPending: true})
 	near(t, prefillShare(launched), 0.5, 0.05)
-	if longestPrefillRun(launched) != 1 {
-		t.Fatal("a second chunk launched behind the first")
-	}
+	require.Equal(t, 1, longestPrefillRun(launched))
+
 }
 
 func TestOvershootOfLastDecodeCountsTowardPrefill(t *testing.T) {
@@ -140,9 +138,8 @@ func TestOvershootOfLastDecodeCountsTowardPrefill(t *testing.T) {
 	runOne(b, c, ClassPrefill, 0.8, 0)
 	runOne(b, c, ClassDecode, 0.5, 0)
 	runOne(b, c, ClassDecode, 0.5, 0)
-	if pending(b, true) {
-		t.Fatal("deferred with decode ahead")
-	}
+	require.False(t, pending(b, true))
+
 	near(t, b.Debt(), -0.2, 1e-9)
 	for range 4 {
 		runOne(b, c, ClassDecode, 0.5, 0)
@@ -155,9 +152,8 @@ func TestPiggybackedDecodeDoesNotReplaceTheDecodeShare(t *testing.T) {
 	c := &clock{}
 	launched := run(balancer(), c, runOpts{steps: 2000, overlap: true, prefillPending: true, decodeRows: 5})
 	near(t, prefillShare(launched), 0.5, 0.05)
-	if longestPrefillRun(launched) != 1 {
-		t.Fatal("mixed chunks ran back to back")
-	}
+	require.Equal(t, 1, longestPrefillRun(launched))
+
 }
 
 func TestMixedBatchIsChargedWithoutItsDecodeRows(t *testing.T) {
@@ -175,9 +171,8 @@ func TestMixedBatchIsChargedWithoutItsDecodeRows(t *testing.T) {
 func TestMeasuresPrefillSecondsPerToken(t *testing.T) {
 	c := &clock{}
 	b := balancer()
-	if b.PrefillSecondsPerToken() != 0 || b.MarginalPrefillSecondsPerToken() != 0 {
-		t.Fatal("rate before any prefill")
-	}
+	require.False(t, b.PrefillSecondsPerToken() != 0 || b.MarginalPrefillSecondsPerToken() != 0)
+
 	runOne(b, c, ClassPrefill, 0.5, 1000)
 	runOne(b, c, ClassDecode, 0.02, 6)
 	runOne(b, c, ClassDecode, 0.03, 8)
@@ -190,21 +185,18 @@ func TestContinuationChunkIsCappedByItsMeasuredSeconds(t *testing.T) {
 	b := balancer()
 	runOne(b, c, ClassPrefill, 0.8, 4000)
 	runOne(b, c, ClassDecode, 0.8, 0)
-	if pending(b, true) {
-		t.Fatal("deferred after decode repaid")
-	}
+	require.False(t, pending(b, true))
+
 	runOne(b, c, ClassPrefill, 0.8, 2000)
 	runOne(b, c, ClassDecode, 1.6, 0)
-	if pending(b, true) {
-		t.Fatal("deferred after decode repaid")
-	}
+	require.False(t, pending(b, true))
+
 	near(t, b.MarginalPrefillSecondsPerToken(), 0.0004, 1e-12)
 	budget := *b.PrefillTokenBudget(true)
 	promised := chunkTokens * b.PrefillSecondsPerToken()
 	marginal := b.MarginalPrefillSecondsPerToken()
-	if float64(budget)*marginal > promised || float64(budget+1)*marginal <= promised || budget >= chunkTokens {
-		t.Fatalf("budget %d does not hold the chunk's seconds", budget)
-	}
+	require.False(t, float64(budget)*marginal > promised || float64(budget+1)*marginal <= promised || budget >= chunkTokens)
+
 }
 
 func TestFreshPrefillIsCappedInTokens(t *testing.T) {
@@ -212,79 +204,69 @@ func TestFreshPrefillIsCappedInTokens(t *testing.T) {
 	b := balancer()
 	runOne(b, c, ClassPrefill, 0.02, 1000)
 	runOne(b, c, ClassPrefill, 0.8, 2000)
-	if pending(b, false) {
-		t.Fatal("fresh work deferred inside the burst")
-	}
-	if got := *b.PrefillTokenBudget(false); got != chunkTokens-3000 {
-		t.Fatalf("fresh budget %d", got)
-	}
+	require.False(t, pending(b, false))
+
+	got := *b.PrefillTokenBudget(false)
+	require.Equal(t, chunkTokens-3000, got)
+
 	cont := float64(*b.PrefillTokenBudget(true))
-	if cont >= chunkTokens || cont*b.MarginalPrefillSecondsPerToken() > chunkTokens*b.PrefillSecondsPerToken() {
-		t.Fatalf("continuation budget %v", cont)
-	}
+	require.False(t, cont >= chunkTokens || cont*b.MarginalPrefillSecondsPerToken() > chunkTokens*b.PrefillSecondsPerToken())
+
 }
 
 func TestFreshPrefillsBackToBackStopAtTheChunkBound(t *testing.T) {
 	c := &clock{}
 	launched := run(balancer(), c, runOpts{steps: 500, prefillPending: true, continuesChunk: ptr(false), prefillTokens: chunkTokens / 4})
-	if longestPrefillRun(launched) != 4 {
-		t.Fatalf("longest run %d", longestPrefillRun(launched))
-	}
+	require.Equal(t, 4, longestPrefillRun(launched))
+
 }
 
 func TestShortPrefillsShareOneChunkBudget(t *testing.T) {
 	c := &clock{}
 	b := balancer()
 	runOne(b, c, ClassPrefill, 0.3, 1000)
-	if pending(b, false) || b.Debt() <= 0 {
-		t.Fatal("second short prefill waited out a decode slice")
-	}
-	if got := *b.PrefillTokenBudget(false); got != chunkTokens-1000 {
-		t.Fatalf("budget %d", got)
-	}
+	require.False(t, pending(b, false) || b.Debt() <= 0)
+
+	got := *b.PrefillTokenBudget(false)
+	require.Equal(t, chunkTokens-1000, got)
+
 	runOne(b, c, ClassPrefill, 0.9, chunkTokens-1000)
-	if !pending(b, false) {
-		t.Fatal("burst exceeded")
-	}
+	require.True(t, pending(b, false))
+
 }
 
 func TestChunkedContinuationWaitsForDecode(t *testing.T) {
 	c := &clock{}
 	b := balancer()
 	runOne(b, c, ClassPrefill, 0.3, 1000)
-	if !pending(b, true) {
-		t.Fatal("continuation took the leftover budget")
-	}
+	require.True(t, pending(b, true))
+
 	runOne(b, c, ClassDecode, 0.3, 0)
-	if pending(b, true) {
-		t.Fatal("continuation deferred after decode caught up")
-	}
-	if got := *b.PrefillTokenBudget(true); got != chunkTokens {
-		t.Fatalf("budget %d", got)
-	}
+	require.False(t, pending(b, true))
+
+	got := *b.PrefillTokenBudget(true)
+	require.Equal(t, chunkTokens, got)
+
 }
 
 func TestWithoutChunkedPrefillDefersOnDebtAlone(t *testing.T) {
 	c := &clock{}
 	b := NewBalancer(nil)
 	runOne(b, c, ClassPrefill, 0.3, 1000)
-	if !pending(b, false) || b.PrefillTokenBudget(false) != nil {
-		t.Fatal("debt alone did not defer")
-	}
+	require.False(t, !pending(b, false) || b.PrefillTokenBudget(false) != nil)
+
 }
 
 func TestNeverDefersWithoutRunningDecode(t *testing.T) {
 	c := &clock{}
 	b := balancer()
 	for range 10 {
-		if b.ShouldDeferPrefill(true, false, true) {
-			t.Fatal("deferred with nothing to decode")
-		}
+		require.False(t, b.ShouldDeferPrefill(true, false, true))
+
 		runOne(b, c, ClassPrefill, 1.0, chunkTokens)
 	}
-	if b.Debt() != 0 {
-		t.Fatal("debt without contention")
-	}
+	require.Equal(t, float64(0), b.Debt())
+
 }
 
 func TestDecodeDoesNotBankCredit(t *testing.T) {
@@ -296,9 +278,8 @@ func TestDecodeDoesNotBankCredit(t *testing.T) {
 		runOne(b, c, ClassDecode, decodeSecs, 0)
 	}
 	near(t, b.Debt(), -decodeSecs, 1e-9)
-	if longestPrefillRun(run(b, c, runOpts{steps: 50, prefillPending: true})) != 1 {
-		t.Fatal("banked decode bought a prefill burst")
-	}
+	require.Equal(t, 1, longestPrefillRun(run(b, c, runOpts{steps: 50, prefillPending: true})))
+
 }
 
 func TestIdleGapIsNotCharged(t *testing.T) {
@@ -317,7 +298,6 @@ func TestOtherBatchesAndStrayFinishesAreNotCharged(t *testing.T) {
 	b.OnBatchFinished(c.now)
 	runOne(b, c, ClassOther, 2.0, 0)
 	pending(b, true)
-	if b.Debt() != 0 {
-		t.Fatal("an idle or prebuilt batch was charged")
-	}
+	require.Equal(t, float64(0), b.Debt())
+
 }
