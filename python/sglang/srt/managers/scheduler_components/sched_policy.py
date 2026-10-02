@@ -21,7 +21,7 @@ import goipc
 from sglang.srt.managers.scheduler_components import sched_policy_messages as msg
 
 # Must equal ProtocolVersion in tools/sched-policy/internal/schedpolicy/version.go.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 BINARY_ENV = "SGLANG_SCHED_POLICY_BIN"
 CLASS_OTHER, CLASS_PREFILL, CLASS_DECODE = 0, 1, 2
@@ -38,8 +38,8 @@ def binary_path() -> str:
 
 
 def spawn(*, name: str, ranks: int, lockstep_timeout: float) -> subprocess.Popen:
-    """Rank 0 starts the process and returns once its channels exist."""
-    proc = subprocess.Popen(
+    """Rank 0 starts the process. A rank that connects first parks until it serves."""
+    return subprocess.Popen(
         [
             binary_path(),
             "-name",
@@ -48,14 +48,8 @@ def spawn(*, name: str, ranks: int, lockstep_timeout: float) -> subprocess.Popen
             str(ranks),
             "-lockstep-timeout",
             f"{lockstep_timeout}s",
-        ],
-        stdout=subprocess.PIPE,
-        text=True,
+        ]
     )
-    line = proc.stdout.readline()
-    if line.strip() != "ready":
-        raise RuntimeError(f"sglang-sched-policy did not start: {line!r}")
-    return proc
 
 
 def new_name() -> str:
@@ -76,8 +70,9 @@ def _tokens(ids: Sequence[int]) -> bytes:
 
 class SchedPolicy:
     def __init__(self, *, name: str, rank: int, world: int, timeout: float) -> None:
-        self._timeout = timeout
-        self._channel = goipc.Channel.open(f"{name}.r{rank}")
+        self._client = goipc.service.connect(
+            name, timeout=timeout, messages=msg.MESSAGES
+        )
         self._call(msg.Hello(protocol=PROTOCOL_VERSION, rank=rank, world=world))
 
     def init(
@@ -176,14 +171,10 @@ class SchedPolicy:
         self._call(msg.Admitted(evicted=evicted, now=time.perf_counter()))
 
     def close(self) -> None:
-        self._channel.close()
+        self._client.close()
 
     def _call(self, request):
-        self._channel.send(
-            request.encode(), type=request.TYPE_ID, timeout=self._timeout
-        )
-        type_id, payload = self._channel.recv(timeout=self._timeout)
-        reply = msg.MESSAGES[type_id].decode(payload)
-        if isinstance(reply, msg.Error):
-            raise RuntimeError(f"sglang-sched-policy: {reply.message}")
-        return reply
+        try:
+            return self._client.call_typed(request)
+        except goipc.CallError as e:
+            raise RuntimeError(f"sglang-sched-policy: {e}") from None

@@ -41,6 +41,52 @@ func ipcgenGetVar(b []byte, off int) ([]byte, int, error) {
 	return b[off : off+int(n)], off + int(n), nil
 }
 
+// Message is any message of package schedpolicy.
+type Message interface {
+	TypeID() uint32
+	Size() int
+	MarshalTo(b []byte) int
+	MarshalBinary() ([]byte, error)
+	UnmarshalBinary(b []byte) error
+}
+
+// NewMessage returns an empty message with the type ID, or nil for a type ID no message has.
+func NewMessage(typeID uint32) Message {
+	switch typeID {
+	case HelloType:
+		return &Hello{}
+	case InitType:
+		return &Init{}
+	case ShouldDeferPrefillType:
+		return &ShouldDeferPrefill{}
+	case PrefillTokenBudgetType:
+		return &PrefillTokenBudget{}
+	case BatchLaunchedType:
+		return &BatchLaunched{}
+	case BatchFinishedType:
+		return &BatchFinished{}
+	case RequestQueuedType:
+		return &RequestQueued{}
+	case RequestFinishedType:
+		return &RequestFinished{}
+	case BeginPassType:
+		return &BeginPass{}
+	case ShouldHoldType:
+		return &ShouldHold{}
+	case AdmittedType:
+		return &Admitted{}
+	case HelloOkType:
+		return &HelloOk{}
+	case BoolReplyType:
+		return &BoolReply{}
+	case OptIntReplyType:
+		return &OptIntReply{}
+	case AckType:
+		return &Ack{}
+	}
+	return nil
+}
+
 // Hello is message 1 of package schedpolicy.
 type Hello struct {
 	Protocol uint32
@@ -50,6 +96,9 @@ type Hello struct {
 
 // HelloType is the type ID of Hello.
 const HelloType uint32 = 1
+
+// TypeID returns HelloType.
+func (m *Hello) TypeID() uint32 { return HelloType }
 
 // Size returns the encoded size of m.
 func (m *Hello) Size() int {
@@ -119,6 +168,9 @@ type Init struct {
 
 // InitType is the type ID of Init.
 const InitType uint32 = 2
+
+// TypeID returns InitType.
+func (m *Init) TypeID() uint32 { return InitType }
 
 // Size returns the encoded size of m.
 func (m *Init) Size() int {
@@ -194,6 +246,9 @@ type ShouldDeferPrefill struct {
 
 // ShouldDeferPrefillType is the type ID of ShouldDeferPrefill.
 const ShouldDeferPrefillType uint32 = 3
+
+// TypeID returns ShouldDeferPrefillType.
+func (m *ShouldDeferPrefill) TypeID() uint32 { return ShouldDeferPrefillType }
 
 // Size returns the encoded size of m.
 func (m *ShouldDeferPrefill) Size() int {
@@ -276,6 +331,9 @@ type PrefillTokenBudget struct {
 // PrefillTokenBudgetType is the type ID of PrefillTokenBudget.
 const PrefillTokenBudgetType uint32 = 4
 
+// TypeID returns PrefillTokenBudgetType.
+func (m *PrefillTokenBudget) TypeID() uint32 { return PrefillTokenBudgetType }
+
 // Size returns the encoded size of m.
 func (m *PrefillTokenBudget) Size() int {
 	return 1
@@ -346,6 +404,9 @@ type BatchLaunched struct {
 // BatchLaunchedType is the type ID of BatchLaunched.
 const BatchLaunchedType uint32 = 5
 
+// TypeID returns BatchLaunchedType.
+func (m *BatchLaunched) TypeID() uint32 { return BatchLaunchedType }
+
 // Size returns the encoded size of m.
 func (m *BatchLaunched) Size() int {
 	return 32
@@ -414,6 +475,9 @@ type BatchFinished struct {
 // BatchFinishedType is the type ID of BatchFinished.
 const BatchFinishedType uint32 = 6
 
+// TypeID returns BatchFinishedType.
+func (m *BatchFinished) TypeID() uint32 { return BatchFinishedType }
+
 // Size returns the encoded size of m.
 func (m *BatchFinished) Size() int {
 	return 8
@@ -477,6 +541,9 @@ type RequestQueued struct {
 
 // RequestQueuedType is the type ID of RequestQueued.
 const RequestQueuedType uint32 = 7
+
+// TypeID returns RequestQueuedType.
+func (m *RequestQueued) TypeID() uint32 { return RequestQueuedType }
 
 // Size returns the encoded size of m.
 func (m *RequestQueued) Size() int {
@@ -565,6 +632,9 @@ type RequestFinished struct {
 // RequestFinishedType is the type ID of RequestFinished.
 const RequestFinishedType uint32 = 8
 
+// TypeID returns RequestFinishedType.
+func (m *RequestFinished) TypeID() uint32 { return RequestFinishedType }
+
 // Size returns the encoded size of m.
 func (m *RequestFinished) Size() int {
 	return 16 + 4 + len(m.Rid) + 4 + len(m.Tail)
@@ -651,6 +721,9 @@ type BeginPass struct {
 // BeginPassType is the type ID of BeginPass.
 const BeginPassType uint32 = 9
 
+// TypeID returns BeginPassType.
+func (m *BeginPass) TypeID() uint32 { return BeginPassType }
+
 // Size returns the encoded size of m.
 func (m *BeginPass) Size() int {
 	return 0 + 4 + len(m.Present)
@@ -733,6 +806,9 @@ type ShouldHold struct {
 
 // ShouldHoldType is the type ID of ShouldHold.
 const ShouldHoldType uint32 = 10
+
+// TypeID returns ShouldHoldType.
+func (m *ShouldHold) TypeID() uint32 { return ShouldHoldType }
 
 // Size returns the encoded size of m.
 func (m *ShouldHold) Size() int {
@@ -829,6 +905,9 @@ type Admitted struct {
 // AdmittedType is the type ID of Admitted.
 const AdmittedType uint32 = 11
 
+// TypeID returns AdmittedType.
+func (m *Admitted) TypeID() uint32 { return AdmittedType }
+
 // Size returns the encoded size of m.
 func (m *Admitted) Size() int {
 	return 16
@@ -898,6 +977,9 @@ type HelloOk struct {
 // HelloOkType is the type ID of HelloOk.
 const HelloOkType uint32 = 100
 
+// TypeID returns HelloOkType.
+func (m *HelloOk) TypeID() uint32 { return HelloOkType }
+
 // Size returns the encoded size of m.
 func (m *HelloOk) Size() int {
 	return 4
@@ -959,6 +1041,9 @@ type BoolReply struct {
 
 // BoolReplyType is the type ID of BoolReply.
 const BoolReplyType uint32 = 101
+
+// TypeID returns BoolReplyType.
+func (m *BoolReply) TypeID() uint32 { return BoolReplyType }
 
 // Size returns the encoded size of m.
 func (m *BoolReply) Size() int {
@@ -1028,6 +1113,9 @@ type OptIntReply struct {
 // OptIntReplyType is the type ID of OptIntReply.
 const OptIntReplyType uint32 = 102
 
+// TypeID returns OptIntReplyType.
+func (m *OptIntReply) TypeID() uint32 { return OptIntReplyType }
+
 // Size returns the encoded size of m.
 func (m *OptIntReply) Size() int {
 	return 16
@@ -1096,6 +1184,9 @@ type Ack struct {
 // AckType is the type ID of Ack.
 const AckType uint32 = 103
 
+// TypeID returns AckType.
+func (m *Ack) TypeID() uint32 { return AckType }
+
 // Size returns the encoded size of m.
 func (m *Ack) Size() int {
 	return 0
@@ -1145,82 +1236,5 @@ func (m *Ack) ipcgenPut(b []byte) {
 }
 
 func (m *Ack) ipcgenGet(b []byte) error {
-	return nil
-}
-
-// Error is message 255 of package schedpolicy.
-type Error struct {
-	Message string
-}
-
-// ErrorType is the type ID of Error.
-const ErrorType uint32 = 255
-
-// Size returns the encoded size of m.
-func (m *Error) Size() int {
-	return 0 + 4 + len(m.Message)
-}
-
-// MarshalTo encodes m into b and returns the bytes written.
-// It returns 0 when b is shorter than Size or a string or bytes field is longer than 4 GiB.
-func (m *Error) MarshalTo(b []byte) int {
-	n, _ := m.ipcgenMarshal(b)
-	return n
-}
-
-// MarshalBinary returns the encoding of m.
-func (m *Error) MarshalBinary() ([]byte, error) {
-	if !ipcgenFits(len(m.Message)) {
-		return nil, errIpcgenTooLong
-	}
-	b := make([]byte, m.Size())
-	m.ipcgenMarshal(b)
-	return b, nil
-}
-
-func (m *Error) ipcgenMarshal(b []byte) (int, bool) {
-	if !ipcgenFits(len(m.Message)) {
-		return 0, false
-	}
-	if len(b) < m.Size() {
-		return 0, false
-	}
-	clear(b[:0])
-	m.ipcgenPut(b)
-	off := 0
-	off = ipcgenPutVar(b, off, m.Message)
-	return off, true
-}
-
-// UnmarshalBinary decodes b into m. It leaves m unchanged when b is malformed.
-func (m *Error) UnmarshalBinary(b []byte) error {
-	if len(b) < 0 {
-		return errIpcgenShort
-	}
-	var v Error
-	if err := v.ipcgenGet(b); err != nil {
-		return err
-	}
-	off := 0
-	var raw []byte
-	var err error
-	if raw, off, err = ipcgenGetVar(b, off); err != nil {
-		return err
-	}
-	if !utf8.Valid(raw) {
-		return errIpcgenUTF8
-	}
-	v.Message = string(raw)
-	if off != len(b) {
-		return errIpcgenTrailing
-	}
-	*m = v
-	return nil
-}
-
-func (m *Error) ipcgenPut(b []byte) {
-}
-
-func (m *Error) ipcgenGet(b []byte) error {
 	return nil
 }

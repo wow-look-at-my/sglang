@@ -665,43 +665,6 @@ class Ack:
 		return cls()
 
 
-@_dc.dataclass
-class Error:
-	TYPE_ID = 255
-	FIXED_SIZE = 0
-
-	message: str = ""
-
-	def encode(self) -> bytes:
-		buf = bytearray(0)
-		try:
-			self._put(buf, 0)
-		except (_st.error, OverflowError) as e:
-			raise _Error("schedpolicy: Error: %s" % e) from None
-		_put_var(buf, self.message.encode("utf-8"))
-		return bytes(buf)
-
-	@classmethod
-	def decode(cls, buf: _t.Any) -> Error:
-		buf = _view(buf)
-		if len(buf) < 0:
-			raise _Error("schedpolicy: input is shorter than the fixed section")
-		m = cls._get(buf, 0)
-		off = 0
-		raw, off = _get_var(buf, off)
-		m.message = _str(raw)
-		if off != len(buf):
-			raise _Error("schedpolicy: bytes remain after the last field")
-		return m
-
-	def _put(self, buf: bytearray, off: int) -> None:
-		pass
-
-	@classmethod
-	def _get(cls, buf: memoryview, off: int) -> Error:
-		return cls()
-
-
 MESSAGES: _t.Dict[int, _t.Any] = {
 	Hello.TYPE_ID: Hello,
 	Init.TYPE_ID: Init,
@@ -718,5 +681,4 @@ MESSAGES: _t.Dict[int, _t.Any] = {
 	BoolReply.TYPE_ID: BoolReply,
 	OptIntReply.TYPE_ID: OptIntReply,
 	Ack.TYPE_ID: Ack,
-	Error.TYPE_ID: Error,
 }

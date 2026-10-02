@@ -41,7 +41,7 @@ dependencies = [
   "flash-attn-4>=4.0.0b18",
   "flashinfer_python[cu13]==0.6.18", # keep it aligned with jit-cache version in Dockerfile
   "gguf",
-  "goipc @ git+https://github.com/wow-look-at-my/go-ipc.git@master#subdirectory=python",
+  "goipc @ git+https://github.com/wow-look-at-my/go-ipc.git@typed-service#subdirectory=python",
   "humming-kernels[cu13]==0.1.12",
   "interegular",
   "IPython",

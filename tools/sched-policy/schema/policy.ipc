@@ -1,6 +1,7 @@
-# Messages between the scheduler ranks and the policy process. The queue
-# record type is the message type ID. Requests are 1-99, replies 100-255.
-# Any change to a message or its meaning bumps PROTOCOL_VERSION in
+# Messages between the scheduler ranks and the policy process, carried as
+# go-ipc service calls. Requests are 1-99, replies 100-255. A failure is the
+# call error of the service layer, so no message carries one. Any change to
+# a message or its meaning bumps PROTOCOL_VERSION in
 # internal/schedpolicy/version.go and sched_policy.py together.
 package schedpolicy
 
@@ -89,8 +90,4 @@ message OptIntReply = 102 {
 }
 
 message Ack = 103 {
-}
-
-message Error = 255 {
-	message string
 }

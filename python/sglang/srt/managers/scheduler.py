@@ -1370,6 +1370,7 @@ class Scheduler(
         world = get_parallel().attn_tp_size
         timeout = float(self.server_args.watchdog_timeout or 300)
         # One process per TP group; rank 0 starts it and tells the others its name.
+        # A rank that connects before it serves parks until it does.
         name = [new_name() if get_parallel().attn_tp_rank == 0 else None]
         if get_parallel().attn_tp_rank == 0:
             self.sched_policy_process = spawn(

@@ -1,11 +1,10 @@
 // Command sglang-sched-policy decides prefill/decode time sharing and
 // eviction throttling for one TP group of the SGLang scheduler. The ranks
-// connect over go-ipc channels named <name>.r<rank>; the process prints
-// "ready" once every channel exists and exits non-zero when the ranks diverge.
+// connect to the go-ipc service of the given name; the process exits
+// non-zero when the ranks diverge, once every rank has heard why.
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -16,7 +15,7 @@ import (
 )
 
 func main() {
-	name := flag.String("name", "", "channel name prefix shared with the ranks")
+	name := flag.String("name", "", "service name shared with the ranks")
 	ranks := flag.Int("ranks", 0, "number of scheduler ranks")
 	timeout := flag.Duration("lockstep-timeout", 5*time.Minute,
 		"how long the other ranks may lag the first rank's request")
@@ -31,17 +30,19 @@ func main() {
 	}
 }
 
+// run serves until the group fails. It then waits for the ranks to leave, so
+// each has read the failure, and no longer than the lockstep timeout.
 func run(name string, ranks int, timeout time.Duration) error {
-	endpoints := make([]server.Endpoint, ranks)
-	for rank := range ranks {
-		ch, err := ipc.CreateChannel(fmt.Sprintf("%s.r%d", name, rank))
-		if err != nil {
-			return err
-		}
-		defer ch.Unlink()
-		defer ch.Close()
-		endpoints[rank] = ch
+	srv := server.New(ranks, timeout)
+	svc, err := ipc.Serve(name, srv)
+	if err != nil {
+		return err
 	}
-	fmt.Println("ready")
-	return server.New(endpoints, timeout).Serve(context.Background())
+	defer svc.Close()
+	<-srv.Failed()
+	select {
+	case <-srv.Left():
+	case <-time.After(timeout):
+	}
+	return srv.Err()
 }

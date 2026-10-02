@@ -9,52 +9,16 @@ import (
 	"github.com/wow-look-at-my/sglang/tools/sched-policy/internal/schedpolicy"
 )
 
-type request interface {
-	encoder
-	UnmarshalBinary([]byte) error
-}
-
-// decode returns the request struct for a message type, or nil for a type
-// that is not a request.
-func decode(typ uint32, payload []byte) (request, error) {
-	var m request
-	switch typ {
-	case schedpolicy.HelloType:
-		m = &schedpolicy.Hello{}
-	case schedpolicy.InitType:
-		m = &schedpolicy.Init{}
-	case schedpolicy.ShouldDeferPrefillType:
-		m = &schedpolicy.ShouldDeferPrefill{}
-	case schedpolicy.PrefillTokenBudgetType:
-		m = &schedpolicy.PrefillTokenBudget{}
-	case schedpolicy.BatchLaunchedType:
-		m = &schedpolicy.BatchLaunched{}
-	case schedpolicy.BatchFinishedType:
-		m = &schedpolicy.BatchFinished{}
-	case schedpolicy.RequestQueuedType:
-		m = &schedpolicy.RequestQueued{}
-	case schedpolicy.RequestFinishedType:
-		m = &schedpolicy.RequestFinished{}
-	case schedpolicy.BeginPassType:
-		m = &schedpolicy.BeginPass{}
-	case schedpolicy.ShouldHoldType:
-		m = &schedpolicy.ShouldHold{}
-	case schedpolicy.AdmittedType:
-		m = &schedpolicy.Admitted{}
-	default:
-		return nil, fmt.Errorf("message type %d is not a request", typ)
-	}
-	if err := m.UnmarshalBinary(payload); err != nil {
-		return nil, fmt.Errorf("message type %d: %w", typ, err)
-	}
-	return m, nil
-}
-
-// replicated re-encodes a request with its rank-local fields zeroed: the
-// bytes every rank must agree on. Clocks and allocator state are rank-local.
-func replicated(typ uint32, payload []byte) ([]byte, error) {
-	m, err := decode(typ, payload)
+// replicated encodes a copy of a request with its rank-local fields zeroed:
+// the bytes every rank must agree on. Clocks and allocator state are
+// rank-local.
+func replicated(req schedpolicy.Message) ([]byte, error) {
+	b, err := req.MarshalBinary()
 	if err != nil {
+		return nil, err
+	}
+	m := schedpolicy.NewMessage(req.TypeID())
+	if err := m.UnmarshalBinary(b); err != nil {
 		return nil, err
 	}
 	switch r := m.(type) {
@@ -77,30 +41,36 @@ func replicated(typ uint32, payload []byte) ([]byte, error) {
 	return m.MarshalBinary()
 }
 
-func (s *Server) dispatch(typ uint32, payload []byte) (uint32, encoder, error) {
-	m, err := decode(typ, payload)
-	if err != nil {
-		return 0, nil, err
-	}
-	if init, ok := m.(*schedpolicy.Init); ok {
-		return s.init(init)
+// dispatch answers the request every rank agreed on. A Hello answers with
+// HelloOk; an Init builds the policy; the rest need the policy built.
+func (s *Server) dispatch(m schedpolicy.Message) (schedpolicy.Message, error) {
+	switch r := m.(type) {
+	case *schedpolicy.Hello:
+		return &schedpolicy.HelloOk{Protocol: schedpolicy.ProtocolVersion}, nil
+	case *schedpolicy.Init:
+		return s.init(r)
+	case *schedpolicy.ShouldDeferPrefill, *schedpolicy.PrefillTokenBudget, *schedpolicy.BatchLaunched,
+		*schedpolicy.BatchFinished, *schedpolicy.RequestQueued, *schedpolicy.RequestFinished,
+		*schedpolicy.BeginPass, *schedpolicy.ShouldHold, *schedpolicy.Admitted:
+	default:
+		return nil, fmt.Errorf("message type %d is not a request", m.TypeID())
 	}
 	if s.balancer == nil {
-		return 0, nil, fmt.Errorf("message type %d before init", typ)
+		return nil, fmt.Errorf("message type %d before init", m.TypeID())
 	}
 	switch r := m.(type) {
 	case *schedpolicy.ShouldDeferPrefill:
 		defer_ := s.balancer.ShouldDeferPrefill(r.PrefillPending, r.DecodeRunnable, r.ContinuesChunk)
-		return schedpolicy.BoolReplyType, &schedpolicy.BoolReply{Value: defer_}, nil
+		return &schedpolicy.BoolReply{Value: defer_}, nil
 	case *schedpolicy.PrefillTokenBudget:
 		budget := s.balancer.PrefillTokenBudget(r.ContinuesChunk)
 		if budget == nil {
-			return schedpolicy.OptIntReplyType, &schedpolicy.OptIntReply{}, nil
+			return &schedpolicy.OptIntReply{}, nil
 		}
-		return schedpolicy.OptIntReplyType, &schedpolicy.OptIntReply{Present: true, Value: int64(*budget)}, nil
+		return &schedpolicy.OptIntReply{Present: true, Value: int64(*budget)}, nil
 	case *schedpolicy.BatchLaunched:
 		if r.BatchClass > uint8(policy.ClassDecode) {
-			return 0, nil, fmt.Errorf("batch class %d is not other, prefill or decode", r.BatchClass)
+			return nil, fmt.Errorf("batch class %d is not other, prefill or decode", r.BatchClass)
 		}
 		s.balancer.OnBatchLaunched(policy.BatchClass(r.BatchClass), int(r.Tokens), int(r.DecodeRows), r.Now)
 	case *schedpolicy.BatchFinished:
@@ -119,24 +89,22 @@ func (s *Server) dispatch(typ uint32, payload []byte) (uint32, encoder, error) {
 		}
 	case *schedpolicy.ShouldHold:
 		if s.throttle == nil {
-			return 0, nil, fmt.Errorf("should_hold without an eviction throttle")
+			return nil, fmt.Errorf("should_hold without an eviction throttle")
 		}
 		hold := s.throttle.ShouldHold(r.Rid, int(r.InputLen), int(r.DeviceHit), int(r.TotalTokens),
 			r.WouldEvict, r.QueuedAt, r.Now)
-		return schedpolicy.BoolReplyType, &schedpolicy.BoolReply{Value: hold}, nil
+		return &schedpolicy.BoolReply{Value: hold}, nil
 	case *schedpolicy.Admitted:
 		if s.throttle != nil {
 			s.throttle.OnAdmitted(r.Evicted, r.Now)
 		}
-	default:
-		return 0, nil, fmt.Errorf("message type %d after hello", typ)
 	}
-	return schedpolicy.AckType, &schedpolicy.Ack{}, nil
+	return &schedpolicy.Ack{}, nil
 }
 
-func (s *Server) init(r *schedpolicy.Init) (uint32, encoder, error) {
+func (s *Server) init(r *schedpolicy.Init) (schedpolicy.Message, error) {
 	if s.balancer != nil {
-		return 0, nil, fmt.Errorf("init sent twice")
+		return nil, fmt.Errorf("init sent twice")
 	}
 	var burst *int
 	if r.BurstTokens >= 0 {
@@ -147,7 +115,7 @@ func (s *Server) init(r *schedpolicy.Init) (uint32, encoder, error) {
 	if r.Throttle {
 		s.throttle = policy.NewThrottle(int(r.DeviceTokens), int(r.HostTokens), s.balancer.PrefillSecondsPerToken)
 	}
-	return schedpolicy.AckType, &schedpolicy.Ack{}, nil
+	return &schedpolicy.Ack{}, nil
 }
 
 // tokens decodes little-endian int32 token ids.
