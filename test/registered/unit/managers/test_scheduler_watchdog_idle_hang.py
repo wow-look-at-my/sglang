@@ -39,14 +39,19 @@ def _fires(scheduler, *, timeout: float = 0.2, wait: float = 1.5) -> bool:
 
     with patch.object(watchdog, "pyspy_dump_schedulers"):
         with patch.object(watchdog.logger, "error", side_effect=on_error):
-            watchdog.WatchdogRaw(
+            raw = watchdog.WatchdogRaw(
                 debug_name="Scheduler",
                 get_counter=kwargs["get_counter"],
                 is_active=kwargs["is_active"],
                 watchdog_timeout=timeout,
                 soft=True,
             )
-            return fired.wait(wait)
+            try:
+                return fired.wait(wait)
+            finally:
+                # A soft watchdog re-arms after firing; a live one from an
+                # earlier test would trip this test's logger patch.
+                raw.stop()
 
 
 class TestSchedulerWatchdogIdleHang(CustomTestCase):

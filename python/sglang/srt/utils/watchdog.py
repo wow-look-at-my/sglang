@@ -118,12 +118,17 @@ class WatchdogRaw:
         self.dump_info = dump_info
 
         self.parent_process = psutil.Process().parent()
-        t = threading.Thread(target=self._watchdog_thread, daemon=True)
-        t.start()
+        self._stopped = threading.Event()
+        self._thread = threading.Thread(target=self._watchdog_thread, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stopped.set()
+        self._thread.join()
 
     def _watchdog_thread(self):
         try:
-            while True:
+            while not self._stopped.is_set():
                 self._watchdog_once()
         except Exception as e:
             logger.error(
@@ -144,7 +149,8 @@ class WatchdogRaw:
                 else:
                     watchdog_last_counter = current_counter
                     watchdog_last_time = current
-            time.sleep(self.watchdog_timeout / 2)
+            if self._stopped.wait(self.watchdog_timeout / 2):
+                return
 
         if self.dump_info is not None and (info_msg := self.dump_info()):
             logger.error(f"{self.debug_name} debug info:\n{info_msg}")
