@@ -267,12 +267,6 @@ from sglang.srt.managers.scheduler_components.output_streamer import (
 from sglang.srt.managers.scheduler_components.pool_stats_observer import (
     SchedulerPoolStatsObserver,
 )
-from sglang.srt.managers.scheduler_components.sched_policy import (
-    SchedPolicy,
-    batch_class,
-    new_name,
-    spawn,
-)
 from sglang.srt.managers.scheduler_components.profiler_manager import (
     SchedulerProfilerManager,
 )
@@ -281,6 +275,12 @@ from sglang.srt.managers.scheduler_components.recv_skipper import (
 )
 from sglang.srt.managers.scheduler_components.request_receiver import (
     SchedulerRequestReceiver,
+)
+from sglang.srt.managers.scheduler_components.sched_policy import (
+    SchedPolicy,
+    batch_class,
+    new_name,
+    spawn,
 )
 from sglang.srt.managers.scheduler_components.weight_updater import (
     SchedulerWeightUpdaterManager,

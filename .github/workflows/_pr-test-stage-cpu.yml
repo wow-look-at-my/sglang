@@ -165,7 +165,7 @@ jobs:
 
       - name: Build and test sched-policy
         if: matrix.partition == 0
-        uses: wow-look-at-my/go-toolchain@v1
+        uses: wow-look-at-my/go-toolchain@master
         with:
           working-directory: tools/sched-policy
 

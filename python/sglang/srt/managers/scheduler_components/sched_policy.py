@@ -14,7 +14,7 @@ import secrets
 import shutil
 import subprocess
 import time
-from typing import List, Optional, Sequence
+from typing import Optional, Sequence
 
 import goipc
 
@@ -129,7 +129,9 @@ class SchedPolicy:
 
     def on_request_queued(self, *, rid: str, token_ids: Sequence[int]) -> None:
         self._call(
-            msg.RequestQueued(now=time.perf_counter(), rid=rid, tokens=_tokens(token_ids))
+            msg.RequestQueued(
+                now=time.perf_counter(), rid=rid, tokens=_tokens(token_ids)
+            )
         )
 
     def on_request_finished(
@@ -177,7 +179,9 @@ class SchedPolicy:
         self._channel.close()
 
     def _call(self, request):
-        self._channel.send(request.encode(), type=request.TYPE_ID, timeout=self._timeout)
+        self._channel.send(
+            request.encode(), type=request.TYPE_ID, timeout=self._timeout
+        )
         type_id, payload = self._channel.recv(timeout=self._timeout)
         reply = msg.MESSAGES[type_id].decode(payload)
         if isinstance(reply, msg.Error):

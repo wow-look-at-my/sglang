@@ -658,7 +658,7 @@ jobs:
 
       # The scheduler's policy process ships in the image as an APE; the Dockerfile reads docker/sched-policy/.
       - name: Build sched-policy
-        uses: wow-look-at-my/go-toolchain@v1
+        uses: wow-look-at-my/go-toolchain@master
         with:
           working-directory: tools/sched-policy
 
