@@ -1,0 +1,96 @@
+# Messages between the scheduler ranks and the policy process. The queue
+# record type is the message type ID. Requests are 1-99, replies 100-255.
+# Any change to a message or its meaning bumps PROTOCOL_VERSION in
+# internal/schedpolicy/version.go and sched_policy.py together.
+package schedpolicy
+
+message Hello = 1 {
+	protocol u32
+	rank u32
+	world u32
+}
+
+# burst_tokens below 0 means chunked prefill is off: no token bound.
+message Init = 2 {
+	burst_tokens i64
+	device_tokens i64
+	host_tokens i64
+	throttle bool
+}
+
+message ShouldDeferPrefill = 3 {
+	prefill_pending bool
+	decode_runnable bool
+	continues_chunk bool
+}
+
+message PrefillTokenBudget = 4 {
+	continues_chunk bool
+}
+
+# batch_class: 0 other, 1 prefill, 2 decode. now is the rank's clock in seconds.
+message BatchLaunched = 5 {
+	batch_class u8
+	tokens i64
+	decode_rows i64
+	now f64
+}
+
+message BatchFinished = 6 {
+	now f64
+}
+
+# tokens is the prompt as little-endian i32.
+message RequestQueued = 7 {
+	now f64
+	rid string
+	tokens bytes
+}
+
+# length is the full context; tail its last tokens as little-endian i32.
+message RequestFinished = 8 {
+	now f64
+	length i64
+	rid string
+	tail bytes
+}
+
+# present is the rids queued, running or in flight, newline-separated.
+message BeginPass = 9 {
+	present string
+}
+
+message ShouldHold = 10 {
+	input_len i64
+	device_hit i64
+	total_tokens i64
+	would_evict bool
+	queued_at f64
+	now f64
+	rid string
+}
+
+message Admitted = 11 {
+	evicted bool
+	now f64
+}
+
+message HelloOk = 100 {
+	protocol u32
+}
+
+message BoolReply = 101 {
+	value bool
+}
+
+message OptIntReply = 102 {
+	present bool
+	value i64
+}
+
+message Ack = 103 {
+}
+
+message Error = 255 {
+	message string
+}
