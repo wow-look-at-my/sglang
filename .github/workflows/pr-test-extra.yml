@@ -118,25 +118,6 @@ jobs:
       skip_pr_test_health_check: ${{ inputs.skip_pr_test_health_check == true }}
     secrets: inherit
 
-  sched-policy-build:
-    needs: [check-changes, call-gate]
-    if: ${{ !cancelled() && needs.check-changes.result == 'success' }}
-    permissions:
-      id-token: write
-      contents: write
-      actions: read
-      checks: read
-      deployments: write
-      artifact-metadata: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.git_ref || github.sha }}
-      - uses: wow-look-at-my/go-toolchain@master
-        with:
-          working-directory: tools/sched-policy
-
   simulator-test-cpu:
     needs: [check-changes, call-gate, rust-ext-build]
     permissions: {actions: write, contents: write, issues: read, pull-requests: read, id-token: write}
@@ -186,7 +167,6 @@ jobs:
         call-gate,
         sgl-kernel-build-wheels,
         rust-ext-build,
-        sched-policy-build,
         simulator-test-cpu,
         extra-test,
       ]
