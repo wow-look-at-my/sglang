@@ -19,8 +19,7 @@ on:
         required: false
         type: string
 
-# Bound the API cost when the same ref pushes repeatedly. See note in
-# runner-utilization.yml for the original incident this guards against.
+# Bound the API cost when the same ref pushes repeatedly. See note in runner-utilization.yml for the original incident this guards against.
 concurrency:
   group: amd-ci-job-monitor-${{ github.ref }}
   cancel-in-progress: true
@@ -28,8 +27,7 @@ concurrency:
 jobs:
   fetch-actions-data:
     name: Fetch Actions Snapshot
-    # Skip fork PRs entirely, and require the `run-ci` label on same-repo PRs.
-    # schedule and workflow_dispatch always run.
+    # Skip fork PRs entirely, and require the `run-ci` label on same-repo PRs. schedule and workflow_dispatch always run.
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&

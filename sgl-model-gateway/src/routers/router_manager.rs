@@ -1,8 +1,4 @@
-//! Router Manager for coordinating multiple routers and workers
-//!
-//! Provides centralized management based on enable_igw flag:
-//! - Single Router Mode (enable_igw=false): Router owns workers directly
-//! - Multi-Router Mode (enable_igw=true): RouterManager coordinates everything
+//! Router Manager for coordinating multiple routers and workers Provides centralized management based on enable_igw flag.
 
 use std::sync::Arc;
 
@@ -370,8 +366,7 @@ impl RouterManager {
                 }
             }
         } else {
-            // ZERO-ALLOCATION Snapshot Iteration (Hot Path Optimization)
-            // Atomic load avoids heap allocations and DashMap shard locks per-request
+            // ZERO-ALLOCATION Snapshot Iteration (Hot Path Optimization) Atomic load avoids heap allocations.
             let routers_snapshot = self.routers_snapshot.load();
             for router in routers_snapshot.iter() {
                 let mut score = 1.0;
@@ -382,10 +377,7 @@ impl RouterManager {
                 } else if !prefer_pd && !is_pd {
                     score += 1.0;
                 }
-                // TODO: Once routers expose worker stats, we can evaluate:
-                // - Average worker priority vs priority_threshold
-                // - Average worker cost vs max_cost
-                // - Current load and health status
+                // TODO: Once routers expose worker stats, we can evaluate.
 
                 if score > best_score && is_router_valid(is_pd) {
                     best_score = score;
@@ -405,7 +397,6 @@ impl RouterTrait for RouterManager {
     }
 
     async fn health_generate(&self, _req: Request<Body>) -> Response {
-        // IGW readiness: return 200 if at least one router has healthy workers
         let has_healthy_workers = self
             .worker_registry
             .get_all()
@@ -658,8 +649,7 @@ impl RouterTrait for RouterManager {
         headers: Option<&HeaderMap>,
         response_id: &str,
     ) -> Response {
-        // Delegate to the default router (typically http-regular)
-        // Response storage is shared across all routers via AppContext
+        // Delegate to the default router (typically http-regular) Response storage is shared across all routers.
         let router = self.select_router_for_request(headers, None);
         if let Some(router) = router {
             router.list_response_input_items(headers, response_id).await

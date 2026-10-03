@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Minimal axum mock of an SGLang HTTP worker for routing tests.
@@ -56,10 +56,7 @@ where
 }
 
 impl MockWorker {
-    /// Bind to a random port on 127.0.0.1 and start serving.
-    ///
-    /// `stream_chunks` are the raw SSE bytes returned when a streaming
-    /// chat-completion request arrives.
+    /// Bind to a random port on.0.0.1 and start serving.
     #[allow(dead_code)] // Only used by some test files.
     pub async fn start(stream_chunks: Vec<&'static str>) -> Self {
         let captured = Arc::new(Mutex::new(CapturedHeaders::default()));
@@ -97,10 +94,7 @@ impl MockWorker {
         }
     }
 
-    /// Bind to a random port and start a worker that accepts the request,
-    /// sleeps for `delay`, then returns `200 OK` with an empty JSON object.
-    /// Used to test router behaviour when the upstream wedges after accepting
-    /// the TCP connection but before sending response headers.
+    /// Bind to a random port and start a worker that accepts the request, sleeps for `delay`.
     #[allow(dead_code)]
     pub async fn start_hanging(delay: Duration) -> Self {
         let captured = Arc::new(Mutex::new(CapturedHeaders::default()));
@@ -167,9 +161,7 @@ impl MockWorker {
         }
     }
 
-    /// Bind to a random port and start a worker that streams `chunks` with a
-    /// fixed `delay` between each chunk.  Used to test that load guards survive
-    /// the full body lifetime for streaming responses.
+    /// Bind to a random port and start a worker that streams `chunks` with a fixed `delay` between each chunk.
     #[allow(dead_code)]
     pub async fn start_slow_stream(chunks: Vec<&'static str>, delay: Duration) -> Self {
         let captured = Arc::new(Mutex::new(CapturedHeaders::default()));
@@ -250,20 +242,7 @@ impl MockWorker {
         }
     }
 
-    /// Bind to a raw TCP listener and start a worker that writes a status
-    /// line + headers with a large declared `Content-Length`, then writes
-    /// only `partial_body_bytes` of body before closing the connection.
-    ///
-    /// Used to test router behaviour when the upstream replies with a status
-    /// but drops the connection mid-body. We can't build this with axum
-    /// directly (it owns the response lifecycle); raw TCP gives us frame-level
-    /// control to short-write the body and close.
-    ///
-    /// NOTE: unlike the axum-based variants, this helper does NOT serve
-    /// `/server_info` (one-shot raw-TCP accept, no path routing). Callers
-    /// that wire this through `spawn_discovery` will see introspect fail
-    /// with empty `model_ids`. All current callers inject the worker via
-    /// `registry.add()` directly, which bypasses introspect.
+    /// Bind to a raw TCP listener and start a worker that writes a status line + headers with a large declared `Content-Length`.
     #[allow(dead_code)]
     pub async fn start_returning_partial_body(
         status: StatusCode,
@@ -284,11 +263,7 @@ impl MockWorker {
                         Ok(v) => v,
                         Err(_) => return,
                     };
-                    // Drain the request bytes until we see end-of-headers
-                    // (`\r\n\r\n`). We deliberately do NOT fully consume the
-                    // request body — the router has already sent it before
-                    // awaiting our response, and we want to write the
-                    // truncated response promptly.
+                    // Drain the request bytes until we see end-of-headers (`\r\n\r\n`).
                     let mut buf = [0u8; 4096];
                     let mut acc: Vec<u8> = Vec::new();
                     while !acc.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -298,14 +273,10 @@ impl MockWorker {
                         };
                         acc.extend_from_slice(&buf[..n]);
                         if acc.len() > 64 * 1024 {
-                            // Defensive: don't loop forever if the request
-                            // never produces a header terminator.
                             break;
                         }
                     }
-                    // Write a response with a Content-Length larger than the
-                    // bytes we will actually write, then drop the socket
-                    // before the body completes.
+                    // Write a response with a Content-Length larger than the bytes we will write.
                     let declared_len = partial_body_bytes.len() + 1024;
                     let head = format!(
                         "HTTP/1.1 {status_u16} {phrase}\r\n\
@@ -322,8 +293,7 @@ impl MockWorker {
                     if sock.write_all(partial_body_bytes).await.is_err() {
                         return;
                     }
-                    // Flush, then drop — the client should see content-length
-                    // mismatch as a transport-level body read failure.
+                    // Flush, then drop — the client should see content-length mismatch.
                     let _ = sock.flush().await;
                     drop(sock);
                 }
@@ -337,9 +307,7 @@ impl MockWorker {
         }
     }
 
-    /// Bind to a random port and start a worker that ALWAYS returns the given
-    /// HTTP status code and JSON body with `Content-Type: application/json`.
-    /// Used to test router behaviour when the upstream returns an error.
+    /// Bind to a random port and start a worker that ALWAYS returns the given HTTP status code and JSON body.
     #[allow(dead_code)]
     pub async fn start_returning_error(status: StatusCode, body: Value) -> Self {
         let captured = Arc::new(Mutex::new(CapturedHeaders::default()));
@@ -409,13 +377,7 @@ impl MockWorker {
     }
 }
 
-/// Stateless `/server_info` handler shared by every axum-based
-/// `MockWorker::start_*` variant. Advertising `served_model_name="tiny"`
-/// lets the worker manager's introspect step resolve `model_ids` for any
-/// variant that flows through `spawn_discovery`, instead of burning 3 ×
-/// `SERVER_INFO_TIMEOUT` of retries before registering with empty
-/// `model_ids`. Adding it unconditionally is cheaper than tracking which
-/// variants do or don't get introspected.
+/// Stateless `/server_info` handler shared by every axum-based `MockWorker::start_*` variant.
 #[allow(dead_code)] // shared across all axum variants
 async fn serve_tiny_server_info() -> Json<Value> {
     Json(serde_json::json!({"served_model_name": "tiny"}))

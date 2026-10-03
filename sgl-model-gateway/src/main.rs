@@ -132,8 +132,7 @@ enum Commands {
 
 #[derive(Parser, Debug)]
 struct CliArgs {
-    // ==================== Worker Configuration ====================
-    /// Host address to bind the router server
+    // ==================== Worker Configuration ==================== Host address to bind the router server
     #[arg(long, default_value = "0.0.0.0", help_heading = "Worker Configuration")]
     host: String,
 
@@ -145,12 +144,11 @@ struct CliArgs {
     #[arg(long, num_args = 0.., help_heading = "Worker Configuration")]
     worker_urls: Vec<String>,
 
-    // ==================== Routing Policy ====================
-    /// Load balancing policy to use
+    // ==================== Routing Policy ==================== Load balancing policy to use
     #[arg(long, default_value = "cache_aware", value_parser = ["random", "round_robin", "cache_aware", "power_of_two", "prefix_hash", "manual"], help_heading = "Routing Policy")]
     policy: String,
 
-    /// Cache threshold (0.0-1.0) for cache-aware routing
+    /// Cache threshold (. -.) for cache-aware routing
     #[arg(long, default_value_t = 0.3, help_heading = "Routing Policy")]
     cache_threshold: f32,
 
@@ -194,8 +192,7 @@ struct CliArgs {
     #[arg(long, default_value_t = false, help_heading = "Routing Policy")]
     enable_igw: bool,
 
-    // ==================== PD Disaggregation ====================
-    /// Enable PD (Prefill-Decode) disaggregated mode
+    // ==================== PD Disaggregation ==================== Enable PD (Prefill-Decode) disaggregated mode
     #[arg(long, default_value_t = false, help_heading = "PD Disaggregation")]
     pd_disaggregation: bool,
 
@@ -252,8 +249,7 @@ struct CliArgs {
     #[arg(long, num_args = 0.., help_heading = "Service Discovery (Kubernetes)")]
     decode_selector: Vec<String>,
 
-    // ==================== Logging ====================
-    /// Directory to store log files
+    // ==================== Logging ==================== Directory to store log files
     #[arg(long, help_heading = "Logging")]
     log_dir: Option<String>,
 
@@ -265,8 +261,7 @@ struct CliArgs {
     #[arg(long, default_value_t = false, help_heading = "Logging")]
     json_log: bool,
 
-    // ==================== Prometheus Metrics ====================
-    /// Port to expose Prometheus metrics
+    // ==================== Prometheus Metrics ==================== Port to expose Prometheus metrics
     #[arg(long, default_value_t = 29000, help_heading = "Prometheus Metrics")]
     prometheus_port: u16,
 
@@ -278,8 +273,7 @@ struct CliArgs {
     #[arg(long, num_args = 0.., help_heading = "Prometheus Metrics")]
     prometheus_duration_buckets: Vec<f64>,
 
-    // ==================== Request Handling ====================
-    /// Custom HTTP headers to check for request IDs
+    // ==================== Request Handling ==================== Custom HTTP headers to check for request IDs
     #[arg(long, num_args = 0.., help_heading = "Request Handling")]
     request_id_headers: Vec<String>,
 
@@ -336,8 +330,6 @@ struct CliArgs {
     )]
     tcp_keepalive_secs: u64,
 
-    // ==================== Rate Limiting ====================
-    /// Maximum concurrent requests (-1 to disable)
     #[arg(long, default_value_t = -1, help_heading = "Rate Limiting")]
     max_concurrent_requests: i32,
 
@@ -353,8 +345,7 @@ struct CliArgs {
     #[arg(long, help_heading = "Rate Limiting")]
     rate_limit_tokens_per_second: Option<i32>,
 
-    // ==================== Retry Configuration ====================
-    /// Maximum number of retry attempts
+    // ==================== Retry Configuration ==================== Maximum number of retry attempts
     #[arg(long, default_value_t = 5, help_heading = "Retry Configuration")]
     retry_max_retries: u32,
 
@@ -370,7 +361,7 @@ struct CliArgs {
     #[arg(long, default_value_t = 1.5, help_heading = "Retry Configuration")]
     retry_backoff_multiplier: f32,
 
-    /// Jitter factor (0.0-1.0) for retry delays
+    /// Jitter factor (. -.) for retry delays
     #[arg(long, default_value_t = 0.2, help_heading = "Retry Configuration")]
     retry_jitter_factor: f32,
 
@@ -378,8 +369,7 @@ struct CliArgs {
     #[arg(long, default_value_t = false, help_heading = "Retry Configuration")]
     disable_retries: bool,
 
-    // ==================== Circuit Breaker ====================
-    /// Number of failures before circuit opens
+    // ==================== Circuit Breaker ==================== Number of failures before circuit opens
     #[arg(long, default_value_t = 10, help_heading = "Circuit Breaker")]
     cb_failure_threshold: u32,
 
@@ -399,8 +389,7 @@ struct CliArgs {
     #[arg(long, default_value_t = false, help_heading = "Circuit Breaker")]
     disable_circuit_breaker: bool,
 
-    // ==================== Health Checks ====================
-    /// Failures before marking worker unhealthy
+    // ==================== Health Checks ==================== Failures before marking worker unhealthy
     #[arg(long, default_value_t = 3, help_heading = "Health Checks")]
     health_failure_threshold: u32,
 
@@ -424,8 +413,7 @@ struct CliArgs {
     #[arg(long, default_value_t = false, help_heading = "Health Checks")]
     disable_health_check: bool,
 
-    // ==================== Tokenizer ====================
-    /// Model path for loading tokenizer (HuggingFace ID or local path)
+    // ==================== Tokenizer ==================== Model path for loading tokenizer.
     #[arg(long, help_heading = "Tokenizer")]
     model_path: Option<String>,
 
@@ -453,8 +441,7 @@ struct CliArgs {
     #[arg(long, default_value_t = 52428800, help_heading = "Tokenizer")]
     tokenizer_cache_l1_max_memory: usize,
 
-    // ==================== Parsers ====================
-    /// Parser for reasoning models (e.g., deepseek-r1, qwen3)
+    // ==================== Parsers ==================== Parser for reasoning models (e.g., deepseek-r1, qwen3)
     #[arg(long, help_heading = "Parsers")]
     reasoning_parser: Option<String>,
 
@@ -466,8 +453,7 @@ struct CliArgs {
     #[arg(long, help_heading = "Parsers")]
     mcp_config_path: Option<String>,
 
-    // ==================== Backend ====================
-    /// Backend runtime to use
+    // ==================== Backend ==================== Backend runtime to use
     #[arg(long, value_enum, default_value_t = Backend::Sglang, alias = "runtime", help_heading = "Backend")]
     backend: Backend,
 
@@ -479,8 +465,7 @@ struct CliArgs {
     #[arg(long, default_value_t = false, help_heading = "Backend")]
     enable_wasm: bool,
 
-    // ==================== Oracle Database ====================
-    /// Path to Oracle ATP wallet directory
+    // ==================== Oracle Database ==================== Path to Oracle ATP wallet directory
     #[arg(long, env = "ATP_WALLET_PATH", help_heading = "Oracle Database")]
     oracle_wallet_path: Option<String>,
 
@@ -512,8 +497,7 @@ struct CliArgs {
     #[arg(long, env = "ATP_POOL_TIMEOUT_SECS", help_heading = "Oracle Database")]
     oracle_pool_timeout_secs: Option<u64>,
 
-    // ==================== PostgreSQL Database ====================
-    /// PostgreSQL database connection URL
+    // ==================== PostgreSQL Database ==================== PostgreSQL database connection URL
     #[arg(long, help_heading = "PostgreSQL Database")]
     postgres_db_url: Option<String>,
 
@@ -521,8 +505,7 @@ struct CliArgs {
     #[arg(long, help_heading = "PostgreSQL Database")]
     postgres_pool_max_size: Option<usize>,
 
-    // ==================== Redis Database ====================
-    /// Redis connection URL
+    // ==================== Redis Database ==================== Redis connection URL
     #[arg(long, help_heading = "Redis Database")]
     redis_url: Option<String>,
 
@@ -530,12 +513,11 @@ struct CliArgs {
     #[arg(long, help_heading = "Redis Database")]
     redis_pool_max_size: Option<usize>,
 
-    /// Redis data retention in days (-1 for persistent, default 30)
+    /// Redis data retention in days (- for persistent, default)
     #[arg(long, help_heading = "Redis Database")]
     redis_retention_days: Option<i64>,
 
-    // ==================== TLS/mTLS Security ====================
-    /// Path to server TLS certificate (PEM format)
+    // ==================== TLS/mTLS Security ==================== Path to server TLS certificate (PEM format)
     #[arg(long, help_heading = "TLS/mTLS Security")]
     tls_cert_path: Option<String>,
 
@@ -560,8 +542,7 @@ struct CliArgs {
     )]
     otlp_traces_endpoint: String,
 
-    // ==================== Control Plane Authentication ====================
-    /// API key for worker authorization
+    // ==================== Control Plane Authentication ==================== API key for worker authorization
     #[arg(long, help_heading = "Control Plane Authentication")]
     api_key: Option<String>,
 
@@ -888,7 +869,7 @@ impl CliArgs {
         let retention_days = match self.redis_retention_days {
             Some(d) if d < 0 => None, // Persistent
             Some(d) => Some(d as u64),
-            None => Some(30), // Default 30 days
+            None => Some(30), // Default many
         };
 
         let rcf = RedisConfig {
@@ -1229,7 +1210,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => cli.router_args,
     };
 
-    // Automatically enable IGW mode when service discovery is turned on
     if cli_args.service_discovery && !cli_args.enable_igw {
         println!("INFO: IGW mode automatically enabled because service discovery is turned on");
         cli_args.enable_igw = true;

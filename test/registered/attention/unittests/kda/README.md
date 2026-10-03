@@ -1,21 +1,14 @@
 # KDA Attention Capability Matrix
 
-This folder covers KDA (Kimi Delta Attention) linear attention. The actual
-path drives `KDAAttnBackend` through `HybridLinearAttnBackend` on a
-`RadixLinearAttention` layer. Expected outputs come from an independent
-pure-PyTorch sigmoid-gated delta-rule reference using
-`KimiLinearCacheParams` / `KimiLinearStateShape` (per-head-channel `dt_bias`,
-`silu` activation on conv1d output, per-channel gate broadcast), not the KDA
-Triton kernel.
+This folder covers KDA (Kimi Delta Attention) linear attention. The actual path drives `KDAAttnBackend` through `HybridLinearAttnBackend` on a `RadixLinearAttention` layer. Expected outputs come from an independent pure-PyTorch sigmoid-gated delta-rule reference using `KimiLinearCacheParams` / `KimiLinearStateShape` (per-head-channel `dt_bias`, `silu` activation on conv1d output, per-channel gate broadcast), not the KDA Triton kernel.
 
 ## Coverage Matrix
 
-Columns are runner modes; rows are the linear-attention kernel backend
-(`triton` is the only one wired today). Cells use:
+Columns are runner modes. Rows are the linear-attention kernel backend (`triton` is the only one wired today). Cells use:
 - **✓ \<variants\>** — exercised, with the config variants listed in the cell
 - **—** — not applicable / not exercised
 - **blocked: \<reason\>** — production-unsupported, not a follow-up
-- **deferred: \<reason\>** — could land later, currently disabled
+- **deferred: \<reason\>** — can land later, disabled
 
 | Linear-attn kernel | Eager Phase 2 | CG decode | PCG extend | BCG extend | Verify eager | Verify CG | DE eager | DE CG | DE-V2 CG | EAGLE-draft runner | EAGLE-DE runner | FKVMTP runner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -23,23 +16,13 @@ Columns are runner modes; rows are the linear-attention kernel backend
 
 ## Input And Config Coverage
 
-- 10 input variants from `make_kda_cases('triton')`: page 1, exact-page,
-  crossing-page, ragged page-boundary, page-size-32 crossing, decode
-  page-boundary, batch-size-1 decode.
-- `num_k_heads=2, num_v_heads=2` with head dims defaulted by
-  `DEFAULT_HEAD_K_DIM = DEFAULT_HEAD_V_DIM = 32`.
+- 10 input variants from `make_kda_cases('triton')`: page 1, exact-page, crossing-page, ragged page-boundary, page-size-32 crossing, decode page-boundary, batch-size-1 decode.
+- `num_k_heads=2, num_v_heads=2` with head dims defaulted by `DEFAULT_HEAD_K_DIM = DEFAULT_HEAD_V_DIM = 32`.
 
 ## Production-Unsupported
 
-- **CUDA-graph capture/replay outside `DECODE_OR_IDLE` / `TARGET_VERIFY`** —
-  KDA inherits the same `MambaAttnBackendBase` capture/replay path as GDN,
-  so `ValueError("Invalid forward mode")` at
-  `hybrid_linear_attn_backend.py:509, 572` rejects `DRAFT_EXTEND` /
-  `DRAFT_EXTEND_V2` / `EXTEND` graph runners. Any Phase 4 KDA draft-extend
-  graph runner is structurally unreachable.
+- **CUDA-graph capture/replay outside `DECODE_OR_IDLE` / `TARGET_VERIFY`** — KDA inherits the same `MambaAttnBackendBase` capture/replay path as GDN. As a result, `ValueError("Invalid forward mode")` at `hybrid_linear_attn_backend.py:509, 572` rejects `DRAFT_EXTEND` / `DRAFT_EXTEND_V2` / `EXTEND` graph runners. Any Phase 4 KDA draft-extend graph runner is structurally unreachable.
 
 ## Next Work
 
-- Consider additional KDA kernel backend variants when available. CG
-  decode, PCG/BCG split-op extend, and EAGLE chain/tree verify
-  (eager + CG) are all wired (see matrix above).
+- Consider additional KDA kernel backend variants when available. CG decode, PCG/BCG split-op extend, and EAGLE chain/tree verify (eager + CG) are all wired (see matrix above).

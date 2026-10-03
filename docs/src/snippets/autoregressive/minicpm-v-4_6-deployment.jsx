@@ -9,12 +9,6 @@ export const MiniCPMV46Deployment = () => {
   //
   // mem-fraction-static values are conservative defaults; re-tune for
   // your workload.
-  //
-  // Required flags (any hardware):
-  //   --trust-remote-code   tokenizer / preprocessor loading
-  //   --dtype bfloat16      released ckpt config.json has no torch_dtype;
-  //                         without forcing bf16 the GDN causal_conv1d
-  //                         triton kernel fails on bf16/fp16 branch merge.
   const options = {
     hardware: {
       name: 'hardware',
@@ -61,10 +55,9 @@ export const MiniCPMV46Deployment = () => {
   };
 
   // Per-hardware tp / mem-fraction-static recommendations (BF16 only).
-  // Conservative defaults; re-tune once the released parameter count is known.
   const modelConfigs = {
-    a100: { tp: 1, mem: 0.7 },   // 80GB,  Ampere
-    h100: { tp: 1, mem: 0.7 },   // 80GB,  Hopper
+    a100: { tp: 1, mem: 0.7 },   // 80GB, Ampere
+    h100: { tp: 1, mem: 0.7 },   // 80GB, Hopper
     h200: { tp: 1, mem: 0.5 },   // 141GB, Hopper
     b200: { tp: 1, mem: 0.4 },   // 180GB, Blackwell
   };

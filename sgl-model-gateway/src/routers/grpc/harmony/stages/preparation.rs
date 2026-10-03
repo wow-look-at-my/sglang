@@ -22,10 +22,8 @@ use crate::{
     },
 };
 
-/// Harmony Preparation stage: Encode requests using Harmony protocol
-///
-/// Replaces the regular PreparationStage for Harmony models.
-/// Converts chat/generate requests to Harmony-encoded token_ids and extraction_text.
+/// Harmony Preparation stage: Encode requests using Harmony protocol Replaces
+/// the regular PreparationStage for Harmony models.
 pub(crate) struct HarmonyPreparationStage {
     builder: HarmonyBuilder,
 }
@@ -48,8 +46,7 @@ impl Default for HarmonyPreparationStage {
 #[async_trait]
 impl PipelineStage for HarmonyPreparationStage {
     async fn execute(&self, ctx: &mut RequestContext) -> Result<Option<Response>, Response> {
-        // Clone Arc before match to avoid borrow checker issues
-        // Arc clone is cheap (8 bytes) - avoids full request clone (15KB-200KB)
+        // Clone Arc before match to avoid borrow checker issues Arc clone is cheap (several bytes) - avoids full request clone.
         let is_chat = matches!(&ctx.input.request_type, RequestType::Chat(_));
         let is_responses = matches!(&ctx.input.request_type, RequestType::Responses(_));
 
@@ -97,17 +94,14 @@ impl HarmonyPreparationStage {
             ));
         }
 
-        // Step 1: Filter tools if needed
         let body_ref = utils::filter_chat_request_by_tool_choice(request);
 
-        // Step 2: Build tool constraints
         let tool_constraints = if let Some(tools) = body_ref.tools.as_ref() {
             Self::generate_tool_call_constraint(tools, &body_ref.tool_choice).map_err(|e| *e)?
         } else {
             None
         };
 
-        // Step 3: Build via Harmony
         let build_output = self.builder.build_from_chat(&body_ref).map_err(|e| {
             error!(
                 function = "prepare_chat",
@@ -120,7 +114,6 @@ impl HarmonyPreparationStage {
             )
         })?;
 
-        // Step 4: Store results
         ctx.state.preparation = Some(PreparationOutput {
             original_text: None,
             token_ids: build_output.input_ids,
@@ -149,18 +142,14 @@ impl HarmonyPreparationStage {
         ctx: &mut RequestContext,
         request: &ResponsesRequest,
     ) -> Result<Option<Response>, Response> {
-        // Step 1: Extract function and MCP tools with schemas from ResponseTools
         let mut function_tools = extract_tools_from_response_tools(request.tools.as_deref(), true);
 
-        // Step 2: Filter tools based on tool_choice (AllowedTools or Function)
-        // Note: Tool existence is already validated in ResponsesRequest::validate()
         if let Some(filtered) =
             utils::filter_tools_by_tool_choice(&function_tools, &request.tool_choice)
         {
             function_tools = filtered;
         }
 
-        // Step 3: Generate Harmony structural tags
         let tool_constraint = if !function_tools.is_empty() {
             Self::generate_tool_call_constraint(&function_tools, &request.tool_choice)
                 .map_err(|e| *e)?
@@ -187,7 +176,6 @@ impl HarmonyPreparationStage {
 
         let constraint = tool_constraint.or(text_constraint);
 
-        // Step 3: Build via Harmony from responses API request
         let build_output = self.builder.build_from_responses(request).map_err(|e| {
             error!(
                 function = "prepare_responses",
@@ -200,7 +188,6 @@ impl HarmonyPreparationStage {
             )
         })?;
 
-        // Step 4: Store results with constraint
         ctx.state.preparation = Some(PreparationOutput {
             original_text: None,
             token_ids: build_output.input_ids,
@@ -327,12 +314,11 @@ impl HarmonyPreparationStage {
             _ => {}
         }
 
-        // Build tags for each tool - need two patterns per tool for reasoning on/off
+        // Build tags for each tool - need patterns per tool for reasoning on/off
         for tool in tools_to_use {
             let tool_name = &tool.function.name;
             let params_schema = &tool.function.parameters;
 
-            // Pattern 1: For reasoning-enabled mode (with analysis channel before commentary)
             tags.push(json!({
                 "begin": format!("<|start|>assistant<|channel|>commentary to=functions.{}<|constrain|>json<|message|>", tool_name),
                 "content": {
@@ -342,7 +328,6 @@ impl HarmonyPreparationStage {
                 "end": "" // `end` is empty because <|call|> comes naturally from Harmony stop tokens
             }));
 
-            // Pattern 2: For reasoning-disabled mode (goes directly to commentary channel)
             tags.push(json!({
                 "begin": format!("<|channel|>commentary to=functions.{}<|constrain|>json<|message|>", tool_name),
                 "content": {
@@ -396,7 +381,6 @@ pub(crate) fn build_text_format_structural_tag(
             "triggers": ["<|start|>assistant<|channel|>final", "<|channel|>final"],
             "tags": [
                 {
-                    // Pattern 1: For reasoning-enabled mode (with analysis channel before final)
                     "begin": "<|start|>assistant<|channel|>final<|constrain|>json<|message|>",
                     "content": {
                         "type": "json_schema",
@@ -405,7 +389,6 @@ pub(crate) fn build_text_format_structural_tag(
                     "end": ""
                 },
                 {
-                    // Pattern 2: For reasoning-disabled mode (goes directly to final channel)
                     "begin": "<|channel|>final<|constrain|>json<|message|>",
                     "content": {
                         "type": "json_schema",

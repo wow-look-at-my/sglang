@@ -1,24 +1,5 @@
 #!/usr/bin/env node
 // Static guard for the cookbook deployment/playground engines and their configs.
-// Zero dependencies, no browser, no Mintlify — plain `node`.
-//
-//   node docs/scripts/check_cookbook_configs.mjs
-//
-// What it protects, in order of how expensive the bug is to find by hand:
-//
-//   1. MIRROR drift. The overlay-resolution rule is written in both engines
-//      because Mintlify snippets cannot import each other. If the copies drift,
-//      the Deploy command and the playground's base disagree and the reader sees
-//      phantom +/- lines in the diff — with no error anywhere.
-//   2. Sibling identity. Overlay resolution clones the base cell, so sibling
-//      detection must compare match dimensions rather than object references.
-//   3. Config/engine contract. A cell keyed on a dimension the config no longer
-//      declares silently stops matching; the panel just shows a different cell.
-//   4. Predicate safety. showWhen / disabled / flags run against selections the
-//      author never clicked through; a throw there blanks the whole widget.
-//   5. PD/speculation reachability. A PD card must stay reachable when a base
-//      cell inherits an algorithm it declares incompatible, so choosing a PD
-//      role can remove that algorithm from the generated command.
 
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
@@ -35,9 +16,8 @@ const LEGACY_DIMS = ["variants", "quantizations", "strategies", "nodesOptions"];
 const failures = [];
 const fail = (where, msg) => failures.push(`${where}: ${msg}`);
 
-// ---------------------------------------------------------------- 1. MIRROR
-// Compare the marked blocks with comments and whitespace normalized away, so
-// wording may differ per file but the rule may not.
+// MIRROR Compare the marked blocks with comments and whitespace normalized
+// away, so wording may differ per file but the rule may not.
 const mirrorBody = (file) => {
   const src = readFileSync(join(SNIPPETS, file), "utf8");
   const start = src.indexOf("==== MIRROR");
@@ -65,10 +45,7 @@ if (a && b && a !== b) {
     + `_playground "${lb.slice(i, i + 8).join(" ")}"`);
 }
 
-// `withOverlay` returns a clone, so object identity can never distinguish the
-// current base cell from a true sibling. This previously made every cookbook
-// show a spurious "matches … / switch base" hint before the reader changed
-// anything.
+// `withOverlay` returns a clone, so object identity can never distinguish the current base cell from a true sibling.
 const playgroundSource = readFileSync(join(SNIPPETS, "_playground.jsx"), "utf8");
 if (/\bmatchedCell\s*!==\s*baseCell\b/.test(playgroundSource)) {
   fail("_playground.jsx", "sibling detection compares cloned cells by object identity");
@@ -87,9 +64,6 @@ if (!cookbookModelTemplate.includes("--enable-w4a4-mxfp4-megamoe")) {
   fail("config.jsx.tmpl", "W4A4 MegaMoE option is missing the server flag");
 }
 
-// --------------------------------------------------------------- 3/4. Configs
-// Configs are .jsx with a single `export const config` literal; import them
-// through a data: URL so no temp file is needed.
 const loadConfig = async (path) => {
   const src = readFileSync(path, "utf8");
   const mod = await import(
@@ -141,7 +115,7 @@ for (const path of walk(CONFIGS)) {
   const custom = Array.isArray(config.matchDims);
 
   // A config either declares its own dims or carries the full legacy set —
-  // half of each means the engine silently renders a dimension nobody authored.
+  // half.
   if (!custom) {
     for (const k of LEGACY_DIMS) {
       if (!Array.isArray(config[k])) fail(where, `legacy config is missing \`${k}\``);
@@ -358,10 +332,7 @@ for (const path of walk(CONFIGS)) {
       }
     }
   };
-  // A cell may report its badge per selection (`verificationStatus` as a
-  // function of sel), so it has to survive the same space the predicates do —
-  // it renders on every pick, and an unrecognized return silently downgrades
-  // the badge to "Not Verified" rather than erroring in the browser.
+  // A cell may report its badge per selection (`verificationStatus` as a function of sel).
   const VERIFY_STATES = ["verified", "in-progress", "unverified"];
   for (const [i, cell] of (config.cells || []).entries()) {
     if (typeof cell.verificationStatus !== "function") continue;
@@ -423,10 +394,8 @@ for (const path of walk(CONFIGS)) {
   }
 }
 
-// ----------------------------------------------------- Diffusion page opening
-// Keep the first screen consistent across model pages. This check intentionally
-// guards structure, not editorial judgment; the authoring skill carries the
-// capability/strength/boundary rubric that cannot be reduced to keywords.
+// ----------------------------------------------------- Diffusion page
+// opening Keep the first screen consistent across model pages.
 const walkMdx = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
   e.isDirectory() ? walkMdx(join(dir, e.name))
     : (e.name.endsWith(".mdx") ? [join(dir, e.name)] : []));

@@ -1,22 +1,10 @@
 // Hy4-Preview cookbook config. Consumed by _deployment.jsx + _playground.jsx;
 // see _deployment.jsx header for the field contract.
 //
-// Sizing (drives the TP/nodes choices below):
-// 770B total / 49B active MoE. BF16 weights ≈ 1.5TB → TP16 on H200/B200
-// (2x8 multi-node) or TP8 on B300 (single 8-GPU node) / GB300 (2x4 multi-node
-// — GB300 hosts carry 4 GPUs). MXFP8 ≈ 760GB → TP4 on B300/GB300 (288GB),
-// TP8 on B200; the MXFP8 kernel path requires SM100+, and H200 (SM90) was
-// tested and cannot serve it — H200 gets BF16 cells only. MLA KV (kv_lora
-// 512 + rope 64, bf16, replicated per TP rank) plus the DSA FP8 indexer
-// cache ≈ 95KB/token/rank; at ~95GB weights/rank (H200 BF16 TP16) the pool
-// left is ~25GB/rank ≈ 260K tokens — size `--context-length` to the pool
-// (the page's sizing table suggests 131072 there).
-//
-// Single-node recipes are `verified: true` (run end-to-end); the 2-node
-// BF16 recipes still carry `verificationStatus: "in-progress"` — when one
-// lands, REPLACE that line with `verified: true` (`verificationStatus`
-// takes precedence over `verified` in the engine, so merely adding
-// `verified: true` would leave the badge amber).
+// Sizing (drives the TP/nodes choices below): 770B total / 49B active MoE.
+// MXFP8 ≈ 760GB → TP4 on B300/GB300 (288GB), TP8 on B200; the MXFP8 kernel
+// path requires SM100+, and H200 (SM90) was tested and cannot serve it — H200
+// gets BF16 cells only.
 
 export const config = {
   modelName: "Hy4-Preview",
@@ -30,7 +18,6 @@ export const config = {
     { id: "bf16",  label: "BF16"  },
     { id: "mxfp8", label: "MXFP8" },
   ],
-  // Two operating points: NEXTN MTP on → low-latency, MTP off → high-throughput.
   strategies: [
     { id: "low-latency",     label: "Low-Latency"     },
     { id: "high-throughput", label: "High-Throughput" },
@@ -98,9 +85,7 @@ sgl-eval run gsm8k \\
   },
 
   dockerImages: {
-    // The hy4-preview image bundles the HYV4 model code, the suffix-aware
-    // `hunyuan` parsers, and the NEXTN MTP runtime. Switch to `:latest` once
-    // a tagged release picks them up.
+    // The hy4-preview image bundles the HYV4 model code, the suffix-aware `hunyuan` parsers, and the NEXTN MTP runtime.
     h200:  "lmsysorg/sglang:hy4-preview",
     b200:  "lmsysorg/sglang:hy4-preview",
     b300:  "lmsysorg/sglang:hy4-preview",
@@ -113,13 +98,6 @@ sgl-eval run gsm8k \\
 
   playgroundFeatures: {
 
-    // ----- Card 1: "Attention Parallelism" -----
-    // No CP knob: HYV4ForCausalLM rejects --enable-prefill-cp before
-    // allocation (and pipeline parallelism likewise raises). TP starts at 4 —
-    // no listed GPU holds the weights below TP4 (MXFP8 ≈ 760GB, BF16 ≈
-    // 1.5TB) — and each degree is gated per hardware/quant so the panel
-    // never emits a command whose weights don't fit or whose rank count
-    // exceeds the selected topology (GB300 hosts carry 4 GPUs).
     attention: {
       knobs: [
         { id: "tp", label: "TP", values: [
@@ -172,14 +150,6 @@ sgl-eval run gsm8k \\
       ],
     },
 
-    // ----- Card 2: "MoE Parallelism" -----
-    // 256 routed + 1 shared experts, top-8 sigmoid routing. The recipes run
-    // the MoE under pure TP (deep_gemm runner on MXFP8 — the validated
-    // HYV4 path); DeepEP is an experimentation override. No
-    // EP knob: the runtime rewrites EP to TP for a2a-spanning backends
-    // (DeepEP), so a free EP degree would advertise a topology that never
-    // runs. No MegaMoE option — its fused path is not wired for Hy4's
-    // sigmoid-scored, bounded-SwiGLU experts.
     moe: {
       backend: {
         options: [
@@ -189,11 +159,6 @@ sgl-eval run gsm8k \\
       },
     },
 
-    // ----- Card 3: "Parsers" -----
-    // Auto-detection resolves to the `hunyuan` reasoning/tool-call parsers;
-    // the parser reads Hy4's suffix-bearing structural tokens (<think:...>,
-    // <tool_calls:...>, <arg_key:...>/<arg_value:...>) from the tokenizer
-    // vocab at runtime.
     parsers: {
       items: [
         { id: "reasoning", label: "Reasoning Parser", flag: "--reasoning-parser auto" },
@@ -201,10 +166,7 @@ sgl-eval run gsm8k \\
       ],
     },
 
-    // ----- Card 4: "Speculative Decoding" -----
-    // One MTP (NextN) draft layer ships in both checkpoints; the preset is
-    // steps=3 / top-k 1 / draft-tokens=4. No NGRAM option — untested against
-    // the DSA sparse-attention backend.
+    // No NGRAM option — untested against the DSA sparse-attention backend.
     speculative: {
       options: [
         { id: "current",  label: "Inherited from base" },
@@ -215,9 +177,6 @@ sgl-eval run gsm8k \\
       ],
     },
 
-    // ----- Card 5: "PD Disaggregation" -----
-    // Generic SGLang prefill/decode disaggregation; not yet exercised on
-    // Hy4 — treat as experimentation.
     pdDisagg: {
       modes: [
         { id: "off",     label: "Off" },
@@ -251,9 +210,6 @@ sgl-eval run gsm8k \\
       },
     },
 
-    // ----- Card 6: "Hierarchical KV Cache" -----
-    // Generic SGLang tiers; not yet exercised against Hy4's DSA FP8 indexer
-    // cache — treat as experimentation.
     hicache: {
       backends: [
         { id: null,       label: "Auto" },
@@ -270,10 +226,6 @@ sgl-eval run gsm8k \\
       ],
     },
 
-    // ----- Card 7: "HiSparse" -----
-    // DSA-style decode-side hierarchical sparse attention (Hy4's DSA indexer
-    // top-k is 2048). Shown/emitted only when the live PD-Disagg mode is
-    // `decode`; not yet exercised on Hy4 — treat as experimentation.
     hisparse: {
       requiredFlags: ["--disable-radix-cache"],
       config: { top_k: 2048, device_buffer_size: 6144 },
@@ -286,8 +238,6 @@ sgl-eval run gsm8k \\
   },
 
   cells: [
-    // NOTE: the engine defaults a hash-less visit to cells[0], so the B300
-    // MXFP8 anchor (the recipe that has actually been served) stays first.
     //
     // The runtime derives the rest from the checkpoint and model defaults:
     // quantization comes from the ModelOpt hf_quant_config, the DSA

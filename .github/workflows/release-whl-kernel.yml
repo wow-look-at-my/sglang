@@ -49,10 +49,7 @@ jobs:
             runner: arm-kernel-build-node
     runs-on: ${{ matrix.runner }}
     steps:
-      # Self-hosted build nodes retain the workspace across jobs. Prior builds
-      # leave root-owned artifacts under python/sglang/kernels/aot/build/ that actions/checkout
-      # cannot remove, causing EACCES on rmdir. Wipe them via a throwaway root
-      # container before checkout recreates the workspace.
+      # Self-hosted build nodes retain the workspace across jobs. Prior builds leave root-owned artifacts under python/sglang/kernels/aot/build/ that actions/checkout cannot remove, causing EACCES on rmdir. Wipe them via a throwaway root container before checkout recreates the workspace.
       - name: Clean workspace (remove root-owned files from prior runs)
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" alpine:3 \
@@ -174,20 +171,10 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10"]
-        # ROCm 10.0.0 builds inside a Python 3.12 container; the wheel is still
-        # tagged cp310-abi3 (wheel.py-api in pyproject.toml), so it stays under
-        # the same python-version leg as the 7.x wheels.
-        #
-        # A dispatch that names one flavor builds only that flavor. Every extra
-        # leg is another image build on the shared AMD node, and its release job
-        # appends the same wheel to the index a second time. `inputs` is empty
-        # on push, which falls through to the full set.
+        # ROCm 10.0.0 builds inside a Python 3.12 container; the wheel is still tagged cp310-abi3 (wheel.py-api in pyproject.toml), so it stays under the same python-version leg as the 7.x wheels. A dispatch that names one flavor builds only that flavor. Every extra leg is another image build on the shared AMD node, and its release job appends the same wheel to the index a second time. `inputs` is empty on push, which falls through to the full set.
         rocm-version: ${{ fromJson(inputs.target == 'rocm720' && '["720"]' || inputs.target == 'rocm1000' && '["1000"]' || '["720", "1000"]') }}
     steps:
-      # Self-hosted build nodes retain the workspace across jobs. Prior builds
-      # leave root-owned artifacts under python/sglang/kernels/aot/build/ that actions/checkout
-      # cannot remove, causing EACCES on rmdir. Wipe them via a throwaway root
-      # container before checkout recreates the workspace.
+      # Self-hosted build nodes retain the workspace across jobs. Prior builds leave root-owned artifacts under python/sglang/kernels/aot/build/ that actions/checkout cannot remove, causing EACCES on rmdir. Wipe them via a throwaway root container before checkout recreates the workspace.
       - name: Clean workspace (remove root-owned files from prior runs)
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" alpine:3 \
@@ -336,10 +323,7 @@ jobs:
         python-version: ["3.10"]
         musa-version: ["43"]
     steps:
-      # Self-hosted build nodes retain the workspace across jobs. Prior builds
-      # leave root-owned artifacts under python/sglang/kernels/aot/build/ that actions/checkout
-      # cannot remove, causing EACCES on rmdir. Wipe them via a throwaway root
-      # container before checkout recreates the workspace.
+      # Self-hosted build nodes retain the workspace across jobs. Prior builds leave root-owned artifacts under python/sglang/kernels/aot/build/ that actions/checkout cannot remove, causing EACCES on rmdir. Wipe them via a throwaway root container before checkout recreates the workspace.
       - name: Clean workspace (remove root-owned files from prior runs)
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" alpine:3 \

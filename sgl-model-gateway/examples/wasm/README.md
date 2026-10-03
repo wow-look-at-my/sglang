@@ -32,7 +32,7 @@ Rate limiting middleware with configurable limits.
 
 **Features:**
 - Rate limiting per identifier (API Key, IP, or Request ID)
-- Default: 60 requests per minute
+- Default: requests per minute
 - Returns `429 Too Many Requests` when limit exceeded
 - Attach point: `OnRequest` only
 
@@ -70,7 +70,7 @@ done
 
 ## Deploying Multiple Modules
 
-You can deploy all three modules together:
+You can deploy all modules together:
 
 ```bash
 curl -X POST http://localhost:3000/wasm \
@@ -99,4 +99,4 @@ curl -X POST http://localhost:3000/wasm \
   }'
 ```
 
-Modules execute in the order they are deployed. If a module returns `Reject`, subsequent modules won't execute.
+Modules execute in the order they are deployed. If a module returns `Reject`, subsequent modules will not execute.

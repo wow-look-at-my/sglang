@@ -21,8 +21,7 @@ use crate::utils::{
     fsm::{Event, RequestState, ValidationOutcome},
 };
 
-/// Longest client-supplied rid accepted. It keys the detok table and travels on
-/// every chunk, so its length is a recurring cost; Python mints 32-byte uuid hex.
+/// Longest client-supplied rid accepted.
 pub(super) const MAX_RID_LEN: usize = 128;
 
 /// Intake FSM dispatcher stage. Owns its inbox + downstream handles, so the
@@ -30,16 +29,13 @@ pub(super) const MAX_RID_LEN: usize = 128;
 /// with positional arguments.
 pub struct Intake {
     tok_manager_rx: flume::Receiver<TmEvent>,
-    /// Unbounded abort lane (see [`Senders::abort`]). Selected against `rx` so an
-    /// abort is handled promptly even while the bounded inbox is saturated.
+    /// Unbounded abort lane (see [`Senders::abort`]).
     abort_rx: flume::Receiver<AbortSource>,
     senders: Senders,
     to_scheduler_tx: ToSchedulerTx,
     limits: Limits,
     mm: MmDispatch,
-    /// Requests parked in `Encoding` while an MM worker processes their media;
-    /// resumed by `MmEncoded` / `MmFailed`. Only this thread touches it, so no
-    /// lock.
+    /// Requests parked in `Encoding` while an MM worker processes their media; resumed by `MmEncoded` / `MmFailed`.
     pending_mm: HashMap<Rid, Request>,
     shutdown: flume::Receiver<()>,
 }
@@ -96,10 +92,7 @@ impl Runnable for Intake {
                     self.on_mm_failed(rid, message)
                 }
                 None => {
-                    // Shutdown, or the inbox closed. Drain whatever is still queued
-                    // on the abort lane first: those requests are in flight on the
-                    // scheduler, and the selector may report the closed inbox before
-                    // it ever looks at a pending abort.
+                    // Shutdown, or the inbox closed.
                     while let Ok(source) = self.abort_rx.try_recv() {
                         self.on_abort(source);
                     }
@@ -111,21 +104,13 @@ impl Runnable for Intake {
 }
 
 impl Intake {
-    /// Reject a request: → `Failed`, notify the client, deregister (unconditional
-    /// — a no-op when nothing was registered).
-    /// `registered` says whether this request ever reached `register_detok`. It
-    /// must: `Deregister`'s handler is a bare `table.remove(&rid)`, so a
-    /// request rejected BEFORE registering would evict whatever entry currently
-    /// holds that key — a concurrent request's sink — leaving that client with no
-    /// terminal frame and a hung connection. Python cannot hit this because it
-    /// validates before `rid_to_state[obj.rid] = state`.
+    /// Reject a request: → `Failed`, notify the client, deregister (unconditional — a no-op when nothing was registered). `registered` says whether this request ever reached `register_detok`. It must: `Deregister`'s handler is a bare `table.remove(&rid)`, so a request rejected BEFORE registering would evict whatever entry holds that key — a concurrent request's sink —
+    /// leaving that client with no terminal frame and a hung connection.
     fn fail(&self, req: &mut Request, err: Error, registered: bool) {
-        // Log only server faults (500); 4xx/499/503 are expected and would spam.
         if err.http_status() == 500 {
             tracing::error!(rid = %req.rid, error = %err, "intake rejected request");
         }
-        // A rejected request never reaches the scheduler drain, so purge any
-        // parked MM result (no-op for the common non-mm request).
+        // A rejected request never reaches the scheduler drain.
         self.mm.results.purge(req.rid.as_str());
         let _ = req.state.apply(Event::Error(err.clone()));
         let _ = req.sink.try_send(ResponseItem::Error(err)); // client may be gone
@@ -137,14 +122,13 @@ impl Intake {
     }
 
     /// Drive a request through its intake states until it terminates (failed or
-    /// pushed to the ring), is handed to the tokenizer pool (re-entering as a
+    /// pushed to the ring).
     /// `Tokenized` event), or is parked in `pending_mm` awaiting an MM worker
     /// (re-entering via `MmEncoded` / `MmFailed`). Each arm acts and advances
     /// the FSM; the loop re-dispatches. The arms are the design table's states,
     /// `Failed` the single reject path.
     fn drive(&mut self, mut req: Request) {
-        // Flipped once `register_detok` succeeds; `fail` must not deregister before
-        // that (see `fail`). A pool return re-enters `drive` already registered.
+        // Flipped once `register_detok` succeeds; `fail` must not deregister before that (see `fail`).
         let mut registered = !matches!(req.state, RequestState::Received);
         loop {
             match req.state.clone() {
@@ -162,7 +146,6 @@ impl Intake {
                         continue;
                     }
                     registered = true;
-                    // `validate` advanced Received → Validating; keep driving.
                 }
                 // Control and detokenize skip normalization (no sampling params)
                 // straight to the pre-send checks; generate goes to Normalizing.
@@ -195,10 +178,8 @@ impl Intake {
                             .normalize(self.limits.skip_tokenizer_init, self.limits.vocab_size)
                         {
                             Err(e) => Err(e),
-                            // The Rust MM pipeline produces the final input_ids,
-                            // so it wins even over a pre-tokenized prompt (which
-                            // still needs placeholder expansion) — the same
-                            // precedence as the Python TokenizerManager.
+                            // The Rust MM pipeline produces the final
+                            // input_ids.
                             Ok(()) if self.mm.enabled && g.has_multimodal() => {
                                 Ok(ValidationOutcome::HasMultimodal)
                             }
@@ -297,7 +278,7 @@ impl Intake {
                     }
                     return;
                 }
-                // The single reject path for every post-register failure.
+                // The reject path for every post-register failure.
                 RequestState::Failed(e) => {
                     self.fail(&mut req, e, registered);
                     return;
@@ -342,7 +323,7 @@ impl Intake {
 
     /// Hand a `Detokenize` request to its owning detok shard — the stage that
     /// answers this kind (it never touches the scheduler ring). The shard
-    /// already holds this rid's sink: `register_detok` queued `Register` on the
+    /// already holds this rid's sink.
     /// same channel from this same thread, so FIFO gives Register → Decode.
     fn push_detokenize_to_shard(&self, mut req: Request) {
         let RequestKind::Detokenize { token_ids } = &req.kind else {
@@ -368,8 +349,7 @@ impl Intake {
         }
     }
 
-    /// Push a bare control request (`[tag, rid, nil]`) onto the to_scheduler channel. The
-    /// scheduler dispatches it (e.g. `GetInternalStateReq`) and replies via the
+    /// Push a bare control request (`[tag, rid, nil]`) onto the to_scheduler channel.
     /// from_scheduler channel as a single `Result`.
     fn push_control_to_ring(&self, mut req: Request) {
         let encode = match &req.kind {
@@ -412,8 +392,6 @@ impl Intake {
         self.drive(req);
     }
 
-    /// An MM worker failed a parked request (bad URL, processor error): reject it
-    /// back to the client, as Python turns a per-request exception into a 400.
     fn on_mm_failed(&mut self, rid: Rid, message: String) {
         let Some(mut req) = self.pending_mm.remove(&rid) else {
             tracing::debug!(rid = %rid, "mm failure for unknown/finished request; dropped");
@@ -422,18 +400,8 @@ impl Intake {
         self.fail(&mut req, Error::Encode(message), true); // parked ⇒ registered
     }
 
-    /// Client disconnected (or a detok terminal): deregister the sink, then push an
-    /// `AbortReq(rid)` so the scheduler stops generating for it.
-    ///
-    /// A failed push is logged, not retried: the scheduler keeps generating and the
-    /// chunks arrive for a rid no longer in the detok table, where they are dropped.
-    /// That wastes GPU work until the request finishes on its own, but it cannot be
-    /// misdelivered — the rid is unique to this request for the process's lifetime
-    /// ([`Rid::from_client`]), so no later request can ever answer to it.
-    ///
-    /// A request parked in `pending_mm` is cancelled here, so the worker's late
-    /// result lands in `on_mm_encoded`'s no-entry branch and purges the parked
-    /// result — no generation runs for output nobody will read.
+    /// Client disconnected (or a detok terminal): deregister the sink, then push an `AbortReq(rid)` so the scheduler stops generating for it. A failed push is logged, not retried: the scheduler keeps generating and the chunks arrive for a rid no longer in the detok table, where they are dropped. That wastes GPU work until the request finishes on its own, but it cannot be misdelivered — the rid is unique to this request for the process's lifetime ([`Rid::from_client`]), so no later request can ever answer to it. A request parked in `pending_mm` is cancelled here, so the worker's late result lands in
+    /// `on_mm_encoded`'s no-entry branch and purges the parked result — no generation runs for output nobody will read.
     fn on_abort(&mut self, source: AbortSource) {
         let rid = source.rid().clone();
         if self.pending_mm.remove(&rid).is_some() {
@@ -492,8 +460,6 @@ impl Intake {
         {
             self.fail(&mut req, Error::QueueFull, true); // registered
         }
-        // On success the scheduler owns the request (response arrives by rid); we
-        // drop our `Request` here — the detok shard holds the sink.
     }
 }
 

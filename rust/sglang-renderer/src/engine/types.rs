@@ -53,8 +53,6 @@ pub struct GenerationOutput {
 pub type GenerationStream = BoxStream<'static, Result<GenerationOutput, ResponseError>>;
 
 /// Normalized engine token delta, before renderer-owned text decoding.
-/// Completion counts are deltas; prompt counts describe the complete prompt.
-/// A successful stream includes a terminal finish reason.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TokenDelta {
     pub token_ids: TokenIds,

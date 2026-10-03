@@ -1,10 +1,4 @@
 //! Resolve chat-template names and files to chat prompt formatters.
-//
-//! Hugging Face tokenizer configs contain Jinja templates. SGLang also accepts
-//! legacy conversation JSON files and the names in Python's template registry.
-//! Legacy definitions are rendered by a native port of Python's
-//! `Conversation.get_prompt()` so there is exactly one implementation of the
-//! per-style formatting logic (no Jinja translation to drift).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -64,8 +58,7 @@ const SUPPORTED_STYLES: &[&str] = &[
     "UNLIMITED_OCR",
 ];
 
-/// A chat prompt formatter: either the model's HuggingFace Jinja template or a
-/// legacy SGLang conversation template.
+/// A chat prompt formatter: either the model's HuggingFace Jinja template or a legacy SGLang conversation template.
 #[derive(Clone)]
 pub(crate) enum ChatFormatter {
     HuggingFace {
@@ -428,10 +421,8 @@ impl ChatFormatter {
         }
     }
 
-    /// The template's stop strings — Python `Conversation.stop_str`
-    /// (`str | list[str] | None`). Legacy/builtin templates define them (e.g.
-    /// chatml's `<|im_end|>`); the HuggingFace renderer carries none, matching
-    /// Python's jinja path, which keeps only the request's own stops.
+    /// The template's stop strings — Python `Conversation.stop_str` (`str |
+    /// list[str] | None`).
     pub(super) fn stop_strs(&self) -> Option<OneOrMany<String>> {
         match self {
             ChatFormatter::HuggingFace { .. }
@@ -479,8 +470,6 @@ fn render_oai(
 }
 
 /// Formatter-facing request view over adapted template arguments.
-/// Native effort access and template arguments share the adapted value without
-/// changing the original request.
 struct TemplateArgsRequest<'a> {
     request: &'a dyn OAIChatLikeRequest,
     args: HashMap<String, Value>,
@@ -539,9 +528,7 @@ pub(super) struct LegacySpec {
     pub(super) roles: (String, String),
     pub(super) style: String,
     pub(super) sep: String,
-    /// `None` = Python's `Conversation.sep2` default. Styles that alternate
-    /// seps (`seps[i % 2]`) need it set; Python crashes on `None` there and we
-    /// error deliberately.
+    /// `None` = Python's `Conversation.sep2` default.
     pub(super) sep2: Option<String>,
     /// Python `Conversation.stop_str` (`str | list[str] | None`).
     pub(super) stop_str: Option<OneOrMany<String>>,
@@ -566,9 +553,7 @@ impl Default for LegacySpec {
     }
 }
 
-/// Native port of Python `generate_chat_conv` + `Conversation.get_prompt()`:
-/// fold system messages into the system prompt, keep user/assistant messages in
-/// order, optionally append the assistant opening, then render per `sep_style`.
+/// Native port of Python `generate_chat_conv` + `Conversation.get_prompt()`: fold system messages into the system prompt.
 #[derive(Clone)]
 pub struct LegacyFormatter {
     pub(super) spec: LegacySpec,
@@ -598,10 +583,8 @@ impl LegacyFormatter {
                                     ChatCompletionRequestUserMessageContentPart::Text(part) => {
                                         text.push_str(&part.text);
                                     }
-                                    // Python would splice media tokens in here;
-                                    // the OpenAI adapter rejects media content
-                                    // upstream, so this is unreachable — error
-                                    // rather than silently drop.
+                                    // Python will splice media tokens in
+                                    // here.
                                     _ => {
                                         return Err(TemplateError::MediaContent { role: "user" });
                                     }
@@ -1006,10 +989,7 @@ impl LegacyFormatter {
                     } else {
                         let mut message = content.clone();
                         while message.contains(&spec.audio_token) {
-                            // Python: `audio_token.format(idx=counter)`. A
-                            // token without `{idx}` makes the replace a no-op
-                            // and Python's loop infinite; bail out instead of
-                            // hanging the server.
+                            // Python: `audio_token.format(idx=counter)`.
                             let indexed = spec.audio_token.replace("{idx}", &counter.to_string());
                             if indexed == spec.audio_token {
                                 break;
@@ -1200,8 +1180,7 @@ pub(super) fn load_chat_formatter(
     chat_template_arg: Option<&str>,
 ) -> Result<ChatFormatter, TemplateError> {
     // Python resolves registry names before looking at the filesystem — and
-    // before touching the tokenizer config, so a built-in name works even when
-    // `tokenizer_config.json` is absent.
+    // before touching the tokenizer config.
     if let Some(argument) = chat_template_arg
         && let Some(spec) = builtin_template(argument)
     {
@@ -1279,8 +1258,7 @@ pub(super) fn load_chat_formatter(
 /// is the fallback then, as in Python.
 fn infer_legacy_template_from_model_path(model_path: &str) -> Option<LegacySpec> {
     let lower = model_path.to_lowercase();
-    // Regexes without regex: every Python pattern here is a plain substring or
-    // a `prefix.*suffix` pair, both on a lowercased path.
+    // Regexes without regex: every Python pattern here is a plain substring or a `prefix.*suffix` pair.
     let contains = |needle: &str| lower.contains(needle);
     let precedes = |prefix: &str, suffix: &str| {
         lower
@@ -1316,8 +1294,6 @@ fn infer_legacy_template_from_model_path(model_path: &str) -> Option<LegacySpec>
     {
         return builtin_template("chatml-llava");
     }
-    // MiniCPM: 4.6+ uses its own template and must not fall back to the
-    // legacy conv template.
     if contains("minicpm-v-4.6")
         || contains("minicpm-v-4_6")
         || contains("minicpm-o-4.6")
@@ -1347,8 +1323,7 @@ fn infer_legacy_template_from_model_path(model_path: &str) -> Option<LegacySpec>
         return builtin_template("whisper");
     }
 
-    // Model-type matchers read `<model_path>/config.json` (local dirs only —
-    // Python's `get_model_type` cannot resolve HF repo ids either).
+    // Model-type matchers read `<model_path>/config.json`.
     let model_type = read_model_type(model_path)?;
     // Python `MODEL_TYPE_TO_TEMPLATE`; minicpmv4_6 is deliberately absent.
     let name = match model_type.as_str() {
@@ -1955,8 +1930,6 @@ mod tests {
     }
 
     /// Every separator style renders exactly like Python's `Conversation.get_prompt()`.
-    /// Messages: system "sys", user "Hello", assistant "World", then the
-    /// unconditional assistant opening.
     #[test]
     fn all_separator_styles_render_like_python() {
         let cases = [
@@ -2059,8 +2032,7 @@ mod tests {
         }
     }
 
-    /// LLAMA2's no-system path starts with `[INST] ` and tags messages by
-    /// index parity — the opening at an even index takes the user tag.
+    /// LLAMA2's no-system path starts with `[INST] ` and tags messages by index parity — the opening.
     #[test]
     fn llama2_without_system_starts_with_inst() {
         let request: CreateChatCompletionRequest = serde_json::from_value(serde_json::json!({
@@ -2094,8 +2066,7 @@ mod tests {
         assert_eq!(rendered, "USER: Hello|sep|ASSISTANT: World|sep|ASSISTANT:");
     }
 
-    /// QWEN2_AUDIO indexes each audio-token occurrence (Python
-    /// `audio_token.format(idx=counter)`).
+    /// QWEN2_AUDIO indexes each audio-token occurrence (Python `audio_token.format(idx=counter)`).
     #[test]
     fn qwen2_audio_indexes_audio_tokens() {
         let mut spec = spec("QWEN2_AUDIO");
@@ -2143,8 +2114,7 @@ mod tests {
             "messages": [{"role": "user", "content": "hi"}]
         }))
         .unwrap();
-        // QWEN2_VL_EMBED requires a single string stop (Python raises TypeError
-        // on a list / None) — error deliberately.
+        // QWEN2_VL_EMBED requires a single string stop (Python raises TypeError on a list / None).
         let mut spec = spec("QWEN2_VL_EMBED");
         spec.stop_str = Some(OneOrMany::Many(vec!["a".into(), "b".into()]));
         let error = LegacyFormatter { spec }.render(&request).unwrap_err();
@@ -2222,9 +2192,7 @@ mod tests {
         let _ = std::fs::remove_file(legacy);
     }
 
-    /// Content extraction matches `generate_chat_conv`: system/assistant arrays
-    /// must be a single text part; user arrays concatenate text parts; tool
-    /// roles are rejected.
+    /// Content extraction matches `generate_chat_conv`: system/assistant arrays must be a single text part.
     #[test]
     fn content_extraction_matches_python() {
         let formatter = LegacyFormatter {
@@ -2255,7 +2223,7 @@ mod tests {
         assert!(!rendered.starts_with("sys|sep|")); // overridden by "Be brief."
         assert!(rendered.contains("Be brief."));
 
-        // System array with two parts is rejected.
+        // System array with parts is rejected.
         let request = serde_json::from_value::<CreateChatCompletionRequest>(serde_json::json!({
             "model": "test",
             "messages": [
@@ -2320,10 +2288,7 @@ mod tests {
         assert_eq!(formatter.spec.name, "chatml");
     }
 
-    /// Python `load_chat_template`: without `--chat-template`, the model path
-    /// infers a legacy template before the HF fallback — so a legacy model
-    /// with no `chat_template` in its config still gets one, and even a config
-    /// that HAS one loses to the inference.
+    /// Python `load_chat_template`: without `--chat-template`, the model path infers a legacy template before the HF fallback —.
     #[test]
     fn model_path_inference_precedes_tokenizer_config() {
         let base = std::env::temp_dir().join(format!(
@@ -2375,8 +2340,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(model_dir);
     }
 
-    /// Every name the model-path matchers can produce must exist in the
-    /// built-in table (parity guard for `MODEL_TYPE_TO_TEMPLATE`).
+    /// Every name the model-path matchers can produce must exist in the built-in table.
     #[test]
     fn inferred_template_names_resolve_to_builtins() {
         for model_path in [
@@ -2403,8 +2367,7 @@ mod tests {
         }
     }
 
-    /// MiniCPM 4.6+ must NOT fall back to the legacy template; with no config
-    /// and nothing else to try, that surfaces as the missing-config error.
+    /// MiniCPM.6+ must NOT fall back to the template.
     #[test]
     fn minicpm_4_6_skips_legacy_inference() {
         assert!(infer_legacy_template_from_model_path("minicpm-v-4.6").is_none());

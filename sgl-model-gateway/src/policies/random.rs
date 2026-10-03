@@ -8,9 +8,7 @@ use rand::Rng;
 use super::{get_healthy_worker_indices, LoadBalancingPolicy, SelectWorkerInfo};
 use crate::core::Worker;
 
-/// Random selection policy
-///
-/// Selects workers randomly with uniform distribution among healthy workers.
+/// Random selection policy Selects workers randomly with uniform distribution among healthy workers.
 #[derive(Debug, Default)]
 pub struct RandomPolicy;
 

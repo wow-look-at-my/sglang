@@ -10,36 +10,21 @@ use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gau
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use once_cell::sync::Lazy;
 
-// =============================================================================
-// STRING INTERNING
-// =============================================================================
-//
-// Dynamic strings (model_id, worker URLs, paths) are interned to avoid repeated
-// heap allocations. The interner uses Arc<str> which is cheap to clone and
-// allows the metrics crate to store references without repeated allocations.
-//
-// Performance characteristics:
-// - First occurrence: One allocation + DashMap insert
-// - Subsequent occurrences: DashMap lookup + Arc::clone (very cheap)
-// - Memory: Strings are never freed (acceptable for bounded label cardinality)
+// ============================================================================= STRING INTERNING.
 
-/// Global string interner for metric labels.
-/// Uses DashMap for lock-free concurrent access.
+/// Global string interner for metric labels. Uses DashMap for lock-free concurrent access.
 static STRING_INTERNER: Lazy<DashMap<String, Arc<str>>> = Lazy::new(DashMap::new);
 
-/// Intern a string, returning a cheaply-cloneable Arc<str>.
-///
-/// This function is designed for high-throughput scenarios where the same
-/// strings (model IDs, worker URLs) appear repeatedly. The first call allocates,
-/// subsequent calls just clone the Arc (very cheap - just a ref count increment).
+/// Intern a string, returning a cheaply-cloneable Arc<str>. This function is
+/// designed for high-throughput scenarios where the same strings (model IDs,
+/// worker URLs) appear repeatedly.
 pub(crate) fn intern_string(s: &str) -> Arc<str> {
     // Fast path: check if already interned
     if let Some(entry) = STRING_INTERNER.get(s) {
         return Arc::clone(entry.value());
     }
 
-    // Slow path: intern the string
-    // Use entry API to avoid TOCTOU race
+    // Slow path: intern the string Use entry API to avoid TOCTOU race
     STRING_INTERNER
         .entry(s.to_string())
         .or_insert_with(|| Arc::from(s))
@@ -51,9 +36,7 @@ pub(crate) fn interner_size() -> usize {
     STRING_INTERNER.len()
 }
 
-// =============================================================================
-// STATIC STRING CONSTANTS
-// =============================================================================
+// ============================================================================= STATIC STRING CONSTANTS.
 
 /// Static string constants for boolean labels to avoid allocations.
 pub const STREAMING_TRUE: &str = "true";
@@ -68,7 +51,6 @@ pub const fn bool_to_static_str(b: bool) -> &'static str {
 }
 
 /// Static lookup table for common HTTP status codes to avoid allocations.
-/// Returns a static string for known codes, or None for unknown codes.
 #[inline]
 pub fn status_code_to_static_str(code: u16) -> Option<&'static str> {
     // Using a match with explicit arms is faster than a lookup table for this size
@@ -113,8 +95,7 @@ pub fn method_to_static_str(method: &str) -> &'static str {
         "PATCH" => http_methods::PATCH,
         "HEAD" => http_methods::HEAD,
         "OPTIONS" => http_methods::OPTIONS,
-        // For unknown methods, we return a static "OTHER" to avoid allocation
-        // This is acceptable since unknown methods are rare in practice
+        // For unknown methods, we return a static "OTHER" to avoid allocation This is acceptable since unknown methods are rare.
         _ => "OTHER",
     }
 }
@@ -146,7 +127,6 @@ impl Default for PrometheusConfig {
 }
 
 pub(crate) fn init_metrics() {
-    // Layer 1: HTTP metrics
     describe_counter!(
         "smg_http_requests_total",
         "Total HTTP requests by method and path"
@@ -172,7 +152,6 @@ pub(crate) fn init_metrics() {
         "Rate limiting decisions by result (allowed/rejected)"
     );
 
-    // Layer 2: Router metrics
     describe_counter!(
         "smg_router_requests_total",
         "Total routed requests by router_type, backend_type, connection_mode, model, endpoint, streaming"
@@ -194,7 +173,6 @@ pub(crate) fn init_metrics() {
         "Upstream backend HTTP responses by router_type, status_code, error_code"
     );
 
-    // Layer 2: Router inference metrics (gRPC only)
     describe_histogram!(
         "smg_router_ttft_seconds",
         "Time to first token by router_type, backend_type, model, endpoint (gRPC only)"
@@ -212,7 +190,6 @@ pub(crate) fn init_metrics() {
         "Total generation time by router_type, backend_type, model, endpoint (gRPC only)"
     );
 
-    // Layer 3: Worker metrics
     describe_gauge!(
         "smg_worker_pool_size",
         "Current worker pool size by worker_type, connection_mode, model"
@@ -246,7 +223,6 @@ pub(crate) fn init_metrics() {
         "Number of routing entries in manual policy cache"
     );
 
-    // Layer 3: Worker resilience metrics (circuit breaker)
     describe_gauge!(
         "smg_worker_cb_state",
         "Circuit breaker state per worker (0=closed, 1=open, 2=half_open)"
@@ -268,7 +244,6 @@ pub(crate) fn init_metrics() {
         "Current consecutive success count per worker"
     );
 
-    // Layer 3: Worker resilience metrics (retry)
     describe_counter!(
         "smg_worker_retries_total",
         "Total retry attempts by worker_type and endpoint"
@@ -282,7 +257,6 @@ pub(crate) fn init_metrics() {
         "Retry backoff duration by attempt number"
     );
 
-    // Layer 4: Discovery metrics
     describe_counter!(
         "smg_discovery_registrations_total",
         "Worker registration attempts by source and result"
@@ -300,7 +274,6 @@ pub(crate) fn init_metrics() {
         "Workers known via discovery by source"
     );
 
-    // Layer 5: MCP metrics
     describe_counter!(
         "smg_mcp_tool_calls_total",
         "Total MCP tool invocations by model, tool_name, result"
@@ -315,7 +288,6 @@ pub(crate) fn init_metrics() {
         "Tool loop iterations in Responses API by model"
     );
 
-    // Layer 6: Database metrics
     describe_counter!(
         "smg_db_operations_total",
         "Total database operations by storage_type, operation, result"
@@ -448,10 +420,6 @@ pub mod metrics_labels {
 }
 
 /// SMG Metrics helper struct for the new layered metrics architecture.
-///
-/// Design principles for low overhead:
-/// - Dynamic labels use string interning (single allocation per unique value)
-/// - Static labels use the metrics crate's internal caching
 pub struct Metrics;
 
 /// Parameters for recording streaming metrics.
@@ -526,9 +494,6 @@ impl Metrics {
         .increment(1);
     }
 
-    // ========================================================================
-    // Layer 2: Router metrics
-    // ========================================================================
 
     /// Record a routed request.
     ///
@@ -635,9 +600,6 @@ impl Metrics {
         .increment(1);
     }
 
-    // ========================================================================
-    // Layer 2: Router inference metrics (gRPC only)
-    // ========================================================================
 
     /// Record time to first token.
     /// Uses string interning for model_id.
@@ -735,7 +697,7 @@ impl Metrics {
             output_tokens,
         } = params;
 
-        // Intern model string once - Arc::clone is just a ref count increment
+        // Intern model string once - Arc::clone is a ref count increment
         let model = intern_string(model_id);
 
         // TTFT and TPOT (only if we have a first token time)
@@ -799,9 +761,6 @@ impl Metrics {
         .increment(output_tokens);
     }
 
-    // ========================================================================
-    // Layer 3: Worker metrics
-    // ========================================================================
 
     /// Set worker pool size
     pub fn set_worker_pool_size(
@@ -939,11 +898,7 @@ impl Metrics {
         .set(if healthy { 1.0 } else { 0.0 });
     }
 
-    // ========================================================================
-    // Layer 3: Worker resilience metrics (circuit breaker)
-    // ========================================================================
 
-    /// Set circuit breaker state (0=closed, 1=open, 2=half_open)
     pub fn set_worker_cb_state(worker: &str, state_code: u8) {
         let worker_interned = intern_string(worker);
         gauge!(
@@ -996,9 +951,6 @@ impl Metrics {
         .set(count as f64);
     }
 
-    // ========================================================================
-    // Layer 3: Worker resilience metrics (retry)
-    // ========================================================================
 
     /// Record retry attempt
     pub fn record_worker_retry(worker_type: &'static str, endpoint: &'static str) {
@@ -1037,9 +989,6 @@ impl Metrics {
         .record(duration.as_secs_f64());
     }
 
-    // ========================================================================
-    // Layer 4: Discovery metrics
-    // ========================================================================
 
     /// Record worker registration attempt
     pub fn record_discovery_registration(source: &'static str, result: &'static str) {
@@ -1079,9 +1028,6 @@ impl Metrics {
         .set(count as f64);
     }
 
-    // ========================================================================
-    // Layer 5: MCP metrics
-    // ========================================================================
 
     /// Record MCP tool call
     pub fn record_mcp_tool_call(model_id: &str, tool_name: &str, result: &'static str) {
@@ -1123,9 +1069,6 @@ impl Metrics {
         .increment(1);
     }
 
-    // ========================================================================
-    // Layer 6: Database metrics
-    // ========================================================================
 
     /// Record database operation
     pub fn record_db_operation(
@@ -1186,8 +1129,7 @@ impl Metrics {
         gauge!("smg_worker_cb_consecutive_successes", "worker" => Arc::clone(&worker)).set(0.0);
         gauge!("smg_worker_requests_active", "worker" => Arc::clone(&worker)).set(0.0);
 
-        // Zero for these metrics have special valid meaning, thus we set to -1 temporarily
-        // (and will remove them completely after https://github.com/metrics-rs/metrics/issues/653)
+        // Zero for these metrics have special valid meaning.
         gauge!("smg_worker_cb_state", "worker" => Arc::clone(&worker)).set(-1.0);
         gauge!("smg_worker_health", "worker" => worker).set(-1.0);
     }
@@ -1431,9 +1373,7 @@ mod tests {
         assert_eq!(socket_addr.to_string(), "127.0.0.1:29000");
     }
 
-    // ========================================================================
-    // String interning tests
-    // ========================================================================
+    // ======================================================================== String interning tests.
 
     #[test]
     fn test_intern_string_returns_same_arc() {

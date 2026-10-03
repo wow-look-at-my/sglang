@@ -30,44 +30,36 @@ using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
 #define MUBUF_RELEASE 0
 #endif
 
-static constexpr int kNegOne = 0xBC00BC00;  // {-1, -1}, fp16x2_t
+static constexpr int kNegOne = 0xBC00BC00;
 
-// Range guard for the bf16 -> fp16 fast path (AllReduceTwoshot<..., true>): fp16 saturates at
-// 65504. Divide by a power of two on load and multiply it back on store; the shift is exact, so
-// sum(x_i / S) * S == sum(x_i). Per codec, because only CodecFP needs it: it carries no block
-// scale, so S is its only range guard, and is free there. The quantized codecs already normalize
-// each 32 values by their own block scale, and MODE.FP16_OVFL (armed in CodecBase) keeps an
-// over-ceiling element from becoming an inf that poisons its block through the block max. S buys
-// them nothing and costs the low end: encoding_scale = rcp(decoding_scale) saturates at 65504,
-// past which encode and decode stop being reciprocals and the block is attenuated wholesale.
-// That cliff sits at blockmax = S * L / 65504 (L = 8 / 32 / 128 for Q4 / Q6 / Q8), so raising S
-// walks it into real data -- 1 -> 2 measures 62% perplexity on GLM-5.2. Leave it at 1.
+// Per codec, because only CodecFP needs it: it carries no block scale, so S is its only range
+// guard, and is free there. The quantized codecs already normalize every few values by their own
+// block scale, and MODE.FP16_OVFL (armed in CodecBase) keeps an over-ceiling element from
+// becoming an inf that poisons its block through the block max.
 static constexpr int kQRFp16CastScaleLog2Fp = 4;     // S = 16, CodecFP
 static constexpr int kQRFp16CastScaleLog2Quant = 0;  // S = 1, CodecQ4 / CodecQ6 / CodecQ8
 
 // Number of atoms (4xf16x2_t) processed by a single thread
 static constexpr int kAtoms = 8;
 
-// We use a workgroup of 256 threads
+// We use a workgroup of multiple threads
 static constexpr int kBlockSize = 256;
 static constexpr int kAtomStride = kBlockSize;
 
 // Size and atom stride of source/destination data that the block will
-// process.
-// Workgroup scope = Tile = (256 threads x 8 atoms x 16B)
+// process. Workgroup scope = Tile = (threads x atoms x 16B)
 static constexpr int kTileSize = kBlockSize * kAtoms * sizeof(int32x4_t);
 
-// Max number of blocks. 304 CUs on MI300
+// Max number of blocks.
 static constexpr int kMaxNumBlocks = 304 * 4;
 
 // Standard CDNA wavefront size.
 static constexpr int kWavefront = 64;
 
-// 256 thread, 4 wavefronts.
 static dim3 constexpr kBlockTwoShot = {kWavefront, kBlockSize / kWavefront, 1};
 
-// Number of threads in a group for quantization
-// It corresponds to 32 F16 elements in quantization block
+// Number of threads in a group for quantization It
+// corresponds to multiple F16 elements in quantization block
 static constexpr int kThreadGroupSize = 8;
 
 // Methods
@@ -249,7 +241,7 @@ template <>
 __quickreduce_device_inline__ int packed_sub<half>(int a, int b) {
   int result;
 
-  // MI300 lacks packed fp16 sub instruction. So we do -1 * min + max
+  // MI300 lacks packed fp16 sub instruction.
   asm volatile("v_pk_fma_f16 %0, %1, %2 %3" : "=v"(result) : "v"(kNegOne), "v"(b), "v"(a));
   return result;
 }
@@ -322,9 +314,9 @@ __quickreduce_device_inline__ int group_abs_max(int32x4_t atom) {
 
   wmin = packed_min<T>(a, b);
 
-  // Reduce the max among a group of threads
-  // Note: This is basically 2 blocks of values setup as the
-  // upper/lower halves of the f16x2_t
+  // Reduce the max among a group of threads Note: This is
+  // basically blocks of values setup as the upper/lower
+  // halves of the f16x2_t
   for (int i = 1; i < kThreadGroupSize; i <<= 1) {
     int x = __shfl_down(wmax, i);
     wmax = packed_max<T>(wmax, x);

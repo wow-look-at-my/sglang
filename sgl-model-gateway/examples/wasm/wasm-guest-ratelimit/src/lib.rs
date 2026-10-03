@@ -1,16 +1,4 @@
 //! WASM Guest Rate Limit Example for sgl-model-gateway
-//!
-//! This example demonstrates rate limiting middleware
-//! for sgl-model-gateway using the WebAssembly Component Model.
-//!
-//! Features:
-//! - Rate limiting based on API Key or IP address
-//! - Fixed time window (e.g., 60 requests per minute)
-//! - Returns 429 Too Many Requests when limit exceeded
-//!
-//! Note: This is a simplified implementation. Since WASM components are stateless,
-//! each instance maintains its own counters. For production use, consider
-//! implementing rate limiting at the host/router level with shared state.
 
 wit_bindgen::generate!({
     path: "../../../src/wasm/interface",
@@ -30,11 +18,9 @@ struct Middleware;
 
 // Rate limit configuration
 const RATE_LIMIT_REQUESTS: u64 = 60; // Maximum requests per window
-const RATE_LIMIT_WINDOW_MS: u64 = 60_000; // Time window in milliseconds (1 minute)
+const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
 
-// Simple in-memory counter (per WASM instance)
-// In a real implementation, this would be shared across all instances
-// This is a simplified example for demonstration purposes
+// Simple in-memory counter (per WASM instance) In a real implementation.
 struct RateLimitState {
     requests: Vec<(String, u64)>, // (identifier, timestamp_ms)
 }
@@ -77,9 +63,8 @@ impl RateLimitState {
     }
 }
 
-// Thread-local state (per WASM instance thread)
-// Using thread_local! is safer than static mut as it avoids unsafe blocks
-// and provides separate state for each thread automatically
+// Thread-local state (per WASM instance thread) Using thread_local! is safer
+// than static mut as it avoids unsafe blocks.
 thread_local! {
     static RATE_LIMIT_STATE: RefCell<RateLimitState> = RefCell::new(RateLimitState::new());
 }

@@ -25,9 +25,7 @@ jobs:
             runner: arm-docker-build-node
     runs-on: ${{ matrix.runner }}
     steps:
-      # Self-hosted build nodes retain the workspace across jobs. Prior builds
-      # leave root-owned artifacts behind that actions/checkout cannot remove,
-      # causing EACCES on rmdir. Wipe them via a throwaway root container.
+      # Self-hosted build nodes retain the workspace across jobs. Prior builds leave root-owned artifacts behind that actions/checkout cannot remove, causing EACCES on rmdir. Wipe them via a throwaway root container.
       - name: Clean workspace (remove root-owned files from prior runs)
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" alpine:3 \
@@ -44,8 +42,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # Needed by setuptools-rust to build the bundled native gRPC extension
-      # (rust/sglang-grpc) when `python -m build` builds the sglang wheel.
+      # Needed by setuptools-rust to build the bundled native gRPC extension (rust/sglang-grpc) when `python -m build` builds the sglang wheel.
       - name: Install protoc
         run: sudo bash scripts/ci/utils/install_protoc.sh
 
@@ -54,9 +51,7 @@ jobs:
 
       - name: Build wheel
         env:
-          # When triggered manually, pin the wheel version to the supplied
-          # input (strip leading `v`) so setuptools-scm doesn't derive a
-          # `.devN+gHASH` version from the branch HEAD.
+          # When triggered manually, pin the wheel version to the supplied input (strip leading `v`) so setuptools-scm doesn't derive a `.devN+gHASH` version from the branch HEAD.
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           cd python
@@ -70,10 +65,7 @@ jobs:
           fi
           python3 -m build --wheel --no-isolation
 
-      # PyPI rejects plain `linux_x86_64` / `linux_aarch64` platform tags;
-      # auditwheel rewrites the wheel's platform tag to a `manylinux_*` tag
-      # and bundles any external native deps. The runner's glibc determines
-      # the lowest acceptable manylinux policy.
+      # PyPI rejects plain `linux_x86_64` / `linux_aarch64` platform tags; auditwheel rewrites the wheel's platform tag to a `manylinux_*` tag and bundles any external native deps. The runner's glibc determines the lowest acceptable manylinux policy.
       - name: Repair and smoke-test wheel
         run: |
           pip install auditwheel patchelf

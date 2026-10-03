@@ -49,7 +49,7 @@ void store_cache_kernel_impl(
 
 }  // anonymous namespace
 
-// check tensor last two dimensions are contiguous
+// check tensor last dimensions are contiguous
 #define CHECK_LAST2_DIM_CONTIGUOUS(x, ndim)                                                 \
   do {                                                                                      \
     const auto& _x = (x);                                                                   \
@@ -62,7 +62,6 @@ void store_cache_kernel_impl(
         #x " must be contiguous at the last two dimensions");                               \
   } while (0)
 
-// [NB]: store_cache takes 3 dimension tensors,
 //   This is to avoid the overhead of creating a new TensorImpl
 //   from .view(-1, row_dim)
 //
@@ -71,7 +70,6 @@ void store_cache_kernel_impl(
 //   k_cache : [num_pages, num_heads, head_size] -> [num_pages, row_dim]
 //   v_cache : [num_pages, num_heads, head_size] -> [num_pages, row_dim]
 //   indices : [batch_size]
-//
 void store_cache_cpu(
     const at::Tensor& k,
     const at::Tensor& v,
@@ -95,7 +93,6 @@ void store_cache_cpu(
   }
   CHECK_EQ(indices.size(0), batch_size);
 
-  // strides: batch dimension (dim 0) stride in elements
   int64_t k_stride = k.stride(0);
   int64_t v_stride = v.stride(0);
   int64_t kc_stride = k_cache.stride(0);
@@ -108,8 +105,8 @@ void store_cache_cpu(
   const auto index_dtype = indices.scalar_type();
   TORCH_CHECK(index_dtype == at::kLong || index_dtype == at::kInt, "indices must be int64 or int32");
 
-  // dtype : [bfloat16, float16, uint8] for fp8 KV stored as uint8
-  // index_dtype : [int64, int32]
+  // Dtype: [bfloat16, float16, uint8] for fp8 KV stored as uint8 index_dtype:
+  // [int64, int32]
   AT_DISPATCH_REDUCED_FLOATING_TYPES_AND(at::ScalarType::Byte, dtype, "store_cache_cpu", [&] {
     AT_DISPATCH_INDEX_TYPES(index_dtype, "store_cache_cpu_index", [&] {
       store_cache_kernel_impl<scalar_t, index_t>(

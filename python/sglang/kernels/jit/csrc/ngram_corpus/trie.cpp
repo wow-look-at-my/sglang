@@ -93,8 +93,7 @@ void Trie::squeeze(size_t count) {
 }
 
 void Trie::reset() {
-  // Epoch bump invalidates all cached MatchState objects, so we do not need to
-  // retireNode() on every node individually.
+  // Epoch bump invalidates all cached MatchState objects, so we do not need to retireNode() on every node individually.
   ++trie_epoch_;
   global_lru_.clear();
   path_.clear();

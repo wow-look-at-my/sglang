@@ -45,7 +45,6 @@ SGL_HIP_INLINE void vec_t<float, 1>::store(float* ptr) const {
   *ptr = data;
 }
 
-// float x 2
 
 template <>
 struct vec_t<float, 2> {
@@ -84,7 +83,6 @@ SGL_HIP_INLINE void vec_t<float, 2>::store(float* ptr) const {
   *((float2*)ptr) = data;
 }
 
-// float x 4 or more
 template <size_t vec_size>
 struct vec_t<float, vec_size> {
   float4 data[vec_size / 4];

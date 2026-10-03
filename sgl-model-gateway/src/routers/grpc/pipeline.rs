@@ -1,7 +1,4 @@
-//! Pipeline orchestrator for gRPC router request processing
-//!
-//! This module defines the RequestPipeline orchestrator that coordinates
-//! the execution of pipeline stages from request preparation to response delivery.
+//! Pipeline orchestrator.
 
 use std::{sync::Arc, time::Instant};
 
@@ -43,10 +40,7 @@ use crate::{
     tool_parser::ParserFactory as ToolParserFactory,
 };
 
-/// Generic request pipeline for all request types
-///
-/// Orchestrates all stages from request preparation to response delivery.
-/// Configured differently for regular vs PD mode.
+/// Generic request pipeline for all request types Orchestrates all stages from request preparation.
 #[derive(Clone)]
 pub(crate) struct RequestPipeline {
     stages: Arc<Vec<Box<dyn PipelineStage>>>,
@@ -667,9 +661,7 @@ impl RequestPipeline {
     /// Execute chat pipeline for responses endpoint
     ///
     /// Used by ALL non-streaming /v1/responses requests.
-    /// Uses the same 7 pipeline stages as execute_chat(), with two differences:
-    /// 1. Returns Result<ChatCompletionResponse, Response> for tool_loop composition
-    /// 2. Disallows streaming (responses endpoint uses different SSE format)
+    /// Disallows streaming (responses endpoint uses different SSE format)
     pub async fn execute_chat_for_responses(
         &self,
         request: Arc<ChatCompletionRequest>,
@@ -735,21 +727,14 @@ impl RequestPipeline {
         }
     }
 
-    /// Execute Harmony Responses API request through all pipeline stages
-    ///
-    /// This method runs a single iteration of the Responses API request,
-    /// returning either ToolCallsFound (continue serving) or Completed (final response).
-    ///
-    /// Called by harmony::responses::serve_harmony_responses() for each iteration.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - Responses API request
-    /// * `ctx` - Harmony Responses context with MCP manager and components
-    ///
-    /// # Returns
-    ///
-    /// ResponsesIterationResult indicating whether to continue iteration or return
+    /// Execute Harmony Responses API request through all pipeline stages This
+    /// method runs a single iteration of the Responses API request, returning
+    /// either ToolCallsFound (continue serving) or Completed (final
+    /// response).
+    /// each iteration. # Arguments * `request` - Responses API request *
+    /// `ctx` - Harmony Responses context with MCP manager and components #
+    /// Returns ResponsesIterationResult indicating whether to continue
+    /// iteration or return
     pub async fn execute_harmony_responses(
         &self,
         request: &crate::protocols::responses::ResponsesRequest,

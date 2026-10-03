@@ -1,24 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Order length-compatible buckets by optional SLO preferences, then capacity and rank.
-//!
-//! ```text
-//! BucketResolver (one model's buckets)
-//!   -> Bucket (token limits, context capacity, rank, SLO estimates)
-//!        -> Plain: one EngineGroup
-//!        -> PD: prefill + decode EngineGroups
-//!             -> each EngineGroup: worker membership + its own Policy
-//! ```
-//!
-//! - [`BucketResolver::resolve`] returns length-compatible buckets in preference order.
-//! - [`EngineGroup::pick`] filters live workers by model, health, stage, and membership,
-//!   then calls [`Policy::pick`] and validates the returned engine.
-//!
-//! The handler tries buckets in order, advancing on missing candidates or admission
-//! rejection. Both P/D picks must succeed in the same bucket before dispatch.
-//! [`WorkerRegistry`] owns live workers; groups reference their IDs. Policies own
-//! their load/KV/affinity dependencies and pass selected observations to admission.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -96,8 +79,7 @@ pub enum BucketGroups {
     },
 }
 
-/// Prepared request facts shared by all bucket attempts. The bucket supplies
-/// its ID and each group's stage when calling policies.
+/// Prepared request facts shared by all bucket attempts.
 #[derive(Debug)]
 pub struct BucketRequest<'a> {
     pub model: &'a ModelId,
@@ -109,8 +91,7 @@ pub struct BucketRequest<'a> {
     pub routing_key: Option<&'a str>,
 }
 
-/// A complete selection from one bucket. For plain serving, `prefill` is the
-/// plain engine and `decode` is absent; PD supplies both picks.
+/// A complete selection from one bucket.
 #[derive(Debug)]
 pub struct BucketPick {
     pub prefill: Pick,

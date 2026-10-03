@@ -179,7 +179,6 @@ python3 -m sglang.bench_serving \\
   --num-prompts {{NUM_PROMPTS}} --max-concurrency {{MAX_CONCURRENCY}} \\
   --request-rate inf --temperature 0 --seed 42 \\
   --flush-cache`,
-    // num_prompts = 5 × concurrency (measured floor 16).
     numPromptsByConc: { 1: 16, 16: 80, 64: 320, 256: 1280, 1024: 5120 },
     accuracy: {
       gsm8k_pct:
@@ -200,9 +199,6 @@ sgl-eval run gsm8k \\
     ["aime2026_pct", "AIME 2026", "%"],
   ],
 
-  // v0.5.20 (= latest) carries GLM-5.3-Flash support (#36507) and the GLM-5.3
-  // template parser detection (#38297) that `--*-parser auto` needs; the old
-  // glm-5.3-flash dev image (2026-09-03) predates #38297 and misdetects.
   dockerImages: {
     gb300: "lmsysorg/sglang:latest",
     h100: "lmsysorg/sglang:latest",
@@ -291,11 +287,10 @@ sgl-eval run gsm8k \\
       ],
     },
 
-    // ----- Card: "Speculative" -----
-    // The Deploy panel only picks speculation through the Strategy dim (Low
-    // Latency = the checkpoint's MTP head, High Throughput = off).
-    // This card is the finer control, and it adds the one algorithm no cell
-    // ships: DFlash2, whose draft is a separate checkpoint.
+    // ----- Card: "Speculative" ----- The Deploy panel only picks speculation
+    // through the Strategy dim (Low Latency = the checkpoint's MTP head, High
+    // Throughput = off). This card is the finer control, and it adds the
+    // algorithm no cell ships: DFlash2, whose draft is a separate checkpoint.
     //
     // The EAGLE preset is byte-identical to what the Low Latency cells carry,
     // so a Low Latency base derives onto that chip instead of showing
@@ -324,9 +319,7 @@ sgl-eval run gsm8k \\
           id: "dflash",
           label: "DFlash2",
           // Block-wise draft: the block size comes from the draft checkpoint,
-          // so no --speculative-num-draft-tokens here. The draft is a dense
-          // model and does not run on the target's DSA backends, hence the
-          // explicit draft attention backend.
+          // so no --speculative-num-draft-tokens here.
           flags: [
             "--speculative-algorithm DFLASH",
             "--speculative-draft-model-path incoai/GLM-5.3-Flash-DFlash2",
@@ -395,11 +388,9 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
-    // RadixArk NVFP4 W4A4 checkpoint (ModelOpt 0.46.0, abs-max, group size
-    // 16): routed and shared experts plus the dense MLPs are FP4; attention,
-    // router, MTP, embeddings, and the vision tower stay BF16. Validated on
-    // 4x GB300 and 4x B300 with both KV/DSA pairings; the benchmark rows
-    // carry measured speed for both pairings on the current release image.
+    // Validated on 4x GB300 and 4x B300 with both KV/DSA pairings; the
+    // benchmark rows carry measured speed for both pairings on the current
+    // release image.
     {
       match: { hw: "gb300", strategy: "low-latency", quant: "nvfp4" },
       nnodes: 1,

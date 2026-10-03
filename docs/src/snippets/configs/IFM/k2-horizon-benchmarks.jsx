@@ -1,4 +1,4 @@
-// Direct NVIDIA H200 measurements. Each displayed value is the mean of two
+// Direct NVIDIA H200 measurements. Each displayed value is the mean of
 // independent server launches; methodology and commands are in the cookbook.
 
 export const benchmarks = [

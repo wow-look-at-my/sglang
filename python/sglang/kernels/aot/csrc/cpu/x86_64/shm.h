@@ -2,9 +2,9 @@
 #include <immintrin.h>
 
 // Reduce functions down below use vectorized algorithm, the number of bytes
-// processed each iteration depends on vector length.  256bit vector ==> 32
+// processed each iteration depends on vector length. 256bit vector ==> 32
 // bytes, 512bit vector ==> 64 bytes If you change implementation of
-// reduce_bf16_buffers, etc. , check whether this number needs to be changed
+// reduce_bf16_buffers, etc., check whether this number needs to be changed
 #define VECTOR_LENGTH_IN_BYTES 32
 
 inline __m512 cvt_bf16_to_fp32(const __m256i src) __attribute__((target("avx512bw")));
@@ -20,7 +20,6 @@ inline __m256i cvt_fp32_to_bf16(const __m512 src) {
   auto mask_value = _mm512_cmp_ps_mask(src, src, _CMP_ORD_Q);
   __m512i ones = _mm512_set1_epi32(0x1);
   __m512i vec_bias = _mm512_set1_epi32(0x7fff);
-  // uint32_t lsb = (input >> 16) & 1;
   auto t_value = _mm512_and_si512(_mm512_srli_epi32(value, 16), ones);
   // uint32_t rounding_bias = 0x7fff + lsb;
   t_value = _mm512_add_epi32(t_value, vec_bias);

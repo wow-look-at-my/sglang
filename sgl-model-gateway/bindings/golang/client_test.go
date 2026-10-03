@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// testTokenizerPath is llm-tokenizer's built-in testing tokenizer, selected by
-// path instead of by a fixture on disk, so these tests need no model files.
+// testTokenizerPath is llm-tokenizer's built-in testing tokenizer, selected by path instead of by a fixture on disk.
 const testTokenizerPath = "mock"
 
 // TestClientConfig tests ClientConfig validation
@@ -227,8 +226,8 @@ func TestToolCallStructure(t *testing.T) {
 	}
 }
 
-// TestConcurrentClientOperations tests thread safety
-// This is a basic test that just verifies concurrent calls don't panic
+// TestConcurrentClientOperations tests thread safety This is a basic test
+// that verifies concurrent calls don't panic
 func TestConcurrentClientOperations(t *testing.T) {
 	config := ClientConfig{
 		Endpoint:      "grpc://localhost:20000",
@@ -284,13 +283,14 @@ func intPtr(i int) *int {
 
 // TestContextCancellation tests that cancelled context is handled gracefully.
 //
-// NOTE: Currently, the FFI layer is blocking and doesn't actively monitor context cancellation.
-// This test verifies that the client at least returns an error rather than panicking or
-// hanging indefinitely when a pre-cancelled context is passed.
+// NOTE: the FFI layer is blocking and doesn't actively monitor context
+// cancellation. This test verifies that the client at least returns an error
+// rather than panicking or hanging indefinitely when a pre-cancelled context
+// is passed.
 //
-// Future: When FFI supports context cancellation (via signals or async operations),
-// this test should be updated to assert that the error is context.Canceled or wrapped
-// context cancellation error.
+// Future: When FFI supports context cancellation (via signals or async
+// operations), this test should be updated to assert that the error is
+// context.Canceled or wrapped context cancellation error.
 func TestContextCancellation(t *testing.T) {
 	config := ClientConfig{
 		Endpoint:      "grpc://localhost:20000",
@@ -314,11 +314,6 @@ func TestContextCancellation(t *testing.T) {
 		},
 	}
 
-	// Attempt request with cancelled context
-	// Since FFI is blocking, we expect either:
-	// 1. An error from the server/network
-	// 2. The call to complete normally (FFI doesn't check context)
-	// What we DON'T expect is a panic or indefinite hang
 	_, err = client.CreateChatCompletion(ctx, req)
 	if err != nil {
 		t.Logf("Request with cancelled context returned error: %v", err)

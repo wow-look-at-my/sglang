@@ -1,17 +1,4 @@
-//! Manual routing policy based on routing key header
-//!
-//! This policy provides sticky session routing where each unique routing key
-//! is consistently mapped to the same worker. Unlike consistent hashing,
-//! this policy:
-//! - Does NOT redistribute any sessions when workers are added
-//! - Only remaps sessions when their assigned worker becomes unhealthy
-//! - Maintains up to 2 candidate workers per routing key for fast failover
-//!
-//! Use this when you need stronger stickiness guarantees than consistent hashing,
-//! for example with stateful chat sessions where context is stored on the worker.
-//!
-//! ## Header
-//! - `X-SMG-Routing-Key`: The routing key for sticky session routing
+//! Manual routing policy based.
 
 use std::{sync::Arc, time::Instant};
 

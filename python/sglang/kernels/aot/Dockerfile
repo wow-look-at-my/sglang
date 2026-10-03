@@ -12,13 +12,11 @@ ARG PYTHON_VERSION=3.10
 ARG PYTHON_TAG=cp310-cp310
 ARG CMAKE_VERSION_MAJOR=3.31
 ARG CMAKE_VERSION_MINOR=1
-# Install ccache 4.12.1 from source for CUDA support (yum provides old 3.7.7)
 ARG USE_CCACHE=1
 ARG CCACHE_VERSION=4.12.1
 ARG GITHUB_ARTIFACTORY=github.com
 ARG PYTORCH_INDEX_BASE=https://download.pytorch.org/whl
 ARG PIP_DEFAULT_INDEX=https://pypi.python.org/simple
-# Optional mirror for the manylinux base image's yum repos (AlmaLinux 8).
 # Pass scheme + host (and optional path prefix), e.g.
 #   --build-arg YUM_MIRROR=https://mirrors.aliyun.com
 # Empty (default) keeps upstream repo.almalinux.org.
@@ -42,10 +40,6 @@ RUN if [ -n "${YUM_MIRROR}" ]; then \
       sed -i 's|^enabled=1|enabled=0|g' /etc/yum.repos.d/epel*.repo; \
     fi
 
-# Install build dependencies. libzstd-devel + xxhash-devel let ccache's
-# FindZstd.cmake / FindXxhash.cmake skip their hardcoded github.com FetchContent
-# fallbacks — critical when github.com is flaky/blocked. xxhash-devel is in
-# PowerTools (disabled by default on AlmaLinux 8); libzstd-devel is in BaseOS.
 RUN yum install gcc gcc-c++ make wget tar numactl-devel libibverbs libzstd-devel -y --nogpgcheck \
  && yum --enablerepo=powertools install xxhash-devel -y --nogpgcheck \
  && ln -sv /usr/lib64/libibverbs.so.1 /usr/lib64/libibverbs.so \

@@ -164,7 +164,6 @@ export const GLM47Deployment = () => {
 
     if (isAMD) {
       // AMD (MI300X / MI325X / MI355X): validated pre-Blackwell command shape.
-      // TP is fixed per chip + weight type, so the GPU-count selector is unused here.
       let tpValue = 4; // MI300X / MI325X default
       if (hardware === 'mi355x') {
         tpValue = quantization === 'fp8' ? 2 : 4; // MI355X: TP=2 FP8, TP=4 BF16
@@ -182,8 +181,7 @@ export const GLM47Deployment = () => {
         cmd += ` \\\n  --ep 8`;
       }
     } else {
-      // NVIDIA (B200 / GB200 / H200): TP follows the "Number of GPUs" selector,
-      // clamped to a §3.2-supported value for the chosen hardware + weight type.
+      // NVIDIA (B200 / GB200 / H200): TP follows the "Number of GPUs" selector.
       const tps = allowedTps(hardware, quantization);
       let tpValue = parseInt(gpus, 10) || tps[0];
       if (!tps.includes(tpValue)) {
@@ -229,8 +227,7 @@ export const GLM47Deployment = () => {
   const subtitleStyle = { display: 'block', fontSize: '9px', marginTop: '1px', lineHeight: '1.1', opacity: 0.7 };
   const commandDisplayStyle = { flex: 1, padding: '12px 16px', background: isDark ? '#111827' : '#f5f5f5', borderRadius: '6px', fontFamily: "'Menlo', 'Monaco', 'Courier New', monospace", fontSize: '12px', lineHeight: '1.5', color: isDark ? '#e5e7eb' : '#374151', whiteSpace: 'pre-wrap', overflowX: 'auto', margin: 0, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` };
 
-  // Which Deployment Strategy toggles apply (mirrors generateCommand): DP only on
-  // AMD; EP only on AMD or Blackwell + NVFP4 — greyed otherwise.
+  // Which Deployment Strategy toggles apply (mirrors generateCommand): DP only on AMD.
   const hwSel = values.hardware;
   const isAMDSel = hwSel === 'mi300x' || hwSel === 'mi325x' || hwSel === 'mi355x';
   const isBlackwellSel = hwSel === 'b200' || hwSel === 'gb200';
@@ -243,8 +240,7 @@ export const GLM47Deployment = () => {
   return (
     <div style={containerStyle} className="not-prose">
       {Object.entries(options).map(([key, option]) => {
-        // GPU count is fixed (greyed) on AMD; on NVIDIA individual counts are greyed
-        // per the §3.2 matrix. Weight types unsupported on the hardware are greyed too.
+        // GPU count is fixed (greyed) on AMD; on NVIDIA individual counts are greyed per the §3.2 matrix.
         const gpusGroupAMD = key === 'gpus' && isAMDSel;
         return (
         <div key={key} style={cardStyle}>

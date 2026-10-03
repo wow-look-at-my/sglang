@@ -1,10 +1,4 @@
-//! Shared helpers and state tracking for Regular Responses
-//!
-//! This module contains common utilities used by both streaming and non-streaming paths:
-//! - ToolLoopState for tracking multi-turn tool calling
-//! - Helper functions for tool preparation and extraction
-//! - MCP metadata builders
-//! - Conversation history loading
+//! Shared helpers and state tracking.
 
 use std::sync::Arc;
 
@@ -101,9 +95,6 @@ pub(super) fn prepare_chat_tools_and_choice(
     all_tools.extend(mcp_chat_tools.iter().cloned());
     chat_request.tools = Some(all_tools);
 
-    // Set tool_choice based on iteration
-    // - Iteration 0: Use user's tool_choice or default to auto
-    // - Iteration 1+: Always use auto to avoid infinite loops
     chat_request.tool_choice = if iteration == 0 {
         chat_request
             .tool_choice
@@ -168,8 +159,7 @@ pub(super) fn convert_mcp_tools_to_chat_tools(mcp_tools: &[mcp::Tool]) -> Vec<To
 }
 
 // ============================================================================
-// MCP Metadata Builders
-// ============================================================================
+// MCP Metadata Builders.
 
 /// Generate unique ID for MCP items
 pub(super) fn generate_mcp_id(prefix: &str) -> String {

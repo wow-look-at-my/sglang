@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
@@ -12,12 +12,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum AddWorkerError {
     /// The spec's mode (plain vs prefill/decode) conflicts with workers
-    /// already registered for one of its `model_ids`. The router does
-    /// not support mixed PD + plain pools on a single model: the
-    /// resolver derives the PD-vs-plain shape from the registered
-    /// workers, and a mixed pool would silently degrade to whichever
-    /// shape happens to be healthy when the other is breaker-open,
-    /// surfacing the wrong error code to clients.
+    /// already registered for one of its `model_ids`.
     #[error(
         "worker {worker:?} for model {model:?} would mix PD ({pd_mode}) with plain workers on \
          the same model — sgl-router does not support mixed pools. Use one of: only Plain \
@@ -26,8 +21,7 @@ pub enum AddWorkerError {
     MixedPdAndPlain {
         worker: WorkerId,
         model: ModelId,
-        /// The role of the *incoming* worker that triggered the conflict
-        /// (the *existing* worker has the opposite role).
+        /// The role of the *incoming* worker that triggered the conflict (the *existing* worker has the opposite role).
         pd_mode: &'static str,
     },
 }
@@ -36,16 +30,7 @@ pub enum AddWorkerError {
 pub struct WorkerRegistry {
     by_id: DashMap<WorkerId, Arc<Worker>>,
     by_model: DashMap<ModelId, HashSet<WorkerId>>,
-    /// Serializes the validate→insert section of `add_with_cb` so the
-    /// `MixedPdAndPlain` check is atomic with the subsequent write. Two
-    /// concurrent registrations from `manager::register_one` for the
-    /// same model with conflicting modes could otherwise both observe
-    /// an empty pool and both insert, leaving the registry in a mixed
-    /// state — the exact corruption the check is meant to prevent.
-    /// Reads (`workers_for`, `get`, `len`, …) stay lock-free against
-    /// the underlying DashMaps; only writes through `add_with_cb` /
-    /// `remove` take this lock so contention is bounded by registry
-    /// mutation rate (worker-discovery events), not request rate.
+    /// Serializes the validate→insert section of `add_with_cb` so the `MixedPdAndPlain` check is atomic.
     write: Mutex<()>,
 }
 
@@ -55,31 +40,16 @@ impl WorkerRegistry {
     }
 
     /// Add a worker, optionally supplying a circuit-breaker config, and with
-    /// the forwarding protocol resolved for it. Pass `None` to use the
-    /// circuit-breaker default (threshold = 3).
-    ///
-    /// Re-adding an existing `WorkerId` is an upsert: the prior entry's
-    /// `by_model` memberships are cleared first so a model that the new
-    /// spec no longer serves stops resolving to this worker.  Without the
-    /// pre-removal step a worker whose model set shrank would still appear
-    /// in `workers_for(<dropped model>)` because `by_id.get(...)` would
-    /// return the new worker via the stale model→id index.
-    ///
-    /// Returns [`AddWorkerError::MixedPdAndPlain`] when adding the spec
-    /// would mix PD (prefill/decode) workers with plain workers on the
-    /// same model. The conflict is detected against the *existing*
-    /// registry state — re-adding the same worker id is fine (the prior
-    /// entry is removed first), and adding a worker whose own
-    /// `model_ids` are all unmixed is fine even if other models in the
-    /// process have a mix of modes.
-    ///
-    /// On rejection the registry is **not** mutated. If the rejected
-    /// spec carries an id that already has an entry, the prior entry
-    /// stays put — it's the caller's responsibility to decide whether
-    /// to evict it (and, importantly, to also clean up sidecar state
-    /// in `KvEventIndex` / `RouterInflightLoadRegistry` if so). Doing that
-    /// cleanup here would leak orphan state into those sidecars when
-    /// a caller actually wanted to keep the prior entry.
+    /// the forwarding protocol resolved for it.
+    /// circuit-breaker default (threshold = 3). Re-adding an existing
+    /// `WorkerId` is an upsert.
+    /// cleared first so a model that the new spec no longer serves stops
+    /// resolving to this worker. Without the pre-removal step a worker whose
+    /// model set shrank would still appear in `workers_for(<dropped model>)`
+    /// because `by_id.get(...)` would return the new worker via the stale
+    /// model→id index.
+    /// adding the spec would mix PD (prefill/decode) workers with plain
+    /// workers on the same model.
     pub fn add_with_cb(
         &self,
         spec: WorkerSpec,
@@ -88,27 +58,11 @@ impl WorkerRegistry {
     ) -> Result<(), AddWorkerError> {
         let incoming_mode = spec.mode;
         // Hold the write lock for the entire validate→insert sequence.
-        // Without it, two concurrent callers for conflicting modes on
-        // the same model can both see an empty pool and both proceed
-        // to insert, producing the mixed PD+plain state the check
-        // exists to prevent.
-        //
-        // Mutex poisoning here means a previous writer panicked while
-        // holding the lock — and since the critical section spans
-        // `remove_locked` + several `by_model` updates + the final
-        // `by_id.insert`, a panic mid-section can leave the registry
-        // with a partial entry across the two DashMaps. Recovering via
-        // `PoisonError::into_inner` would silently continue against
-        // that half-written state; propagating the panic instead
-        // surfaces the corruption to `manager::register_one`'s task
-        // and ultimately trips `supervise_critical_tasks → mark_unready`
-        // so the pod stops taking traffic. That's the right outcome.
         let _guard = self.write.lock().unwrap();
-        // Validate against existing workers BEFORE we mutate. Re-adding
-        // the same id is an upsert; pretend the prior entry is gone for
-        // the purposes of the check (otherwise an upsert of an unmixed
-        // worker would self-conflict if its current entry already
-        // serves the model).
+        // Validate against existing workers BEFORE we mutate. Re-adding the
+        // same id is an upsert; pretend the prior entry is gone the check
+        // (otherwise an upsert of an unmixed worker would self-conflict if
+        // its current entry already serves the model).
         for model in &spec.model_ids {
             for existing in self.workers_for(model) {
                 if existing.id == spec.id {
@@ -137,10 +91,7 @@ impl WorkerRegistry {
     }
 
     pub fn remove(&self, id: &WorkerId) {
-        // Mirror `add_with_cb`'s write-lock acquisition so removals
-        // don't race with concurrent adds (a stale `workers_for` snapshot
-        // could otherwise let an add succeed against a peer that's
-        // about to be removed, or vice versa).
+        // Mirror `add_with_cb`'s write-lock acquisition so removals don't race with concurrent adds.
         let _guard = self.write.lock().unwrap();
         self.remove_locked(id);
     }
@@ -170,10 +121,7 @@ impl WorkerRegistry {
 
     pub fn healthy_workers_for(&self, model: &ModelId) -> Vec<Arc<Worker>> {
         // Use `would_allow` (non-mutating) for filtering — `allow()` would
-        // claim a half-open probe slot for every enumerated candidate,
-        // starving the worker that the policy actually picks. The probe
-        // is claimed at dispatch time by `forward_*_to` in
-        // [`crate::proxy`].
+        // claim a half-open probe slot for every enumerated candidate.
         self.workers_for(model)
             .into_iter()
             .filter(|w| w.breaker.would_allow())
@@ -200,22 +148,13 @@ impl WorkerRegistry {
     }
 
     /// Snapshot of every registered worker, across all models and modes,
-    /// regardless of breaker state. Order is unspecified (iterates the
-    /// underlying `DashMap`).
-    ///
-    /// Used by fleet-wide admin fan-out (e.g. `/flush_cache`) that targets
-    /// every worker the router knows about rather than one model's pool, and
-    /// by the `/metrics` scrape path to render per-worker gauges
-    /// (`sgl_router_worker_health`, `_cb_state`, `_inflight_requests`) plus
-    /// the pool-size gauge. The metrics path samples this fresh on each
-    /// scrape rather than pushing, so a removed worker stops appearing
-    /// immediately.
+    /// regardless of breaker state.
     pub fn all(&self) -> Vec<Arc<Worker>> {
         self.by_id.iter().map(|e| Arc::clone(e.value())).collect()
     }
 }
 
-/// `true` when the two modes can't coexist for the same model — i.e.
+/// `true` when both modes can't coexist for the same model — i.e.
 /// one is `Plain` and the other is `Prefill` or `Decode`.
 fn modes_are_mixed(a: WorkerMode, b: WorkerMode) -> bool {
     matches!(
@@ -289,8 +228,7 @@ mod tests {
     #[test]
     fn all_lists_multi_model_worker_once() {
         let r = WorkerRegistry::default();
-        // "a" serves two models; `all` must still list it once,
-        // unlike a per-model enumeration which would double-count.
+        // "a" serves models; `all` must still list it once.
         let _ = r.add(spec("a", WorkerMode::Plain, &["m1", "m2"]));
         let _ = r.add(spec("b", WorkerMode::Plain, &["m1"]));
         let mut urls: Vec<String> = r.all().iter().map(|w| w.url.clone()).collect();
@@ -299,12 +237,6 @@ mod tests {
     }
 
     /// `healthy_workers_for` must drop workers whose breaker is Open.
-    /// An earlier version of this test asserted `healthy.len() == 2`
-    /// against two workers with untouched breakers — i.e., it pinned
-    /// only the no-op case (both Closed) and would have passed even if
-    /// `healthy_workers_for` ignored the breaker entirely and was a
-    /// thin alias for `workers_for`. Tripping one breaker and asserting
-    /// the surviving set excludes it is the actual contract.
     #[test]
     fn healthy_subset_filters_via_breaker() {
         use crate::health::circuit_breaker::CircuitBreakerConfig;
@@ -343,13 +275,7 @@ mod tests {
         assert_eq!(healthy[0].id, WorkerId("ok".into()));
     }
 
-    /// PD prefill/decode workers and plain workers cannot coexist on the
-    /// same model. The resolver bases its PD-vs-plain shape on registered
-    /// workers; mixing the two forces a fallback to whichever bucket
-    /// happens to be healthy when the other is breaker-open, surfacing
-    /// the wrong 5xx code (`no_healthy_workers` instead of
-    /// `no_prefill_workers_available`). Reject the conflicting add up
-    /// front so the operator sees the misconfiguration immediately.
+    /// PD prefill/decode workers and plain workers cannot coexist on the same model.
     #[test]
     fn plain_then_pd_for_same_model_is_rejected() {
         let r = WorkerRegistry::default();
@@ -418,10 +344,7 @@ mod tests {
         );
     }
 
-    /// Re-adding a worker with a shrunken `model_ids` must drop the worker
-    /// from the models it no longer serves.  The earlier implementation
-    /// only updated `by_id`, leaving the stale `by_model` entries pointing
-    /// at the new worker.
+    /// Re-adding a worker with a shrunken `model_ids` must drop the worker from the models it no longer serves.
     #[test]
     fn re_add_with_shrunken_model_set_drops_stale_indexes() {
         let r = WorkerRegistry::default();
@@ -441,8 +364,7 @@ mod tests {
         );
     }
 
-    /// Re-adding the same id with a different mode reflects in
-    /// `workers_for_mode`.
+    /// Re-adding the same id with a different mode reflects in `workers_for_mode`.
     #[test]
     fn re_add_with_different_mode_updates_mode_filter() {
         let r = WorkerRegistry::default();
@@ -460,11 +382,7 @@ mod tests {
         );
     }
 
-    /// On a rejected upsert with `MixedPdAndPlain`, the registry is
-    /// **not** mutated — the prior entry for the rejected id stays
-    /// put. Eviction (with the matching `KvEventIndex` /
-    /// `RouterInflightLoadRegistry` cleanup) is the manager's responsibility;
-    /// doing it here would leak orphan state in those sidecars.
+    /// On a rejected upsert with `MixedPdAndPlain`, the registry is **not** mutated — the prior entry.
     #[test]
     fn upsert_rejected_with_mixed_modes_leaves_registry_unchanged() {
         let r = WorkerRegistry::default();
@@ -477,9 +395,7 @@ mod tests {
             .add(spec("p", WorkerMode::Plain, &["m"]))
             .expect_err("plain upsert must be rejected when peer decode worker remains");
         assert!(err.to_string().contains("plain"), "got: {err}");
-        // Prior "p" entry survives (still Prefill). The registry
-        // deliberately does NOT auto-evict on rejection — eviction
-        // (and the matching sidecar cleanup) is the caller's call.
+        // Prior "p" entry survives (still Prefill).
         let p = r
             .get(&WorkerId("p".into()))
             .expect("prior entry must remain — caller owns the cleanup");
@@ -496,9 +412,7 @@ mod tests {
         );
     }
 
-    /// A *new* (not-yet-registered) worker rejected with `MixedPdAndPlain`
-    /// must not affect the pool. Combined with the upsert test above,
-    /// this pins that rejection never mutates registry state on its own.
+    /// A *new* (not-yet-registered) worker rejected with `MixedPdAndPlain` must not affect the pool.
     #[test]
     fn rejected_new_add_leaves_pool_untouched() {
         let r = WorkerRegistry::default();
@@ -515,34 +429,14 @@ mod tests {
         assert!(r.get(&WorkerId("p".into())).is_none());
     }
 
-    /// Concurrent registrations from `manager::register_one` race against
-    /// each other: each spawned task calls `add_with_cb` in parallel, and
-    /// the validate-then-insert sequence inside that method is **not**
-    /// atomic. Two threads adding workers of conflicting modes for the
-    /// same model can both pass the existing-workers check (each sees an
-    /// empty pool) and both proceed to insert, leaving the registry in a
-    /// mixed PD+plain state — exactly the corruption the
-    /// `MixedPdAndPlain` check is supposed to prevent.
-    ///
-    /// Invariant we pin: for every model, the resulting pool must be
-    /// EITHER all-Plain OR all-PD, never a mix. We don't care which
-    /// "winner" mode is selected — the racing manager already serialises
-    /// per-WorkerId so it's the cross-id case that needs atomicity here.
+    /// Concurrent registrations from `manager::register_one` race against each other: each spawned task calls `add_with_cb` in parallel.
     #[test]
     fn concurrent_conflicting_modes_never_produce_mixed_pool() {
         use std::sync::Arc;
         use std::sync::Barrier;
         use std::thread;
 
-        // All threads target one shared model so every `add_with_cb`
-        // racer contends on the same `workers_for("m")` slot — that's
-        // what makes the read-validate-write window of one thread
-        // overlap with another's mutate. An earlier variant spread the
-        // load across 4 models and did not reliably reproduce the bug
-        // (per-slot contention was diluted to ~N/4 threads). 200
-        // iterations × 16 threads triggers the race within the first
-        // few iterations on the author's machine; post-fix the
-        // invariant must hold across every iteration.
+        // All threads target one shared model so every `add_with_cb` racer contends on the same `workers_for("m")` slot.
         const N_THREADS: usize = 16;
         const ITER: usize = 200;
 
@@ -554,10 +448,7 @@ mod tests {
                 let r = Arc::clone(&r);
                 let barrier = Arc::clone(&barrier);
                 // Half the threads register Plain workers, half register
-                // Prefill, all on the same model. With a non-atomic
-                // validate→write inside `add_with_cb`, a Plain and a
-                // Prefill thread both see an empty pool and both
-                // succeed.
+                // Prefill, all on the same model.
                 let mode = if t % 2 == 0 {
                     WorkerMode::Plain
                 } else {
@@ -586,10 +477,8 @@ mod tests {
                  The MixedPdAndPlain check in `add_with_cb` is not atomic \
                  across concurrent callers.",
             );
-            // Sanity: the first thread to take the lock must succeed
-            // (no peer exists yet). Defends against a degenerate "fix"
-            // that satisfies the single-mode invariant by silently
-            // rejecting every add.
+            // Sanity: the first thread to take the lock must succeed (no peer
+            // exists yet).
             assert!(
                 plain + pd >= 1,
                 "iter {iter}: no workers were registered — \

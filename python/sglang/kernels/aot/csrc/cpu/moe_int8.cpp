@@ -37,7 +37,6 @@ inline void silu_and_mul(
   Unroll<COLS>{}(load_scale_and_comp);
 
   auto scalec = [&](auto col, int64_t m) {
-    // update As
     vas = _mm512_set1_ps(As[m]);
     // C = As * (C - Bcomp) * Bs
     __m512i vc32_0 = _mm512_loadu_si512(C0 + m * BLOCK_N + col * 16);
@@ -99,7 +98,6 @@ inline void scale_C(
   Unroll<COLS>{}(load_scale_and_comp);
 
   auto scalec = [&](auto col, int64_t m) {
-    // update As
     vas = _mm512_set1_ps(As[m]);
     // C = As * (C - Bcomp) * Bs
     __m512i vc32 = _mm512_loadu_si512(Ctmp + m * BLOCK_N + col * 16);
@@ -177,7 +175,7 @@ struct tinygemm_kernel_vnni<at::BFloat16, BLOCK_M, BLOCK_N> {
 
     const int64_t K4 = K >> 2;
     const int64_t lda4 = lda >> 2;
-    const int64_t ldb4 = ldb;  // ldb * 4 >> 2;
+    const int64_t ldb4 = ldb;
     const int32_t* a_ptr = reinterpret_cast<const int32_t*>(A);
     const int32_t* b0_ptr = reinterpret_cast<const int32_t*>(B0);
     const int32_t* b1_ptr = reinterpret_cast<const int32_t*>(B1);
@@ -225,7 +223,6 @@ struct tinygemm_kernel_vnni<at::BFloat16, BLOCK_M, BLOCK_N> {
     auto storec = [&](auto i) {
       constexpr int row = i / COLS;
       constexpr int col = i % COLS;
-      // for COLS = 2, 4 use 512bit store
       if constexpr (col % 2 == 0) {
         __m512 x0 = _mm512_castsi512_ps(vc0[row * COLS + col + 0]);
         __m512 x1 = _mm512_castsi512_ps(vc0[row * COLS + col + 1]);
@@ -278,7 +275,6 @@ void tinygemm_kernel(
   const int32_t* Bcomp0 = reinterpret_cast<const int32_t*>(B0 + block_size_n() * K);
   const int32_t* Bcomp1 = reinterpret_cast<const int32_t*>(B1 + block_size_n() * K);
 
-  // pattern: 1-(2+2)-(8+8)
   constexpr int64_t BLOCK_M = 4;
   constexpr int64_t BLOCK_N = 32;
   const int64_t MB = div_up(M, BLOCK_M);
@@ -358,7 +354,7 @@ struct tinygemm_kernel_vnni2<at::BFloat16, BLOCK_M, BLOCK_N> {
 
     const int64_t K4 = K >> 2;
     const int64_t lda4 = lda >> 2;
-    const int64_t ldb4 = ldb;  // ldb * 4 >> 2;
+    const int64_t ldb4 = ldb;
     const int32_t* a_ptr = reinterpret_cast<const int32_t*>(A);
     const int32_t* b_ptr = reinterpret_cast<const int32_t*>(B);
 
@@ -386,8 +382,7 @@ struct tinygemm_kernel_vnni2<at::BFloat16, BLOCK_M, BLOCK_N> {
       if constexpr (col == 0) {
         vas = _mm512_set1_ps(As[row]);
       }
-      // load b scale and vcomp per 2 vectors
-      // also load bias if any
+      // load b scale and vcomp every few vectors also load bias if any
       if constexpr (row == 0) {
         if constexpr (col % 2 == 0) {
           vbs[col + 0] = _mm512_loadu_ps(Bs + col * 16);
@@ -434,7 +429,6 @@ void tinygemm_kernel(
   // B compensation
   const int32_t* Bcomp = reinterpret_cast<const int32_t*>(B + block_size_n() * K);
 
-  // pattern: 1-4-16
   constexpr int64_t BLOCK_M = 4;
   constexpr int64_t BLOCK_N = 64;
   const int64_t MB = div_up(M, BLOCK_M);
@@ -492,18 +486,16 @@ void fused_experts_int8_kernel_impl(
     int64_t E,
     int64_t topk,
     int64_t num_tokens_post_pad) {
-  // handle 2 tiles per block
+  // handle tiles per block
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
 
-  // stage 0: quantize input to uint8, [M, K]
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
       quantize_row_int8<scalar_t>(Aq_tmp + m * K, As_tmp[m], input + m * K, K);
     }
   });
 
-  // stage 1: intermediate_cache1 = silu(hidden_states @ w1)
   const int64_t MB = div_up(num_tokens_post_pad, BLOCK_M);
   const int64_t NB = div_up(N, BLOCK_N);
 
@@ -545,7 +537,6 @@ void fused_experts_int8_kernel_impl(
       int64_t m_size = offsets[mb + 1] - offsets[mb];
 
       if (nb_offset == 0) {
-        // 1.a load A
         const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
         for (int64_t m = 0; m < m_size; ++m) {
           int32_t index = A_ids[m] / topk;
@@ -613,15 +604,12 @@ void fused_experts_int8_kernel_impl(
     }
   });
 
-  // stage 1.5: quantize ic1 to uint8, [M * topk, N]
   at::parallel_for(0, M * topk, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
       quantize_row_int8<scalar_t>(Aq_tmp + m * N, As_tmp[m], ic1 + m * N, N);
     }
   });
 
-  // stage 2: intermediate_cache2 = intermediate_cache1 @ w2
-  //   w2 : [E, K, N] as [E, OC, IC]
   const int64_t OC = K;  // rename K as OC
   const int64_t IC = N;  // rename N as IC
   const int64_t MB2 = MB;
@@ -640,8 +628,7 @@ void fused_experts_int8_kernel_impl(
       int64_t m_size = offsets[mb + 1] - offsets[mb];
       int64_t n_size = std::min(OC - nb * BLOCK_N, BLOCK_N);
 
-      // A ptr from ic1 of [M * topk, N] in sorted order
-      // so as to avoid copy A to tmp buffer again
+      // A ptr from ic1 of [M * topk, N] in sorted order so as to avoid copy A to tmp buffer again
       const uint8_t* __restrict__ A = Aq_tmp + offsets[mb] * N;
       const float* __restrict__ As = As_tmp + offsets[mb];
       const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
@@ -697,7 +684,6 @@ void fused_experts_int8_kernel_impl(
     }
   });
 
-  // stage 3: out = intermediate_cache2.sum(dim=1)
   //   from [M, topk, K] to [M, K]
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
@@ -751,18 +737,16 @@ void shared_expert_int8_kernel_impl(
     int64_t M,
     int64_t N,
     int64_t K) {
-  // handle 2 tiles per block
+  // handle tiles per block
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
 
-  // stage 0: quantize input to uint8, [M, K]
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
       quantize_row_int8<scalar_t>(Aq_tmp + m * K, As_tmp[m], input + m * K, K);
     }
   });
 
-  // stage 1: intermediate_cache1 = silu(hidden_states @ w1)
   const int64_t MB = div_up(M, BLOCK_M);
   const int64_t NB = div_up(N, BLOCK_N);
 
@@ -856,15 +840,12 @@ void shared_expert_int8_kernel_impl(
     }
   });
 
-  // stage 1.5: quantize ic1 to uint8, [M * topk, N]
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
       quantize_row_int8<scalar_t>(Aq_tmp + m * N, As_tmp[m], ic1 + m * N, N);
     }
   });
 
-  // stage 2: intermediate_cache2 = intermediate_cache1 @ w2
-  //   w2 : [K, N] as [OC, IC]
   const int64_t OC = K;  // rename K as OC
   const int64_t IC = N;  // rename N as IC
   const int64_t MB2 = MB;

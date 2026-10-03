@@ -1,25 +1,4 @@
 //! Detokenizer shards — CPU-bound, one pinned thread per shard.
-//!
-//! Each shard owns a *local* `rid -> DetokState` map. There is no lock: a given
-//! rid is routed to exactly one shard (by `Rid::shard`) for both its
-//! `Register` and all its `Chunk`s, so the map has a single accessor.
-//!
-//! The hash PARTITIONS, the rid IDENTIFIES. Keying the map by the hash meant two
-//! distinct rids that happened to collide became one entry: `Register` evicted the
-//! first client's sink and their tokens were then written to the second client's
-//! connection. Chunks carry the rid string (moved out of the frame header, which
-//! owns it and would otherwise drop it), so a collision now only co-locates.
-//!
-//! Real detokenization uses dynamo-tokenizers' `DecodeStream`, a stateful
-//! incremental decoder (TGI/vLLM-style: it buffers partial UTF-8 / byte-fallback
-//! tokens and only emits text once a valid boundary is reached). Each request
-//! gets its own `DecodeStream`. When no tokenizer is configured (or
-//! `skip_tokenizer_init` is set) the backend is `Skip`: no decoding, the raw
-//! `output_ids` are emitted instead of text.
-//!
-//! Per-chunk response flow (no FSM state change inside Streaming):
-//!   ChunkEvent{finish:None}  -> step ids -> delta -> Server frame
-//!   ChunkEvent{finish:Some}  -> step ids -> delta -> final frame
 
 use std::collections::HashMap;
 
@@ -35,14 +14,10 @@ use crate::utils::{
     fsm::{Event, RequestState},
 };
 
-/// Default for `skip_special_tokens` (SGLang's SamplingParams default). The
-/// per-request value isn't available on the response yet; see the note in
-/// `DetokenizerBackend::new_decoder`.
+/// Default for `skip_special_tokens` (SGLang's SamplingParams default).
 const SKIP_SPECIAL_TOKENS: bool = true;
 
-/// Per-request incremental decoder. `step` feeds the new token ids for one chunk
-/// and returns the newly decoded text delta (empty if the ids only produced a
-/// partial/incomplete multi-byte sequence that needs more tokens).
+/// Per-request incremental decoder.
 pub trait StreamDecoder: Send {
     fn step(&mut self, token_ids: &[i32]) -> Result<String, Error>;
 }
@@ -68,14 +43,11 @@ impl StreamDecoder for DynamoDecoder {
     }
 }
 
-/// Shard-wide detok backend. Cloned per shard; mints a fresh per-request decoder
-/// on each `Register`.
+/// Shard-wide detok backend. Cloned per shard; mints a fresh per-request decoder on each `Register`.
 #[derive(Clone)]
 pub enum DetokenizerBackend {
     Dynamo(dynamo_tokenizers::Tokenizer),
-    /// No decoding at all — the shard emits each chunk's raw output token ids as
-    /// `output_ids` (no `DecodeStream`, no accumulation). Used for
-    /// `skip_tokenizer_init` and when no tokenizer is configured.
+    /// No decoding at all — the shard emits each chunk's raw output token ids as `output_ids`.
     Skip,
 }
 
@@ -84,10 +56,8 @@ impl DetokenizerBackend {
     /// token ids through untouched instead of decoding text).
     fn new_decoder(&self) -> Option<Box<dyn StreamDecoder>> {
         match self {
-            // NOTE: the stream is seeded with an empty prompt context, which is
-            // correct for the common case. Seeding with the prompt's trailing
-            // tokens (for perfect first-token spacing) would require Register to
-            // carry input_ids — deferred.
+            // NOTE: the stream is seeded with an empty prompt context, which
+            // is correct for the common case.
             DetokenizerBackend::Dynamo(t) => Some(Box::new(DynamoDecoder {
                 stream: t.decode_stream(&[], SKIP_SPECIAL_TOKENS),
             })),
@@ -110,10 +80,9 @@ impl DetokenizerBackend {
         }
     }
 
-    /// Decode each logprob token id to its own text (one id at a time, matching
-    /// Python's `batch_decode([[id] for id in ids])`). Runs on this CPU-bound
-    /// shard, not the api-server I/O threads. `Skip` mode (no tokenizer) yields
-    /// no text, so the `[logprob, token_id, text]` tuple's text slot stays null.
+    /// Decode each logprob token id to its own text (one id at a time,
+    /// matching Python's `batch_decode([[id] for id in ids])`). Runs on this
+    /// CPU-bound shard, not the api-server I/O threads.
     fn decode_logprob_texts(&self, idxs: &[i32]) -> Vec<String> {
         match self {
             DetokenizerBackend::Dynamo(t) => idxs
@@ -131,22 +100,13 @@ impl DetokenizerBackend {
 
 struct DetokState {
     sink: ResponseSink,
-    /// `return_text_in_logprobs`: whether to decode this request's logprob token
-    /// ids to text (in this shard) for the `[logprob, token_id, text]` tuples.
+    /// `return_text_in_logprobs`: whether to decode this request's logprob token ids to text (in this shard).
     decode_logprob_text: bool,
-    /// `SamplingParams.no_stop_trim`: keep the matched stop in the output. Default
-    /// (`false`) trims it off the final chunk (see [`trim_stop_str`]).
+    /// `SamplingParams.no_stop_trim`: keep the matched stop in the output.
     no_stop_trim: bool,
     /// Per-request incremental decoder; `None` in `skip_tokenizer_init` mode.
-    /// This is the *only* per-request accumulation the shard keeps: the decoder's
-    /// internal byte/UTF-8 buffer. Decoded **text deltas** are emitted per chunk
-    /// (no cumulative buffer here) — the api-server's drain loop reassembles the
-    /// cumulative view where a consumer needs it (every unary response and the
-    /// cumulative SGLang `/generate` stream); OpenAI streaming forwards deltas.
     decoder: Option<Box<dyn StreamDecoder>>,
-    /// Response half of the lifecycle FSM. Lives here because the `Request` (and
-    /// its FSM) was handed to the scheduler when queued; the shard is the sole
-    /// owner of the response state, so no lock.
+    /// Response half of the lifecycle FSM.
     fsm: RequestState,
 }
 
@@ -156,8 +116,7 @@ pub struct DetokenizerWorker {
     shard: usize,
     rx: flume::Receiver<DetokMsg>,
     backend: DetokenizerBackend,
-    /// Unbounded abort lane, used to abort a request the shard had to drop
-    /// (client backpressure) so the scheduler stops generating for it.
+    /// Unbounded abort lane, used to abort a request the shard had to drop (client backpressure) so the scheduler stops generating.
     abort: flume::Sender<AbortSource>,
 }
 
@@ -253,18 +212,16 @@ fn handle_decode(
 fn handle_result(table: &mut HashMap<Rid, DetokState>, rid: &Rid, payload: bytes::Bytes) {
     if let Some(mut st) = table.remove(rid) {
         let _ = st.sink.try_send(ResponseItem::Control(payload));
-        // Response FSM: a control request goes straight to Completed (no Streaming
-        // / Finalizing states — single response, never streamed).
+        // Response FSM: a control request goes straight to Completed.
         st.fsm = RequestState::Completed;
     }
 }
 
-/// Terminal per-request failure (bad request header): send an `Error` to the sink
-/// (the api-server turns it into an HTTP 400) and drop the request.
-/// Terminal per-request failure. `Internal` (500), not `Validation` (400): the
-/// producers of this message are server faults — a malformed scheduler output
-/// frame — not bad client input. Also aborts the request on the scheduler, which
-/// otherwise keeps generating tokens for a connection that will never read them.
+/// Terminal per-request failure (bad request header): send an `Error` to the
+/// sink (the api-server turns it into an HTTP 400) and drop the request.
+/// Terminal per-request failure.
+/// the producers of this message are server faults — a malformed scheduler
+/// output frame — not bad client input.
 fn handle_fail(
     table: &mut HashMap<Rid, DetokState>,
     rid: &Rid,
@@ -272,8 +229,7 @@ fn handle_fail(
     abort: &flume::Sender<AbortSource>,
 ) {
     if let Some(mut st) = table.remove(rid) {
-        // Abort first: `try_send` on the sink can release the handler, which frees
-        // the rid for reuse (same ordering hazard as the disconnect path).
+        // Abort first: `try_send` on the sink can release the handler.
         let _ = abort.send(AbortSource::Detok(rid.clone()));
         let _ = st
             .sink
@@ -288,8 +244,7 @@ fn handle_chunk(
     backend: &DetokenizerBackend,
     abort: &flume::Sender<AbortSource>,
 ) {
-    // Copied once: `ev` is moved into the sink below, but the rid is still
-    // needed to look the request up and to remove it.
+    // Copied once: `ev` is moved into the sink below.
     let rid = ev.rid.clone();
 
     let Some(st) = table.get_mut(&rid) else {
@@ -305,9 +260,8 @@ fn handle_chunk(
     }
 
     let finished = ev.finish_reason.is_some();
-    // Matched-stop trim (Python `trim_matched_stop`): the final chunk's finish
-    // reason names the stop it matched — a stop STRING or a stop TOKEN id. By
-    // default that stop is removed from the output; `no_stop_trim` keeps it.
+    // Matched-stop trim (Python `trim_matched_stop`): the final chunk's
+    // finish reason names the stop it matched — a stop STRING.
     let matched = finished
         .then(|| ev.finish_reason.as_ref().and_then(|fr| fr.matched()))
         .flatten()
@@ -317,18 +271,13 @@ fn handle_chunk(
     // Stop TOKEN: drop it before decode, so it reaches neither `text` nor `output_ids`.
     trim_stop_token(&mut ev.token_ids, &matched, no_stop_trim);
 
-    // Fully incremental: decode just this chunk's delta. `token_ids` stays in the
-    // event — it's ALSO surfaced as the `/generate` response's `output_ids` (the
-    // Python server returns them by default alongside `text`), in both normal and
-    // `skip_tokenizer_init` mode. Nothing cumulative is kept here — the api-server's
-    // drain loop reassembles it where needed.
+    // Fully incremental: decode this chunk's delta. `token_ids` stays in the event — it's ALSO surfaced as the `/generate` response's `output_ids` (the Python server returns them by default alongside `text`), in both normal and `skip_tokenizer_init` mode. Nothing cumulative is kept here — the
+    // api-server's drain loop reassembles it where needed.
     let mut delta_text = match &mut st.decoder {
         Some(decoder) => match decoder.step(&ev.token_ids) {
             Ok(delta) => delta,
             Err(e) => {
-                // Abort too: this is terminal for the request, and without it the
-                // scheduler keeps generating for a connection that is already gone
-                // — the other two terminal paths (disconnect, fail) both abort.
+                // Abort too: this is terminal for the request.
                 let _ = st.fsm.apply(Event::Error(e.clone()));
                 let _ = abort.send(AbortSource::Detok(rid.clone()));
                 let _ = st.sink.try_send(ResponseItem::Error(e));
@@ -347,10 +296,11 @@ fn handle_chunk(
     // Streaming → Streaming (finish:false) or Streaming → Finalizing (finish:true).
     let _ = st.fsm.apply(Event::Chunk { finish: finished });
 
-    // `return_text_in_logprobs`: decode each logprob token id to text HERE (this
-    // CPU-bound shard) rather than on the api-server I/O threads. Flat text columns
-    // stay parallel to the `idx` buffers, so `sglang_frame` just reads them. Only the
-    // logprob-carrying frames have an `extras` box; a plain token frame skips this.
+    // `return_text_in_logprobs`: decode each logprob token id to text HERE
+    // (this CPU-bound shard) rather than on the api-server I/O threads. Flat
+    // text columns stay parallel to the `idx` buffers, so `sglang_frame`
+    // reads them. Only the logprob-carrying frames have an `extras` box; a
+    // plain token frame skips this.
     if decode_logprob_text && let Some(ex) = ev.extras.as_deref_mut() {
         ex.out_lp_txt = backend.decode_logprob_texts(&ex.out_lp_idx);
         ex.in_lp_txt = backend.decode_logprob_texts(&ex.in_lp_idx);
@@ -360,9 +310,7 @@ fn handle_chunk(
         ex.in_tid_txt = backend.decode_logprob_texts(&ex.in_tid_idx);
     }
 
-    // Fill the decode outputs in place; the pre-decode columns (boxed logprobs/hidden,
-    // token_ids, prompt_tokens, finish_reason) already ride in `ev`. The API handler
-    // formats this delta (and accumulates for the cumulative view).
+    // Fill the decode outputs in place.
     ev.text = delta_text;
     ev.completion_tokens = n_tok;
 
@@ -395,13 +343,7 @@ fn handle_chunk(
                 }
             }
             let _ = st.fsm.apply(Event::Disconnect);
-            // Abort ONLY when the sink is full. `Closed` means the handler future is
-            // already gone, so its `AbortGuard` has run: it aborted and released the
-            // rid. A second abort from here is unordered with respect to that
-            // release, so it lands after a resubmit of the same rid has registered
-            // and deregisters the NEW request — the cross-wiring the rid registry
-            // exists to prevent, reached through the one abort producer that
-            // bypasses the guard's ordering.
+            // Abort ONLY when the sink is full.
             if matches!(e, SinkError::Full) {
                 let _ = abort.send(AbortSource::Detok(rid.clone()));
             }
@@ -413,16 +355,13 @@ fn handle_chunk(
 /// Drop a matched stop TOKEN from the final chunk (Python `trim_matched_stop`,
 /// token branch); `no_stop_trim` / non-token match keeps it.
 fn trim_stop_token(token_ids: &mut TokenIds, matched: &Option<Matched>, no_stop_trim: bool) {
-    // Token id 0 is NOT a match: Python guards with `if not matched`, and 0 is
-    // falsy there, so it trims nothing. Trimming on 0 drops a real generated token
-    // for any model whose stop id happens to be 0.
     if !no_stop_trim && matches!(matched, Some(Matched::Token(t)) if *t != 0) {
         token_ids.pop();
     }
 }
 
 /// Remove the matched stop string from the decoded final chunk (Python
-/// `trim_matched_stop`, string branch); `no_stop_trim` keeps it. Truncates at
+/// `trim_matched_stop`, string branch); `no_stop_trim` keeps it.
 /// the FIRST occurrence.
 fn trim_stop_str(text: &mut String, stop: &str, no_stop_trim: bool) {
     if stop.is_empty() {
@@ -438,9 +377,7 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
-    /// A non-terminal chunk that can't be delivered (sink full → client
-    /// backpressure) drops the request AND aborts scheduler work — it does not
-    /// silently keep state, which would later read as a clean completion at EOS.
+    /// A non-terminal chunk that can't be delivered (sink full → client backpressure) drops the request AND aborts scheduler work.
     #[test]
     fn full_sink_drops_request_and_aborts_scheduler() {
         // Capacity-1 sink, pre-filled so the next send hits `Full`.
@@ -477,9 +414,7 @@ mod tests {
         ));
     }
 
-    /// `trim_stop_str` reproduces the base's stop-string semantics: `stop: "3"` on
-    /// output " 1, 2, 3" yields " 1, 2, " by default and " 1, 2, 3" with
-    /// `no_stop_trim`.
+    /// `trim_stop_str` reproduces the base's stop-string semantics: `stop: "3"` on output " 1, 2, 3" yields " 1, 2, " by default and " 1, 2, 3".
     #[test]
     fn trim_stop_str_matches_base() {
         let mut t = " 1, 2, 3".to_string();
@@ -512,8 +447,7 @@ mod tests {
         assert!(error.to_string().contains("skip_tokenizer_init=True"));
     }
 
-    /// A `Decode` job answers through the REGISTERED sink and consumes the
-    /// entry.
+    /// A `Decode` job answers through the REGISTERED sink and consumes the entry.
     #[test]
     fn decode_answers_via_registered_sink_and_consumes_the_entry() {
         let (tx, mut rx) = mpsc::channel::<ResponseItem>(4);
@@ -553,12 +487,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    /// Two requests on the SAME shard keep separate entries. This is what a
-    /// A shard-hash collision now degrades to: the hash partitions, the rid
-    /// identifies. Keying the table by the hash made colliding rids one entry, so
-    /// `Register` evicted the first client's sink and their tokens were written to
-    /// the second client's connection. A single shard forces co-location
-    /// deterministically, without needing to find a real 64-bit collision.
+    /// requests on the SAME shard keep separate entries.
     #[test]
     fn co_located_requests_keep_their_own_sinks() {
         let (tx_a, mut rx_a) = mpsc::channel::<ResponseItem>(4);
@@ -647,9 +576,7 @@ mod tests {
         }
     }
 
-    /// Token id 0 is not a match: Python's `trim_matched_stop` guards with
-    /// `if not matched`, and 0 is falsy there. Trimming on it drops a real
-    /// generated token for any model whose stop id is 0.
+    /// Token id is not a match: Python's `trim_matched_stop` guards with `if not matched`, and is falsy there.
     #[test]
     fn matched_token_zero_does_not_trim() {
         let mut ids = vec![1, 2, 0];
@@ -661,8 +588,7 @@ mod tests {
         assert_eq!(ids, vec![1, 2]);
     }
 
-    /// A matched stop TOKEN is dropped from the surfaced `output_ids` by default
-    /// (but still counted in `completion_tokens`); `no_stop_trim` keeps it.
+    /// A matched stop TOKEN is dropped from the surfaced `output_ids` by default (but still counted in `completion_tokens`).
     #[test]
     fn stop_token_trimmed_from_output_ids() {
         let fr = serde_json::json!({ "type": "stop", "matched": 3 });

@@ -1,13 +1,4 @@
 //! Model processor registries.
-//!
-//! Two registries live here:
-//! * [`ImageProcessorSpec`] / [`ProcessorRegistry`] — the Python-facing batch
-//!   preprocess interface (e.g. Inkling), looked up by name at init time.
-//! * [`pipeline_from_spec`] — the pure-Rust request pipeline `sglang-server`'s
-//!   MM workers drive. Each model family implements
-//!   [`crate::pipeline::MmFamilyProcessor`] in `src/<model>/mod.rs`; the Python
-//!   side selects one by serializing a spec
-//!   (`{"family": ..., resolved processor params}`).
 
 /// `(height, width, patches_as_u16_bits, content_hash)` for one image.
 pub type PreprocessedImage = (usize, usize, Vec<u16>, u64);
@@ -67,10 +58,7 @@ pub fn default_registry() -> ProcessorRegistry {
 }
 // --- Server (pure-Rust) request pipeline ---
 
-/// The resolved parameters of one family pipeline — the typed form of the
-/// Python-side spec, one variant per family arm. `sglang-server` builds it
-/// directly from its `MmSpec` pyclass; the JSON parity API reaches it through
-/// [`pipeline_from_spec`], where the `family` key selects the variant.
+/// The resolved parameters of one family pipeline — the typed form of the Python-side spec, one variant.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(tag = "family", rename_all = "snake_case")]
 pub enum PipelineSpec {

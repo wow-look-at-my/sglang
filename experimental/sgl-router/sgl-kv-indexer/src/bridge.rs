@@ -1,15 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! SGLang KV event bridge.
-//!
-//! Subscribes to a worker's ZMQ KV-event stream, decodes each batch, and
-//! forwards it to the indexer over gRPC.
-//!
-//! It keeps a reconnect supervisor but does not recover data: no sequence
-//! tracking, no replay of missed batches, no incarnation token, no liveness
-//! heartbeat. A sequence gap is logged and ignored, and events produced while
-//! the bridge is disconnected are lost.
 
 use std::io::Cursor;
 use std::time::Duration;
@@ -36,15 +28,13 @@ const GRPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone)]
 pub struct BridgeConfig {
     pub worker_id: String,
-    /// The worker's KV-transfer address, forwarded on every apply batch so the
-    /// indexer can answer MatchExternalKv with an address. Empty if unset.
+    /// The worker's KV-transfer address, forwarded on every apply batch so the indexer can answer MatchExternalKv.
     pub worker_address: String,
     pub event_endpoint: String,
     pub event_topic: String,
     pub indexer_endpoint: String,
     pub clear_tiers: Vec<i32>,
-    /// The worker's component cache spec, forwarded on every apply batch. `None`
-    /// for a legacy / full-only worker that reports no component metadata.
+    /// The worker's component cache spec, forwarded on every apply batch.
     pub cache_spec: Option<WorkerCacheSpec>,
 }
 
@@ -55,8 +45,7 @@ impl BridgeConfig {
         let worker_address = std::env::var("KV_INDEXER_WORKER_ADDRESS").unwrap_or_default();
         let event_endpoint = std::env::var("SGLANG_KV_EVENT_ENDPOINT")
             .unwrap_or_else(|_| "tcp://127.0.0.1:5557".to_string());
-        // Match SGLang's upstream ZMQ publisher default. Deployments that use a
-        // non-empty topic must configure the same value on both sides.
+        // Match SGLang's upstream ZMQ publisher default.
         let event_topic = std::env::var("SGLANG_KV_EVENT_TOPIC").unwrap_or_default();
         let indexer_endpoint = std::env::var("KV_INDEXER_ENDPOINT")
             .unwrap_or_else(|_| "http://[::1]:50051".to_string());
@@ -133,19 +122,12 @@ fn classify_rpc(status: Status) -> BridgeError {
         | Code::PermissionDenied
         | Code::Unimplemented
         | Code::DataLoss => BridgeError::PermanentRpc(status),
-        // RESOURCE_EXHAUSTED is the indexer shedding load or refusing an
-        // oversized batch. Reconnecting loses that batch's events, which costs
-        // routing accuracy; exiting loses every later batch too.
+        // RESOURCE_EXHAUSTED is the indexer shedding load or refusing an oversized batch.
         _ => BridgeError::Rpc(status),
     }
 }
 
-/// A single indexer mutation, kept in the exact order it appeared in the event
-/// batch so mutations on the same hash are never reordered.
-///
-/// `Report` carries per-hash component metadata in arrays index-aligned with
-/// `hashes`: `masks[i]` is `None` for a legacy whole-block store, and
-/// `block_sizes[i]` is the reported token count, `None` when none was supplied.
+/// A single indexer mutation, kept in the exact order it appeared in the event batch so mutations.
 #[derive(Debug, PartialEq, Eq)]
 enum Action {
     Report {
@@ -168,8 +150,7 @@ struct EventActions {
 }
 
 impl EventActions {
-    /// Append a store for the block hashes of one `BlockStored`, coalescing only
-    /// with an immediately-preceding store to the same tier and never across a
+    /// Append a store for the block hashes of one `BlockStored`.
     /// revoke/clear, so the final per-hash state is preserved. All hashes here
     /// share the event's component mask and block size.
     fn report(
@@ -258,11 +239,7 @@ async fn supervise(config: BridgeConfig) -> Result<(), BridgeError> {
         "starting SGLang KV event bridge"
     );
 
-    // Supervisor loop: (re)connect to both the indexer and the ZMQ publisher,
-    // run until a connection-level error, then back off and retry. Decode-level
-    // problems are handled inside the session and never tear down the bridge.
-    // Reconnecting recovers the connection only: events published while
-    // disconnected are lost.
+    // Supervisor loop: (re)connect to both the indexer and the ZMQ publisher, run until a connection-level error, then back off.
     let mut delay = RECONNECT_MIN_DELAY;
     loop {
         match connect(&config).await {
@@ -386,9 +363,8 @@ async fn forward_raw_batch(
     };
 
     let request = build_apply_request(config, seq, actions);
-    // One ZMQ batch can hold more mutations than a single apply RPC admits, so
-    // send the parts in order. A later failure leaves an applied prefix, which
-    // beats rejecting and losing the whole event batch.
+    // One ZMQ batch can hold more mutations than a single apply RPC admits,
+    // so send the parts in order.
     for request in split_apply_request(request) {
         client
             .apply_external_kv_batch(request)
@@ -419,9 +395,7 @@ fn build_apply_request(
                 r#type: ExternalKvActionType::ActionReport as i32,
                 tier,
                 hashes,
-                // Emit the per-hash arrays only when some hash carries
-                // component data; a fully-legacy report leaves them empty so
-                // the backend keeps the whole-block fast path.
+                // Emit the per-hash arrays only when some hash carries component data.
                 component_masks: encode_component_masks(&masks),
                 block_sizes: encode_block_sizes(&block_sizes),
                 parent_block_hash,
@@ -461,7 +435,7 @@ fn build_apply_request(
 /// Splits one decoded ZMQ batch into apply RPCs within the service's action and
 /// hash bounds, preserving action order and per-hash index alignment.
 ///
-/// Every part reuses the source `seq`, which is safe because `seq` is
+/// Every part reuses the source `seq`.
 /// observability only (see the proto): applies are never deduplicated or fenced,
 /// so a repeated `seq` cannot get a part dropped as stale.
 fn split_apply_request(request: ApplyExternalKvBatchRequest) -> Vec<ApplyExternalKvBatchRequest> {
@@ -527,8 +501,7 @@ fn split_action(action: ExternalKvAction) -> Vec<ExternalKvAction> {
         .collect()
 }
 
-/// Slices a per-hash array alongside its `hashes` slice. Empty is the legacy
-/// "field absent" signal; non-empty arrays are aligned by `build_apply_request`.
+/// Slices a per-hash array alongside its `hashes` slice.
 fn slice_or_empty<T: Clone>(values: &[T], start: usize, end: usize) -> Vec<T> {
     if values.is_empty() {
         return Vec::new();
@@ -683,8 +656,7 @@ fn decode_hash(value: &Value, field: &str) -> Result<i64, BridgeError> {
     if let Some(value) = value.as_i64() {
         return Ok(value);
     }
-    // SGLang folds the unsigned top 64 bits of the SHA-256 into the signed
-    // range by subtracting 2^64. Reinterpreting recovers the same bits.
+    // Reinterpreting recovers the same bits.
     if let Some(value) = value.as_u64() {
         return Ok(value as i64);
     }
@@ -746,7 +718,7 @@ fn medium_to_tier(medium: Option<&str>) -> Result<i32, BridgeError> {
 }
 
 /// Builds the worker's [`WorkerCacheSpec`] from the environment, `None` for a
-/// legacy / full-only worker. Rules are fixed, so the config only declares which
+/// legacy / full-only worker. Rules are fixed.
 /// components are present, the SWA window, and their servable tiers:
 ///
 /// ```text
@@ -1294,9 +1266,7 @@ mod tests {
         assert!(!classify_rpc(Status::deadline_exceeded("retry")).is_permanent());
     }
 
-    /// Indexer backpressure must not take the bridge down: the router treats the
-    /// same code as recoverable, and a rejected batch is worth less than the
-    /// entire event stream.
+    /// Indexer backpressure must not take the bridge down: the router treats the same code as recoverable.
     #[test]
     fn shed_batches_keep_the_bridge_alive() {
         assert!(!classify_rpc(Status::resource_exhausted("batch too large")).is_permanent());
@@ -1386,8 +1356,7 @@ mod tests {
 
     #[test]
     fn python_msgspec_mixed_batch_golden_decodes() {
-        // Generated by msgspec.msgpack.Encoder from the authoritative Python
-        // KVEventBatch schema in sglang.srt.disaggregation.kv_events.
+        // Generated by msgspec.msgpack.Encoder from the authoritative Python KVEventBatch schema in sglang.srt.disaggregation.kv_events.
         let payload = golden_bytes("93cb405edd2f1a9fbe779387a474797065ab426c6f636b53746f726564ac626c6f636b5f68617368657392cf0000011f71fb04cbd2c521974fb1706172656e745f626c6f636b5f686173682aa9746f6b656e5f696473940a141e28aa626c6f636b5f73697a6504a76c6f72615f696407a66d656469756da347505583a474797065ac426c6f636b52656d6f766564ac626c6f636b5f6861736865739264ccc8a66d656469756da44449534b81a474797065b0416c6c426c6f636b73436c656172656402");
         assert_eq!(
             decode_event_batch(&payload).unwrap().actions,
@@ -1401,8 +1370,7 @@ mod tests {
 
     #[test]
     fn python_msgspec_bigram_tokens_golden_decodes() {
-        // token_ids contains Python tuples as nested msgpack arrays; the
-        // bridge ignores payload shape and indexes the published hashes.
+        // token_ids contains Python tuples as nested msgpack arrays; the bridge ignores payload shape and indexes the published hashes.
         let payload = golden_bytes("93cb3ff80000000000009187a474797065ab426c6f636b53746f726564ac626c6f636b5f686173686573916fb1706172656e745f626c6f636b5f68617368c0a9746f6b656e5f69647392920a1492141eaa626c6f636b5f73697a6502a76c6f72615f6964c0a66d656469756da347505503");
         assert_eq!(
             decode_event_batch(&payload).unwrap().actions,
@@ -1412,9 +1380,7 @@ mod tests {
 
     #[test]
     fn python_msgspec_nil_medium_golden_is_safely_skipped() {
-        // The Python schema permits medium=None (the key is then omitted);
-        // such events map to no Indexer tier, so they are isolated rather
-        // than given a placement.
+        // The Python schema permits medium=None (the key is then omitted); such events map to no Indexer tier, so they are isolated rather than given a placement.
         let payload = golden_bytes("93cb00000000000000009286a474797065ab426c6f636b53746f726564ac626c6f636b5f6861736865739101b1706172656e745f626c6f636b5f68617368c0a9746f6b656e5f696473920506aa626c6f636b5f73697a6502a76c6f72615f6964c082a474797065ac426c6f636b52656d6f766564ac626c6f636b5f6861736865739102c0");
         assert!(decode_event_batch(&payload).unwrap().actions.is_empty());
     }
@@ -1467,9 +1433,7 @@ mod tests {
         assert!(parse_clear_tiers("HBM,NVME").is_err());
     }
 
-    /// An event that serialises a hash as unsigned must decode to the value the
-    /// router queries for. Anything else would file the block under a hash no
-    /// query can reach, which reads as a silent cache miss rather than an error.
+    /// An event that serialises a hash as unsigned must decode to the value the router queries for.
     #[test]
     fn decode_hashes_reinterprets_unsigned_as_the_same_bits() {
         let value = Value::Array(vec![
@@ -1533,7 +1497,7 @@ mod tests {
     #[test]
     fn component_types_nil_decodes_as_legacy() {
         // An 8-element BlockStored whose trailing slot is nil is exactly the
-        // legacy whole-block store: no components, no size.
+        // whole-block store: no components, no size.
         assert_eq!(
             actions_of(vec![stored_c(&[1], "GPU", 64, Value::Nil)]),
             vec![rep(hbm(), &["1"])]

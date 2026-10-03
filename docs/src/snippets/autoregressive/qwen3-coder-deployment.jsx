@@ -113,9 +113,6 @@ export const Qwen3CoderDeployment = () => {
     if (ep) {
       cmd += ` \\\n  --ep ${ep}`;
     } else if (modelSize === '480b' && quantization === 'fp8' && !isXeon) {
-      // FP8 requires EP=2 for 480B model due to MoE dimension alignment
-      // moe_intermediate_size=2560, with tp=8 ep=1: 2560/8=320, 320%128!=0
-      // with tp=8 ep=2: 2560/4=640, 640%128=0
       cmd += ` \\\n  --ep 2`;
     }
 

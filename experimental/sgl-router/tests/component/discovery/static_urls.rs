@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use sgl_router::config::StaticUrlsDiscoveryConfig;
@@ -25,13 +25,11 @@ async fn emits_one_added_per_url_with_plain_seed() {
             .unwrap();
         match event {
             DiscoveryEvent::Added(spec) => {
-                // mode / model_ids / bootstrap_port are seeded as Plain/empty/None;
-                // the worker manager fills them from /server_info post-discovery.
+                // mode / model_ids / bootstrap_port are seeded as Plain/empty/None.
                 assert_eq!(spec.mode, WorkerMode::Plain);
                 assert!(spec.model_ids.is_empty());
                 assert_eq!(spec.bootstrap_port, None);
-                // The URL doubles as the worker id — strings already have to
-                // be unique (rejected at config-load otherwise).
+                // The URL doubles as the worker id — strings already have to be unique.
                 assert_eq!(spec.id.0, spec.url);
                 seen.insert(spec.url);
             }
@@ -44,14 +42,7 @@ async fn emits_one_added_per_url_with_plain_seed() {
     );
 }
 
-/// Single-URL list — the common dev deployment shape. The producer
-/// emits exactly one event and then parks until the receiver is
-/// dropped. Earlier versions exited as soon as fan-out completed,
-/// which tripped `server::supervisor::supervise_critical_tasks` →
-/// `mark_unready` → `/readyz` 503; the lib-side
-/// `stays_alive_after_fanout_until_receiver_dropped` pins that
-/// invariant in isolation, while this test pins the same contract
-/// through the public `spawn` entry point used by the binary.
+/// Single-URL list — the common dev deployment shape.
 #[tokio::test]
 async fn emits_one_event_and_parks_until_receiver_dropped() {
     let cfg = StaticUrlsDiscoveryConfig {
@@ -65,8 +56,7 @@ async fn emits_one_event_and_parks_until_receiver_dropped() {
     assert!(matches!(event, DiscoveryEvent::Added(_)));
     assert!(rx.try_recv().is_err(), "exactly one event expected");
 
-    // Drop the receiver → producer's `tx.closed()` resolves → task
-    // exits cleanly.
+    // Drop the receiver → producer's `tx.closed()` resolves → task exits cleanly.
     drop(rx);
     tokio::time::timeout(Duration::from_secs(2), h)
         .await
@@ -74,17 +64,7 @@ async fn emits_one_event_and_parks_until_receiver_dropped() {
         .expect("join handle should not panic");
 }
 
-/// Spin up a fake worker that advertises
-/// `disaggregation_mode = "prefill"` + `disaggregation_bootstrap_port`,
-/// pipe it through `spawn_discovery` (StaticUrls backend) into
-/// `manager::run_with_config`, and assert the worker lands in the
-/// registry with `WorkerMode::Prefill` + the disclosed port.
-///
-/// This is the load-bearing end-to-end assertion for the refactor's
-/// central claim — "prefill, decode, and plain workers can all appear
-/// in the same `urls` list and end up classified correctly" — exercised
-/// against the full discovery → introspect → registry pipeline rather
-/// than just the in-isolation `register_one` unit test.
+/// Spin up a fake worker that advertises `disaggregation_mode = "prefill"` + `disaggregation_bootstrap_port`.
 #[tokio::test]
 async fn static_urls_pd_role_resolved_end_to_end() {
     use axum::{routing::get, Json, Router};

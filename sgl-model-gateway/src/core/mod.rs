@@ -1,13 +1,4 @@
-//! Core abstractions for the SGLang router
-//!
-//! This module contains the fundamental types and traits used throughout the router:
-//! - Worker trait and implementations
-//! - Model types and endpoint definitions
-//! - Error types
-//! - Circuit breaker for reliability
-//! - Token buckets for rate limiting
-//! - Workflow steps for multi-step operations
-//! - Common utilities
+//! Core abstractions for the SGLang router This module contains the fundamental types and traits used throughout the router.
 
 // Re-export UNKNOWN_MODEL_ID from protocols for use throughout core
 pub use crate::protocols::UNKNOWN_MODEL_ID;

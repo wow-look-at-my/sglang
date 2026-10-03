@@ -264,8 +264,7 @@ impl McpManager {
 
     /// List tools only from specific servers plus all static servers
     ///
-    /// Tools from static servers (always visible)
-    /// 2. Tools from the specified dynamic servers
+    /// Tools from the specified dynamic servers
     ///
     /// This provides request-scoped tool isolation while maintaining
     /// global visibility for static servers.

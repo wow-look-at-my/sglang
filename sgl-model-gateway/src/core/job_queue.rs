@@ -1,7 +1,4 @@
 //! Async job queue for control plane operations
-//!
-//! Provides non-blocking worker management by queuing operations and processing
-//! them asynchronously in background worker tasks.
 
 use std::{
     collections::HashMap,
@@ -184,7 +181,7 @@ impl JobQueue {
             debug!("Job dispatcher stopped");
         });
 
-        // Spawn cleanup task for old job statuses (TTL 5 minutes)
+        // Spawn cleanup task for old job statuses (TTL a few minutes)
         let cleanup_status_map = status_map.clone();
         tokio::spawn(async move {
             Self::cleanup_old_statuses(cleanup_status_map).await;
@@ -287,7 +284,6 @@ impl JobQueue {
             }
         }
 
-        // Permit automatically released when dropped
     }
 
     /// Execute a specific job
@@ -453,7 +449,7 @@ impl JobQueue {
                     config.descriptor.name, instance_id
                 );
 
-                let timeout_duration = Duration::from_secs(300); // 5 minutes
+                let timeout_duration = Duration::from_secs(300); // A few
 
                 engines
                     .wasm_registration
@@ -482,7 +478,7 @@ impl JobQueue {
                     request.module_uuid, instance_id
                 );
 
-                let timeout_duration = Duration::from_secs(60); // 1 minute
+                let timeout_duration = Duration::from_secs(60);
 
                 engines
                     .wasm_removal
@@ -518,8 +514,7 @@ impl JobQueue {
                         prefill_workers.chain(decode_workers).collect()
                     }
                     RoutingMode::OpenAI { worker_urls } => {
-                        // OpenAI mode: submit AddWorker jobs with runtime: "external"
-                        // The external_worker_registration workflow handles model discovery
+                        // OpenAI mode: submit AddWorker jobs with runtime.
                         let api_key = router_config.api_key.clone();
                         let mut submitted_count = 0;
 
@@ -721,7 +716,7 @@ impl JobQueue {
                     config.name, config.id, instance_id
                 );
 
-                // Allow up to 10 minutes for HuggingFace downloads
+                // Allow a bounded number of minutes for HuggingFace downloads
                 let timeout_duration = Duration::from_secs(600);
 
                 engines
@@ -773,10 +768,10 @@ impl JobQueue {
         }
     }
 
-    /// Cleanup old job statuses (TTL 5 minutes)
+    /// Cleanup old job statuses (TTL a few minutes)
     async fn cleanup_old_statuses(status_map: Arc<DashMap<String, JobStatus>>) {
         const CLEANUP_INTERVAL: Duration = Duration::from_secs(60); // Run every minute
-        const STATUS_TTL: u64 = 300; // 5 minutes in seconds
+        const STATUS_TTL: u64 = 300;
 
         loop {
             tokio::time::sleep(CLEANUP_INTERVAL).await;

@@ -77,7 +77,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "To persist, add to your shell profile (e.g., ~/.bashrc or ~/.zshrc):"
   echo '  export RUSTC_WRAPPER="$(command -v sccache 2>/dev/null || echo "")"'
   echo '  export SCCACHE_CACHE_SIZE="10G"'
-  # echo '  export SCCACHE_DIR="$HOME/.cache/sccache"'
+  # echo ' export SCCACHE_DIR="$HOME/.cache/sccache"'
   echo '  export SCCACHE_STATS="1"'
 fi
 

@@ -215,10 +215,7 @@ mod generation_tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // For streaming responses, the router might use chunked encoding or other streaming mechanisms
-        // The exact content-type can vary based on the router implementation
-        // Just verify we got a successful response
-        // Note: In a real implementation, we'd check for text/event-stream or appropriate streaming headers
+        // For streaming responses, the router might use chunked encoding or other streaming mechanisms The exact content-type can vary based.
 
         ctx.shutdown().await;
     }
@@ -559,7 +556,6 @@ mod model_info_tests {
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
-        // Worker with fail_rate: 1.0 should always return an error status
         assert!(
             resp.status() == StatusCode::INTERNAL_SERVER_ERROR
                 || resp.status() == StatusCode::SERVICE_UNAVAILABLE,
@@ -634,9 +630,7 @@ mod router_policy_tests {
             "stream": false
         });
 
-        // Check that router has the worker
-        // TODO: Update test after worker management refactoring
-        // For now, skip this check
+        // Check that router has the worker TODO: Update test after worker management refactoring skip this check
 
         ctx.shutdown().await;
     }
@@ -915,7 +909,6 @@ mod responses_endpoint_tests {
         assert_eq!(items_json["object"], "list");
         assert!(items_json["data"].is_array());
 
-        // Should have 2 input items
         let items = items_json["data"].as_array().unwrap();
         assert_eq!(items.len(), 2);
 
@@ -924,7 +917,7 @@ mod responses_endpoint_tests {
 
     #[tokio::test]
     async fn test_v1_responses_get_multi_worker_fanout() {
-        // Start two mock workers
+        // Start mock workers
         let ctx = AppTestContext::new(vec![
             MockWorkerConfig {
                 port: 18960,
@@ -1056,7 +1049,6 @@ mod error_tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
-        // Note: Axum returns 405 for wrong methods on matched routes
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 
         // POST request to GET-only endpoint
@@ -1101,9 +1093,7 @@ mod error_tests {
         )
         .await;
 
-        // Note: The server would have payload size middleware configured
-        // but we cannot test it directly through the test app
-        // This test is kept for documentation purposes
+        // Note: The server will have payload size middleware configured.
 
         ctx.shutdown().await;
     }
@@ -1173,7 +1163,6 @@ mod error_tests {
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
-        // Mock worker accepts any model, but real implementation might return 400
         assert!(resp.status().is_success() || resp.status() == StatusCode::BAD_REQUEST);
 
         ctx.shutdown().await;
@@ -1258,8 +1247,7 @@ mod cache_tests {
         let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert!(body_json.is_object());
-        // The exact structure depends on the implementation
-        // but should contain worker load information
+        // The exact structure depends on the implementation but should contain worker load information
 
         ctx.shutdown().await;
     }
@@ -1399,7 +1387,7 @@ mod pd_mode_tests {
         prefill_worker.stop().await;
         decode_worker.stop().await;
 
-        // For now, just verify the configuration was attempted
+        // Verify the configuration was attempted
         assert!(router_result.is_err() || router_result.is_ok());
     }
 }

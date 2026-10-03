@@ -1,15 +1,8 @@
 #!/bin/bash
-# Copy the built PyO3 extension modules into their package-relative paths under
-# rust-ext-staging/. Shared by both jobs of _pr-test-rust-ext-build.yml, so the
-# archive layout and module-count checks cannot drift between them.
-#
-# MAX_GLIBC (optional): also reject a module requiring a newer GLIBC symbol
-# version than the test runners have. Only set where the modules were just
-# compiled - on a cache hit these are the same bytes that already passed.
+# Copy the built PyO3 extension modules into their package-relative paths under rust-ext-staging/.
 set -euo pipefail
 shopt -s nullglob
-# upload-artifact strips the longest common prefix it matched, so a missing
-# module would silently shift the archive layout.
+# upload-artifact strips the longest common prefix it matched.
 rm -rf rust-ext-staging
 built=()
 # Same suffix set across modules, or one ABI's Rust-server tests silently skip.
@@ -56,16 +49,14 @@ max_allowed="${MAX_GLIBC:-}"
 status=0
 for so in "${built[@]}"; do
     # Its own invocation, not the head of a pipeline: there its failure is
-    # invisible, and the empty symbol list a wrong-arch objdump leaves behind reads
-    # exactly like "needs no glibc", passing this gate silently.
+    # invisible, and the empty symbol list a wrong-arch objdump leaves behind.
     if ! symbols=$(objdump -T "$so" 2>&1); then
         echo "::error::objdump could not read ${so}: ${symbols}"
         echo "::error::this gate must run on the same architecture as the modules"
         status=1
         continue
     fi
-    # grep exits 1 with no match; without `|| true` pipefail kills the script. With
-    # objdump known to have succeeded, no match really is no requirement.
+    # grep exits 1 with no match; without `|| true` pipefail kills the script.
     references=$(printf '%s\n' "${symbols}" | grep -coE 'GLIBC_2\.[0-9]+' || true)
     needed=$(printf '%s\n' "${symbols}" \
         | grep -oE 'GLIBC_2\.[0-9]+' \

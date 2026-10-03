@@ -1,10 +1,4 @@
-//! Workflow step implementations
-//!
-//! This module contains concrete step implementations for various workflows:
-//! - Worker management (registration, removal, updates)
-//! - MCP server registration
-//! - WASM module registration and removal
-//! - Tokenizer registration
+//! Workflow step implementations This module contains concrete step implementations for various workflows.
 
 pub mod mcp_registration;
 pub mod tokenizer_registration;

@@ -1,8 +1,9 @@
-// Ornith-1.0 (DeepReinforce) — config-driven cookbook page.
-// The launch flags follow the SGLang quickstarts published on the model cards; the 9B recipe makes the single-GPU default explicit with --tp 1.
-// FP8 quantization cells use their FP8 repo ids from the collection with the same flags; their README quickstarts currently point to the non-FP8 repos.
-// Reasoning / tool-call parsers are exposed as a Playground toggle (qwen3 / qwen3_coder), not baked into the deploy cells.
-// Cells remain unverified until exact recipes are run and signed off.
+// Ornith-1.0 (DeepReinforce) — config-driven cookbook page. FP8
+// quantization cells use their FP8 repo ids from the collection with the same
+// flags; their README quickstarts point to the non-FP8 repos. Reasoning /
+// tool-call parsers are exposed as a Playground toggle (qwen3 / qwen3_coder),
+// not baked into the deploy cells. Cells remain unverified until exact
+// recipes are run and signed off.
 
 export const config = {
   modelName: "Ornith-1.0",

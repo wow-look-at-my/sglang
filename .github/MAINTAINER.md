@@ -1,16 +1,15 @@
 # SGLang Code Maintenance Model
-This document describes the code maintenance model for the SGLang project.
-Since SGLang is a large project involving multiple organizations and hardware platforms, we designed this model with the following goals:
+This document describes the code maintenance model for the SGLang project. Since SGLang is a large project involving multiple organizations and hardware platforms, we designed this model with the following goals:
 - Ensure a responsive and smooth review process.
 - Allow for fast iteration, so maintainers can sometimes bypass flaky CI tests for important PRs.
 
 ## Role Descriptions
-There are four roles in this maintenance model. Some are custom roles, while others are predefined by GitHub.
+There are roles in this maintenance model. Some are custom roles, while others are predefined by GitHub.
 
 - **Merge Oncall**: The person who drives the PR merge process. They have strong area-specific expertise and uphold a high bar for code quality.
   - Permission: Merge PRs. Bypass branch protection rules if needed.
   - Responsibility: Shepherd the merge of PRs assigned to their area. Revert or hotfix any issues related to their merge (especially if they bypass).
-- **Codeowner**: The person who protects critical code. Without a bypass, each PR needs at least one Codeowner approval for each modified file protected by [CODEOWNERS](./CODEOWNERS). Please note that this role is not an honor but a significant responsibility because PRs cannot be merged without your approval (except when bypassed by a Merge Oncall).
+- **Codeowner**: The person who protects critical code. Without a bypass, each PR needs at least one Codeowner approval for each modified file protected by [CODEOWNERS](./CODEOWNERS). Please this role is not an honor but a significant responsibility because PRs cannot be merged without your approval (except when bypassed by a Merge Oncall).
   - Permission: Approve PRs, allowing them to be merged without a bypass.
   - Responsibility: Review PRs in a timely manner.
 - **Write**: A person with write permission to the SGLang repo.
@@ -22,7 +21,7 @@ There are four roles in this maintenance model. Some are custom roles, while oth
 
 __Note__: Difference between Merge Oncall and Codeowner
 - The Merge Oncall is an active role held by someone who actively tries to help merge PRs and can bypass CI if needed.
-- The Codeowner is a passive protection role provided by GitHub; it prevents accidental changes to critical code.
+- The Codeowner is a passive protection role provided by GitHub. It prevents accidental changes to critical code.
 - The list of Merge Oncalls is attached below. The list of Codeowners is in the [CODEOWNERS](./CODEOWNERS) file.
 
 __Note__: The permissions to trigger CI tests are defined separately according to these [rules](https://docs.sglang.io/developer_guide/contribution_guide.html#how-to-trigger-ci-tests).
@@ -30,9 +29,9 @@ __Note__: The permissions to trigger CI tests are defined separately according t
 
 ## Pull Request Merge Process
 1. The author submits a pull request (PR) and fills out the PR checklist.
-2. A bot assigns this PR to a Merge Oncall and @-mentions them. At the same time, GitHub will automatically request reviews from Codeowners.
+2. A bot assigns. At the same time, GitHub will automatically request reviews from Codeowners.
 3. Someone tags the PR with a `run-ci` label ([help](https://docs.sglang.io/developer_guide/contribution_guide.html#how-to-trigger-ci-tests)). Then the author can trigger CI by pushing new commits.
-4. The Merge Oncall coordinates the review (e.g., asking people to review) and approves the PR; the Codeowners also approve the PR. If the assigned Merge Oncall is not responsive, the author can ping other related Merge Oncalls and Reviewers in the list below.
+4. The Merge Oncall coordinates the review (e.g., asking people to review) and approves the PR. The Codeowners also approve the PR. If the assigned Merge Oncall is not responsive, the author can ping other related Merge Oncalls and Reviewers in the list below.
 5. The code can now be merged:
    - **Ideal case:** For each modified file, one Codeowner has approved the PR. The PR has also passed the required CI tests. Then, anyone with write permission can merge the PR.
    - **Exception:** In cases where it is difficult to meet all requirements (due to flaky CI or slow responses), a Merge Oncall can bypass branch protection to merge the PR.
@@ -40,8 +39,7 @@ __Note__: The permissions to trigger CI tests are defined separately according t
 If you meet any issues during the merge, you can discuss in [slack channels](https://slack.sglang.io/): #pull-request, #ci-cd-build-release, #dev.
 
 ## The List of Merge Oncalls and Reviewers
-This section lists the oncalls for each module or feature.
-The format is @github-username (Slack username).
+This section lists the oncalls for each module or feature. The format is @github-username (Slack username).
 
 ### Scheduler
 [@merrymercy](https://github.com/merrymercy) (Lianmin Zheng), [@hnyls2002](https://github.com/hnyls2002) (Liangsheng Yin), [@cctry](https://github.com/cctry) (Shiyang Chen)
@@ -121,10 +119,9 @@ related files
 
 ### Other Notes
 
-Now we have many Merge Oncalls mainly because the CI is flaky and the CODEOWNERS is too coarse-grained.
-In the future, we hope the CI can be improved and we only need bypass rarely. After that, most Merge Oncalls can be converted back to Write and CODEOWNERS.
+Now we have many Merge Oncalls mainly because the CI is flaky and the CODEOWNERS is too coarse-grained. In the future, we hope the CI can be improved and we only need bypass rarely. After that, most Merge Oncalls can be converted back to Write and CODEOWNERS.
 
-This list is based on the current situation. If you or someone you know would like to take on more responsibility and are qualified, please ping [Lianmin Zheng](https://github.com/merrymercy) and [Ying Sheng](https://github.com/Ying1123) in the Slack channel. They will start a nomination and internal review process.
+This list is based on the current situation. If you or someone you know will like to take on more responsibility and are qualified, please ping [Lianmin Zheng](https://github.com/merrymercy) and [Ying Sheng](https://github.com/Ying1123). This is in the Slack channel. They will start a nomination and internal review process.
 
 ## The List of CI Oncalls
 This section lists the oncalls for each hardware platform. The format is @github-username (Slack username).
@@ -141,18 +138,13 @@ This section lists the oncalls for each hardware platform. The format is @github
 ### Ascend NPUs
 [@iforgetmyname](https://github.com/iforgetmyname) (Even Zhou)
 
-This list is based on the current situation. If you or someone you know would like to donate machines for CI, they can serve as the CI oncalls for their machines. Please ping [Lianmin Zheng](https://github.com/merrymercy) and [Ying Sheng](https://github.com/Ying1123) in the Slack channel. They will start a nomination and internal review process.
+This list is based on the current situation. If you or someone you know will like to donate machines for CI, they can serve as the CI oncalls for their machines. Please ping [Lianmin Zheng](https://github.com/merrymercy) and [Ying Sheng](https://github.com/Ying1123) in the Slack channel. They will start a nomination and internal review process.
 
 ## CI Control Labels
 
-`bypass-fail-fast`, `parallel-stages`, `max-concurrency` and `highest-priority`
-each relax one of the limits that keep a single PR from monopolizing the
-self-hosted GPU runners; `highest-priority` relaxes all of them at once. The
-[contribution guide](https://docs.sglang.io/developer_guide/contribution_guide.html#ci-control-labels)
-describes what each one does.
+`bypass-fail-fast`, `parallel-stages`, `max-concurrency` and `highest-priority` each relax one of the limits that keep a single PR from monopolizing the self-hosted GPU runners. `highest-priority` relaxes all of them at once. The [contribution guide](https://docs.sglang.io/developer_guide/contribution_guide.html#ci-control-labels) describes what each one does.
 
-Applying one spends other PRs' runner capacity. `parallel-stages` is the
-expensive one: a PR that cannot pass now runs its whole matrix.
+Applying one spends other PRs' runner capacity. `parallel-stages` is the expensive one: a PR that cannot pass now runs its whole matrix.
 
 ## CI Maintenance Mode
 When the CI is unhealthy (e.g., the scheduled pr-test on `main` is broken for consecutive runs), the project enters **CI Maintenance Mode** by opening [issue #21065](https://github.com/sgl-project/sglang/issues/21065). While active:
@@ -162,17 +154,17 @@ When the CI is unhealthy (e.g., the scheduled pr-test on `main` is broken for co
 Maintenance mode ends when `pr-test.yml` is all green on `main` and the issue is closed.
 
 ### Rebase-Required Mode
-When a major update lands on `main` and all open PRs must rebase before CI can run (without fully pausing CI), add a line of the form `MIN_BASE_SHA: <sha>` to the body of issue #21065. **The rebase check is enforced regardless of whether the issue is open or closed** — you do not need to enter full maintenance mode (open the issue) to use this gate; just editing the body to include the directive is enough. While the directive is present:
+When a major update lands on `main` and all open PRs must rebase before CI can run (without fully pausing CI), add a line of the form `MIN_BASE_SHA: <sha>`. This is to the body of issue #21065. **The rebase check is enforced regardless of whether the issue is open or closed** — you do not need to enter full maintenance mode (open the issue). This is to use this gate. Just editing the body to include the directive is enough. While the directive is present:
 - CI is allowed to run only for PRs whose branch already contains `<sha>` (GitHub compare API status `ahead` or `identical` — i.e., the PR has `<sha>` in its history).
 - PRs that are `behind` or `diverged` from `<sha>` are blocked with a "rebase required" error until they rebase onto the latest `main`.
 - The `bypass-maintenance` label still bypasses this check for CI-fix PRs.
 
 Notes:
 - Only the **first** `MIN_BASE_SHA:` line in the issue body is read.
-- The SHA must be 7-40 hex characters; malformed values are ignored (with a warning in the job summary).
+- The SHA must be 7-40 hex characters. Malformed values are ignored (with a warning in the job summary).
 - Avoid pasting the directive inside a fenced code block in the issue body — the parser does not skip code fences and may match example snippets.
 
 Remove the directive from the issue body to lift the rebase requirement (closing the issue does NOT lift it on its own).
 
 ## Suspending Permissions
-If a Merge Oncall bypasses checks to merge a PR that breaks the `main` branch, merges a non-CI-fix PR during CI Maintenance Mode, or repeatedly breaks the CI due to various reasons, their privileges will be suspended for at least two days, depending on the severity of the incident.
+If a Merge Oncall bypasses checks to merge a PR that breaks the `main` branch, merges a non-CI-fix PR. This is during CI Maintenance Mode, or repeatedly breaks the CI due to various reasons, their privileges will be suspended for a couple of days. This is depending on the severity of the incident.

@@ -1,7 +1,4 @@
-//! Preparation stage that delegates to endpoint-specific implementations
-//!
-//! This stage checks RequestType at runtime and delegates to the appropriate
-//! endpoint-specific stage (ChatPreparationStage or GeneratePreparationStage).
+//! Preparation stage that delegates.
 
 use async_trait::async_trait;
 use axum::response::Response;

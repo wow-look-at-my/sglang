@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::atomic::Ordering;
@@ -49,7 +49,7 @@ async fn assert_winner(
 ) {
     let model = ModelId("m".into());
     let request = PickRequest::new(&model, stage, 10);
-    // With exactly two candidates the winner is independent of sample order.
+    // With exactly candidates the winner is independent of sample order.
     for _ in 0..16 {
         let pick = policy.pick(engines, &request).await.unwrap();
         assert!(Arc::ptr_eq(&pick.engine, expected), "stage: {stage:?}");
@@ -93,8 +93,7 @@ async fn prefill_uses_estimated_queue_time_only_when_both_engines_have_rates() {
             native.total_prefill_busy_us = 1_000_000;
             table.set(&worker.url, 0, report, Instant::now());
         }
-        // B has more queued tokens, but its higher throughput gives a shorter
-        // estimated queue. Without B's rate, compare queued tokens for both.
+        // B has more queued tokens, but its higher throughput gives a shorter estimated queue.
         let expected = usize::from(both_have_rates);
         assert_winner(
             &PowerOfTwoPolicy::new(table),

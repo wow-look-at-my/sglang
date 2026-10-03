@@ -54,10 +54,7 @@ type GrpcResponseConverterHandle struct {
 
 // PostprocessStreamChunk postprocesses a gRPC stream chunk to OpenAI format
 //
-// This function:
-// 1. Parses the proto chunk from JSON
-// 2. Converts it to OpenAI format using the converter handle
-// 3. Returns the OpenAI format JSON
+// Returns the OpenAI format JSON
 //
 // Returns the OpenAI format JSON, is_done flag, and any error.
 func PostprocessStreamChunk(converterHandle *GrpcResponseConverterHandle, protoChunkJSON string) (openaiJSON string, isDone bool, err error) {
@@ -100,20 +97,14 @@ func PostprocessStreamChunk(converterHandle *GrpcResponseConverterHandle, protoC
 	return openaiJSON, isDone, nil
 }
 
-// PostprocessStreamChunksBatch postprocesses multiple gRPC stream chunks in batch
+// PostprocessStreamChunksBatch postprocesses multiple gRPC stream chunks in
+// batch
 //
-// This function processes multiple chunks in a single FFI call, significantly reducing
-// FFI overhead in streaming scenarios.
+// This function processes multiple chunks in a single FFI call, significantly
+// reducing FFI overhead in streaming scenarios.
 //
-// Arguments:
-// - converterHandle: Converter handle
-// - protoChunksJSONArray: JSON array string of proto chunks
-// - maxChunks: Maximum number of chunks to process (for safety, typically 10-20)
-//
-// Returns:
-// - openaiChunksJSONArray: JSON array of OpenAI format chunks
-// - chunksCount: Number of processed chunks
-// - error: Any error that occurred
+// Returns: - openaiChunksJSONArray: JSON array of OpenAI format chunks -
+// chunksCount: Number of processed chunks - error: Any error that occurred
 func PostprocessStreamChunksBatch(converterHandle *GrpcResponseConverterHandle, protoChunksJSONArray string, maxChunks int) (openaiChunksJSONArray string, chunksCount int, err error) {
 	if converterHandle == nil || converterHandle.handle == nil {
 		return "", 0, fmt.Errorf("invalid converter handle")

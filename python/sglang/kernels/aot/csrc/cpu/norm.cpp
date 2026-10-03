@@ -57,11 +57,11 @@ struct NormParams {
 };
 
 enum class NormMode {
-  L2Norm,        // y = x / sqrt(mean(x^2) + eps)
-  RMSNorm,       // y = x * weight / sqrt(mean(x^2) + eps)
-  GemmaNorm,     // y = x * (weight + scale_shift) / sqrt(mean(x^2) + eps)
+  L2Norm,
+  RMSNorm,
+  GemmaNorm,
   LayerNorm,     // y = (x - mean(x)) * weight / sqrt(var(x) + eps) + bias
-  RMSNormGated,  // y = x * weight / sqrt(mean(x^2) + eps) * SiLU(gate)
+  RMSNormGated,
 };
 
 struct NormTraitsBase {
@@ -106,7 +106,6 @@ struct NormTraits<NormMode::GemmaNorm> : NormTraitsBase {
 #endif
 };
 
-// LayerNorm: Var(X) = E(X^2) - (E(X))^2, refer to FlashInfer impl:
 //   https://github.com/flashinfer-ai/flashinfer/blob/main/include/flashinfer/norm.cuh#L552
 template <>
 struct NormTraits<NormMode::LayerNorm> : NormTraitsBase {
@@ -168,7 +167,6 @@ struct NormReduce<M, at::BFloat16, D> {
     __m512 vmean, vrscale;
     const __m512 vshift = _mm512_set1_ps(params.shift);
 
-    // step 1: load input and do reduce with avx512-bf16
     __m512 vsum = _mm512_set1_ps(0.f);
     __m512 vsum2 = _mm512_set1_ps(0.f);
     Unroll<COLS>{}([&](auto col) {
@@ -192,7 +190,6 @@ struct NormReduce<M, at::BFloat16, D> {
     float rscale = 1.f / std::sqrt(variance + params.eps);
     vrscale = _mm512_set1_ps(rscale);
 
-    // step 2: apply scale to output
     Unroll<COLS>{}([&](auto col) {
       __m512i a16 = (__m512i)va[col];
       __m512 va0 = CVT_BF16_TO_FP32(_mm512_extracti32x8_epi32(a16, 0));
@@ -398,7 +395,6 @@ void norm4d_kernel_impl(
     const NormParams& p,
     const scalar_t* __restrict__ gate = nullptr) {
 #if defined(CPU_CAPABILITY_AVX512)
-  // fast path only applies to bfloat16 when D in {32, 64, 128, 256, 512}
   if constexpr (std::is_same_v<scalar_t, at::BFloat16>) {
     switch (p.D) {
       LAUNCH_PARALLEL_LOOP_HD(32);
@@ -731,8 +727,7 @@ at::Tensor gemma4_rmsnorm_cpu(at::Tensor& input, at::Tensor& weight, double eps,
 }
 
 // input : {batch_size, hidden_size} or {batch_size, seq_len, hidden_size}
-// weight: {hidden_size}
-// bias  : {hidden_size}
+// weight: {hidden_size} bias : {hidden_size}
 at::Tensor
 layernorm_cpu(const at::Tensor& input, const at::Tensor& weight, const std::optional<at::Tensor>& bias, double eps) {
   const auto st = input.scalar_type();
@@ -776,9 +771,9 @@ at::Tensor fused_rmsnorm_gated_cpu(at::Tensor& input, at::Tensor& weight, at::Te
   return output;
 }
 
-// input   : {batch_size, hidden_size} or {batch_size, seq_len, hidden_size}
+// input : {batch_size, hidden_size} or {batch_size, seq_len, hidden_size}
 // residual: {batch_size, hidden_size} or {batch_size, seq_len, hidden_size}
-// weight  : {hidden_size}
+// weight : {hidden_size}
 void fused_add_rmsnorm_cpu(at::Tensor& input, at::Tensor& residual, at::Tensor& weight, double eps) {
   const auto st = input.scalar_type();
   CHECK_INPUT_ND<2, 3>(input);
@@ -799,9 +794,9 @@ void fused_add_rmsnorm_cpu(at::Tensor& input, at::Tensor& residual, at::Tensor& 
   });
 }
 
-// input   : {batch_size, hidden_size}
+// input : {batch_size, hidden_size}
 // residual: {batch_size, hidden_size}
-// weight  : {hidden_size}
+// weight : {hidden_size}
 void gemma_fused_add_rmsnorm_cpu(at::Tensor& input, at::Tensor& residual, at::Tensor& weight, double eps) {
   const auto st = input.scalar_type();
   CHECK_INPUT_ND<2>(input);
@@ -823,10 +818,9 @@ void gemma_fused_add_rmsnorm_cpu(at::Tensor& input, at::Tensor& residual, at::Te
   });
 }
 
-// input   : {batch_size, hidden_size} or {batch_size, seq_len, hidden_size}
+// input : {batch_size, hidden_size} or {batch_size, seq_len, hidden_size}
 // residual: {batch_size, hidden_size} or {batch_size, seq_len, hidden_size}
-// weight  : {hidden_size}
-// bias    : {hidden_size}
+// weight : {hidden_size} bias : {hidden_size}
 at::Tensor fused_add_layernorm_cpu(
     const at::Tensor& input,
     at::Tensor& residual,
@@ -889,9 +883,6 @@ std::tuple<at::Tensor, at::Tensor> fused_qk_rmsnorm_cpu(
   return std::make_tuple(q_out, k_out);
 }
 
-// q: {batch_size, local_q_hidden_size} 2D
-// k: {batch_size, local_k_hidden_size} 2D
-// output: local Q/K squared sums, {batch_size, 2} FP32
 at::Tensor fused_qk_rmsnorm_sumsq_cpu(const at::Tensor& q, const at::Tensor& k) {
   const auto st = q.scalar_type();
   CHECK_INPUT_ND<2>(q);
@@ -909,9 +900,6 @@ at::Tensor fused_qk_rmsnorm_sumsq_cpu(const at::Tensor& q, const at::Tensor& k) 
   return sum_sq;
 }
 
-// q: {batch_size, local_q_hidden_size} 2D
-// k: {batch_size, local_k_hidden_size} 2D
-// sum_sq: globally reduced Q/K squared sums, {batch_size, 2} FP32
 std::tuple<at::Tensor, at::Tensor> fused_qk_rmsnorm_apply_from_stats_cpu(
     const at::Tensor& q,
     const at::Tensor& k,
@@ -1001,8 +989,6 @@ std::tuple<at::Tensor, at::Tensor> fused_qk_gemma_rmsnorm_cpu(
   return std::make_tuple(q_out, k_out);
 }
 
-// q_gate : {batch_size, num_head * head_dim * 2} 2D, interleaved per head as [q_h, gate_h]
-// k      : {batch_size, num_head_kv * head_dim} 2D
 std::tuple<at::Tensor, at::Tensor, at::Tensor> fused_qk_gemma_rmsnorm_with_gate_cpu(
     const at::Tensor& q_gate,
     const at::Tensor& k,

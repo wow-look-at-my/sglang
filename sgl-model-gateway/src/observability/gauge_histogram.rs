@@ -1,72 +1,20 @@
 //! Non-cumulative gauge histogram for Grafana heatmap visualization.
-//!
-//! Unlike Prometheus Histogram which uses cumulative `le` buckets, this emits
-//! non-cumulative bucket counts with `(gt, le]` ranges suitable for heatmaps.
-//!
-//! # Design: True Zero-Allocation Hot Path
-//!
-//! The key insight is that `gauge!` returns a `Gauge` handle that can be stored.
-//! By pre-registering all gauge handles at startup, the hot path becomes just
-//! N+1 atomic `gauge.set()` calls with zero allocations.
-//!
-//! # Performance Characteristics
-//!
-//! Setup (once per label combination):
-//! - `register()`: N+1 gauge registrations, N+1 String allocations for gt/le
-//!
-//! Hot path (`set_counts()`):
-//! - **Zero heap allocations**
-//! - **Zero key lookups** (handles are pre-registered)
-//! - N+1 atomic `gauge.set()` calls
-//!
-//! # Example
-//!
-//! ```ignore
-//! use crate::observability::gauge_histogram::{BucketBounds, GaugeHistogramVec};
-//!
-//! // Define at module level
-//! static BOUNDS: BucketBounds<10> = BucketBounds::new([1, 2, 3, 5, 7, 10, 20, 50, 100, 200]);
-//! static HISTOGRAM: GaugeHistogramVec<10> = GaugeHistogramVec::new("smg_request_dist", &BOUNDS);
-//!
-//! // At startup: register for each label combination
-//! let handle = HISTOGRAM.register(&[("router", "round_robin"), ("model", "llama")]);
-//!
-//! // Pre-allocate counts buffer
-//! let mut counts = vec![0usize; BOUNDS.bucket_count()];
-//!
-//! // Hot path: TRUE zero allocation
-//! fn update(handle: &GaugeHistogramHandle, counts: &mut [usize], observations: &[u64]) {
-//!     BOUNDS.compute_counts_into(counts, observations);
-//!     handle.set_counts(counts);  // Just N+1 atomic gauge.set() calls!
-//! }
-//! ```
 
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use metrics::{gauge, Label};
 
-// =============================================================================
-// BUCKET BOUNDS
-// =============================================================================
+// ============================================================================= BUCKET BOUNDS.
 
-/// Static bucket boundary configuration.
-///
-/// Uses const generics to define bucket bounds at compile time with validation.
-/// The bounds define `N` upper limits, creating `N + 1` buckets:
-/// `(0, b[0]], (b[0], b[1]], ..., (b[N-1], +Inf]`.
+/// Static bucket boundary configuration. Uses const generics to define bucket bounds at compile time with validation.
 #[derive(Debug)]
 pub struct BucketBounds<const N: usize> {
     bounds: [u64; N],
 }
 
 impl<const N: usize> BucketBounds<N> {
-    /// Create new bucket bounds from a sorted array of upper limits.
-    ///
-    /// # Panics
-    ///
-    /// Panics at compile time (in const context) or runtime if bounds are not
-    /// strictly ascending.
+    /// Create new bucket bounds from a sorted array of upper limits. # Panics Panics at compile time (in const context) or runtime.
     #[must_use]
     pub const fn new(bounds: [u64; N]) -> Self {
         let mut i = 1;
@@ -119,7 +67,7 @@ impl<const N: usize> BucketBounds<N> {
         }
     }
 
-    /// Get the lower bound for a bucket index (0 for the first bucket).
+    /// Get the lower bound for a bucket index ( for the first bucket).
     #[inline]
     #[must_use]
     pub const fn lower_bound(&self, idx: usize) -> u64 {
@@ -130,11 +78,7 @@ impl<const N: usize> BucketBounds<N> {
         }
     }
 
-    /// Compute bucket counts into a pre-allocated buffer. **Zero allocation.**
-    ///
-    /// # Panics
-    ///
-    /// Panics if `counts.len() < bucket_count()`.
+    /// Compute bucket counts into a pre-allocated buffer.
     #[inline]
     pub fn compute_counts_into(&self, counts: &mut [usize], observations: &[u64]) {
         debug_assert!(
@@ -148,9 +92,7 @@ impl<const N: usize> BucketBounds<N> {
         }
     }
 
-    /// Compute bucket counts, allocating a new Vec.
-    ///
-    /// Prefer `compute_counts_into` in hot paths to avoid allocation.
+    /// Compute bucket counts, allocating a new Vec. Prefer `compute_counts_into` in hot paths to avoid allocation.
     #[must_use]
     pub fn compute_counts(&self, observations: &[u64]) -> Vec<usize> {
         let mut counts = vec![0usize; self.bucket_count()];
@@ -159,23 +101,16 @@ impl<const N: usize> BucketBounds<N> {
     }
 }
 
-// =============================================================================
-// GAUGE HISTOGRAM HANDLE (pre-registered, zero-alloc hot path)
-// =============================================================================
+// ============================================================================= GAUGE HISTOGRAM HANDLE.
 
-/// Pre-registered gauge handles for a histogram with specific labels.
-///
-/// This is what you use in the hot path. Calling `set_counts()` does only
-/// N+1 atomic `gauge.set()` operations - zero allocations, zero lookups.
+/// Pre-registered gauge handles for a histogram with specific labels. This is what you use in the hot path.
 #[derive(Clone)]
 pub struct GaugeHistogramHandle {
     gauges: Vec<metrics::Gauge>,
 }
 
 impl GaugeHistogramHandle {
-    /// Set bucket counts. **TRUE zero allocation.**
-    ///
-    /// Just N+1 atomic `gauge.set()` calls - no key lookup, no allocation.
+    /// Set bucket counts. **TRUE zero allocation.** Just N+1 atomic `gauge.set()` calls - no key lookup, no allocation.
     #[inline]
     pub fn set_counts(&self, counts: &[usize]) {
         debug_assert_eq!(
@@ -203,14 +138,9 @@ impl GaugeHistogramHandle {
     }
 }
 
-// =============================================================================
-// GAUGE HISTOGRAM VEC (factory for registering handles)
-// =============================================================================
+// ============================================================================= GAUGE HISTOGRAM VEC.
 
 /// Factory for creating pre-registered histogram handles.
-///
-/// Define as a static constant, then call `register()` for each label combination
-/// you need. The returned `GaugeHistogramHandle` provides zero-allocation updates.
 #[derive(Debug)]
 pub struct GaugeHistogramVec<const N: usize> {
     name: &'static str,
@@ -218,9 +148,7 @@ pub struct GaugeHistogramVec<const N: usize> {
 }
 
 impl<const N: usize> GaugeHistogramVec<N> {
-    /// Create a new gauge histogram factory.
-    ///
-    /// This just stores the name and bounds - no allocation or registration yet.
+    /// Create a new gauge histogram factory. This stores the name and bounds - no allocation or registration yet.
     #[must_use]
     pub const fn new(name: &'static str, bounds: &'static BucketBounds<N>) -> Self {
         Self { name, bounds }
@@ -291,28 +219,10 @@ impl<const N: usize> GaugeHistogramVec<N> {
 }
 
 // =============================================================================
-// CACHED GAUGE HISTOGRAM (for dynamic labels discovered at runtime)
-// =============================================================================
+// CACHED GAUGE HISTOGRAM (for dynamic labels discovered at runtime).
 
-/// A gauge histogram with automatic handle caching for dynamic labels.
-///
-/// Use this when label values (like worker names) are discovered at runtime.
-/// Handles are registered on first use and cached for subsequent calls.
-///
-/// # Example
-///
-/// ```ignore
-/// static BOUNDS: BucketBounds<10> = BucketBounds::new([1, 2, 3, 5, 7, 10, 20, 50, 100, 200]);
-/// static HISTOGRAM: GaugeHistogramVec<10> = GaugeHistogramVec::new("smg_worker_dist", &BOUNDS);
-///
-/// // Create cached wrapper (do this once, store in your router state)
-/// let cached = CachedGaugeHistogram::new(&HISTOGRAM);
-///
-/// // Hot path - first call registers, subsequent calls use cached handle
-/// cached.observe("worker-1", &request_counts);
-/// cached.observe("worker-2", &request_counts);
-/// cached.observe("worker-1", &request_counts);  // Uses cached handle
-/// ```
+/// A gauge histogram with automatic handle caching for dynamic labels. Use
+/// this when label values (like worker names) are discovered at runtime.
 pub struct CachedGaugeHistogram<const N: usize> {
     histogram: &'static GaugeHistogramVec<N>,
     /// Cache of label value -> (handle, counts_buffer)
@@ -322,12 +232,8 @@ pub struct CachedGaugeHistogram<const N: usize> {
 }
 
 impl<const N: usize> CachedGaugeHistogram<N> {
-    /// Create a new cached histogram for a single dynamic label.
-    ///
-    /// # Arguments
-    ///
-    /// - `histogram`: The static histogram factory
-    /// - `label_key`: The label key for the dynamic value (e.g., "worker")
+    /// Create a new cached histogram for a single dynamic label. # Arguments
+    /// - `histogram`: The static histogram factory - `label_key`.
     pub fn new(histogram: &'static GaugeHistogramVec<N>, label_key: &'static str) -> Self {
         Self {
             histogram,
@@ -395,30 +301,16 @@ impl<const N: usize> CachedGaugeHistogram<N> {
         self.cache.len()
     }
 
-    /// Remove a worker and zero out its metrics. **Zero allocation.**
-    ///
-    /// Call this when a worker is removed from the pool.
-    /// Sets all bucket counts to 0 (so Grafana shows it as empty).
-    ///
-    /// Note: The gauge handles remain in the Prometheus registry (the `metrics`
-    /// crate doesn't support unregistering). But memory in our cache is freed.
+    /// Remove a worker and zero out its metrics. **Zero allocation.** Call
+    /// this when a worker is removed from the pool.
     pub fn remove(&self, label_value: &str) {
         if let Some((_, (handle, _))) = self.cache.remove(label_value) {
             handle.zero_counts();
         }
     }
 
-    /// Remove workers not in the provided set.
-    ///
-    /// Call this periodically with your current active workers to clean up stale entries.
-    /// Uses `DashMap::retain` for atomic operation without intermediate allocation.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let active: HashSet<&str> = workers.iter().map(|w| w.name.as_str()).collect();
-    /// cached.retain_only(&active);
-    /// ```
+    /// Remove workers not in the provided set. Call this periodically with
+    /// your current active workers to clean up stale entries.
     pub fn retain_only<S: std::borrow::Borrow<str> + std::hash::Hash + Eq>(
         &self,
         active_labels: &std::collections::HashSet<S>,
@@ -440,16 +332,13 @@ impl<const N: usize> CachedGaugeHistogram<N> {
 }
 
 // =============================================================================
-// CONVENIENCE CONSTANTS
-// =============================================================================
+// CONVENIENCE CONSTANTS.
 
 /// Common bucket bounds for request counts.
 pub static REQUEST_COUNT_BOUNDS: BucketBounds<10> =
     BucketBounds::new([1, 2, 3, 5, 7, 10, 20, 50, 100, 200]);
 
-// =============================================================================
-// TESTS
-// =============================================================================
+// ============================================================================= TESTS.
 
 #[cfg(test)]
 mod tests {

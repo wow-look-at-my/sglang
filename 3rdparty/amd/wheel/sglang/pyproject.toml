@@ -77,7 +77,7 @@ rocm720 = [
 ]
 
 # HIP (Heterogeneous-computing Interface for Portability) for AMD
-# Install with:
+# Install with.
 #   pip install "amd-sglang[srt_hip,rocm720]"
 srt_hip = [
   "amd-sglang[runtime_common]",

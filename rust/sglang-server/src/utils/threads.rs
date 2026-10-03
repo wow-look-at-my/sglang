@@ -1,11 +1,4 @@
-//! Thread-group machinery: CPU-core partitioning and the pinned-thread
-//! spawners (for [`Runnable`] stages) used by `runtime::start`.
-//!
-//! Adding a new thread group (encoder, weight loader, KV-cache offloader, …) is
-//! three small steps and no spawn boilerplate:
-//!   1. a struct implementing [`Runnable`];
-//!   2. a core set for it (a field on [`CorePlan`] + a slice in [`plan_cores`]);
-//!   3. one [`spawn_pool`] (N pinned workers) or [`spawn_stage`] (singleton) call.
+//! Thread-group machinery: CPU-core partitioning and the pinned-thread spawners (for [`Runnable`] stages) used.
 
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -15,22 +8,11 @@ use core_affinity::CoreId;
 use super::runtime::Runnable;
 use crate::message::config::RuntimeConfig;
 
-/// Cores reserved for the two TokenizerManager router threads (`to-scheduler`,
-/// `from-scheduler`) — light, latency-sensitive channel routers, so one core each.
-///
-/// TODO(tm-scaling): both TM threads are single-consumer serialization points,
-/// each with its own ceiling. `to-scheduler` runs validate + `normalize_sampling_params`
-/// for *every* request before fanning out to the (pooled) tokenizer workers, so a
-/// high request-arrival / short-request workload is bounded by that one thread's
-/// per-request cost (kept O(fields), see `sampling::normalize_sampling_params`).
-/// Sharding to-scheduler by rid — like the tokenizer/detok pools — lifts that ceiling.
+/// Cores reserved for both TokenizerManager router threads (`to-scheduler`, `from-scheduler`) — light.
 const TM_CORES: usize = 2;
 
-/// Partition the machine's cores into four disjoint sets: the I/O-bound API
-/// pool, the CPU-bound tokenizer and detokenizer pools, and the two TM router
-/// threads. Falls back to no pinning if affinity isn't available or there aren't
-/// enough cores for the (CPU-bound) pools. A new thread group adds a field here
-/// and a slice in [`plan_cores`].
+/// Partition the machine's cores into disjoint sets: the I/O-bound API
+/// pool, the CPU-bound tokenizer.
 pub(super) struct CorePlan {
     pub(super) api: Vec<CoreId>,
     pub(super) tok: Vec<CoreId>,
@@ -39,9 +21,7 @@ pub(super) struct CorePlan {
 }
 
 pub(super) fn plan_cores(cfg: &RuntimeConfig) -> Option<CorePlan> {
-    // `cores` carries the pinning decision: `None`/empty → run unpinned. The
-    // caller (Python `_partition_cores`) passes this rank's NUMA-local cores
-    // minus the scheduler's reserved launch cores.
+    // `cores` carries the pinning decision: `None`/empty → run unpinned.
     let cores: Vec<CoreId> = match &cfg.rust_server_args.cores {
         Some(ids) if !ids.is_empty() => ids.iter().map(|&id| CoreId { id }).collect(),
         _ => return None,
@@ -70,9 +50,7 @@ pub(super) fn plan_cores(cfg: &RuntimeConfig) -> Option<CorePlan> {
         .by_ref()
         .take(cfg.server_args.detokenizer_worker_num)
         .collect();
-    // The two TM router threads get up to `TM_CORES` leftover cores; when none
-    // are spare they fall back to the API set so they never float onto the
-    // CPU-bound tokenizer/detok cores.
+    // The TM router threads get up to `TM_CORES` leftover cores.
     let mut tm: Vec<CoreId> = it.by_ref().take(TM_CORES).collect();
     if tm.is_empty() {
         tm = api.clone();

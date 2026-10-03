@@ -36,8 +36,7 @@ on:
         type: string
         default: 'false'
 
-# Workflow-level env is NOT inherited from the caller in reusable workflows.
-# The github context (including github.event_name) IS inherited from the caller.
+# Workflow-level env is NOT inherited from the caller in reusable workflows. The github context (including github.event_name) IS inherited from the caller.
 env:
   SGLANG_IS_IN_CI: true
   NCCL_NVLS_ENABLE: "0"

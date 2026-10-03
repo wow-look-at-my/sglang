@@ -1,10 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! HTTP contract for static P/D buckets.
-//!
-//! Buckets narrow the candidate domain before policy selection. Prefill SLO
-//! profiles may override rank, while decode uses `input_tokens + max_tokens`.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

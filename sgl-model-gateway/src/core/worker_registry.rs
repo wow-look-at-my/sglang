@@ -1,15 +1,4 @@
-//! Worker Registry for multi-router support
-//!
-//! Provides centralized registry for workers with model-based indexing
-//!
-//! # Performance Optimizations
-//! The model index uses immutable Arc snapshots instead of RwLock for lock-free reads.
-//! This is critical for high-concurrency scenarios where many requests query the same model.
-//!
-//! # Consistent Hash Ring
-//! The registry maintains a pre-computed hash ring per model for O(log n) consistent hashing.
-//! The ring is rebuilt only when workers are added/removed, not per-request.
-//! Uses virtual nodes (150 per worker) for even distribution and blake3 for stable hashing.
+//! Worker Registry.
 
 use std::sync::{Arc, RwLock};
 
@@ -27,23 +16,12 @@ use crate::{
 };
 
 /// Number of virtual nodes per physical worker for even distribution.
-/// 150 is a common choice that provides good balance between memory and distribution.
 const VIRTUAL_NODES_PER_WORKER: usize = 150;
 
 /// Consistent hash ring for O(log n) worker selection.
-///
-/// Each worker is placed at multiple positions (virtual nodes) on the ring
-/// based on hash(worker_url + vnode_index). This provides:
-/// - Even key distribution across workers
-/// - Minimal key redistribution when workers are added/removed (~1/N keys move)
-/// - O(log n) lookup via binary search
-///
-/// Uses blake3 for stable, fast hashing that's consistent across Rust versions.
 #[derive(Debug, Clone)]
 pub struct HashRing {
-    /// Sorted list of (ring_position, worker_url)
-    /// Multiple entries per worker (virtual nodes) for even distribution.
-    /// Uses Arc<str> to share URL across all virtual nodes (150 refs vs 150 copies).
+    /// Sorted list of (ring_position, worker_url) Multiple entries per worker (virtual nodes) for even distribution.
     entries: Arc<[(u64, Arc<str>)]>,
 }
 
@@ -83,7 +61,7 @@ impl HashRing {
     #[inline]
     fn hash_position(s: &str) -> u64 {
         let hash = blake3::hash(s.as_bytes());
-        // Take first 8 bytes as u64
+        // Take first several bytes as u64
         u64::from_le_bytes(hash.as_bytes()[..8].try_into().unwrap())
     }
 
@@ -171,8 +149,6 @@ impl Default for WorkerId {
 }
 
 /// Model index using immutable snapshots for lock-free reads.
-/// Each model maps to an Arc'd slice of workers that can be read without locking.
-/// Updates create new snapshots (copy-on-write semantics).
 type ModelIndex = Arc<DashMap<String, Arc<[Arc<dyn Worker>]>>>;
 
 /// Worker registry with model-based indexing
@@ -182,11 +158,9 @@ pub struct WorkerRegistry {
     workers: Arc<DashMap<WorkerId, Arc<dyn Worker>>>,
 
     /// Model index for O(1) lookups using immutable snapshots.
-    /// Uses Arc<[T]> instead of Arc<RwLock<Vec<T>>> for lock-free reads.
     model_index: ModelIndex,
 
-    /// Consistent hash rings per model for O(log n) routing.
-    /// Rebuilt on worker add/remove (copy-on-write).
+    /// Consistent hash rings per model for O(log n) routing. Rebuilt on worker add/remove (copy-on-write).
     hash_rings: Arc<DashMap<String, Arc<HashRing>>>,
 
     /// Workers indexed by worker type
@@ -197,9 +171,7 @@ pub struct WorkerRegistry {
 
     /// URL to worker ID mapping
     url_to_id: Arc<DashMap<String, WorkerId>>,
-    /// Optional mesh sync manager for state synchronization
-    /// When None, the registry works independently without mesh synchronization
-    /// Uses RwLock for thread-safe access when setting mesh_sync after initialization
+    /// Optional mesh sync manager for state synchronization When None.
     mesh_sync: Arc<RwLock<OptionalMeshSyncManager>>,
 }
 
@@ -254,8 +226,7 @@ impl WorkerRegistry {
         self.url_to_id
             .insert(worker.url().to_string(), worker_id.clone());
 
-        // Update model index for O(1) lookups using copy-on-write
-        // This creates a new immutable snapshot with the added worker
+        // Update model index for O(1) lookups using copy-on-write This creates a new immutable snapshot.
         let model_id = worker.model_id().to_string();
         self.model_index
             .entry(model_id.clone())
@@ -318,8 +289,7 @@ impl WorkerRegistry {
             // Remove from URL mapping
             self.url_to_id.remove(worker.url());
 
-            // Remove from model index using copy-on-write
-            // Create new snapshot without the removed worker
+            // Remove from model index using copy-on-write Create new snapshot without the removed worker
             let worker_url = worker.url();
             let model_id = worker.model_id().to_string();
             if let Some(mut entry) = self.model_index.get_mut(&model_id) {
@@ -404,7 +374,7 @@ impl WorkerRegistry {
     pub fn update_worker_health(&self, worker_id: &WorkerId, is_healthy: bool) {
         if let Some(worker) = self.workers.get(worker_id) {
             // Update worker health (if Worker trait has a method for this)
-            // For now, we'll just sync to mesh
+            // we'll sync to mesh
 
             // Sync to mesh if enabled (no-op if mesh is not enabled)
             if let Some(ref mesh_sync) = *self.mesh_sync.read().unwrap() {
@@ -503,7 +473,7 @@ impl WorkerRegistry {
 
     /// Get workers filtered by multiple criteria
     ///
-    /// This method allows flexible filtering of workers based on:
+    /// This method allows flexible filtering of workers based on.
     /// - model_id: Filter by specific model
     /// - worker_type: Filter by worker type (Regular, Prefill, Decode)
     /// - connection_mode: Filter by connection mode (Http, Grpc)

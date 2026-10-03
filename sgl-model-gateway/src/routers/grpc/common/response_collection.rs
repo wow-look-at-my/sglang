@@ -1,7 +1,4 @@
-//! Shared response collection logic
-//!
-//! This module contains common logic for collecting responses from execution results.
-//! Both regular and harmony processors use these functions to avoid duplication.
+//! Shared response collection.
 
 use axum::response::Response;
 
@@ -35,11 +32,9 @@ pub(crate) async fn collect_responses(
             mut prefill,
             decode,
         } => {
-            // Collect prefill for input_logprobs (don't mark completed yet)
             let prefill_responses =
                 utils::collect_stream_responses(&mut prefill, "Prefill").await?;
 
-            // Collect decode for actual output (don't mark completed yet)
             let mut decode_stream = *decode;
             let mut decode_responses =
                 utils::collect_stream_responses(&mut decode_stream, "Decode").await?;

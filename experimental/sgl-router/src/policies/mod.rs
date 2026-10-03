@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod admission;
@@ -31,8 +31,7 @@ use std::sync::Arc;
 pub struct RequestTokens {
     /// The prompt token ids.
     pub ids: Vec<u32>,
-    /// Whether the IDs came from rendered chat messages.
-    /// Forwarding also requires the request safety guard.
+    /// Whether the IDs came from rendered chat messages. Forwarding also requires the request safety guard.
     pub rendered_from_chat: bool,
 }
 
@@ -44,9 +43,7 @@ pub struct ExternalPrefixSignal {
 }
 
 /// Whether the caller pre-tokenized the prompt (`input_ids` present and not
-/// null). Such a request is never re-rendered: its ids drive routing and the
-/// body is forwarded untouched, malformed values included, for the engine to
-/// validate.
+/// null).
 pub fn has_caller_input_ids(value: &serde_json::Value) -> bool {
     value.get("input_ids").is_some_and(|v| !v.is_null())
 }
@@ -60,8 +57,7 @@ pub fn request_tokens_for(
     value: &serde_json::Value,
 ) -> Option<RequestTokens> {
     if has_caller_input_ids(value) {
-        // A flat u32 array (empty included) supplies routing tokens; anything
-        // else yields none, leaving validation to the engine.
+        // A flat u32 array (empty included) supplies routing tokens.
         let ids = serde::Deserialize::deserialize(&value["input_ids"]).ok()?;
         return Some(RequestTokens {
             ids,
@@ -118,7 +114,6 @@ fn tokenize_text(
 ///   4. `"messages": [{"content": [{"text": "..."}]}]` — chat with
 ///      multimodal content blocks; text-only blocks concatenated.
 ///   5. `"text": "..."` — SGLang `/generate` native form.
-///
 pub(crate) fn extract_prompt_text_from_value(v: &serde_json::Value) -> Option<String> {
     if let Some(s) = v.get("prompt").and_then(|p| p.as_str()) {
         return Some(s.to_string());
@@ -336,7 +331,6 @@ pub struct SelectionProposal {
     pub backup: Option<Arc<Worker>>,
     pub kind: ProposalKind,
     /// Optional pressure guard settings for this pair.
-    /// Applied only when both workers have complete, fresh native monitor data.
     pub guard_hints: GuardHints,
     /// Workers available for fallback after eligibility filtering.
     pub eligible_workers: Option<Vec<Arc<Worker>>>,
@@ -349,9 +343,6 @@ pub struct CacheCandidate {
     pub matched_prefix_tokens: u64,
     pub uncached_tokens: u64,
     /// Matched prefix length in blocks, as reported by the prefix signal.
-    /// Selection reads `matched_prefix_tokens`; the block count exists for
-    /// observability (the diverted-overlap histogram reads against the
-    /// tree/indexer block domain).
     pub matched_prefix_blocks: u32,
     /// Domain containing this candidate.
     pub candidate_range_id: String,
@@ -368,17 +359,9 @@ pub struct CacheCandidateProposal {
     pub pressure_abs_threshold_tokens: u64,
     pub pressure_abs_threshold_ms: Option<f64>,
     pub pressure_rel_threshold: f64,
-    /// Queue gate: a candidate whose engine reports at least this many
-    /// waiting requests cannot win on cache affinity. `None` disables the
-    /// gate. See [`crate::config::AffinityConfig::worker_queue_limit`].
+    /// Queue gate: a candidate whose engine reports at least this many waiting requests cannot win on cache affinity.
     pub worker_queue_limit: Option<u64>,
-    /// Saturation pin: when no candidate survives the gate and hard
-    /// admission, at least one was queue-gate-rejected, and no worker in
-    /// the routable fleet has a fresh queue reading strictly below this
-    /// floor, the request pins to the least-pressured rejected prefix
-    /// owner instead of diverting — the diversion cannot dodge a wait and
-    /// would forfeit the matched prefix. `None` disables the pin. See
-    /// [`crate::config::AffinityConfig::saturation_queue_floor`].
+    /// Saturation pin: when no candidate survives the gate and hard admission, at least one was queue-gate-rejected.
     pub saturation_queue_floor: Option<u64>,
 }
 
@@ -525,11 +508,8 @@ pub trait Policy: Send + Sync + std::fmt::Debug {
         false
     }
 
-    /// Whether this policy's routing decision needs request tokens (i.e.
-    /// it routes by prompt prefix). This keeps routing tokenization active when
-    /// generated input-ID forwarding is disabled or no chat formatter exists.
-    /// Models with forwarding enabled also tokenize independently of this flag.
-    /// Default `false` for load-only and sticky routes.
+    /// Whether this policy's routing decision needs request tokens (i.e. it
+    /// routes by prompt prefix).
     fn needs_request_tokens(&self) -> bool {
         false
     }
@@ -598,7 +578,7 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Instant;
 
-    /// #34608 `LoadStat` aggregate used by policy tests.
+    /// # `LoadStat` aggregate used by policy tests.
     #[derive(Clone, Default)]
     struct TestEngineLoad {
         num_running_reqs: u64,
@@ -1517,9 +1497,7 @@ mod tests {
         let near_tie = worker("near-tie");
         let beyond_margin = worker("beyond-margin");
         let proposal = CacheCandidateProposal {
-            // The policy supplies candidates in increasing E order. Each
-            // adjacent pair is a near tie, but the last candidate is more
-            // than one configured margin away from the global work minimum.
+            // The policy supplies candidates in increasing E order.
             candidates: vec![
                 cache_candidate(&best_work, 100, 0, None),
                 cache_candidate(&near_tie, 80, 20, None),

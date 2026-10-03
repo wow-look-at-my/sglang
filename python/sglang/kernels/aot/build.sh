@@ -6,8 +6,8 @@ if [ $# -lt 2 ]; then
   exit 1
 fi
 
-PYTHON_VERSION="$1"          # e.g. 3.10
-CUDA_VERSION="$2"            # e.g. 12.9
+PYTHON_VERSION="$1"
+CUDA_VERSION="$2"
 ARCH="${3:-$(uname -i)}"     # optional override
 
 if [ "${ARCH}" = "aarch64" ]; then
@@ -16,8 +16,7 @@ else
   BASE_IMG="pytorch/manylinux2_28-builder"
 fi
 
-# Create cache directories for persistent build artifacts in home directory
-# Using home directory to persist across workspace cleanups/checkouts
+# Create cache directories for persistent build artifacts in home directory Using home directory.
 CACHE_DIR="${HOME}/.cache/sgl-kernel"
 BUILDX_CACHE_DIR="${CACHE_DIR}/buildx"
 CCACHE_HOST_DIR="${CACHE_DIR}/ccache"
@@ -78,7 +77,6 @@ BUILD_ARGS=()
 [ -n "${PIP_DEFAULT_INDEX:-}" ]    && BUILD_ARGS+=(--build-arg PIP_DEFAULT_INDEX="${PIP_DEFAULT_INDEX}")
 [ -n "${YUM_MIRROR:-}" ]           && BUILD_ARGS+=(--build-arg YUM_MIRROR="${YUM_MIRROR}")
 
-# ---- Step 1: Build deps image (layer cached, fast on repeat) ----
 DEPS_TAG="sgl-kernel-deps:cuda${CUDA_VERSION}-${PY_TAG}-${ARCH}"
 
 docker buildx build \
@@ -99,8 +97,6 @@ docker buildx build \
 
 echo "Deps image ready: ${DEPS_TAG}"
 
-# ---- Step 2: Build wheel with host-mounted ccache ----
-# This allows ccache to persist on the host filesystem across builds.
 CCACHE_FLAG="${USE_CCACHE:-1}"
 BUILD_JOBS_FLAG="${BUILD_JOBS:-0}"
 NVCC_THREADS_FLAG="${NVCC_THREADS:-32}"

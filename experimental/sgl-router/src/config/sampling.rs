@@ -1,20 +1,12 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Fleet sampling defaults and constraints. Custom JSON visitors preserve duplicate
-//! keys so validation can reject them and report the offending parameter.
-//!
-//! The flag is read once, at startup, on a router that crash-loops if it is wrong,
-//! so the message an operator reads out of `kubectl logs` is the whole debugging
-//! session: every rejection names the offending key, the value it saw, and the
-//! domain it violated. (A `serde_json::Map` would keep only the last of a repeated
-//! key and silently enforce a value the operator did not write.)
+//! Fleet sampling defaults and constraints.
 
 use anyhow::{anyhow, ensure, Result};
 use std::collections::BTreeMap;
 
-/// Fleet sampling defaults. Exact values fill absent fields; [`ConflictPolicy`]
-/// determines whether differing client values are rejected or forwarded.
+/// Fleet sampling defaults.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SamplingOverrides {
     /// Parameters in deterministic injection order.
@@ -33,28 +25,22 @@ impl SamplingOverrides {
     }
 }
 
-/// What a request sending a value that differs from the configured one gets
-/// (`--sampling-param-conflict`).
+/// What a request sending a value that differs from the configured one gets (`--sampling-param-conflict`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum ConflictPolicy {
-    /// Reject differing client values with 400 before admission.
+    /// Reject differing client values with before admission.
     #[default]
     Reject,
-    /// Forward the client's value to the engine untouched. The configured
-    /// value degrades to a fill-when-absent default.
+    /// Forward the client's value to the engine untouched. The configured value degrades to a fill-when-absent default.
     Allow,
 }
 
-/// One configured parameter's value: a single value, or an inclusive band of
-/// accepted ones.
+/// One configured parameter's value: a single value, or an inclusive band of accepted ones.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamSpec {
     /// Injected when absent; under [`ConflictPolicy::Reject`], the only accepted value.
-    /// JSON numbers preserve integer wire types.
     Exact(serde_json::Number),
-    /// Inclusive bounds for supplied values; never injects a default.
-    /// Requires [`ConflictPolicy::Reject`]. Omitted fields use the engine default,
-    /// which may lie outside the band.
+    /// Inclusive bounds for supplied values; never injects a default. Requires [`ConflictPolicy::Reject`].
     Range { lo: f64, hi: f64 },
 }
 
@@ -117,7 +103,7 @@ impl SamplingField {
 }
 
 /// [`SamplingField::ALL`] agrees with [`SamplingField::index`] — see that
-/// method for why a disagreement is a silent startup rejection.
+/// method.
 const _: () = {
     let mut i = 0;
     while i < SamplingField::ALL.len() {
@@ -170,7 +156,6 @@ pub(crate) fn parse_sampling_overrides(
     }
     let overrides = SamplingOverrides { params, conflict };
     // Validate complete specs too, including bands and programmatically built overrides.
-    // The earlier exact-value check protects the integer cast in `canonical_number`.
     overrides.validate()?;
     Ok(overrides)
 }
@@ -249,10 +234,6 @@ fn parse_band(
 }
 
 /// Validate before normalization so diagnostics retain the configured number.
-/// Domains follow the OpenAI contract plus engine-specific parameters — deliberately
-/// NARROWER than what the engine accepts: these values are injected into request
-/// bodies, and a fleet contract outside the range every OpenAI client library
-/// validates against is far more likely a typo than an intent.
 fn checked_value(field: SamplingField, n: &serde_json::Number) -> Result<f64> {
     let name = field.wire_name();
     // Handle conversion failure even if serde_json arbitrary precision is enabled later.
@@ -272,7 +253,6 @@ fn check_domain(field: SamplingField, v: f64, shown: &str) -> Result<()> {
         SamplingField::TopK => (v >= 1.0 || v == -1.0, ">= 1, or -1 to disable"),
         // Engine-specific: zero disables `min_p`.
         SamplingField::MinP => ((0.0..=1.0).contains(&v), "in [0, 1]"),
-        // Engine-specific: one disables the penalty; cap fleet defaults at two.
         SamplingField::RepetitionPenalty => (v > 0.0 && v <= 2.0, "in (0, 2]"),
         SamplingField::FrequencyPenalty | SamplingField::PresencePenalty => {
             ((-2.0..=2.0).contains(&v), "in [-2, 2]")
@@ -289,7 +269,7 @@ fn check_domain(field: SamplingField, v: f64, shown: &str) -> Result<()> {
             v.fract() == 0.0,
             "--override-sampling-params: {name} ({shown}) must be a whole number"
         );
-        // Float-to-i64 casts saturate. Use [-2^63, 2^63): `i64::MAX as f64` rounds up.
+        // Float-to-i64 casts saturate.
         ensure!(
             (i64::MIN as f64..i64::MAX as f64).contains(&v),
             "--override-sampling-params: {name} ({shown}) is too large to forward"
@@ -344,8 +324,7 @@ impl<'de> serde::Deserialize<'de> for ObjectEntries {
                 Ok(ObjectEntries(entries))
             }
         }
-        // `deserialize_map` rejects a non-object with the type error the
-        // caller wraps into the flag's own message.
+        // `deserialize_map` rejects a non-object with the type error the caller wraps into the flag's own message.
         d.deserialize_map(EntryVisitor)
     }
 }
@@ -479,8 +458,7 @@ mod tests {
         );
     }
 
-    /// Every malformed spelling fails the launch, naming the offending key and
-    /// its domain.
+    /// Every malformed spelling fails the launch, naming the offending key and its domain.
     #[test]
     fn rejects_malformed_input() {
         for (json, needle) in [
@@ -536,8 +514,7 @@ mod tests {
         }
     }
 
-    /// `top_p`'s domain is (0, 1] — the inclusive upper bound is valid — and
-    /// `top_k` has no upper bound, so a wide sample width parses.
+    /// `top_p`'s domain.
     #[test]
     fn top_p_upper_bound_and_wide_top_k_are_accepted() {
         let o = parse(r#"{"top_p": 1, "top_k": 1000}"#).unwrap();
@@ -562,8 +539,7 @@ mod tests {
         }
     }
 
-    /// The wire name is the request-body key in both directions, so a
-    /// configured key round-trips back to its field.
+    /// The wire name is the request-body key in both directions, so a configured key round-trips back to its field.
     #[test]
     fn every_field_round_trips_through_its_wire_name() {
         for field in SamplingField::ALL {
@@ -574,13 +550,11 @@ mod tests {
         }
         assert_eq!(SamplingField::from_wire_name("max_tokens"), None);
     }
-    /// Float-to-i64 casts saturate. Use [-2^63, 2^63): `i64::MAX as f64` rounds up.
+    /// Float-to-i64 casts saturate. Use [- ^, ^): `i64::MAX as f64` rounds up.
     #[test]
     fn integral_literals_beyond_i64_fail_the_launch() {
         for raw in [
-            // 2^63 exactly — equal to `i64::MAX as f64`, not greater than it.
             r#"{"top_k": 9223372036854775808}"#,
-            // i64::MAX, which also rounds to 2^63 as an f64.
             r#"{"top_k": 9223372036854775807}"#,
             r#"{"top_k": 1e30}"#,
         ] {

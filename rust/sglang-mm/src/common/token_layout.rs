@@ -1,15 +1,8 @@
 //! Token-layout mechanics for the server MM pipeline.
-//!
-//! Families describe their prompt geometry as a [`TokenLayout`] value
-//! (`pipeline.rs`); [`apply_layout`] applies it mechanically. Expanding the
-//! already-tokenized prompt means non-media tokens can never drift from a
-//! retokenize (the `SGLANG_MM_AVOID_RETOKENIZE` idea, unconditional here).
 
 use crate::pipeline::{Segment, TokenLayout, TokenPattern};
 
-/// The expanded prompt plus, per media item (indexed as in the layout), the
-/// inclusive `(start, end)` token range it occupies — the Python
-/// `get_mm_items_offset` convention.
+/// The expanded prompt plus, per media item (indexed as in the layout).
 pub struct ExpandedPrompt {
     pub input_ids: Vec<i32>,
     pub offsets: Vec<(u32, u32)>,
@@ -33,8 +26,7 @@ pub fn apply_layout(
 ) -> Result<ExpandedPrompt, String> {
     let mut out = Vec::new();
     let mut offsets: Vec<Option<(u32, u32)>> = vec![None; n_items];
-    // Source tokens consumed so far: `Text` copies them, a `Media` segment
-    // replaces exactly the one placeholder token sitting at this position.
+    // Source tokens consumed so far: `Text` copies them.
     let mut consumed = 0usize;
     for segment in &layout.segments {
         match segment {
@@ -98,7 +90,7 @@ pub fn apply_layout(
 }
 
 /// Build the simplest layout: each occurrence of `placeholder_id` in `ids`
-/// becomes `counts[i]` copies (i-th occurrence ↔ i-th media item). Errs when
+/// becomes `counts[i]` copies (i-th occurrence ↔ i-th media item).
 /// the occurrence count and `counts` disagree.
 pub fn layout_by_placeholder(
     ids: &[i32],
@@ -151,7 +143,6 @@ mod tests {
 
     #[test]
     fn expands_in_order_with_inclusive_offsets() {
-        // [7, PAD, 8, PAD, 9] with counts [2, 3]
         let e = expand(&[7, 1, 8, 1, 9], 1, &[2, 3]).unwrap();
         assert_eq!(e.input_ids, vec![7, 1, 1, 8, 1, 1, 1, 9]);
         assert_eq!(e.offsets, vec![(1, 2), (4, 6)]);
@@ -203,8 +194,7 @@ mod tests {
         assert!(apply_layout(&[7, 1, 9], &out_of_bounds, 0).is_err());
     }
 
-    /// A family that skips, repeats, or reorders source tokens would silently
-    /// serve a truncated or scrambled prompt; the layout must reject it instead.
+    /// A family that skips, repeats, or reorders source tokens would silently serve a truncated or scrambled prompt.
     #[test]
     fn incomplete_or_disordered_coverage_errs() {
         let media = || Segment::Media {
@@ -212,11 +202,9 @@ mod tests {
             pattern: TokenPattern::Repeat { id: 5, n: 2 },
         };
         let cases = [
-            // Dropped tail: [7, PAD, 9] expanded without the trailing 9.
             vec![Segment::Text(0..1), media()],
             // Dropped head.
             vec![media(), Segment::Text(2..3)],
-            // Gap in the middle (source index 1 never consumed).
             vec![Segment::Text(0..1), Segment::Text(2..3), media()],
             // Duplicated source span.
             vec![

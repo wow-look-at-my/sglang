@@ -1,8 +1,6 @@
-/******************************************************************************
- * Copyright (c) 2024, Tri Dao.
- ******************************************************************************/
+/***************************************************************************** */
 
-// Include these 2 headers instead of torch/extension.h since we don't need all of the torch headers.
+// Include these headers instead of torch/extension.h since we don't need all of the torch headers.
 #include <ATen/cuda/CUDAGeneratorImpl.h>  // For at::Generator and at::PhiloxCudaState
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
@@ -120,9 +118,6 @@ void set_params_fprop(
   // Set this to probability of keeping an element to simplify things.
   params.p_dropout = 1.f - p_dropout;
   // Convert p from float to int so we don't have to convert the random uint to float to compare.
-  // [Minor] We want to round down since when we do the comparison we use <= instead of <
-  // params.p_dropout_in_uint = uint32_t(std::floor(params.p_dropout * 4294967295.0));
-  // params.p_dropout_in_uint16_t = uint16_t(std::floor(params.p_dropout * 65535.0));
   params.p_dropout_in_uint8_t = uint8_t(std::floor(params.p_dropout * 255.0));
   params.rp_dropout = 1.f / params.p_dropout;
   params.scale_softmax_rp_dropout = params.rp_dropout * params.scale_softmax;
@@ -131,8 +126,6 @@ void set_params_fprop(
   TORCH_CHECK(p_dropout == 0.0f, "This flash attention build does not support dropout.");
 #endif
 
-  // Causal is the special case where window_size_right == 0 and window_size_left < 0.
-  // Local is the more general case where window_size_right >= 0 or window_size_left >= 0.
   params.is_causal = window_size_left < 0 && window_size_right == 0;
 
   if (window_size_left < 0 && window_size_right >= 0) {
@@ -225,15 +218,12 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   // bool is_sm75 = cc_major == 7 && cc_minor == 5;
   bool is_sm8x = cc_major == 8 && cc_minor >= 0;
   bool is_sm90 = cc_major == 9 && cc_minor == 0;
-  // TORCH_CHECK(is_sm90 || is_sm8x, "FlashAttention only supports Ampere GPUs or newer.");
-  // We will support Turing in the near future
-  // TORCH_CHECK(is_sm90 || is_sm8x || is_sm75, "FlashAttention only supports Turing GPUs or newer.");
+  // TORCH_CHECK(is_sm90 || is_sm8x, "FlashAttention only supports Ampere GPUs or newer.")
 
   auto q_dtype = q.dtype();
   TORCH_CHECK(
       q_dtype == torch::kFloat16 || q_dtype == torch::kBFloat16, "FlashAttention only support fp16 and bf16 data type");
   if (q_dtype == torch::kBFloat16) {
-    // TORCH_CHECK(is_sm90 || is_sm8x, "bfloat16 is only supported on Ampere GPUs or newer");
   }
   TORCH_CHECK(k.dtype() == q_dtype, "query and key must have the same dtype");
   TORCH_CHECK(v.dtype() == q_dtype, "query and value must have the same dtype");
@@ -289,8 +279,6 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
 
   void* cu_seqlens_q_d = cu_seqlens_q.data_ptr();
 
-  // Faster to transpose q from (b, 1, (nheads_kv ngroups), d) to (b, ngroups, nheads_kv, d) in this case
-  // H/t Daniel Haziza
   const int seqlenq_ngroups_swapped = max_seqlen_q == 1 && num_heads > num_heads_k && window_size_left < 0 &&
                                       window_size_right < 0 && p_dropout == 0.f && head_size % 8 == 0 &&
                                       !alibi_slopes_.has_value();
@@ -322,7 +310,6 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   if (!paged_KV) {
     const int total_k = k.size(0);
     CHECK_SHAPE(k, total_k, num_heads_k, head_size);
-    // CHECK_SHAPE(v, total_k, num_heads_k, head_size);
   } else {
     CHECK_SHAPE(k, num_blocks, page_block_size, num_heads_k, head_size);
     // CHECK_SHAPE(v, num_blocks, page_block_size, num_heads_k, head_size);
@@ -343,19 +330,7 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
   auto opts = q.options();
   at::Tensor out;
   out = torch::empty({0}, opts);
-  // if (out_.has_value()) {
-  //     out = out_.value();
-  //     TORCH_CHECK(out.dtype() == q_dtype, "Output must have the same dtype as inputs");
-  //     CHECK_DEVICE(out);
-  //     TORCH_CHECK(out.stride(-1) == 1, "Output tensor must have contiguous last dimension");
-  //     CHECK_SHAPE(out, sizes[0], sizes[1], head_size);
-  //     if (seqlenq_ngroups_swapped) {
-  //         out = out.reshape({batch_size, num_heads_k, ngroups, head_size}).transpose(1, 2).reshape({batch_size *
-  //         ngroups, num_heads_k, head_size});
-  //     }
-  // } else {
-  //     out = torch::empty_like(q);
-  // }
+  // if (out_.has_value()) { out = out_.value(); TORCH_CHECK(out.dtype() == q_dtype, "Output must have the same dtype as inputs").
 
   auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };
   const int head_size_rounded = head_size <= 192 ? round_multiple(head_size, 32) : 256;
@@ -411,16 +386,7 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
 
   params.cu_seqlens_v = static_cast<int*>(cu_seqlens_v.data_ptr());
   params.is_seqlens_v_cumulative = true;  // Treat cu_seqlens_v as cumulative sequence lengths
-  // {
-  //     // Copy cu_seqlens_v to CPU for printing
-  //     at::Tensor cu_seqlens_v_cpu = cu_seqlens_v.to(torch::kCPU);
-  //     const int* cu_seqlens_v_data = cu_seqlens_v_cpu.data_ptr<int>();
-  //     printf("params.cu_seqlens_v: ");
-  //     for (int i = 0; i < batch_size + 1; ++i) {
-  //         printf("%d ", cu_seqlens_v_data[i]);
-  //     }
-  //     printf("\n");
-  // }
+  // // Copy cu_seqlens_v to CPU for printing at::Tensor cu_seqlens_v_cpu = cu_seqlens_v.to(torch::kCPU).
   params.total_q = total_q;
 
   params.m_block_dim = 16;
@@ -430,7 +396,6 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
     params.block_table = block_table.data_ptr<int>();
     params.block_table_batch_stride = block_table.stride(0);
     params.k_batch_stride = k.stride(0);
-    // params.v_batch_stride = v.stride(0);
   }
   params.page_block_size = page_block_size;
   // Keep references to these tensors to extend their lifetime
@@ -445,9 +410,7 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
     params.leftpad_k = static_cast<int*>(leftpad_k.data_ptr());
   }
 
-  // number of times random will be generated per thread, to offset philox counter in thc random
-  // state
-  // We use a custom RNG that increases the offset by batch_size * nheads * 32.
+  // number of times random will be generated per thread.
   int64_t counter_offset = params.b * params.h * 32;
   auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
   auto rng_state = torch::empty({2}, options.dtype(torch::kInt64));
@@ -468,17 +431,12 @@ std::vector<at::Tensor> mha_varlen_fwd_stage1(
     params.num_splits = 1;
     run_mha_fwd_split_stage1(params, stream);
   } else {
-    // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
-    // out.zero_();
-    // softmax_lse.fill_(std::numeric_limits<float>::infinity());
   }
 
   if (seqlenq_ngroups_swapped) {
     int64_t size_before[] = {batch_size, max_seqlen_q, num_heads_k, head_size};
     int64_t size_after[] = {batch_size, num_heads_k * max_seqlen_q, head_size};
-    // out = out.reshape(size_before).transpose(1, 2).reshape(size_after);
     q = q.reshape(size_before).transpose(1, 2).reshape(size_after);
-    // softmax_lse = softmax_lse.reshape({num_heads * max_seqlen_q, batch_size});
   }
 
   return {p};

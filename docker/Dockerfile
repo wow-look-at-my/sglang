@@ -6,7 +6,6 @@ ARG SGL_KERNEL_VERSION=0.4.10
 ARG GPU_ARCHS=
 # Compile jobs per native build step; empty keeps each tool's own default.
 ARG BUILD_JOBS=
-# 0 leaves sgl-model-gateway (the Rust router binary and sglang-router wheel) out.
 ARG INSTALL_GATEWAY=1
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
 
@@ -60,9 +59,7 @@ RUN printf '%s\n' '#!/bin/sh' \
        > /etc/apt/apt.conf.d/80-retries
 
 
-# Python setup (combined with apt update to reduce layers)
-# Ubuntu 24.04 ships Python 3.12 in main, so we no longer need the deadsnakes
-# PPA. Dropping it avoids transient Launchpad 504s in `add-apt-repository`.
+# Dropping it avoids transient Launchpad 504s in `add-apt-repository`.
 RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
     apt-retry update && apt install -y --no-install-recommends wget software-properties-common \
     && apt install -y --no-install-recommends python3.12-full python3.12-dev \
@@ -187,7 +184,6 @@ ENV LANG=en_US.UTF-8 \
 #     |
 #     v
 #   framework (combines all artifacts)
-#
 
 # Holds no wheel by default, so sglang-kernel comes from PyPI. Override it with
 # `--build-context sgl_kernel_wheels=<dir of sglang_kernel-*.whl>` to install the
@@ -195,9 +191,6 @@ ENV LANG=en_US.UTF-8 \
 # SGL_KERNEL_WHEEL_REQUIRED=1 then fails the build instead of falling back to PyPI.
 FROM base AS sgl_kernel_wheels
 
-########################################################
-# PARALLEL STAGE 1: Torch/Deps Builder (starts from base)
-########################################################
 FROM base AS torch_deps
 
 ARG CUDA_VERSION
@@ -209,8 +202,8 @@ ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
-# Rust toolchain for setuptools-rust extensions (e.g. sglang-grpc).
-# Requires >= 1.85 (edition 2024). Inherited by framework via FROM torch_deps.
+# Rust toolchain for setuptools-rust extensions (e.g. sglang-grpc). Inherited
+# by framework via FROM torch_deps.
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --no-modify-path --profile minimal \
@@ -270,14 +263,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # stage does not COPY; force a pip copy into /usr/local so it survives the stage split.
 RUN python3 -m pip install --ignore-installed --no-deps distro
 
-# Cosmos3 guardrails default ON: sglang enables them whenever `cosmos_guardrail`
-# is importable (Cosmos3Pipeline.create_pipeline_stages); opt out at runtime with
-# SGLANG_DISABLE_COSMOS3_GUARDRAILS=1. Installed with --no-deps because the
-# package metadata conflicts with our pins in ways that don't matter at runtime
-# (imageio>=2.37 vs our ==2.36) or would be harmful (opencv-python — also pulled
-# by retinaface-py — would shadow our opencv-python-headless cv2). The deps not
-# already in the image are installed explicitly; the find_spec check mirrors
-# sglang's availability probe plus cosmos_guardrail's own imports.
+# The deps not already in the image are installed explicitly; the find_spec check
+# mirrors sglang's availability probe plus cosmos_guardrail's own imports.
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --no-deps \
         cosmos-guardrail==0.3.1 \
@@ -288,9 +275,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "peft==0.18.1" \
     && python3 -c "import importlib.util as u; missing = [m for m in ('cosmos_guardrail', 'retinaface', 'better_profanity', 'nltk', 'cv2', 'peft', 'sentencepiece') if u.find_spec(m) is None]; assert not missing, f'guardrail deps missing: {missing}'"
 
-########################################################
-# PARALLEL STAGE 2: HPC-Ops Builder (needs torch_deps)
-########################################################
 FROM torch_deps AS hpc_ops_builder
 
 # HPC-Ops (https://github.com/Tencent/hpc-ops, MIT): fused attention / MoE /
@@ -319,9 +303,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         python3 setup.py bdist_wheel -d /wheels; \
     fi
 
-########################################################
-# PARALLEL STAGE 3: FlashInfer Cache (needs torch_deps)
-########################################################
 FROM torch_deps AS flashinfer_cache
 
 ARG CUDA_VERSION
@@ -345,9 +326,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         && cp -r /opt/sglang/lib/python3.12/site-packages/flashinfer_jit_cache-*.dist-info /flashinfer_jit_output/ ; \
     fi
 
-########################################################
-# PARALLEL STAGE 4: Dev Tools Builder (starts from base)
-########################################################
 FROM base AS devtools_builder
 
 ARG GITHUB_ARTIFACTORY
@@ -395,11 +373,6 @@ RUN sh -c "$(curl --retry 3 --retry-delay 2 -fsSL https://raw.githubusercontent.
     && git clone --depth 1 https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-/root/.oh-my-zsh/custom}/plugins/zsh-autosuggestions \
     && git clone --depth 1 https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-/root/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
 
-########################################################
-# PARALLEL STAGE 5: Gateway Builder (starts from base)
-########################################################
-# Builds sgl-model-gateway in isolation so Python-only changes
-# don't trigger a full Rust recompilation.
 FROM base AS gateway_builder
 
 ARG GITHUB_ARTIFACTORY
@@ -427,7 +400,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && cp target/release/sgl-model-gateway /build/gateway_bin/sgl-model-gateway \
     && rm -rf /root/.cargo /root/.rustup /build/sgl-model-gateway/target /build/sgl-model-gateway/bindings/python/target
 
-# INSTALL_GATEWAY picks the gateway artifacts: the build above, or two empty
+# INSTALL_GATEWAY picks the gateway artifacts: the build above, or empty
 # directories, in which case BuildKit never runs gateway_builder at all.
 FROM base AS gateway_artifacts_0
 RUN mkdir -p /build/gateway_wheels /build/gateway_bin
@@ -442,7 +415,6 @@ FROM gateway_artifacts_${INSTALL_GATEWAY} AS gateway_artifacts
 ########################################################
 #
 # Combines all artifacts from parallel builder stages
-#
 FROM torch_deps AS framework
 
 ARG BRANCH_TYPE
@@ -453,8 +425,6 @@ ARG USE_LATEST_SGLANG
 ARG GITHUB_ARTIFACTORY
 ARG MOONCAKE_VERSION
 ARG MSCCLPP_VERSION
-# Renamed from NCCL_VERSION: the nvidia/cuda base image sets ENV NCCL_VERSION
-# (Debian apt format, e.g. 2.28.3-1), which shadows a same-named ARG inside RUN.
 ARG SGL_NCCL_VERSION
 ARG BUILD_JOBS
 
@@ -569,9 +539,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     termplotlib \
     "runai-model-streamer[s3,gcs,azure]>=0.15.7"
 
-# PyTorch 2.13 requires nvidia-nccl-cu13==2.29.7, so keep that version while
-# resolving dependencies and generating constraints.txt. DeepEP needs 2.30.7
-# at runtime; apply the override only after the constrained dependency solve.
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --force-reinstall --no-deps \
         "nvidia-nccl-cu13==${SGL_NCCL_VERSION}"
@@ -598,14 +565,6 @@ COPY docker/configs/opt/.gitconfig /opt/sglang/.gitconfig
 # Configure development environment
 COPY docker/configs/.zshrc /root/.zshrc
 
-# Fix Trivy-reported CVEs
-# pip:             urllib3 (CVE-2025-43859), pillow (CVE-2026-25990)
-# binutils family: CVE-2025-{1147,1148,3198,5244,5245,7545,7546,8225,11082,11083,11412,11413,11414,11494,11839,11840}
-# libgnutls30t64:  CVE-2025-{9820,14831}
-# libpam:          CVE-2024-10963
-# libsqlite3-0:    CVE-2025-{6965,7709}
-# libtasn1-6:      CVE-2025-13151
-# dpkg:            CVE-2025-6297
 RUN python3 -m pip install --upgrade "urllib3>=2.6.3" "pillow>=12.1.1"
 RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
     apt-retry update && apt-get install -y --only-upgrade \
@@ -794,8 +753,6 @@ RUN printf '%s\n' '#!/bin/sh' \
        > /etc/apt/apt.conf.d/80-retries
 
 
-# Install runtime dependencies (devel base provides gcc/g++/build tools)
-# Python 3.12 ships in Ubuntu 24.04 main, so no deadsnakes PPA needed.
 RUN --mount=type=cache,target=/var/cache/apt,id=runtime-apt \
     apt-retry update && apt-get install -y --no-install-recommends --allow-change-held-packages \
     # Python runtime
@@ -886,7 +843,6 @@ COPY --from=framework_final /opt/sglang/bin/sglang /opt/sglang/bin/sglang
 # Copy py-spy binary
 COPY --from=framework_final /opt/sglang/bin/py-spy /opt/sglang/bin/py-spy
 
-# Copy the scheduler policy process and the goipc library it is reached over
 COPY --from=framework_final /opt/sglang/sched-policy /opt/sglang/sched-policy
 COPY --from=framework_final /opt/sglang/lib/libgoipc.so /opt/sglang/lib/libgoipc.so
 ENV SGLANG_SCHED_POLICY_BIN=/opt/sglang/sched-policy/sglang-sched-policy \

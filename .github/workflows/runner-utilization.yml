@@ -19,10 +19,7 @@ on:
         required: false
         type: string
 
-# Sandbox PRs (e.g. tom/kv_canary) push dozens of times in a row. Without this
-# group, every push spawns another 24h API scan that races the previous ones
-# and drains the shared 15k/hr installation token quota. Cancel-in-progress
-# keeps at most one Runner Utilization run per ref alive at a time.
+# Sandbox PRs (e.g. tom/kv_canary) push dozens of times in a row. Without this group, every push spawns another 24h API scan that races the previous ones and drains the shared 15k/hr installation token quota. Cancel-in-progress keeps at most one Runner Utilization run per ref alive at a time.
 concurrency:
   group: runner-utilization-${{ github.ref }}
   cancel-in-progress: true
@@ -30,9 +27,7 @@ concurrency:
 jobs:
   report:
     name: Generate Report
-    # Skip fork PRs entirely, and require the `run-ci` label on same-repo PRs
-    # so unlabeled iteration pushes (e.g. long-lived sandbox branches) don't
-    # fire the 24h API scan. schedule and workflow_dispatch always run.
+    # Skip fork PRs entirely, and require the `run-ci` label on same-repo PRs so unlabeled iteration pushes (e.g. long-lived sandbox branches) don't fire the 24h API scan. schedule and workflow_dispatch always run.
     if: |
       github.repository == 'sgl-project/sglang' && (
         github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository &&
@@ -49,17 +44,13 @@ jobs:
           python-version: '3.10'
 
       - name: Unit-test report logic
-        # Pure-logic tests (stdlib only, no API calls) — guards the
-        # queue-time accounting and status/link rendering before the
-        # (API-heavy) report runs.
+        # Pure-logic tests (stdlib only, no API calls) — guards the queue-time accounting and status/link rendering before the (API-heavy) report runs.
         run: |
           python -m unittest discover -s scripts/ci/utils \
             -p 'test_runner_utilization_report.py' -v
 
       - name: Generate Utilization Report
-        # Full-coverage fetch (created-filtered listing + 12h lookback) is
-        # ~2-3x the truncated 5000-run fetch this replaces; the old fetch
-        # took ~10 min, so give the full one comfortable headroom.
+        # Full-coverage fetch (created-filtered listing + 12h lookback) is ~2-3x the truncated 5000-run fetch this replaces; the old fetch took ~10 min, so give the full one comfortable headroom.
         timeout-minutes: 55
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -72,8 +63,7 @@ jobs:
             ${{ inputs.filter && format('--filter {0}', inputs.filter) || '' }} \
             --queue-series-out queue-series.json
 
-      # The card rides on the scan above rather than running its own: a 24h
-      # window is ~5000 API calls, the whole hourly budget of ci-lark-notify's PAT.
+      # The card rides on the scan above rather than running its own: a 24h window is ~5000 API calls, the whole hourly budget of ci-lark-notify's PAT.
       - name: Post queue timeline card
         if: >-
           github.repository == 'sgl-project/sglang' &&

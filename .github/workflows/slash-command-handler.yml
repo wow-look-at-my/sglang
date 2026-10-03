@@ -12,12 +12,7 @@ permissions:
 
 jobs:
   slash_command:
-    # Only run if it is a PR and the comment contains a recognized command
-    # Use contains() since startsWith() can't handle leading whitespace/newlines
-    #
-    # The trailing startsWith() namespace clauses admit *unrecognized* commands
-    # so the script can answer them; they are startsWith() because
-    # contains('/run-') would fire on any comment quoting `scripts/run-tests.sh`.
+    # Only run if it is a PR and the comment contains a recognized command. Use contains() since startsWith() can't handle leading whitespace/newlines. The trailing startsWith() namespace clauses admit *unrecognized* commands so the script can answer them; they are startsWith() because contains('/run-') would fire on any comment quoting `scripts/run-tests.sh`.
     if: >
       github.event.issue.pull_request &&
       (contains(github.event.comment.body, '/tag-run-ci-label') ||
@@ -35,10 +30,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # SECURITY: This workflow runs on issue_comment trigger with elevated permissions
-      # (pull-requests: write, actions: write). For non-fork PRs, we can safely checkout
-      # the PR branch to allow testing changes to this handler. For fork PRs, we MUST
-      # stay on main to prevent untrusted code execution with these elevated permissions.
+      # SECURITY: This workflow runs on issue_comment trigger with elevated permissions (pull-requests: write, actions: write). For non-fork PRs, we can safely checkout the PR branch to allow testing changes to this handler. For fork PRs, we MUST stay on main to prevent untrusted code execution with these elevated permissions.
       - name: Get PR details
         id: pr
         shell: bash
@@ -84,9 +76,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # For non-fork PRs: checkout PR branch by name
-          # For fork PRs with trusted commenter: checkout via refs/pull/N/head
-          # For fork PRs with untrusted commenter: stay on main for security
+          # For non-fork PRs: checkout PR branch by name. For fork PRs with trusted commenter: checkout via refs/pull/N/head. For fork PRs with untrusted commenter: stay on main for security
           ref: ${{ steps.pr.outputs.is_fork == 'false' && steps.pr.outputs.ref || (steps.perm.outputs.safe_to_checkout_pr == 'true' && steps.pr.outputs.pr_ref || '') }}
 
       - name: Set up Python

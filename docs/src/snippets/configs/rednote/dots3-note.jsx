@@ -4,7 +4,7 @@
 export const config = {
   modelName: "Dots3-Note",
 
-  // Hopper only for now — no Blackwell support.
+  // Hopper only — no Blackwell support.
   supportedHardware: ["h200", "h100"],
 
   // One model and one node shape — only the checkpoint precision is a real choice.

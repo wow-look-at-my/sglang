@@ -3,12 +3,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A named POSIX shared-memory segment owning its name: dropped → unlinked.
-///
-/// Written by an MM worker so the TP broadcast carries a ~100-byte
-/// `ShmPointerMMData` stub instead of the ~20 MB feature tensor, and every
-/// rank maps it in parallel. Python's `materialize()` unlinks after cloning;
-/// this `Drop` covers the paths where the buffers never reach Python (aborted
-/// while parked, late result purged).
 pub struct ShmSegment {
     pub(super) name: String,
 }
@@ -71,8 +65,7 @@ impl ShmSegment {
 impl Drop for ShmSegment {
     fn drop(&mut self) {
         if let Ok(c_name) = std::ffi::CString::new(format!("/{}", self.name)) {
-            // SAFETY: unlinking a name we created; ENOENT (already unlinked
-            // by Python's materialize) is fine to ignore.
+            // SAFETY: unlinking a name we created; ENOENT (already unlinked by Python's materialize) is fine to ignore.
             unsafe { libc::shm_unlink(c_name.as_ptr()) };
         }
     }
@@ -96,8 +89,7 @@ pub(super) fn shm_path(name: &str) -> std::path::PathBuf {
 mod tests {
     use super::*;
 
-    /// The segment holds exactly the written bytes and dropping it unlinks —
-    /// the leak guard for results purged before Python takes them.
+    /// The segment holds exactly the written bytes and dropping it unlinks — the leak guard for results purged.
     #[test]
     fn segment_roundtrip_and_drop_unlinks() {
         let name = shm_name(0);
@@ -108,8 +100,7 @@ mod tests {
         assert!(!shm_path(&name).exists(), "drop must unlink");
     }
 
-    /// `into_name` transfers the unlink duty to the caller (Python's
-    /// `materialize()`), so the segment must survive the handoff.
+    /// `into_name` transfers the unlink duty to the caller (Python's `materialize()`).
     #[test]
     fn into_name_disarms_the_unlink() {
         let segment = ShmSegment::create(shm_name(0), &[1, 2, 3]).unwrap();

@@ -1,4 +1,4 @@
-# Two Nodes Sglang example
+# Nodes Sglang example
 
 apiVersion: apps/v1
 kind: StatefulSet

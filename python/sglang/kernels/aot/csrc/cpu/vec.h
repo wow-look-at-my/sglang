@@ -36,7 +36,7 @@ inline std::tuple<Vectorized<float>, Vectorized<float>> load_float_vec2(const sc
   return std::make_tuple(x0, x1);
 }
 
-// allow  f32
+// allow f32
 inline std::tuple<Vectorized<float>, Vectorized<float>> load_float_vec2(const float* __restrict__ data) {
   using fVec = at::vec::Vectorized<float>;
   fVec x0 = fVec::loadu(data);
@@ -96,7 +96,6 @@ inline __m512bh cvt_e4m3_bf16_intrinsic_without_denorm(__m256i fp8_vec) {
   // The following conversion is without denorm behavior, that is to say,
   //   Max subnorm   : S.0000.111 = 0.875 ∗ 2**(−6)
   //   Min subnorm   : S.0000.001 = 2**(−9)
-  // 0.0019 ~ 0.0137 cannot be converted correctly.
   __m512i x = _mm512_cvtepu8_epi16(fp8_vec);
   auto mask = _mm512_cmpneq_epi16_mask(
       _mm512_and_si512(x, _mm512_set1_epi16(127)),
@@ -104,17 +103,17 @@ inline __m512bh cvt_e4m3_bf16_intrinsic_without_denorm(__m256i fp8_vec) {
   auto mask_nan = _mm512_cmpneq_epi16_mask(
       _mm512_and_si512(x, _mm512_set1_epi16(127)),
       _mm512_set1_epi16(127));                                                      // mask_nan = x & 0x7f
-  auto mantissa = _mm512_slli_epi16(_mm512_and_si512(x, _mm512_set1_epi16(7)), 4);  // mantissa = (x & 7) << 4
+  auto mantissa = _mm512_slli_epi16(_mm512_and_si512(x, _mm512_set1_epi16(7)), 4);
   auto exponent = _mm512_add_epi16(
       _mm512_srli_epi16(_mm512_and_si512(x, _mm512_set1_epi16(120)), 3),
-      _mm512_set1_epi16(120));  // exponent = (((x >> 3) & 15) + 120)
+      _mm512_set1_epi16(120));
   auto nonsign = _mm512_maskz_mov_epi16(mask, _mm512_or_si512(mantissa, _mm512_slli_epi16(exponent, 7)));
   nonsign = _mm512_mask_mov_epi16(_mm512_set1_epi16(0x7fff), mask_nan, nonsign);  // deal with Nan
   return (__m512bh)(_mm512_or_si512(
       nonsign,
       _mm512_slli_epi16(
           _mm512_and_si512(x, _mm512_set1_epi16(128)),
-          8)));  // add sign (x & 128) << 8
+          8)));
 }
 
 inline __m512bh cvt_e4m3_bf16_intrinsic_with_denorm(__m256i fp8_vec) {
@@ -156,7 +155,6 @@ inline __m512bh CVT_FP8_TO_BF16(__m256i a) {
 //
 // we mapped cuda implementation from below link and vectorized with avx512:
 // https://github.com/thu-pacman/chitu/blob/1ed2078ec26581ebdca05b7306d4385f86edaa7c/csrc/cuda/marlin/marlin_gemm/dequant.h#L387
-//
 inline __attribute__((always_inline)) __m512bh CVT_FP8_TO_BF16_EXT(__m256i a) {
   const __m512i mask0 = _mm512_set1_epi16(0x80);  // sign bit
   const __m512i mask1 = _mm512_set1_epi16(0x7F);  // exponent and mantissa
@@ -173,7 +171,6 @@ inline __attribute__((always_inline)) __m512bh CVT_FP8_TO_BF16_EXT(__m256i a) {
   return (__m512bh)(_mm512_ternarylogic_epi32(vsign, mask2, vexp_and_mant, 0b11111110));
 }
 
-// bias for conversion of fp8 to bf16 1/256 in float32
 #define kFP8_BIAS 0x3b800000
 
 // remove warning: ignoring attributes on template argument ‘__m512bh’ [-Wignored-attributes]
@@ -183,7 +180,7 @@ inline __attribute__((always_inline)) __m512bh CVT_FP8_TO_BF16_EXT(__m256i a) {
 #define MXFP4_VALUES \
   -6.0f, -4.0f, -3.0f, -2.0f, -1.5f, -1.0f, -0.5f, -0.0f, 6.0f, 4.0f, 3.0f, 2.0f, 1.5f, 1.0f, 0.5f, 0.0f
 
-// convert 64 mxfp4 to 2x bf16 vectors, expect input 32-way packing
+// convert multiple mxfp4 to 2x bf16 vectors, expect input 32-way packing
 inline std::tuple<__m512bh, __m512bh> cvt_mxfp4_e2m1_bf16_intrinsic_lut(__m256i a, __m512i s0, __m512i s1) {
   // LUT
   const __m512 values = _mm512_set_ps(MXFP4_VALUES);
@@ -450,14 +447,12 @@ inline void transpose_16x16_32bit(__m512i* v) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wignored-attributes"
 
-// transpose from [2, 32] to [32, 2]
 inline std::tuple<__m512i, __m512i> transpose_2x32_16bit(__m512i r0, __m512i r1) {
   // r0: {a0, a1, ..., a31}
   // r1: {b0, b1, ..., b31}
   //
-  // d0: {a0,   b0, ..., a15, b15}
+  // d0: {a0, b0, ..., a15, b15}
   // d1: {a16, b16, ..., a31, b31}
-  //
   __m512i d0 = _mm512_unpacklo_epi16(r0, r1);
   __m512i d1 = _mm512_unpackhi_epi16(r0, r1);
   r0 = _mm512_shuffle_i32x4(d0, d1, 0x88);
@@ -494,7 +489,6 @@ inline __attribute__((always_inline)) __m512 _mm512_exp_u20_ps(const __m512 valu
   auto vec_src = _mm512_min_ps(values, vec_ln_flt_max);
   vec_src = _mm512_max_ps(vec_src, vec_ln_flt_min);
 
-  // fx = floorf(x * log2ef + 0.5)
   auto vec_fx = _mm512_fmadd_ps(vec_src, vec_exp_log2ef, vec_half);
   auto vec_fx_i = _mm512_cvt_roundps_epi32(vec_fx, _MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC);
   vec_fx = _mm512_cvtepi32_ps(vec_fx_i);
@@ -509,7 +503,6 @@ inline __attribute__((always_inline)) __m512 _mm512_exp_u20_ps(const __m512 valu
   vec_res = _mm512_fmadd_ps(vec_exp_poly, vec_res, vec_factorial_1);
   vec_res = _mm512_fmadd_ps(vec_exp_poly, vec_res, vec_one);
 
-  // compute 2^(n-1)
   auto vec_exp_number = _mm512_sub_ps(vec_fx, vec_one);
   auto vec_exp_number_i = _mm512_cvtps_epi32(vec_exp_number);
   auto vec_two_pow_n_i = _mm512_add_epi32(vec_exp_number_i, vec_127);
@@ -517,7 +510,6 @@ inline __attribute__((always_inline)) __m512 _mm512_exp_u20_ps(const __m512 valu
   auto vec_two_pow_n = _mm512_castsi512_ps(vec_two_pow_n_i);
   vec_two_pow_n = _mm512_mask_blend_ps(less_ln_flt_min_mask, vec_two_pow_n, vec_zero);
 
-  // y = y * 2^n
   vec_res = _mm512_mul_ps(vec_res, vec_two_pow_n);
   vec_res = _mm512_mul_ps(vec_res, vec_two);
   return vec_res;
@@ -575,7 +567,6 @@ inline __attribute__((always_inline)) __m512 _mm512_fexp_u20_ps(const __m512 val
   return _mm512_castsi512_ps(casted_integer);
 }
 
-// sigmoid(x) = 1 / (1 + exp(-x)); avoid vdivps via rcp14
 inline __attribute__((always_inline)) __m512 _mm512_rcp14_sigmoid_ps(__m512 x) {
   __m512 minus_x = _mm512_xor_ps(_mm512_set1_ps(-0.f), x);
   __m512 denom = _mm512_add_ps(_mm512_exp_u20_ps(minus_x), _mm512_set1_ps(1.f));

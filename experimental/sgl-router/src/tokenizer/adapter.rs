@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
@@ -23,11 +23,7 @@ pub fn load(source: &str) -> Result<Arc<Tokenizer>> {
         .with_context(|| format!("load downloaded tokenizer for {source}"))
 }
 
-/// Treat `source` as a filesystem path (rather than a HuggingFace repo id)
-/// when it has a path-like shape — an absolute/relative prefix or a
-/// tokenizer-file suffix. HF repo ids are `namespace/name` with none of these markers, so a
-/// missing local file like `/models/tok.json` reports a load error instead of
-/// silently attempting a (doomed) network fetch.
+/// tokenizer-file suffix.
 fn looks_like_path(source: &str) -> bool {
     source.starts_with('/')
         || source.starts_with("./")
@@ -90,10 +86,8 @@ fn list_repo_files(repo_id: &str) -> Option<std::collections::HashSet<String>> {
     }
 }
 
-/// Files co-located with the tokenizer named by `source` (the same value passed
-/// to [`load`]): siblings of a local `tokenizer.json`, or files of the same HF
-/// repo. The repo is listed once so only files it ships are downloaded; a file
-/// the model lacks resolves to `None` without a network round-trip.
+/// Files co-located with the tokenizer named by `source` (the same value
+/// passed to [`load`]): siblings of a local `tokenizer.json`.
 pub struct ModelFiles {
     source: String,
     /// Directory of a local `tokenizer.json`; `None` for an HF repo id.
@@ -165,16 +159,12 @@ pub fn encode(t: &Tokenizer, text: &str) -> Result<Vec<u32>> {
     Ok(enc.token_ids().to_vec())
 }
 
-/// Decode token ids to a complete UTF-8 string.
-///
-/// Non-streaming callers (e.g. `/v1/detokenize`) get the full result either way:
-/// - `DecodeResult::Complete(s)` — the token sequence ends on a codepoint boundary.
-/// - `DecodeResult::Partial(s)` — the token sequence ends mid-codepoint; `s` ends
+/// Decode token ids to a complete UTF-8 string. Non-streaming callers (e.g.
+/// `/v1/detokenize`) get the full result either way: -
+/// `DecodeResult::Complete(s)` — the token sequence ends on a codepoint
+/// boundary. - `DecodeResult::Partial(s)` — the token sequence ends
+/// mid-codepoint; `s` ends
 ///   in U+FFFD. We return `s` as-is so the client sees the closest-possible string.
-///
-/// Streaming callers should NOT use this; they should consume `DecodeResult`
-/// directly and withhold the trailing U+FFFD until the next decode produces a
-/// `Complete` result.
 pub fn decode_complete(t: &Tokenizer, ids: &[u32], skip_special: bool) -> Result<String> {
     let res = t.decode(ids, skip_special).context("decode")?;
     Ok(match res {

@@ -1,11 +1,5 @@
 #!/usr/bin/env bash
 # Build sgl-deep-ep wheels in a CUDA-versioned manylinux container.
-#
-# Usage:
-#   build_sgl_deepep.sh <python-version> <cuda-version> <deepep-source> <packaging-overlay> [architecture]
-#
-# Writes CUDA-tagged wheels to <deepep-source>/dist, plus PyPI-ready wheels
-# without the local CUDA version in <deepep-source>/dist-pypi.
 
 set -euo pipefail
 

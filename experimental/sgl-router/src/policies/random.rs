@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::policies::{scoring::ScoringPolicy, SelectionContext};
@@ -40,13 +40,11 @@ mod tests {
         }))
     }
 
-    /// Distributional: `select()` is not pure. Marginals alone are satisfied by
-    /// a ROTATION -- what a constant `scores()` becomes under ARGMAX's rotating
-    /// tiebreak -- so REPEATS share the band: P(pick==prev) is 1/N iid, 0 rotating.
+    /// Distributional: `select()` is not pure.
     #[test]
     fn picks_uniformly_over_20k_draws_and_repeats_at_the_iid_rate() {
-        const MEAN: f64 = 5_000.0; // 20_000 draws over 4 workers; repeats too
-        const BAND: f64 = 5.0 * 61.237_244; // 5 sigma, sqrt(20_000 / 4 * 3 / 4)
+        const MEAN: f64 = 5_000.0;
+        const BAND: f64 = 5.0 * 61.237_244;
         let (policy, model) = (RandomPolicy::new(), ModelId("tiny".into()));
         let ctx = SelectionContext::new(&model, None);
         let ws: Vec<Arc<Worker>> = (0..4).map(|i| worker(&format!("w{i}"))).collect();

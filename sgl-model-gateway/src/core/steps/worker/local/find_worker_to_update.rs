@@ -7,10 +7,7 @@ use wfaas::{StepExecutor, StepId, StepResult, WorkflowContext, WorkflowError, Wo
 use super::find_workers_by_url;
 use crate::core::steps::workflow_data::WorkerUpdateWorkflowData;
 
-/// Step to find workers to update based on URL.
-///
-/// For DP-aware workers, finds all workers with matching URL prefix.
-/// For regular workers, finds the single worker with exact URL match.
+/// Step to find workers to update based on URL. For DP-aware workers, finds all workers with matching URL prefix.
 pub struct FindWorkerToUpdateStep;
 
 #[async_trait]

@@ -1,6 +1,4 @@
-/******************************************************************************
- * Copyright (c) 2023, Tri Dao.
- ******************************************************************************/
+/***************************************************************************** */
 
 #pragma once
 
@@ -225,19 +223,17 @@ __forceinline__ __device__ void gemm_rs(
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Convert acc_layout from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
+// Convert acc_layout from (MMA=4, MMA_M, MMA_N) to (nrow=(MMA_M), ncol=(MMA_N))
 template <typename Layout>
 __forceinline__ __device__ auto convert_layout_acc_rowcol(Layout acc_layout) {
   static_assert(decltype(size<0>(acc_layout))::value == 4);
   static_assert(decltype(rank(acc_layout))::value == 3);
-  auto l = logical_divide(acc_layout, Shape<_2>{});  // ((2, 2), MMA_M, MMA_N)
+  auto l = logical_divide(acc_layout, Shape<_2>{});
   return make_layout(make_layout(get<0, 1>(l), get<1>(l)), make_layout(get<0, 0>(l), get<2>(l)));
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Convert acc_layout from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
-// if using m16n8k16, or to (4, MMA_M, MMA_N) if using m16n8k8.
 template <typename MMA_traits, typename Layout>
 __forceinline__ __device__ auto convert_layout_acc_Aregs(Layout acc_layout) {
   using X = Underscore;
@@ -248,20 +244,19 @@ __forceinline__ __device__ auto convert_layout_acc_Aregs(Layout acc_layout) {
   if constexpr (mma_shape_K == 8) {
     return acc_layout;
   } else {
-    auto l = logical_divide(acc_layout, Shape<X, X, _2>{});  // (4, MMA_M, (2, MMA_N / 2)))
+    auto l = logical_divide(acc_layout, Shape<X, X, _2>{});
     return make_layout(make_layout(get<0>(l), get<2, 0>(l)), get<1>(l), get<2, 1>(l));
   }
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Convert acc_layout from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
 template <typename Layout>
 __forceinline__ __device__ auto convert_layout_acc_dropout(Layout acc_layout) {
   using X = Underscore;
   static_assert(decltype(size<0>(acc_layout))::value == 4);
   static_assert(decltype(rank(acc_layout))::value == 3);
-  auto l = logical_divide(acc_layout, Shape<X, X, _2>{});  // (4, MMA_M, (2, MMA_N / 2)))
+  auto l = logical_divide(acc_layout, Shape<X, X, _2>{});
   return make_layout(make_layout(get<0>(l), get<2, 0>(l)), get<1>(l), get<2, 1>(l));
 };
 
@@ -294,7 +289,6 @@ __forceinline__ __device__ void relu_(Tensor<Engine, Layout>& tensor) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// On SM80 and above, we can fuse fp32 -> fp16/bf16 conversion and relu into 1 instruction
 template <typename To_type, typename Engine, typename Layout>
 __forceinline__ __device__ auto convert_type_relu(Tensor<Engine, Layout> const& tensor) {
   using From_type = typename Engine::value_type;
@@ -321,10 +315,6 @@ __forceinline__ __device__ auto convert_type_relu(Tensor<Engine, Layout> const& 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Blocks until all but N previous cp.async.commit_group operations have committed.
-// This differs from cute::cp_async_wait in that when N = 0 we don't call cp.async.wait_all
-// (which is equivalent to commit_group then wait_group 0).
-// Instead we just call cp.async.wait_group 0, which is slightly faster.
-// https://github.com/NVIDIA/cutlass/blob/master/include/cute/arch/copy_sm80.hpp#L113
 template <int N>
 CUTE_HOST_DEVICE void cp_async_wait() {
 #if defined(CUTE_ARCH_CP_ASYNC_SM80_ENABLED)
@@ -377,9 +367,8 @@ __forceinline__ __device__ void copy(
       cute::clear(D(_, m, _));
     }
   }
-  // TD [2023-04-13]: Strange that the code below can cause race condition.
-  // I think it's because the copies are under an if statement.
-  // if (Is_even_K) {
+  // I think it's because the copies are under an if statement. if
+  // (Is_even_K) {
   //     #pragma unroll
   //     for (int m = 0; m < size<1>(S); ++m) {
   //         if (Is_even_MN || get<0>(identity_MN(0, m, 0)) < max_MN) {
@@ -388,7 +377,7 @@ __forceinline__ __device__ void copy(
   //             clear(D(_, m, _));
   //         }
   //     }
-  // } else {  // It's slightly faster in this case if iterate over K first
+  // } else { // It's slightly faster in this case if iterate over K first
   //     #pragma unroll
   //     for (int k = 0; k < size<2>(S); ++k) {
   //         if (predicate_K(k)) {
@@ -444,11 +433,11 @@ __forceinline__ __device__ void copy_w_min_idx(
 // min_MN); }
 #pragma unroll
   for (int m = 0; m < size<1>(S); ++m) {
-    // if (threadIdx.x == 0 && blockIdx.z == 0) { printf("blockIdx.y = %d, m = %d\n", blockIdx.y, get<0>(identity_MN(0,
-    // m, 0))); }
+    // if (threadIdx.x == 0 && blockIdx.z == 0) { printf("blockIdx.y = %d, m = %d\n", blockIdx.y, get<0>(identity_MN(,
+    // m,))); }
     if (get<0>(identity_MN(0, m, 0)) >= min_MN && get<0>(identity_MN(0, m, 0)) < max_MN) {
 // if (threadIdx.x == 0 && blockIdx.z == 0) { printf("Inner loop, blockIdx.y = %d, m = %d\n", blockIdx.y,
-// get<0>(identity_MN(0, m, 0))); }
+// get<0>(identity_MN(, m,))); }
 #pragma unroll
       for (int k = 0; k < size<2>(S); ++k) {
         if (Is_even_K || predicate_K(k)) {

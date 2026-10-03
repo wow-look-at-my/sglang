@@ -29,9 +29,6 @@ impl WasmModuleRemovalRequest {
     }
 }
 
-/// Step 1: Find module to remove
-///
-/// Verifies that the module exists before attempting removal.
 pub struct FindModuleToRemoveStep;
 
 #[async_trait]
@@ -89,9 +86,6 @@ impl StepExecutor<WasmRemovalWorkflowData> for FindModuleToRemoveStep {
     }
 }
 
-/// Step 2: Remove module from WasmModuleManager
-///
-/// Removes the module from the manager's module map.
 pub struct RemoveModuleStep;
 
 #[async_trait]

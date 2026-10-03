@@ -32,8 +32,8 @@ fn eviction_priority_is_lower_for_leaf_than_internal() {
     );
 }
 
-// Three value-bearing root children in the D-leaf set; ticks anti-correlated
-// with allocation order so priority order differs from NodeIdx_ order.
+// Value-bearing root children in the D-leaf set; ticks anti-correlated with
+// allocation order so priority order differs from NodeIdx_ order.
 fn evict_walk_setup(tc: &mut UnifiedTreeCore<Vec<i64>>) -> (NodeIdx_, NodeIdx_, NodeIdx_) {
     let root = tc.arena.root();
     let ticks = [30i64, 10, 20];
@@ -180,8 +180,7 @@ fn evict_walk_skips_nodes_that_left_the_leaf_set() {
     let (_a, b, c) = evict_walk_setup(&mut tc);
     let (mut tr, mut df, mut hf) = (tracker(), frees(), frees());
     tc.evict_device_start(FULL, /* request_cnt = */ 100);
-    // The lowest-priority b stops being a D-leaf after the heap was built
-    // (e.g. locked): the walk skips it for the next candidate.
+    // The lowest-priority b stops being a D-leaf after the heap was built (e.g. locked).
     tc.evictable_device_leaves.discard(b);
     let (node, step) = tc.evict_device_next_node(FULL, &tr);
     accumulate_step(step, &mut tr, &mut df, &mut hf);
@@ -211,8 +210,8 @@ fn evict_walk_readmits_the_freed_leafs_parent() {
             /* extra_key = */ None,
         )
         .unwrap();
-    // Two live sibling leaves whose ticks straddle the parent's tick, so
-    // the readmitted parent must compete on its own priority.
+    // Live sibling leaves whose ticks straddle the parent's tick, so the
+    // readmitted parent must compete on its own priority.
     let s1 = tc
         .arena
         .alloc_child(
@@ -244,9 +243,7 @@ fn evict_walk_readmits_the_freed_leafs_parent() {
     let (node, step) = tc.evict_device_next_node(FULL, &tr);
     accumulate_step(step, &mut tr, &mut df, &mut hf);
     assert_eq!(node, Some(tc.arena.node(c).id));
-    // The driver deletes the write-through leaf outright and its parent
-    // becomes the new D-leaf; the walk must still find it via the parent
-    // captured before the free, ordered between the surviving siblings.
+    // The driver deletes the write-through leaf outright and its parent becomes the new D-leaf.
     tc.evictable_device_leaves.discard(c);
     let _ = tc.arena.take_device_value(c, FULL);
     tc.arena.free_leaf(c).unwrap();
@@ -296,8 +293,8 @@ fn evict_next_panics_before_start() {
     tc.evict_device_next_node(FULL, &tr);
 }
 
-// Three host-backed root children in the H-leaf set; ticks anti-correlated
-// with allocation order so priority order differs from NodeIdx_ order.
+// Host-backed root children in the H-leaf set; ticks anti-correlated with
+// allocation order so priority order differs from NodeIdx_ order.
 fn host_walk_setup(tc: &mut UnifiedTreeCore<Vec<i64>>) -> (NodeIdx_, NodeIdx_, NodeIdx_) {
     let root = tc.arena.root();
     let ticks = [30i64, 10, 20];
@@ -332,7 +329,6 @@ fn host_drive_evicts_leaves_lowest_priority_first_until_the_budget() {
         &mut df,
         &mut hf,
     );
-    // b (tick 10) and c (tick 20) go; a (tick 30) survives.
     assert_eq!(tr[&FULL], 2);
     assert!(!tc.evictable_host_leaves.contains(b));
     assert!(!tc.evictable_host_leaves.contains(c));
@@ -576,8 +572,7 @@ fn host_drive_skips_a_stale_heap_entry_for_an_already_freed_leaf() {
         .set_host_value(c, FULL, Tensor::from_slice(&[20i64]));
     tc.arena.node_mut(p).last_access_counter = 2;
     tc.arena.node_mut(c).last_access_counter = 1;
-    // p staged in the set despite its child: the initial heap entry goes
-    // stale once c's eviction readmits (and then frees) p.
+    // p staged in the set despite its child.
     tc.evictable_host_leaves.add(p);
     tc.evictable_host_leaves.add(c);
     let (mut tr, mut df, mut hf) = (tracker(), frees(), frees());
@@ -594,7 +589,6 @@ fn host_drive_skips_a_stale_heap_entry_for_an_already_freed_leaf() {
     tc.sanity_check(&[], &[]);
 }
 
-// Chain root -> n1 (len 2) -> n2 (len 3) with FULL device values; evictable seeded to 5.
 fn lock_chain(tc: &mut UnifiedTreeCore<Vec<i64>>) -> (NodeIdx_, NodeIdx_) {
     let root = tc.arena.root();
     let n1 = tc
@@ -677,8 +671,7 @@ fn inc_lock_ref_counts_only_newly_locked_nodes() {
 
 #[test]
 fn inc_lock_ref_counts_the_evicted_bottom_segment() {
-    // n2 and n3 are evicted (no device value): counted in the segment with no
-    // ledger move; only n1's tokens turn protected.
+    // n2 and n3 are evicted (no device value): counted in the segment with no ledger move.
     let mut tc = core();
     let root = tc.arena.root();
     let n1 = tc
@@ -807,8 +800,7 @@ fn lock_walks_treat_a_present_but_empty_value_as_device_on() {
     let result = tc
         .inc_lock_ref(tc.arena.node(n1).id, ComponentSet::EMPTY)
         .expect("live test node");
-    // A present-but-empty value is device-on (Python `value is not None`):
-    // locked, zero tokens moved.
+    // A present-but-empty value is device-on (Python `value is not None`): locked, zero tokens moved.
     assert_eq!(result.delta, Some(0));
     assert_eq!(tc.arena.device_lock_ref(n1, FULL), 1);
     // The release side moves the same zero tokens back.
@@ -1062,7 +1054,7 @@ fn dec_lock_ref_with_skip_swa_still_releases_full() {
 
 #[test]
 fn nested_locks_release_pairwise() {
-    // Two acquires then two releases: sizes move only on the outermost pair.
+    // Acquires then releases: sizes move only on the outermost pair.
     let mut tc = core();
     let (_n1, n2) = lock_chain(&mut tc);
     tc.inc_lock_ref(tc.arena.node(n2).id, ComponentSet::EMPTY)
@@ -1661,7 +1653,6 @@ fn match_validator_accepts_present_but_empty_device_value() {
     assert!(!device_only(&tc, no_value));
 }
 
-// Chain root -> n1 -> n2 -> n3 with FULL host values on n2 (len 2) and n3 (len 3).
 fn host_hit_chain() -> (UnifiedTreeCore<Vec<i64>>, NodeIdx_, NodeIdx_) {
     let mut tc = core();
     let root = tc.arena.root();
@@ -2000,7 +1991,7 @@ fn finalize_empty_walk_when_best_equals_last_device() {
 
 #[test]
 fn finalize_excludes_last_device_nodes_own_host_value() {
-    // root -> n1 -> n2 -> n3, host on all three; last_device=n2 counts only n3.
+    // root -> n1 -> n2 -> n3, host on all of them; last_device=n2 counts only n3.
     let mut tc = core();
     let root = tc.arena.root();
     let n1 = tc
@@ -2050,7 +2041,6 @@ fn finalize_excludes_last_device_nodes_own_host_value() {
 
 #[test]
 fn finalize_skips_nodes_without_host_value() {
-    // root -> n1 -> n2 -> n3, host only on n1 and n3; a value-less n2 contributes 0.
     let mut tc = core();
     let root = tc.arena.root();
     let n1 = tc
@@ -2096,7 +2086,6 @@ fn finalize_skips_nodes_without_host_value() {
     assert_eq!(out.host_hit_length, 4);
 }
 
-// Test-only split setup: root -> parent (key len 2) -> child, as _split_node leaves them.
 fn nodes(tc: &mut UnifiedTreeCore<Vec<i64>>) -> (NodeIdx_, NodeIdx_) {
     let root = tc.arena.root();
     let parent = tc
@@ -2194,7 +2183,7 @@ fn redistribute_splits_device_value_with_bigram_key() {
             /* extra_key = */ None,
         )
         .unwrap();
-    // One value row per atom: a 2-atom bigram parent key takes 2 rows.
+    // One value row per atom: a 2-atom bigram parent key takes a couple of rows.
     let original = Tensor::from_slice(&[10i64, 11, 12]);
     // Mid-split state: the child's key is already trimmed, its value not yet split.
     set_value_no_check(&mut tc, child, ValueSlotIdx::device(FULL), original.copy());
@@ -2740,7 +2729,6 @@ fn evict_panics_when_size_would_underflow() {
         .unwrap();
     tc.arena
         .set_device_value(node, FULL, Tensor::from_slice(&[10i64, 11, 12]));
-    // Counter still 0: evicting 3 tokens must fail loudly, not wrap.
     let mut device_frees = HashMap::new();
     let mut host_frees = HashMap::new();
     FullComponent.evict_component(
@@ -2958,8 +2946,7 @@ fn load_back_commit_attaches_device_slices_in_chain_order() {
     assert_eq!(tc.full_evictable_size(), 3);
     assert!(cache_actions.is_empty());
     assert!(tc.evictable_device_leaves.contains(c));
-    // b entered the D-leaf set while c was still evicted and the per-node update
-    // never revisits it; the orchestrator's post-commit path re-lock corrects it.
+    // b entered the D-leaf set while c was still evicted and the per-node update never revisits it.
     assert!(tc.evictable_device_leaves.contains(b));
 }
 

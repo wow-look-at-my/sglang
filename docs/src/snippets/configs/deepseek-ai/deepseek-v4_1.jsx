@@ -5,9 +5,7 @@
 //
 // Every DSpark cell caps --cuda-graph-max-bs-decode: the derived batch list does
 // not fit while capturing the DSpark decode graphs, on any NVIDIA platform. The
-// MI350X cell already carried the equivalent --cuda-graph-max-bs. H200 is the
-// tightest board at 140 GiB and needs the cap on both cells plus a lower memory
-// fraction; the three other High-Throughput cells start without either.
+// MI350X cell already carried the equivalent --cuda-graph-max-bs.
 //
 // DP-Attention, DeepEP and MegaMoE are absent by design: they have never been
 // enabled on this model. EP is set equal to TP on every shape here.
@@ -20,8 +18,6 @@ export const config = {
   supportedHardware: ["h200", "b200", "b300", "gb300", "mi350x"],
 
   // Hardware is the implicit first match dim; Strategy is the only other one.
-  // Declaring matchDims replaces variants / quantizations / nodesOptions
-  // wholesale, which drops three rows that each had exactly one option.
   matchDims: [
     {
       id: "strategy",
@@ -104,9 +100,8 @@ export const config = {
         { id: "decode",  label: "Decode role" },
       ],
       transferBackends: [
-        // Fallback for hosts where the RDMA fabric is not visible in the container:
-        // Mooncake then picks its NVLink transport, which only serves buffers from
-        // its own allocator and fails to find the peer address.
+        // Fallback for hosts where the RDMA fabric is not visible in the
+        // container: Mooncake then picks its NVLink transport.
         { id: "mooncake", label: "Mooncake (TCP)",
           env: ["MOONCAKE_PROTOCOL=tcp", "MC_FORCE_TCP=1"] },
       ],
@@ -207,11 +202,9 @@ export const config = {
         "--model-path {{MODEL_NAME}}",
         "--tp 4",
         "--ep-size 4",
-        // No speculation: the DSpark step has a fixed cost over a plain decode
-        // step, so it stops paying for itself once the batch is large.
+        // No speculation: the DSpark step has a fixed cost over a plain decode step.
         "--max-running-requests 256",
-        // Leave the backends alone — they resolve to dsv4 / flashinfer_mxfp4 /
-        // flashinfer_cutedsl. Overriding them is the usual cause of slow decode.
+        // Leave the backends alone — they resolve to dsv4 / flashinfer_mxfp4 / flashinfer_cutedsl.
         "--reasoning-parser auto",
         "--tool-call-parser auto",
         "--host {{HOST_IP}}",
@@ -219,9 +212,7 @@ export const config = {
       ],
     },
 
-    // ---------- H200: 8x H200, TP8 + EP8. No MXFP8 dense path on Hopper. The
-    // tightest board here at 140 GiB, so both cells also need the memory
-    // fraction pulled back; the cap alone still leaves the graphs short. ------
+    // ---------- H200: 8x H200, TP8 + EP8. No MXFP8 dense path on Hopper.
     {
       match: { hw: "h200", strategy: "low-latency" },
       nnodes: 1,
@@ -351,12 +342,10 @@ export const config = {
       nnodes: 1,
       verified: true,
       env: [
-        // Load-bearing: without it the fp4 experts land in the Triton
-        // fused-experts runner and assert on the hidden size.
+        // Load-bearing: without it the fp4 experts land in the Triton fused-experts runner and assert.
         "SGLANG_USE_AITER=1",
         "SGLANG_MOE_PADDING=1",
-        // Required for run-to-run repeatable output: forces the FlyDSL MoE
-        // down-projection onto a per-slot reduce instead of atomics.
+        // Required for run-to-run repeatable output: forces the FlyDSL MoE down-projection onto a per-slot reduce instead.
         "AITER_FLYDSL_FORCE_REDUCE=1",
         "ROCM_QUICK_REDUCE_QUANTIZATION=NONE",
       ],
@@ -379,18 +368,15 @@ export const config = {
       ],
     },
     {
-      // The attention backend and mem-fraction-static are the resolved
-      // defaults on HIP, so this cell leaves both alone.
+      // The attention backend and mem-fraction-static are the resolved defaults on HIP, so this cell leaves both alone.
       match: { hw: "mi350x", strategy: "high-throughput" },
       nnodes: 1,
       verified: true,
       env: [
-        // Load-bearing: without it the fp4 experts land in the Triton
-        // fused-experts runner and assert on the hidden size.
+        // Load-bearing: without it the fp4 experts land in the Triton fused-experts runner and assert.
         "SGLANG_USE_AITER=1",
         "SGLANG_MOE_PADDING=1",
-        // Required for run-to-run repeatable output: forces the FlyDSL MoE
-        // down-projection onto a per-slot reduce instead of atomics.
+        // Required for run-to-run repeatable output: forces the FlyDSL MoE down-projection onto a per-slot reduce instead.
         "AITER_FLYDSL_FORCE_REDUCE=1",
         "ROCM_QUICK_REDUCE_QUANTIZATION=NONE",
       ],

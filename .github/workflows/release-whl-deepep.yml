@@ -62,10 +62,8 @@ jobs:
           sparse-checkout: sgl_deep_ep
 
       - name: Set wheel version
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          printf '%s' "${RELEASE_VERSION}" > DeepEP-packaging/sgl_deep_ep/VERSION
+          printf '%s' "${{ inputs.version }}" > DeepEP-packaging/sgl_deep_ep/VERSION
 
       - name: Build wheels
         run: |
@@ -128,8 +126,6 @@ jobs:
         run: python3 scripts/update_deepep_whl_index.py --cuda 130
 
       - name: Push wheel indexes
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           cd sgl-whl
           git config --local user.name "sglang-bot"
@@ -138,7 +134,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Wheel indexes are already up to date"
           else
-            git commit -m "update sgl-deep-ep whl indexes for v${RELEASE_VERSION}"
+            git commit -m "update sgl-deep-ep whl indexes for v${{ inputs.version }}"
             git push origin gh-pages
           fi
 

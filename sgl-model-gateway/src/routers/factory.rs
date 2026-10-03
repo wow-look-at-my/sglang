@@ -116,11 +116,8 @@ impl RouterFactory {
         Ok(Box::new(router))
     }
 
-    /// Create an OpenAI router
-    ///
-    /// Workers should be registered via the external worker registration workflow
-    /// before using this router. The workflow discovers models from the provided
-    /// endpoints and creates external workers in the registry.
+    /// Create an OpenAI router Workers should be registered via the external
+    /// worker registration workflow before using this router.
     pub async fn create_openai_router(
         ctx: &Arc<AppContext>,
     ) -> Result<Box<dyn RouterTrait>, String> {

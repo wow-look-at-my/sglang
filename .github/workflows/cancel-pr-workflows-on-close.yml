@@ -1,10 +1,6 @@
 name: Cancel PR Workflows on Close
 
-# Cancels every unfinished run on a PR's head branch when the PR closes
-# (merged or not). Runs are listed repo-wide by branch, not per workflow:
-# the previous styfle/cancel-workflow-action `workflow_id: all` fetched
-# only the first page (30) of repo workflows, so newer workflows (e.g.
-# pr-test-extra.yml) were never cancelled and kept occupying runners.
+# Cancels every unfinished run on a PR's head branch when the PR closes (merged or not). Runs are listed repo-wide by branch, not per workflow: the previous styfle/cancel-workflow-action `workflow_id: all` fetched only the first page (30) of repo workflows, so newer workflows (e.g. pr-test-extra.yml) were never cancelled and kept occupying runners.
 
 on:
   pull_request_target:
@@ -21,7 +17,6 @@ jobs:
       - name: Cancel unfinished runs of this PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id }}
         shell: bash
@@ -47,7 +42,7 @@ jobs:
             for status in queued in_progress waiting pending requested action_required; do
               ids=""
               for attempt in 1 2 3; do
-                if ids=$(gh api -X GET "repos/$REPO/actions/runs" \
+                if ids=$(gh api -X GET "repos/${{ github.repository }}/actions/runs" \
                   --paginate \
                   -f branch="$HEAD_BRANCH" \
                   -f status="$status" \
@@ -76,18 +71,18 @@ jobs:
             echo "Pass $pass: cancelling $(echo "$run_ids" | wc -l | tr -d ' ') run(s)"
 
             for run_id in $run_ids; do
-              echo "Cancelling https://github.com/$REPO/actions/runs/$run_id"
-              if gh run cancel "$run_id" --repo "$REPO" 2>/dev/null; then
+              echo "Cancelling https://github.com/${{ github.repository }}/actions/runs/$run_id"
+              if gh run cancel "$run_id" --repo "${{ github.repository }}" 2>/dev/null; then
                 continue
               fi
               # Plain cancel fails for runs stuck behind approval /
               # deployment protection rules; force-cancel handles those.
-              if gh api -X POST "repos/$REPO/actions/runs/$run_id/force-cancel" >/dev/null 2>&1; then
+              if gh api -X POST "repos/${{ github.repository }}/actions/runs/$run_id/force-cancel" >/dev/null 2>&1; then
                 echo "  force-cancelled"
                 continue
               fi
               # Finished between listing and cancelling is fine.
-              state=$(gh api "repos/$REPO/actions/runs/$run_id" --jq '.status' 2>/dev/null || echo "unknown")
+              state=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id" --jq '.status' 2>/dev/null || echo "unknown")
               if [ "$state" = "completed" ]; then
                 echo "  already finished, nothing to cancel"
               else

@@ -1,12 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Concurrent-state invariants for the worker/registry/breaker layer.
-//!
-//! These tests stress the lock-free / single-Mutex paths that production
-//! traffic exercises in parallel: many requests calling `breaker.allow()`,
-//! many discovery events racing with workers_for() reads, and LoadGuard
-//! lifecycles under panics.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -16,10 +11,7 @@ use sgl_router::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
 use sgl_router::health::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
 use sgl_router::workers::{Worker, WorkerRegistry};
 
-/// HalfOpen state must admit at most one probe at a time even under high
-/// concurrency.  N threads race `allow()` when the breaker is HalfOpen; the
-/// invariant is that exactly one observes `true` (the probe holder); the
-/// rest see `false` because `probe_in_flight` is already set.
+/// HalfOpen state must admit at most one probe at a time even under high concurrency.
 #[tokio::test(start_paused = true)]
 async fn breaker_half_open_admits_only_one_probe_concurrently() {
     let cb = Arc::new(CircuitBreaker::with_config(CircuitBreakerConfig {
@@ -31,8 +23,7 @@ async fn breaker_half_open_admits_only_one_probe_concurrently() {
     cb.record_failure();
     assert!(!cb.allow(), "must be Open immediately after a failure");
 
-    // Advance the paused clock past cool_down so the next `allow()` will
-    // attempt the Open → HalfOpen transition.
+    // Advance the paused clock past cool_down so the next `allow()` will attempt the Open → HalfOpen transition.
     tokio::time::advance(Duration::from_millis(60)).await;
 
     let admitted = Arc::new(AtomicUsize::new(0));
@@ -56,10 +47,7 @@ async fn breaker_half_open_admits_only_one_probe_concurrently() {
     );
 }
 
-/// Concurrent `add_with_cb` (upsert) and `remove` from many threads on the
-/// same WorkerId must not panic, must not deadlock, and must leave a
-/// consistent index — `workers_for(model)` may return 0 or 1 worker, but
-/// must never resolve to a worker that has been removed.
+/// Concurrent `add_with_cb` (upsert) and `remove` from many threads on the same WorkerId must not panic, must not deadlock.
 #[test]
 fn registry_concurrent_add_remove_keeps_indexes_consistent() {
     let r = Arc::new(WorkerRegistry::default());
@@ -82,19 +70,7 @@ fn registry_concurrent_add_remove_keeps_indexes_consistent() {
                 for w in &snapshot {
                     // Cross-index invariant: an entry surfaced via
                     // `by_model[m]` must come from a Worker whose own
-                    // `model_ids` includes `m`. An earlier version of
-                    // this assertion checked `w.id.0.starts_with('w')`,
-                    // which is a tautology — every id is `w0..w7` by
-                    // construction — and a regression where `by_model`
-                    // pointed at the wrong Worker (e.g., a stale entry
-                    // left after an upsert that should have cleared its
-                    // by_model membership for the dropped model) would
-                    // pass silently. We can't `re-get by_id and ptr_eq`
-                    // because a concurrent remove can drop the by_id
-                    // entry between the two reads — `Arc` keeps the
-                    // Worker alive on our side but the index map is
-                    // gone. The model-membership claim, however, is a
-                    // property of the Arc itself and stays stable.
+                    // `model_ids` includes `m`.
                     assert!(
                         w.model_ids.contains(&model),
                         "cross-index drift: by_model[{model:?}] surfaced \
@@ -111,17 +87,14 @@ fn registry_concurrent_add_remove_keeps_indexes_consistent() {
         h.join().unwrap();
     }
 
-    // After every thread finishes, every removed worker must really be gone.
+    // After every thread finishes, every removed worker must be gone.
     assert!(
         r.workers_for(&model).is_empty(),
         "registry must be empty after all threads finished their add/remove cycles",
     );
 }
 
-/// `LoadGuard` must decrement the counter during a panic-unwind, not just
-/// on a normal scope exit.  Rust's RAII contract via `Drop` covers this,
-/// but a future refactor (e.g. adding a manual decrement on a non-panic
-/// path) could silently regress it.  This test pins the invariant.
+/// `LoadGuard` must decrement the counter during a panic-unwind, not on a normal scope exit.
 #[test]
 fn load_guard_decrements_on_panic_unwind() {
     let w = Arc::new(Worker::new(WorkerSpec {

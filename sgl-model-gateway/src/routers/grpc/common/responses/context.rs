@@ -1,6 +1,4 @@
-//! Shared context for /v1/responses endpoint handlers
-//!
-//! This context is used by both regular and harmony response implementations.
+//! Shared context.
 
 use std::sync::{Arc, RwLock as StdRwLock};
 
@@ -9,10 +7,7 @@ use smg_mcp::McpManager;
 
 use crate::routers::grpc::{context::SharedComponents, pipeline::RequestPipeline};
 
-/// Context for /v1/responses endpoint
-///
-/// Used by both regular and harmony implementations.
-/// All fields are Arc/shared references, so cloning this context is cheap.
+/// Context for /v1/responses endpoint Used by both regular and harmony implementations.
 #[derive(Clone)]
 pub(crate) struct ResponsesContext {
     /// Chat pipeline for executing requests

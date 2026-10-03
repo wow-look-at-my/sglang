@@ -1,8 +1,8 @@
 /*Adapt from:
 https://github.com/neuralmagic/vllm-flash-attention/blob/90eacc1af2a7c3de62ea249e929ed5faccf38954/csrc/common/pytorch_shim.h
-  Copyright 2025 SGLang Team. All Rights Reserved.
+  Copyright SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
+Licensed under the Apache License, Version.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -112,7 +112,6 @@ struct pytorch_library_compatible_type<float> {
 
 //
 //  Shim Utils
-//
 
 template <typename Ret, typename... Args>
 auto make_pytorch_shim(Ret (*fun)(Args... args)) {

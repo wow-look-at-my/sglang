@@ -1,14 +1,10 @@
-//! Common SSE parsing and processing utilities for OpenAI responses
-//!
-//! This module contains shared helpers used by both streaming and accumulator modules.
+//! Common SSE parsing and processing utilities.
 
 use std::borrow::Cow;
 
 use serde_json::Value;
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
+// ============================================================================ Helper Functions.
 
 /// Extract output_index from a JSON value
 #[inline]
@@ -25,8 +21,7 @@ pub(super) fn get_event_type<'a>(event_name: Option<&'a str>, parsed: &'a Value)
 }
 
 // ============================================================================
-// Chunk Processor
-// ============================================================================
+// Chunk Processor.
 
 /// Processes incoming byte chunks into complete SSE blocks.
 /// Handles buffering of partial chunks and CRLF normalization.
@@ -68,7 +63,6 @@ impl ChunkProcessor {
             if !block.trim().is_empty() {
                 return Some(block);
             }
-            // If block is empty, loop again to find the next one
         }
     }
 

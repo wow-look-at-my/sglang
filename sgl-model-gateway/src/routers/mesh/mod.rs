@@ -1,6 +1,4 @@
-//! Mesh cluster management HTTP handlers
-//!
-//! This module provides HTTP API endpoints for mesh cluster management.
+//! Mesh cluster management HTTP.
 
 mod handlers;
 

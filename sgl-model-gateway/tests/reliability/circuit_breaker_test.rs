@@ -38,7 +38,6 @@ mod circuit_breaker_tests {
 
         let app = ctx.create_app().await;
 
-        // Make requests until we see failures (500) and then circuit breaker opens (503)
         let mut saw_500 = false;
         let mut saw_503 = false;
 
@@ -63,7 +62,6 @@ mod circuit_breaker_tests {
             }
         }
 
-        // Should see 500 (worker error) and eventually 503 (circuit breaker open)
         assert!(
             saw_500 || saw_503,
             "Should see either 500 (worker error) or 503 (circuit breaker open)"
@@ -98,7 +96,6 @@ mod circuit_breaker_tests {
 
         let app = ctx.create_app().await;
 
-        // With circuit breaker disabled, should always see 500 (never 503)
         for _ in 0..5 {
             let payload = json!({
                 "text": "Test disabled CB",
@@ -113,7 +110,6 @@ mod circuit_breaker_tests {
                 .unwrap();
 
             let resp = app.clone().oneshot(req).await.unwrap();
-            // With CB disabled, we expect 500 errors (not 503 from CB)
             assert_eq!(
                 resp.status(),
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -147,8 +143,7 @@ mod circuit_breaker_tests {
 
         let app = ctx.create_app().await;
 
-        // Send enough requests to trigger CB on the failing worker
-        // The healthy worker should continue to serve requests
+        // Send enough requests to trigger CB on the failing worker The healthy worker should continue to serve requests
         let mut success_count = 0;
         for _ in 0..20 {
             let payload = json!({

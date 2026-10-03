@@ -2,11 +2,9 @@
 #
 # All Kimi-specific config lives in this recipe's `model:` block (docker env +
 # sglang server args) and `runtime` (split attention backends); nothing about
-# Kimi is hardcoded in launch_mi355x.sh. Mirrors the single-node registered test
-# test/registered/amd/accuracy/mi35x/test_kimi_k26_eval_mi35x.py (TP8, split
-# attention backends, multithread loader, GSM8K > 0.92).
+# Kimi is hardcoded in launch_mi355x.sh.
 #
-# Consumed by:
+# Consumed by.
 #   * scripts/ci/slurm/process_result.py reads `resources` and
 #     `backend.sglang_config` (TP/EP/DP + worker counts) for the summary table.
 #   * scripts/ci/slurm/launch_mi355x.sh reads `runtime`, `bench`, `model`, `mtp`.
@@ -66,8 +64,7 @@ bench:
   num_prompts_factor: 4      # num-prompts = concurrency * factor
   random_range_ratio: 1.0
 
-  # Correctness gate run through the PD path before the perf sweep. Mirrors the
-  # registered single-node Kimi-K2.6 eval (full GSM8K, 8-shot, accuracy > 0.92).
+  # Correctness gate run through the PD path before the perf sweep.
   accuracy:
     enabled: true
     num_shots: 8

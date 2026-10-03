@@ -1,13 +1,8 @@
 # UNO full-dataset math evaluation
 
-`run_math_eval.py` evaluates AR, UNO, DFLASH, EAGLE, or EAGLE3 with identical
-datasets, prompts, sampling parameters, and grading. It creates an in-process
-`sgl.Engine`; there is no separate server process. Engine startup is excluded
-from the timed interval, and no additional request warmup is run.
+`run_math_eval.py` evaluates AR, UNO, DFLASH, EAGLE, or EAGLE3 with identical datasets, prompts, sampling parameters, and grading. It creates an in-process `sgl.Engine`. There is no separate server process. Engine startup is excluded from the timed interval, and no additional request warmup is run.
 
-The runner downloads pinned revisions of GSM8K, MATH-500, AIME 2024, AIME
-2025, and AIME 2026. It applies the same boxed-answer instruction and Qwen
-reasoning chat template to every engine, then grades with `math_verify`.
+The runner downloads pinned revisions of GSM8K, MATH-500, AIME 2024, AIME 2025, and AIME 2026. It applies the same boxed-answer instruction and Qwen reasoning chat template to every engine, then grades with `math_verify`.
 
 Install SGLang with its evaluation dependencies:
 
@@ -17,9 +12,7 @@ pip install -e "python[test]"
 
 ## Reproduce the H200 table
 
-Run from the SGLang repository root. Each invocation below produces one row of
-the PR table. GSM8K and MATH-500 use one sample per problem; AIME 2025 uses ten
-samples per problem, or 300 completions.
+Run from the SGLang repository root. Each invocation below produces one row of the PR table. GSM8K and MATH-500 use one sample per problem. AIME uses multiple samples per problem, or completions.
 
 ```bash
 export MODEL_PATH=Qwen/Qwen3-8B
@@ -103,15 +96,11 @@ run_ar       aime25  10 1 ar-aime25-c1
 run_tree_uno aime25  10 1 uno-tree-b16-k32-v32-aime25-c1
 ```
 
-Each output directory contains raw generations, per-answer grades, and
-`summary.json` and `summary.md`. AR TPF is one. UNO TPF counts both full
-target-model forwards in each cycle: the diffusion-pathway draft and
-AR-pathway verification forwards.
+Each output directory contains raw generations, per-answer grades, and `summary.json` and `summary.md`. AR TPF is one. UNO TPF counts both full target-model forwards in each cycle: the diffusion-pathway draft and AR-pathway verification forwards.
 
 ## Other speculative decoders
 
-The runner uses the same public option names as `sglang serve`. For example,
-DFLASH can be evaluated with:
+The runner uses the same public option names as `sglang serve`. For example, DFLASH can be evaluated with:
 
 ```bash
 PYTHONPATH=python python -m benchmark.uno.run_math_eval \
@@ -144,5 +133,4 @@ PYTHONPATH=python python -m benchmark.uno.run_math_eval \
   --speculative-num-draft-tokens 8
 ```
 
-For EAGLE and DFLASH, TPF follows SGLang's acceptance-length convention and
-counts generated tokens per target verification forward.
+For EAGLE and DFLASH, TPF follows SGLang's acceptance-length convention and counts generated tokens per target verification forward.

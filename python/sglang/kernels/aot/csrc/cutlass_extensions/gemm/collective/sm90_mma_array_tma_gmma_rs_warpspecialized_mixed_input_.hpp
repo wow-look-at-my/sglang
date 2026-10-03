@@ -1,33 +1,18 @@
-/***************************************************************************************************
- * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- **************************************************************************************************/
+/*All rights reserved. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer. Redistributions in binary form must reproduce
+ * the above copyright notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution. Neither the name of the
+ * copyright holder nor the names of its contributors may be used to endorse or promote products
+ * derived from this software without specific prior written permission. THIS SOFTWARE IS PROVIDED
+ * BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+ * PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+ * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+ * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * ************************************************************************************************ */
 #pragma once
 
 #include "cute/algorithm/functional.hpp"
@@ -93,7 +78,6 @@ struct CollectiveMmaArrayMixedInput<
 
   //
   // Type Aliases
-  //
   using DispatchPolicy = MainloopSm90ArrayTmaGmmaWarpSpecializedMixedInput<Stages, ClusterShape, KernelSchedule_>;
   using TileShape = TileShape_;
   using KernelSchedule = KernelSchedule_;
@@ -121,7 +105,6 @@ struct CollectiveMmaArrayMixedInput<
 
   //
   // Type Aliases
-  //
   using ScaleA = detail::deduce_mixed_width_dtype_t<1, ElementAOptionalTuple>;
   using ScaleB = detail::deduce_mixed_width_dtype_t<1, ElementBOptionalTuple>;
   using ZeroA = detail::deduce_mixed_width_dtype_t<2, ElementAOptionalTuple>;
@@ -270,7 +253,6 @@ struct CollectiveMmaArrayMixedInput<
       cute::is_same_v<GmemTiledCopyB, SM90_TMA_LOAD> || cute::is_same_v<GmemTiledCopyB, SM90_TMA_LOAD_MULTICAST>,
       "GmemTiledCopy - invalid SM90 TMA copy atom specified.");
 
-  // To relax them, we need to handle loading more than 1 row of scales for every main loop iteration.
   // We must also handle updating the pipeline transaction bytes on the fly.
   static_assert(size<1>(SmemLayoutAtomScale{}) == 1, "size<1>(SmemLayoutAtomScale) must be 1.");
 
@@ -400,7 +382,6 @@ struct CollectiveMmaArrayMixedInput<
 
   //
   // Methods
-  //
 
   template <class ProblemShape>
   static constexpr Params to_underlying_arguments(ProblemShape problem_shapes, Arguments const& args, void* workspace) {
@@ -682,12 +663,12 @@ struct CollectiveMmaArrayMixedInput<
   static constexpr uint32_t TmaTransactionBytes =
       TmaTransactionBytesMK + TmaTransactionBytesNK + TmaTransactionBytesExtra;
 
-  // Set up the data needed by this collective for load and mma.
-  // Returns a tuple of tensors. The collective and the kernel layer have the contract that the
-  // returned tuple must contain at least two elements, with the first two elements being:
-  // gA_mkl - The tma tensor, A after a local tile so it has shape  (BLK_M,BLK_K,m,k,l)
-  // gB_nkl - The tma tensor, B after a local tile so it has shape  (BLK_N,BLK_K,n,k,l)
-  // The rest of the tensors can be specified as needed by this collective.
+  // Set up the data needed by this collective for load and mma. Returns a tuple of tensors.
+  // The collective and the kernel layer have the contract that the returned tuple must contain
+  // at least elements, with the first elements being: gA_mkl - The tma tensor, A after a local
+  // tile so it has shape (BLK_M,BLK_K,m,k,l) gB_nkl - The tma tensor, B after a local tile so
+  // it has shape (BLK_N,BLK_K,n,k,l) The rest of the tensors can be specified as needed by
+  // this collective.
   template <class ProblemShape_MNKL>
   CUTLASS_DEVICE auto load_init(ProblemShape_MNKL const& problem_shape_MNKL, Params const& mainloop_params) const {
     using X = Underscore;
@@ -765,7 +746,6 @@ struct CollectiveMmaArrayMixedInput<
 
     //
     // Prepare the TMA loads for A and B
-    //
 
     constexpr uint32_t cluster_shape_x = get<0>(typename DispatchPolicy::ClusterShape());
     uint2 cluster_local_block_id = {block_rank_in_cluster % cluster_shape_x, block_rank_in_cluster / cluster_shape_x};
@@ -819,7 +799,6 @@ struct CollectiveMmaArrayMixedInput<
 
       //
       // Copy gmem to smem for *k_tile_iter
-      //
 
       using BarrierType = typename MainloopPipeline::ProducerBarrierType;
       BarrierType* tma_barrier = pipeline.producer_get_barrier(smem_pipe_write);
@@ -846,8 +825,6 @@ struct CollectiveMmaArrayMixedInput<
         // transaction bytes on the fly. We must do a ceiling divide here to correctly handle with chunk_size == K. In
         // that case, we don't require that K is a multiple of the threadblock tile K
         const int scale_load_k = *k_tile_iter / 1;
-        // const int scale_load_k = *k_tile_iter / mainloop_params.reload_factor; // This will always be 0 when
-        // chunk_size == K.
         if (cute::elect_one_sync()) {
           copy(
               mainloop_params.tma_load_scale.with(get<2>(input_tensormaps), *tma_barrier, mcast_mask_s),
@@ -930,7 +907,6 @@ struct CollectiveMmaArrayMixedInput<
 
     //
     // Define C accumulators and A/B partitioning
-    //
 
     // Layout of warp group to thread mapping
 
@@ -965,7 +941,6 @@ struct CollectiveMmaArrayMixedInput<
 
     //
     // Copy Atom A retiling
-    //
     auto smem_tiled_copy_A = make_tiled_copy_A(SwappedSmemCopyAtomA{}, tiled_mma);
     auto smem_thr_copy_A = smem_tiled_copy_A.get_thread_slice(warp_group_thread_idx);
 
@@ -987,7 +962,6 @@ struct CollectiveMmaArrayMixedInput<
 
     //
     // PIPELINED MAIN LOOP
-    //
 
     // We release buffers to producer warps(dma load) with some mmas in flight
     PipelineState smem_pipe_release = smem_pipe_read;
@@ -1025,7 +999,6 @@ struct CollectiveMmaArrayMixedInput<
       // src: tCrA_load, dst: tCrA_mma
       Utils::convert_A_kblock(tCrA_load, tCrA_mma, 0);
 
-      // Unroll the K mode manually to set scale D to 1
       CUTLASS_PRAGMA_UNROLL
       for (int chunk_id = 0; chunk_id < NumChunksPerTileK; ++chunk_id) {
         tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
@@ -1064,9 +1037,6 @@ struct CollectiveMmaArrayMixedInput<
       for (int chunk_id_ = 0; chunk_id_ < NumChunksPerTileK; ++chunk_id_) {
         warpgroup_fence_operand(intermediate_array[chunk_id_]);
 
-        // Apply the group-wise scaling
-        // tCrS  ((4, _2, _2), MMA_M, _1)
-        // accum ((2, _2, _2), MMA_M, _1)
         auto tCrS = cute::get<1>(partitioned_extra_info);
         for (int mma_m = 0; mma_m < size<1>(accum); mma_m++) {
           for (int m = 0; m < size<0, 1>(accum); m++) {
@@ -1092,8 +1062,6 @@ struct CollectiveMmaArrayMixedInput<
 
       --k_tile_count;
       if (k_tile_count > 0) {
-        // Wait for K_BLOCK_MAX - 1 to be in flight to ensure that it is safe to overwrite the A registers for the first
-        // mma.
         pipeline.consumer_wait(smem_pipe_read, barrier_token);
 
         Utils::copy_tensors_MK(
@@ -1127,12 +1095,10 @@ struct CollectiveMmaArrayMixedInput<
     for (; k_tile_count > 1; --k_tile_count) {
       //
       // Compute on k_tile
-      //
 
       int read_stage = smem_pipe_read.index();
       ++smem_pipe_read;
 
-      // Unroll the K mode manually to set scale D to 1
       CUTLASS_PRAGMA_UNROLL
       for (int chunk_id = 0; chunk_id < NumChunksPerTileK; ++chunk_id) {
         tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
@@ -1224,14 +1190,12 @@ struct CollectiveMmaArrayMixedInput<
     {
       //
       // Last k tile
-      //
       Tensor intermediate = make_fragment_like(accum);
 
       int read_stage = smem_pipe_read.index();
 
       tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
 
-      // Unroll the K mode manually to set scale D to 1
       CUTLASS_PRAGMA_UNROLL
       for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block) {
         warpgroup_arrive();
@@ -1306,7 +1270,6 @@ struct CollectiveMmaArrayMixedInput<
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   //
   // Methods to perform different parts of TMA/Tensormap modifications
-  //
   CUTLASS_DEVICE auto tensormaps_init(
       Params const& mainloop_params, TensorMapStorage& shared_tensormaps, int32_t sm_count, int32_t sm_idx) {
     cute::TmaDescriptor* gmem_tensormap = reinterpret_cast<cute::TmaDescriptor*>(mainloop_params.tensormaps);

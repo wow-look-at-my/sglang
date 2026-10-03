@@ -1,16 +1,5 @@
 #!/bin/bash
 # Build sgl-deep-gemm wheel inside a CUDA-versioned container.
-#
-# Usage: build_sgl_deep_gemm.sh <PYTHON_VERSION> <CUDA_VERSION> <DEEPGEMM_SRC> [ARCH]
-#   PYTHON_VERSION: e.g. 3.10
-#   CUDA_VERSION:   e.g. 13.0
-#   DEEPGEMM_SRC:   path to a checkout of sgl-project/DeepGEMM
-#   ARCH:           x86_64 (default) or aarch64
-#
-# Writes:
-#   <DEEPGEMM_SRC>/dist/      — wheel(s) tagged +cu130 and manylinux
-#   <DEEPGEMM_SRC>/dist-pypi/ — cu130 only: same wheel(s) with +cu130 stripped
-#                              (PyPI rejects local-version segments)
 set -ex
 
 if [ $# -lt 3 ]; then

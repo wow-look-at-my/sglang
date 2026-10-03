@@ -1,6 +1,4 @@
-//! Streaming response processor for gRPC routers
-//!
-//! This module contains shared streaming logic for both Regular and PD router.
+//! Streaming response processor.
 
 use std::{collections::HashMap, io, sync::Arc, time::Instant};
 
@@ -208,7 +206,6 @@ impl StreamingProcessor {
         let history_tool_calls_count = utils::get_history_tool_calls_count(&original_request);
         let stream_options = &original_request.stream_options;
 
-        // Phase 1: Initialize state tracking (per-index for n>1 support)
         let mut is_firsts: HashMap<u32, bool> = HashMap::new();
         let mut stream_buffers: HashMap<u32, String> = HashMap::new();
         let mut finish_reasons: HashMap<u32, String> = HashMap::new();
@@ -277,7 +274,6 @@ impl StreamingProcessor {
             );
         }
 
-        // Phase 2: Main streaming loop
         while let Some(response) = grpc_stream.next().await {
             let gen_response = response.map_err(|e| format!("Stream error: {}", e))?;
 
@@ -421,8 +417,7 @@ impl StreamingProcessor {
                                 .map_err(|_| "Failed to send tool call chunk".to_string())?;
                         }
 
-                        // Always skip regular content when tool parsing is active
-                        // Parser either emitted chunks or buffered content
+                        // Always skip regular content when tool parsing is active Parser either emitted chunks.
                         continue;
                     }
 
@@ -495,7 +490,6 @@ impl StreamingProcessor {
                     };
                     matched_stops.insert(index, matched_stop_value);
 
-                    // Don't break - continue reading all Complete messages for n>1
                 }
                 ProtoResponseVariant::Error(error) => {
                     return Err(error.message().to_string());
@@ -504,7 +498,6 @@ impl StreamingProcessor {
             }
         }
 
-        // Phase 3: Check unstreamed tool args
         for (index, parser) in &tool_parsers {
             let parser_guard = parser.lock().await;
             if let Some(unstreamed_items) = parser_guard.get_unstreamed_tool_args() {
@@ -537,7 +530,6 @@ impl StreamingProcessor {
             }
         }
 
-        // Phase 4: Finish reason chunks
         for (index, finish_reason) in finish_reasons.iter() {
             let final_finish_reason =
                 if has_tool_calls.get(index).copied().unwrap_or(false) && finish_reason == "stop" {
@@ -560,7 +552,6 @@ impl StreamingProcessor {
                 .map_err(|_| "Failed to send finish chunk".to_string())?;
         }
 
-        // Phase 5: Usage chunk
         if let Some(stream_opts) = stream_options {
             if stream_opts.include_usage.unwrap_or(false) {
                 let total_prompt: u32 = prompt_tokens.values().sum();
@@ -616,14 +607,12 @@ impl StreamingProcessor {
         original_request: Arc<ChatCompletionRequest>,
         tx: &UnboundedSender<Result<Bytes, io::Error>>,
     ) -> Result<(), String> {
-        // Phase 1.5: Collect input_logprobs from prefill stream if requested
         if original_request.logprobs {
             while let Some(response) = prefill_stream.next().await {
                 let gen_response = response.map_err(|e| format!("Prefill stream error: {}", e))?;
                 match gen_response.into_response() {
                     ProtoResponseVariant::Complete(_complete) => {
-                        // Input logprobs collected but not yet used in streaming
-                        // (OpenAI spec doesn't require prompt logprobs in streaming responses)
+                        // Input logprobs collected but not yet used in streaming.
                         break;
                     }
                     ProtoResponseVariant::Error(error) => {
@@ -634,8 +623,6 @@ impl StreamingProcessor {
             }
         }
 
-        // Phase 2-5: Process decode stream (same as single mode)
-        // Note: decode_stream will be marked completed inside process_streaming_chunks
         let result = self
             .process_streaming_chunks(
                 decode_stream,
@@ -647,8 +634,8 @@ impl StreamingProcessor {
             )
             .await;
 
-        // Mark prefill stream as completed AFTER decode completes successfully
-        // This ensures that if client disconnects during decode, BOTH streams send abort
+        // Mark prefill stream as completed AFTER decode completes
+        // successfully This ensures that if client disconnects during decode.
         if result.is_ok() {
             prefill_stream.mark_completed();
         }
@@ -825,7 +812,6 @@ impl StreamingProcessor {
                     tx.send(Ok(Bytes::from(sse_chunk)))
                         .map_err(|_| "Failed to send finish chunk".to_string())?;
 
-                    // Continue to process all completions if n>1
                 }
                 ProtoResponseVariant::Error(error) => {
                     return Err(error.message().to_string());
@@ -887,8 +873,8 @@ impl StreamingProcessor {
         )
         .await;
 
-        // Mark prefill stream as completed AFTER decode completes successfully
-        // This ensures that if client disconnects during decode, BOTH streams send abort
+        // Mark prefill stream as completed AFTER decode completes
+        // successfully This ensures that if client disconnects during decode.
         if result.is_ok() {
             prefill_stream.mark_completed();
         }
@@ -1021,7 +1007,6 @@ impl StreamingProcessor {
                     tx.send(Ok(Bytes::from(sse_chunk)))
                         .map_err(|_| "Failed to send finish chunk".to_string())?;
 
-                    // Continue to process all completions if n>1
                 }
                 ProtoResponseVariant::Error(error) => {
                     return Err(error.message().to_string());
@@ -1308,8 +1293,7 @@ impl StreamingProcessor {
         chunks
     }
 
-    /// Format a response as SSE chunk into a reusable buffer
-    /// This avoids allocations by reusing the same buffer across multiple chunks
+    /// Format a response as SSE chunk into a reusable buffer This avoids allocations.
     #[inline]
     fn format_sse_chunk_into(buffer: &mut Vec<u8>, chunk: &ChatCompletionStreamResponse) {
         buffer.clear();

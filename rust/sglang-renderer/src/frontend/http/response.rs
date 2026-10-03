@@ -27,8 +27,7 @@ where
             };
             yield Ok::<_, Infallible>(Event::default().data(data));
         }
-        // An error may be followed by the protocol's final usage chunk.
-        // Only this transport owns the SSE terminator.
+        // An error may be followed by the protocol's final usage chunk. Only this transport owns the SSE terminator.
         yield Ok::<_, Infallible>(Event::default().data("[DONE]"));
     };
     Sse::new(events).into_response()

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::server::app_context::AppContext;
@@ -21,8 +21,7 @@ pub struct ModelEntry {
 }
 
 pub async fn list_models(State(ctx): State<Arc<AppContext>>) -> Json<ModelsList> {
-    // The router serves a single configured model; OpenAI clients still
-    // expect a list shape, so return a one-element `data` array.
+    // The router serves a single configured model.
     let m = &ctx.config.model;
     let data = vec![ModelEntry {
         id: m.id.clone(),
@@ -84,10 +83,7 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["qwen3"]);
         assert_eq!(v["data"][0]["object"], "model");
-        // Pin `owned_by` so a refactor that flips the hardcoded value to
-        // "openai" / "" / a typo would fail loudly here. OpenAI clients
-        // expect this field and some (e.g. langchain-openai) treat
-        // `owned_by != "system"` as a meaningful signal.
+        // Pin `owned_by` so a refactor that flips the hardcoded value to "openai" / "" / a typo would fail loudly here.
         assert_eq!(v["data"][0]["owned_by"], "sglang");
     }
 }

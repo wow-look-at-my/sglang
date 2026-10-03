@@ -19,8 +19,7 @@ on:
         required: false
         type: string
 
-# Bound the API cost when the same ref pushes repeatedly. See note in
-# runner-utilization.yml for the original incident this guards against.
+# Bound the API cost when the same ref pushes repeatedly. See note in runner-utilization.yml for the original incident this guards against.
 concurrency:
   group: xpu-ci-job-monitor-${{ github.ref }}
   cancel-in-progress: true
@@ -28,8 +27,7 @@ concurrency:
 jobs:
   fetch-actions-data:
     name: Fetch Actions Snapshot
-    # Skip fork PRs entirely, and require the `run-ci` label on same-repo PRs.
-    # schedule and workflow_dispatch always run.
+    # Skip fork PRs entirely, and require the `run-ci` label on same-repo PRs. schedule and workflow_dispatch always run.
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
@@ -255,8 +253,7 @@ jobs:
             --input-data-file ci-data/actions-job-snapshot.json \
             --summary
 
-  # Colorful nightly XPU status dashboard, rendered into the workflow summary.
-  # Success-rate thresholds: >=90% healthy, >=70% degraded, else critical.
+  # Colorful nightly XPU status dashboard, rendered into the workflow summary. Success-rate thresholds: >=90% healthy, >=70% degraded, else critical.
   nightly-xpu-status-dashboard:
     name: Nightly XPU Status Dashboard
     if: ${{ !inputs.job_filter }}
@@ -402,17 +399,10 @@ jobs:
               sys.exit(1)
           PY
 
-  # -------------------------------------------------------------------
-  # Intel(XPU) Nightly report — per-model 1x/2x/4x/8x tables.
-  # Downloads the per-model metrics jsonl artifacts uploaded by
-  # nightly-test-intel.yml (SGLANG_TEST_METRICS_FILE side-writer) and renders
-  # one Markdown table per GPU-count suite. 8x is future-ready: it renders
-  # "No metrics recorded" until an 8-GPU suite is enabled upstream.
-  # -------------------------------------------------------------------
+  # ------------------------------------------------------------------- Intel(XPU) Nightly report — per-model 1x/2x/4x/8x tables. Downloads the per-model metrics jsonl artifacts uploaded by nightly-test-intel.yml (SGLANG_TEST_METRICS_FILE side-writer) and renders one Markdown table per GPU-count suite. 8x is future-ready: it renders "No metrics recorded" until an 8-GPU suite is enabled upstream. -------------------------------------------------------------------
   nightly-xpu-per-model-report:
     name: Intel(XPU) Nightly report
-    # Fork PRs don't get secrets and can't read cross-workflow artifacts;
-    # rest is same gating as the fetch-actions-data job above.
+    # Fork PRs don't get secrets and can't read cross-workflow artifacts; rest is same gating as the fetch-actions-data job above.
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&

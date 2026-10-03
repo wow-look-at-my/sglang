@@ -262,8 +262,7 @@ fn load_chat_support(config: &RendererConfig) -> (Option<ChatFormatter>, Option<
             return (
                 Some(ChatFormatter::HuggingFace {
                     formatter,
-                    // The remaining display-name fallback formatters are
-                    // constructed with their thinking mode enabled.
+                    // The remaining display-name fallback formatters are constructed with their thinking mode enabled.
                     thinking: ThinkingTemplates::native(true, false),
                 }),
                 None,

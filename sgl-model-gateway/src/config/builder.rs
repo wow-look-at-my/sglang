@@ -7,8 +7,7 @@ use super::{
 };
 use crate::core::ConnectionMode;
 
-/// Builder for RouterConfig that wraps the config itself
-/// This eliminates field duplication and stays in sync automatically
+/// Builder for RouterConfig that wraps the config itself This eliminates field duplication and stays.
 #[derive(Debug, Clone, Default)]
 pub struct RouterConfigBuilder {
     config: RouterConfig,
@@ -702,9 +701,7 @@ impl RouterConfigBuilder {
                     reason: format!("Failed to read client key from {}: {}", key_path, e),
                 })?;
 
-                // Combine cert and key into single PEM for reqwest::Identity
-                // When using rustls, certificate must come first, then key
-                // Ensure proper PEM formatting with newlines
+                // Combine cert and key into single PEM for reqwest::Identity When using rustls, certificate must come first.
                 let mut combined = cert;
                 if !combined.ends_with(b"\n") {
                     combined.push(b'\n');
@@ -717,7 +714,6 @@ impl RouterConfigBuilder {
                 self.config.client_identity = Some(combined);
             }
             (None, None) => {
-                // No client cert configured, that's fine
             }
             _ => {
                 return Err(ConfigError::ValidationFailed {

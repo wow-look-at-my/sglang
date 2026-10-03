@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! SGLang's native DeepSeek serving semantics around Dynamo's V4 encoder.
@@ -64,8 +64,7 @@ impl V4Profile {
                 _ => bail!("invalid dsv4_reasoning_effort_profile: {profile}"),
             };
         }
-        // Inspect checkpoint source as data, never execute remote Python. Like
-        // SGLang, an absent/unrecognized encoder falls back to the preview profile.
+        // Inspect checkpoint source as data, never execute remote Python.
         let source = files.text("encoding/encoding_dsv4.py")?.unwrap_or_default();
         Ok(Self::detect(&source))
     }

@@ -1,13 +1,13 @@
 # SGLang Model Gateway
 
-High-performance model routing control and data plane for large-scale LLM deployments. The gateway orchestrates fleets of workers, balances traffic across HTTP and gRPC backends, and exposes OpenAI-compatible APIs with pluggable history storage and tool integrations—while remaining deeply optimized for the SGLang serving runtime.
+High-performance model routing control and data plane for large-scale LLM deployments. The gateway orchestrates fleets of workers, balances traffic across HTTP and gRPC backends, and exposes OpenAI-compatible APIs with pluggable history storage. This is tool integrations—while remaining deeply optimized for the SGLang serving runtime.
 
 ## Overview
 - Unified control plane for registering, monitoring, and orchestrating prefill, decode, and regular workers across heterogeneous model fleets.
 - Data plane that routes requests across HTTP, PD (prefill/decode), gRPC, and OpenAI-compatible backends with shared reliability features.
 - Industry-first gRPC pipeline with native Rust tokenization, reasoning, and tool-call execution for high-throughput OpenAI-compatible serving.
 - Multi-model inference gateway mode (`--enable-igw`) that runs several routers at once and applies per-model policies.
-- Conversation, response, and chat-history connectors that centralize state at the router, enabling compliant sharing across models/MCP loops with in-memory, no-op, or Oracle ATP storage options.
+- Conversation, response, and chat-history connectors that centralize state at the router, enabling compliant sharing across models/MCP loops with in-memory. This is no-op, or Oracle ATP storage options.
 - Built-in reliability primitives: retries with exponential backoff, circuit breakers, token-bucket rate limiting, and queuing.
 - First-class observability with structured logging, OpenTelemetry trace and Prometheus metrics.
 
@@ -20,7 +20,7 @@ High-performance model routing control and data plane for large-scale LLM deploy
 
 **Data Plane**
 - SGLang HTTP routers for regular and PD (prefill/decode) traffic with policy-aware selection.
-- SGLang gRPC router and pipeline that stream tokenized requests through SRT gRPC workers with fully Rust tokenizer, reasoning parser, and tool parser implementations for maximal OpenAI API performance, supporting both single-stage and PD serving topologies.
+- SGLang gRPC router and pipeline that stream tokenized requests through SRT gRPC workers with fully Rust tokenizer, reasoning parser. Tool parser implementations for maximal OpenAI API performance, supporting both single-stage and PD serving topologies.
 - OpenAI router that proxies OpenAI-style requests, responses, and conversations to remote vendors (OpenAI, xAI, Gemini, and other OpenAI-compatible providers) while preserving streaming/SSE semantics.
 - Router Manager coordinates multiple router implementations when IGW is enabled.
 - Resilience layer delivers token-bucket rate limiting, request queuing, retry executor, and per-worker circuit breakers to keep traffic flowing through failures.
@@ -30,15 +30,15 @@ High-performance model routing control and data plane for large-scale LLM deploy
 - Multiple load balancing strategies (`random`, `round_robin`, `cache_aware`, `power_of_two`, `bucket`) with DP-aware scheduling.
 - Multi-model HTTP serving and inference gateway routing with model-specific policies.
 - Prefill/decode disaggregation, including bootstrap port handling and cache-aware merging.
-- gRPC routing with fully Rust tokenizer loading, reasoning parser selection, and tool parser integration for OpenAI-compatible endpoints—supporting streaming and non-streaming modes across DeepSeek, Llama, Kimi K2, Qwen, GPT-OSS, Mistral, Step-3, GLM4, GLM4.7 and other reasoning-capable models.
+- gRPC routing with fully Rust tokenizer loading, reasoning parser selection, and tool parser integration for OpenAI-compatible endpoints—supporting streaming. This is non-streaming modes across DeepSeek, Llama, Kimi K2, Qwen, GPT-OSS, Mistral, Step-3, GLM4, GLM4.7 and other reasoning-capable models.
 - OpenAI-compatible `/v1/chat/completions`, `/v1/responses`, `/v1/conversations`, `/v1/embeddings`, `/v1/rerank`, `/v1/classify` endpoints.
-- **Tokenization APIs**: HTTP endpoints for tokenize (`/v1/tokenize`) and detokenize (`/v1/detokenize`) with batch support; tokenizer management APIs for dynamic registration.
+- **Tokenization APIs**: HTTP endpoints for tokenize (`/v1/tokenize`) and detokenize (`/v1/detokenize`) with batch support. Tokenizer management APIs for dynamic registration.
 - **Parser endpoints**: Reasoning parser (`/parse/reasoning`) and function call parser (`/parse/function_call`) for separating reasoning content and extracting tool calls.
 - Native MCP client integration supporting all MCP transport protocols (STDIO, HTTP, SSE, and Streamable) for tool execution loops.
 - Pluggable history connectors: in-memory, disabled, Oracle ATP, or PostgreSQL (with pooling and credential support).
 - Reliability controls: retry with jitter, worker-scoped circuit breakers, token bucket limiter with optional queue, and cache flush APIs.
 - Service discovery for regular and PD workloads with independent selectors.
-- **Comprehensive observability**: 40+ Prometheus metrics across HTTP, router, worker, circuit breaker, retry, discovery, MCP, and database layers; OpenTelemetry tracing with OTLP export; structured logging with request ID propagation.
+- **Comprehensive observability**: 40+ Prometheus metrics across HTTP, router, worker, circuit breaker, retry, discovery, MCP, and database layers. OpenTelemetry tracing with OTLP export. Structured logging with request ID propagation.
 
 ## Documentation
 - **User Guide**: [docs.sglang.io/advanced_features/sgl_model_gateway.html](https://docs.sglang.io/advanced_features/sgl_model_gateway.html)
@@ -206,7 +206,7 @@ Sample response (http workers):
   }
 }
 ```
-Add more workers with the same API; include optional `labels` (for per-model policies) or `tokenizer_path` / `reasoning_parser` / `tool_parser` fields as needed. `/workers/{worker_id}` exposes queued job status while background jobs finalize registration.
+Add more workers with the same API. Include optional `labels` (for per-model policies) or `tokenizer_path` / `reasoning_parser` / `tool_parser` fields as needed. `/workers/{worker_id}` exposes queued job status while background jobs finalize registration.
 
 ### gRPC Routing
 - **Rust binary**
@@ -225,8 +225,7 @@ Add more workers with the same API; include optional `labels` (for per-model pol
     --host 0.0.0.0 \
     --port 8080
   ```
-The gRPC router tokenizes inputs locally, supports tool-call parsing, and streams responses. It supports both regular HTTP-equivalent serving and PD (prefill/decode) serving when the worker registry contains PD workers. Provide `--model-path` or `--tokenizer-path` (HuggingFace ID or local directory) whenever connection mode resolves to gRPC.
-Use `--reasoning-parser` to select built-in reasoning pipelines (DeepSeek-R1, Qwen3, Step-3, GLM4, GLM4.7, etc.) and `--tool-call-parser` for JSON/Pythonic/XML tool contracts in streaming or non-streaming modes.
+The gRPC router tokenizes inputs locally, supports tool-call parsing, and streams responses. It supports both regular HTTP-equivalent serving and PD (prefill/decode) serving when the worker registry contains PD workers. Provide `--model-path` or `--tokenizer-path` (HuggingFace ID or local directory) whenever connection mode resolves to gRPC. Use `--reasoning-parser` to select built-in reasoning pipelines (DeepSeek-R1, Qwen3, Step-3, GLM4, GLM4.7, etc.) and `--tool-call-parser` for JSON/Pythonic/XML tool contracts in streaming or non-streaming modes.
 
 ### OpenAI Backend Mode
 Route requests to OpenAI or OpenAI-compatible endpoints:
@@ -244,7 +243,7 @@ python3 -m sglang_router.launch_router \
 ```
 
 **Notes**
-- OpenAI backend mode acts as a proxy to a single remote endpoint; load balancing is not applied.
+- OpenAI backend mode acts as a proxy to a single remote endpoint. Load balancing is not applied.
 - Provide exactly one `--worker-urls` entry per router instance.
 - The Rust binary supports the same flags (`./target/release/sgl-model-gateway --backend openai ...`).
 
@@ -356,16 +355,16 @@ required: true
 ```
 
 #### Server Lifecycle
-- MCP servers are registered via the workflow engine with retry logic (100 attempts, 2-hour timeout for STDIO servers)
+- MCP servers are registered via the workflow engine with retry logic (attempts, 2-hour timeout for STDIO servers)
 - Discovery phase identifies tools, prompts, and resources
 - Tool inventory is cached with configurable TTL and periodic refresh
-- Failed optional servers log warnings; required servers halt startup
-- Static servers (from config) are permanent; dynamic servers (per-request) use connection pooling
+- Failed optional servers log warnings. Required servers halt startup
+- Static servers (from config) are permanent. Dynamic servers (per-request) use connection pooling
 
 Check Prometheus metrics for MCP activity (`mcp_*` metrics) and workflow job status via the admin API.
 
 ### Python Launcher (Router + Workers)
-Launch router and SGLang worker processes together; `launch_server` spins up workers (HTTP or gRPC) and the router in one shot.
+Launch router and SGLang worker processes together. `launch_server` spins up workers (HTTP or gRPC) and the router in one shot.
 ```bash
 python3 -m sglang_router.launch_server --host 0.0.0.0
 ```
@@ -379,7 +378,7 @@ python3 -m sglang_router.launch_server \
   --dp-size 8 \
   --grpc-mode
 ```
-Omit `--grpc-mode` to start HTTP workers; the router automatically configures worker URLs and schedules them based on the provided DP size.
+Omit `--grpc-mode` to start HTTP workers. The router automatically configures worker URLs and schedules them based on the provided DP size.
 
 ### Mini Load Balancer (Debug)
 ```bash
@@ -408,7 +407,7 @@ Use upstream SGLang binaries to start dedicated worker processes.
 ### Worker Lifecycle & Job Queue
 - `JobQueue` handles asynchronous add/remove operations to avoid blocking clients.
 - `WorkerManager` inspects worker metadata (`/server_info`, `/get_model_info`), tracks load, and exposes `flush_cache` and `get_loads`.
-- Per-worker circuit breakers and health probes keep the registry healthy; load monitor feeds metrics to cache-aware and power-of-two policies.
+- Per-worker circuit breakers and health probes keep the registry healthy. Load monitor feeds metrics to cache-aware and power-of-two policies.
 
 ### Administrative & Worker APIs
 | Method   | Path             | Description                                                                                                                                               |
@@ -456,7 +455,7 @@ The HTTP router exposes the full OpenAI-compatible surface area (`/generate`, `/
 
 #### gRPC Router specifics
 - Industry-first fully Rust implementation of an OpenAI-compatible gRPC inference gateway, including tokenizer, reasoning parser, and tool parser execution in-process for maximum throughput.
-- Supports both single-stage and PD (prefill/decode) worker topologies; the router automatically selects the appropriate pipeline per model.
+- Supports both single-stage and PD (prefill/decode) worker topologies. The router automatically selects the appropriate pipeline per model.
 - Provides the same `/v1/*` APIs as the HTTP router while streaming tokenized requests/responses directly to SRT gRPC workers.
 - Built-in reasoning parsers for DeepSeek, Qwen, Llama, Mistral, GPT-OSS, Step-3, GLM4, GLM4.7, Kimi K2, and other structured-thought models.
 - Tool-call parsers for JSON, Pythonic, XML, and custom schemas with streaming and non-streaming execution loops.
@@ -466,8 +465,8 @@ The HTTP router exposes the full OpenAI-compatible surface area (`/generate`, `/
 ### OpenAI Router
 - Proxies OpenAI-compatible chat completions and responses APIs, preserving headers and SSE streams end-to-end.
 - Supports `/v1/responses` background jobs with cancellation, deletion, and listing input items—enabling agentic, multi-turn orchestration without persisting data at remote vendor endpoints.
-- Conversation APIs (`/v1/conversations` and `/v1/conversations/{id}/items`) interact with the configured conversation storage backend for compliant chat-history management. Conversation state lives at the router tier, so the same history can drive different models or MCP loops without leaking data to upstream vendors.
-- Chat history, agentic multi-turn `/v1/responses`, and the native MCP client (STDIO/HTTP/SSE/Streamable transports) are designed to satisfy enterprise data-privacy requirements by keeping sensitive state within the router.
+- Conversation APIs (`/v1/conversations` and `/v1/conversations/{id}/items`) interact with the configured conversation storage backend for compliant chat-history management. Conversation state lives at the router tier. As a result, the same history can drive different models or MCP loops without leaking data to upstream vendors.
+- Chat history, agentic multi-turn `/v1/responses`, and the native MCP client (STDIO/HTTP/SSE/Streamable transports) are designed to satisfy enterprise data-privacy requirements. This is by keeping sensitive state within the router.
 
 ### Request Endpoints
 | Endpoint                                                                         | Notes                                                      |
@@ -526,10 +525,10 @@ curl http://localhost:30000/v1/classify \
 
 **Notes:**
 - Classification reuses the embedding backend—the scheduler returns logits which are converted to probabilities via softmax
-- Labels come from the model's HuggingFace config (`id2label` field); models without this mapping use generic labels (`LABEL_0`, `LABEL_1`, etc.)
+- Labels come from the model's HuggingFace config (`id2label` field). Models without this mapping use generic labels (`LABEL_0`, `LABEL_1`, etc.)
 - Both HTTP and gRPC routers support classification
 
-Public health endpoints (`/liveness`, `/readiness`, `/health`, `/health_generate`) reflect registry state; readiness ensures PD workers are paired and IGW has at least one healthy route.
+Public health endpoints (`/liveness`, `/readiness`, `/health`, `/health_generate`) reflect registry state. Readiness ensures PD workers are paired and IGW has at least one healthy route.
 
 ### Tokenization Endpoints
 
@@ -637,7 +636,7 @@ Supported tool parsers: `json`, `python`, `xml`.
 ## Conversations, Responses, and Data Connectors
 - `--history-backend memory` (default) stores responses and conversations in-process.
 - `--history-backend none` disables persistence while keeping APIs.
-- `--history-backend oracle` uses Oracle Autonomous Database; provide credentials via flags or environment variables.
+- `--history-backend oracle` uses Oracle Autonomous Database. Provide credentials via flags or environment variables.
 - `--history-backend postgres` uses PostgreSQL Database.
 - `--history-backend redis` uses Redis.
 - Conversation item storage mirrors the history backend (Oracle or memory). The same storage powers OpenAI `/responses` and conversation APIs.
@@ -710,7 +709,7 @@ Router flags map to these values:
 - `--oracle-wallet-path` (`ATP_WALLET_PATH`) when using TNS alias.
 - `--oracle-pool-min`, `--oracle-pool-max`, `--oracle-pool-timeout-secs`.
 
-Only one of `--oracle-dsn` or `--oracle-tns-alias` should be supplied.
+Only one of `--oracle-dsn` or `--oracle-tns-alias` must be supplied.
 
 #### Redis configuration
 Provide Redis connection URL and optional pool sizing:
@@ -723,13 +722,13 @@ export REDIS_RETENTION_DAYS=30
 Router flags map to these values:
 - `--redis-url` (env: `REDIS_URL`)
 - `--redis-pool-max` (env: `REDIS_POOL_MAX`)
-- `--redis-retention-days` (env: `REDIS_RETENTION_DAYS`). Set to `-1` for persistent storage (default: 30 days).
+- `--redis-retention-days` (env: `REDIS_RETENTION_DAYS`). Set to `-1` for persistent storage (default: many days).
 
 ## Reliability & Flow Control
 - **HTTP Client**: Upstream HTTP client connection settings default to pool idle timeout 50s, connect timeout 10s, max idle connections per host 500, and TCP keepalive 30s. Configure via `--pool-idle-timeout-secs`, `--connect-timeout-secs`, `--pool-max-idle-per-host`, `--tcp-keepalive-secs`, or the corresponding `SMG_*` env vars.
 - **Retries**: Default max retries = 5 with exponential backoff (`--retry-max-retries`, `--retry-initial-backoff-ms`, `--retry-max-backoff-ms`, `--retry-backoff-multiplier`, `--retry-jitter-factor`). Retries trigger on 408/429/500/502/503/504.
 - **Circuit Breakers**: Per worker thresholds (`--cb-failure-threshold`, `--cb-success-threshold`, `--cb-timeout-duration-secs`, `--cb-window-duration-secs`). Disable via `--disable-circuit-breaker`.
-- **Rate Limiting**: Token bucket driven by `--max-concurrent-requests`. Set `--rate-limit-tokens-per-second` to override refill rate. Configure request queue via `--queue-size` and `--queue-timeout-secs`; queued requests observe FIFO order and respect cancellation.
+- **Rate Limiting**: Token bucket driven by `--max-concurrent-requests`. Set `--rate-limit-tokens-per-second` to override refill rate. Configure request queue via `--queue-size` and `--queue-timeout-secs`. Queued requests observe FIFO order and respect cancellation.
 - **Health Checks**: Runtime probes via `--health-check-interval-secs`, `--health-check-timeout-secs`, failure/success thresholds, and `--health-check-endpoint`. Use `--disable-health-check` to skip health checks entirely.
 - **Cache Management**: `/flush_cache` ensures LRU eviction when redeploying PD workers.
 
@@ -737,8 +736,7 @@ Router flags map to these values:
 - `random`: uniform random worker selection.
 - `round_robin`: sequential rotation with atomic counters.
 - `cache_aware`: maintains a prefix tree of prompts to route repeat traffic and evens load with configurable thresholds (`--cache-threshold`, `--balance-abs-threshold`, `--balance-rel-threshold`, `--eviction-interval`, `--max-tree-size`).
-- `power_of_two`: chooses the lighter worker among two random candidates; integrates with `LoadMonitor`.
-  Per-model overrides are available in PD mode (`--prefill-policy`, `--decode-policy`) and IGW mode via the worker registry.
+- `power_of_two`: chooses the lighter worker among multiple random candidates. Integrates with `LoadMonitor`. Per-model overrides are available in PD mode (`--prefill-policy`, `--decode-policy`) and IGW mode via the worker registry.
 
 ## Observability
 
@@ -769,8 +767,7 @@ Enable with `--prometheus-host`/`--prometheus-port` (defaults to `0.0.0.0:29000`
 - `smg_router_generation_duration_seconds` - End-to-end generation time
 - `smg_worker_cb_state` - Circuit breaker state gauge (0=closed, 1=open, 2=half-open)
 
-**Duration Buckets:**
-1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s, 15s, 30s, 45s, 60s, 90s, 120s, 180s, 240s
+**Duration Buckets:** 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s, 15s, 30s, 45s, 60s, 90s, 120s, 180s, 240s
 
 ### OpenTelemetry Tracing
 Enable distributed tracing with OTLP export:
@@ -806,9 +803,9 @@ Set `--cors-allowed-origins` for browser access.
 ## Security
 
 ### Router and Worker API Keys
-- **Router API key (`--api-key`)** protects client access to router endpoints; all protected routes expect `Authorization: Bearer <key>`.
+- **Router API key (`--api-key`)** protects client access to router endpoints. All protected routes expect `Authorization: Bearer <key>`.
 - Workers listed in `--worker-urls` inherit the router API key automatically.
-- When adding workers dynamically, provide explicit API keys via payload or query string; they do **not** inherit automatically.
+- When adding workers dynamically, provide explicit API keys via payload or query string. They do **not** inherit automatically.
 
 ```bash
 # Router and initial workers share the same key
@@ -825,8 +822,8 @@ curl -X POST "http://localhost:8080/add_worker?url=http://worker3:8000&api_key=w
 
 ### Security Configurations
 1. **No Authentication** (default): Router and workers accept requests without keys—use only in trusted environments.
-2. **Router-only Authentication**: Provide `--api-key`; clients must present the key, router accesses workers without credentials.
-3. **Worker-only Authentication**: Router open to clients; each worker requires its own key. Supply keys when calling `/workers` or `/add_worker`.
+2. **Router-only Authentication**: Provide `--api-key`. Clients must present the key, router accesses workers without credentials.
+3. **Worker-only Authentication**: Router open to clients. Each worker requires its own key. Supply keys when calling `/workers` or `/add_worker`.
 4. **Full Authentication**: Set router API key and provide per-worker keys. Example:
    ```bash
    python3 -m sglang_router.launch_router --api-key "router-key"
@@ -835,7 +832,7 @@ curl -X POST "http://localhost:8080/add_worker?url=http://worker3:8000&api_key=w
    ```
 
 ### Important Notes
-- Initial workers declared via CLI inherit the router key; dynamic workers must supply keys explicitly.
+- Initial workers declared via CLI inherit the router key. Dynamic workers must supply keys explicitly.
 - Router logs a warning when a worker is registered without a key while the router expects authentication.
 - When router and workers share the same key, still include the key when invoking dynamic registration APIs.
 
@@ -880,7 +877,7 @@ python3 -m sglang_router.launch_router \
 - Multiple CA certificates can be added with multiple `--ca-cert-path` flags
 - Uses rustls backend when TLS is configured
 - Single HTTP client is created for all workers (assumes single security domain)
-- TCP keepalive (30 seconds) is enabled for long-lived connections
+- TCP keepalive (many seconds) is enabled for long-lived connections
 
 **Full TLS Example (Gateway HTTPS + Worker mTLS):**
 ```bash
@@ -896,7 +893,7 @@ python3 -m sglang_router.launch_router \
 
 ### Control Plane Authentication
 
-The gateway supports role-based access control (RBAC) for control plane APIs (worker management, tokenizer registration, cache operations). Two authentication methods are available:
+The gateway supports role-based access control (RBAC) for control plane APIs (worker management, tokenizer registration, cache operations). Authentication methods are available:
 
 #### Authentication Methods
 
@@ -1105,4 +1102,4 @@ The script automatically extracts author attribution, PR links, and identifies n
 
 ---
 
-SGLang Model Gateway continues to evolve alongside the core SGLang runtime. Contributions should keep CLI flags, documentation, and Python bindings in sync with the Rust implementation.
+SGLang Model Gateway continues to evolve alongside the core SGLang runtime. Contributions must keep CLI flags, documentation, and Python bindings in sync with the Rust implementation.

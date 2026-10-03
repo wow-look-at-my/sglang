@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Session and routing-key assignments with idle expiry. The store keeps
-//! bindings; deciding whether to reuse, create or replace one is the policy's.
+//! Session and routing-key assignments with idle expiry.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -185,8 +184,7 @@ mod tests {
             }
             start.wait();
             for _ in 0..1000 {
-                // The clock never advances: every binding must survive,
-                // even when requests insert new keys during a sweep.
+                // The clock never advances: every binding must survive.
                 assert_eq!(store.sweep_expired(), 0);
             }
         });

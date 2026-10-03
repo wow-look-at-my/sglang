@@ -40,17 +40,11 @@ pub unsafe fn set_error_message_fmt(error_out: *mut *mut c_char, fmt: std::fmt::
     unsafe { set_error_message(error_out, &msg) };
 }
 
-/// Helper to clear error message
-///
-/// # Safety
-/// `error_out` must be null or point to a writable `*mut c_char`. Any previous
-/// value is leaked rather than freed, since ownership may already have moved
-/// to the caller.
+/// Helper to clear error message # Safety `error_out` must be null or point
+/// to a writable `*mut c_char`.
 pub unsafe fn clear_error_message(error_out: *mut *mut c_char) {
     if !error_out.is_null() {
         unsafe { *error_out = ptr::null_mut() };
     }
 }
 
-// Helper functions for error handling
-// Note: Some helper functions are kept for potential future use

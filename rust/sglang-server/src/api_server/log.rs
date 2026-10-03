@@ -1,8 +1,4 @@
-//! HTTP access logging — one INFO line per request, content-matching the
-//! Python server's uvicorn access log. Gated exactly like uvicorn's
-//! (`--log-level-http warning` turns it off, see
-//! `ServerArgs::http_access_log_enabled`); when disabled the middleware is not
-//! installed at all — zero cost.
+//! HTTP access logging — one INFO line per request, content-matching the Python server's uvicorn access log.
 
 use axum::{Router, response::Response};
 
@@ -20,7 +16,7 @@ pub(super) fn apply(app: Router, server_args: &ServerArgs) -> Router {
 
 /// Access log — one INFO line per request, content-matching the Python server's
 /// uvicorn access log (`127.0.0.1:54232 - "GET /model_info HTTP/1.1" 200 OK`).
-/// Logged when the response head is ready; for SSE that's stream start, same as
+/// Logged when the response head is ready; for SSE that's stream start.
 /// uvicorn.
 async fn access_log(
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,

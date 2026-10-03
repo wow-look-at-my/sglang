@@ -48,7 +48,6 @@ struct scale_C<at::BFloat16, has_bias, BLOCK_N> {
     Unroll<COLS>{}(compute);
 
     auto storec = [&](auto col) {
-      // for COLS = 2, 4 use 512bit store
       if constexpr (col % 2 == 0) {
         _mm512_storeu_si512(
             reinterpret_cast<__m512i*>((C + col * 16)), (__m512i)(_mm512_cvtne2ps_pbh(vc[col + 1], vc[col + 0])));
@@ -109,22 +108,13 @@ struct tinygemm_kernel_nn<at::BFloat16, has_bias, BLOCK_M, BLOCK_N> {
     // oops! 4x4 spills but we use 4x2
     __m512 vbias[COLS];
 
-    // [NOTE]: s8s8 igemm compensation in avx512-vnni
-    //
-    // avx512-vnni has no s8s8, so we need to change s8s8 to u8s8 with compensate:
-    //
-    //   a * b = (a + 128) * b - 128 * b
-    //   s   s       u       s    u    s
-    //
-    // 1) 128 * b is pre-computed when packing B to vnni formats
-    // 2) a + 128 is fused when dynamically quantize A
-    //
+    // [NOTE]: s8s8 igemm compensation in avx512-vnni avx512-vnni has no s8s8, so we need to change s8s8 to u8s8 with compensate.
     auto loadc = [&](auto i) { vc[i] = _mm512_set1_epi32(0); };
     Unroll<ROWS * COLS>{}(loadc);
 
     const int64_t K4 = K >> 2;
     const int64_t lda4 = lda >> 2;
-    const int64_t ldb4 = ldb;  // ldb * 4 >> 2;
+    const int64_t ldb4 = ldb;
     const int32_t* a_ptr = reinterpret_cast<const int32_t*>(A);
     const int32_t* b_ptr = reinterpret_cast<const int32_t*>(B);
 
@@ -155,8 +145,7 @@ struct tinygemm_kernel_nn<at::BFloat16, has_bias, BLOCK_M, BLOCK_N> {
       if constexpr (col == 0) {
         vd0 = _mm512_set1_ps(As[row]);
       }
-      // load b scale and vcomp per 2 vectors
-      // also load bias if any
+      // load b scale and vcomp every few vectors also load bias if any
       if constexpr (row == 0) {
         if constexpr (col % 2 == 0) {
           vd1[col + 0] = _mm512_loadu_ps(Bs + col * 16);
@@ -170,7 +159,6 @@ struct tinygemm_kernel_nn<at::BFloat16, has_bias, BLOCK_M, BLOCK_N> {
         }
       }
 
-      // for COLS = 2, 4 use 512bit store
       if constexpr (col % 2 == 0) {
         __m512 vc0 = _mm512_cvtepi32_ps(_mm512_sub_epi32(vc[row * COLS + col + 0], vcomp[col + 0]));
         __m512 vc1 = _mm512_cvtepi32_ps(_mm512_sub_epi32(vc[row * COLS + col + 1], vcomp[col + 1]));
@@ -235,7 +223,6 @@ void tinygemm_kernel(
     return;
   }
 
-  // pattern: 1-4-16
   constexpr int64_t BLOCK_M = 4;
   constexpr int64_t BLOCK_N = 64;
   const int64_t MB = div_up(M, BLOCK_M);
@@ -301,7 +288,6 @@ void int8_scaled_mm_kernel_impl(
 
   const bool use_brgemm = can_use_brgemm<int8_t>(M);
 
-  // K + 4 after compensation
   const int64_t packed_row_size = get_row_size<int8_t>(K);
 
   AT_DISPATCH_BOOL(bias != nullptr, has_bias, [&] {
@@ -317,7 +303,7 @@ void int8_scaled_mm_kernel_impl(
 
         tinygemm_kernel<scalar_t, has_bias>(
             /*   A */ mat1 + mb_start * K,
-            /*   B */ mat2 + nb_start * packed_row_size /* nb * BLOCK_N * (K + 4) */,
+            /*   B */ mat2 + nb_start * packed_row_size /* nb * BLOCK_N * (K +) */,
             /*   C */ out + mb_start * N + nb_start,
             /* Ctmp*/ Ctmp,
             /*  As */ scales1 + mb_start,
@@ -407,16 +393,10 @@ std::tuple<at::Tensor, at::Tensor> per_token_quant_int8_cpu(at::Tensor& A) {
   return std::make_tuple(Aq, As);
 }
 
-// weight     :  static, per-channel, symmetric
-// activation : dynamic,   per-token, symmetric
+// Weight: static, per-channel, symmetric activation: dynamic, per-token,
+// symmetric
 //
-// mat1    : [M, K]
-// mat2    : [N, K]
-// scales1 : [M]
-// scales2 : [N]
-// bias    : [N]
-// out     : [M, N]
-//
+// Mat1: [M, K] mat2: [N, K] scales1: [M] scales2: [N] bias: [N] out: [M, N]
 at::Tensor int8_scaled_mm_cpu(
     at::Tensor& mat1,
     at::Tensor& mat2,

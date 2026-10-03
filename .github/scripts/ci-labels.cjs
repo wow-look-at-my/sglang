@@ -1,9 +1,6 @@
 "use strict";
 
-/**
- * Labels come from the API, not `context.payload`: a rerun replays the original
- * event, so the payload carries the label set from when the run was created.
- */
+/** Labels come from the API, not `context.payload`: a rerun replays the event. */
 
 const BYPASS_FAIL_FAST = "bypass-fail-fast";
 const PARALLEL_STAGES = "parallel-stages";

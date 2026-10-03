@@ -1,6 +1,4 @@
 //! Concrete sampling parameters and shared preprocessing.
-//! Protocol lowering resolves defaults before the Python-compatible
-//! `__post_init__` → `normalize` → `verify` pipeline.
 
 use std::collections::BTreeMap;
 
@@ -12,27 +10,21 @@ use super::regex::RegexPattern;
 const SAMPLING_EPS: f64 = 1e-6;
 /// `TOP_K_ALL = 1 << 30` — `top_k` sentinel for "consider the whole vocabulary".
 const TOP_K_ALL: i64 = 1 << 30;
-/// Most stop STRINGS accepted per request. The scheduler scans the decoded text
-/// once per stop per decode step, so this is a per-step multiplier: 50k stops
-/// measured 20.4 ms/step from a 586 KB body.
+/// Most stop STRINGS accepted per request.
 const MAX_STOP_COUNT: usize = 32;
-/// Longest `stop_regex` accepted. A 1 MB literal pattern takes ~677 ms just to
-/// compile, and that cost lands on the scheduler.
+/// Longest `stop_regex` accepted.
 const MAX_STOP_REGEX_LEN: usize = 256;
-/// Most `stop_regex` patterns accepted per request. Python's `re` cache holds 512
-/// (`re._MAXCACHE`), so past that every pattern recompiles on every decode step.
+/// Most `stop_regex` patterns accepted per request.
 const MAX_STOP_REGEX_COUNT: usize = 32;
 
 /// Concrete sampling parameters normalized and validated during preprocessing.
-/// Protocol adapters own serialization into their respective wire formats.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SamplingParams {
     // --- API parameters (set by callers) ---
     pub max_new_tokens: Option<i64>,
     /// API input alias, copied to `stop_strs` then cleared by `normalize`.
     pub stop: Option<OneOrMany<String>>,
-    /// Python `Optional[Set[int]]`. A `null` *element* is a 400 here where Python
-    /// filters it out — a typed list can't hold one, and it is malformed input.
+    /// Python `Optional[Set[int]]`.
     pub stop_token_ids: Option<Vec<i64>>,
     /// API input alias, copied to `stop_regex_strs` then cleared by `normalize`.
     pub stop_regex: Option<OneOrMany<String>>,
@@ -56,23 +48,13 @@ pub struct SamplingParams {
     pub spaces_between_special_tokens: bool,
     pub no_stop_trim: bool,
     pub stream_interval: Option<i64>,
-    /// Token id (as a string key, matching Python) → bias. Keys are vocab-bounded
-    /// by [`verify`](Self::verify).
+    /// Token id (as a string key, matching Python) → bias. Keys are vocab-bounded by [`verify`](Self::verify).
     pub logit_bias: Option<BTreeMap<String, f64>>,
     pub sampling_seed: Option<i64>,
-    /// Opaque JSON object forwarded to a custom logit processor. Python types it
-    /// as `Dict[str, JsonScalar | list | dict]`; it is never inspected here.
+    /// Opaque JSON object forwarded to a custom logit processor.
     pub custom_params: Option<serde_json::Value>,
 
-    // --- Internal fields (populated by the pipeline below, not API-facing) ---
-    //
-    // These fields are outputs of `normalize`, and a client that
-    // could set them would be setting the pipeline's own state. `is_normalized` is
-    // the dangerous one — `{"is_normalized": true, "temperature": 0.0}` makes
-    // `post_init` early-return, so the greedy mapping never runs and temperature 0
-    // reaches the scheduler's `logits.div_()`; `stop` would likewise be dropped
-    // without ever reaching `stop_strs`. Only concrete parameters carry them.
-    /// From `stop`; a list after `normalize` (Python widens str → [str] there).
+    // --- Internal fields (populated by the pipeline below, not API-facing) --- These fields are outputs of `normalize`.
     pub stop_strs: Vec<String>,
     /// From `stop_regex`.
     pub stop_regex_strs: Vec<String>,
@@ -122,8 +104,7 @@ impl Default for SamplingParams {
 
 impl SamplingParams {
     /// `__post_init__` → `normalize` → `verify`, the order
-    /// `TokenizerManager._create_tokenized_object` runs them in. `Err` is a
-    /// request-local 400. `vocab_size` bounds `logit_bias` keys.
+    /// `TokenizerManager._create_tokenized_object` runs them in.
     pub fn normalize(&mut self, vocab_size: u64) -> Result<(), Error> {
         self.post_init();
         self.normalize_stops()?;
@@ -133,10 +114,7 @@ impl SamplingParams {
     /// Python `__post_init__` (defaults were resolved during protocol lowering):
     /// copy API aliases into internal fields and apply greedy / `top_k` special cases.
     fn post_init(&mut self) {
-        // Python's `__post_init__` guard. Without it a second `normalize` reads
-        // the aliases `normalize_stops` already cleared and silently wipes
-        // `stop_strs`/`stop_regex_strs` to empty — the request would stop
-        // matching its stop strings.
+        // Python's `__post_init__` guard.
         if self.is_normalized {
             return;
         }
@@ -148,12 +126,11 @@ impl SamplingParams {
             self.stop_token_ids = None;
         }
         if (0.0..SAMPLING_EPS).contains(&self.temperature) {
-            // Greedy: temperature ~0 → temperature=1.0, top_k=1.
             self.temperature = 1.0;
             self.top_k = 1;
         }
         if self.top_k == -1 {
-            self.top_k = TOP_K_ALL; // -1 disables top_k → whole vocabulary
+            self.top_k = TOP_K_ALL; // -disables top_k → whole vocabulary
         }
     }
 
@@ -163,9 +140,7 @@ impl SamplingParams {
         // Match window: UTF-8 byte length is a safe upper bound on the token count.
         self.stop_str_max_len = self.stop_strs.iter().map(|s| s.len()).max().unwrap_or(0);
         // Validate + bound every stop_regex here, before it can reach the
-        // scheduler's `re.search` (see `RegexPattern`). A rejected pattern is a
-        // 400 for this request; an accepted one carries a bound the scheduler uses
-        // to size its match window.
+        // scheduler's `re.search` (see `RegexPattern`).
         if self.stop_strs.len() > MAX_STOP_COUNT {
             return Err(bad(format!(
                 "at most {MAX_STOP_COUNT} stop strings are allowed, got {}",
@@ -259,9 +234,7 @@ impl SamplingParams {
         }
         // A non-numeric bias key raises in the scheduler's `int(key)`, and an
         // out-of-vocabulary one would index past the logits row, so both are
-        // rejected here (Python `verify` does the same, in that order). Only the
-        // *range* check needs the vocab size (`None` = unknown, skip it); the key
-        // format is checked either way, since `int(key)` runs regardless.
+        // rejected here (Python `verify` does the same, in that order).
         if let Some(logit_bias) = &self.logit_bias {
             for key in logit_bias.keys() {
                 let token_id: u64 = key
@@ -285,10 +258,8 @@ impl SamplingParams {
                 "Only one of regex, json_schema, or ebnf can be set".into()
             ));
         }
-        // Not a Python restriction: the rust from_scheduler maps one rid to one response,
-        // so parallel sampling would drop all but the first sample. This is the
-        // only place it is rejected — `n` lives in `sampling_params`, where
-        // Python reads it, and the `/generate` body has no `n` of its own.
+        // Not a Python restriction: the rust from_scheduler maps one rid to one response, so parallel sampling would
+        // drop all but the first sample.
         if self.n != 1 {
             return Err(bad(format!(
                 "n must be 1 (parallel sampling is not supported), got {}",
@@ -330,10 +301,7 @@ fn take_one_or_many(v: Option<OneOrMany<String>>) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// Vocab size for tests that aren't about the vocab bound at all. It is
-    /// mandatory now (`ServerArgs::validate_mandatory` rejects a boot without
-    /// one), so there is no longer an "unknown vocab" case to pass instead —
-    /// this is just a value large enough to stay out of the way.
+    /// Vocab size for tests that aren't about the vocab bound at all.
     const TEST_VOCAB: u64 = 1000;
 
     /// Bound valid stop regexes and reject malformed patterns before submission.
@@ -418,9 +386,7 @@ mod tests {
         assert!(sp.stop.is_none());
     }
 
-    /// A multi-byte stop char must use its byte length as the window bound: `𓀀`
-    /// is 1 char but 4 UTF-8 bytes (and 3 tokens on Qwen3). Char count (1) would
-    /// under-size the tail and miss the stop; byte count (4) ≥ the token span.
+    /// A multi-byte stop char must use its byte length as the window bound.
     #[test]
     fn stop_str_max_len_uses_bytes_not_chars() {
         let sp = norm(SamplingParams {
@@ -560,10 +526,7 @@ mod tests {
         }
     }
 
-    /// The inclusive bounds must ACCEPT their endpoints. Only the rejecting side
-    /// was covered, and far from the edge (`frequency_penalty: 3.0`), so flipping
-    /// any `..=` to `..` — or `>= 1` to `> 1` — would 400 legitimate requests
-    /// without failing a single test.
+    /// The inclusive bounds must ACCEPT their endpoints.
     #[test]
     fn verify_accepts_inclusive_boundaries() {
         for params in [
@@ -621,7 +584,6 @@ mod tests {
                 min_new_tokens: 8,
                 ..Default::default()
             },
-            // Greedy: temperature 0 is the documented sentinel, not an under-run.
             SamplingParams {
                 temperature: 0.0,
                 ..Default::default()
@@ -637,8 +599,7 @@ mod tests {
         }
     }
 
-    /// And the first value past each endpoint is still rejected — the pair of
-    /// tests brackets the boundary instead of testing one side of it.
+    /// And the first value past each endpoint is still rejected — the pair of tests brackets the boundary instead of testing one side.
     #[test]
     fn verify_rejects_just_past_the_boundaries() {
         for params in [
@@ -695,10 +656,7 @@ mod tests {
         }
     }
 
-    /// `normalize` must be idempotent: `post_init` reads the API aliases, which
-    /// `normalize_stops` clears, so without Python's `if self.is_normalized:
-    /// return` guard a second call wipes `stop_strs` and drops the stop bound to
-    /// zero — silently, leaving a request that never stops.
+    /// `normalize` must be idempotent: `post_init` reads the API aliases, which `normalize_stops` clears.
     #[test]
     fn normalize_is_idempotent() {
         let mut once = norm(SamplingParams {
@@ -716,16 +674,11 @@ mod tests {
         assert_eq!(twice.stop_str_max_len, 4);
         assert_eq!(twice.stop_regex_max_len, 3);
 
-        // Greedy handling must not re-fire either: temperature is 1.0 after the
-        // first pass, which is not in the greedy window.
         once.normalize(TEST_VOCAB).unwrap();
         assert_eq!(once.top_k, twice.top_k);
     }
 
-    /// `logit_bias` keys index the logits row, so an out-of-vocab id is a 400
-    /// (Python `verify`'s vocab bound). The bound is exclusive, and it always
-    /// applies — `vocab_size` is mandatory, so there is no "unknown vocab" path
-    /// that skips this.
+    /// `logit_bias` keys index the logits row, so an out-of-vocab id is a (Python `verify`'s vocab bound).
     #[test]
     fn logit_bias_keys_are_vocab_bounded() {
         let mut sp = SamplingParams {
@@ -742,10 +695,7 @@ mod tests {
         assert!(sp.normalize(1000).is_ok());
     }
 
-    /// The key *format* check is separate from the vocab bound: the scheduler
-    /// does `logit_bias[i, int(key)]`, so a key that is not a parseable
-    /// non-negative integer has to be a 400 in its own right — a range check
-    /// alone would let `"abc"` or `"1.5"` through to that indexing.
+    /// The key *format* check is separate from the vocab bound.
     #[test]
     fn logit_bias_keys_must_be_parseable_token_ids() {
         for params in [
@@ -766,8 +716,7 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            // Every key here is well inside TEST_VOCAB's range (or unparsable),
-            // so only the format check can be what rejects it.
+            // Every key here is well inside TEST_VOCAB's range (or unparsable).
             let _ = norm_err(params);
         }
         assert!(
@@ -780,10 +729,7 @@ mod tests {
         );
     }
 
-    /// Both `stop_regex` caps, neither of which had a test: deleting either `if`
-    /// left the suite green. The count cap bounds per-step recompilation (Python's
-    /// `re` cache is 512 entries); the length cap bounds compile time (a 1 MB
-    /// literal pattern measured ~677 ms).
+    /// Both `stop_regex` caps, neither of which had a test: deleting either `if` left the suite green.
     #[test]
     fn stop_regex_count_and_length_are_capped() {
         let over: Vec<String> = (0..MAX_STOP_REGEX_COUNT + 1)
@@ -814,8 +760,7 @@ mod tests {
         assert!(err.contains("over the"), "{err}");
     }
 
-    /// The commoner field had no limit at all: the scheduler scans the decoded text
-    /// once per stop per decode step.
+    /// The commoner field had no limit at all: the scheduler scans the decoded text once per stop per decode step.
     #[test]
     fn stop_string_count_is_capped() {
         let stops: Vec<String> = (0..MAX_STOP_COUNT + 1).map(|i| i.to_string()).collect();

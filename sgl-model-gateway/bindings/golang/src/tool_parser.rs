@@ -22,9 +22,8 @@ static PARSER_FACTORY: Lazy<ParserFactory> = Lazy::new(ParserFactory::new);
 static RUNTIME: Lazy<Runtime> =
     Lazy::new(|| Runtime::new().expect("Failed to create tokio runtime for tool parser FFI"));
 
-/// Opaque handle for a tool parser instance
-/// Note: For streaming, we need mutable access, so we use Arc<Mutex<>> internally
-/// Note: This is an opaque handle, C code doesn't access fields directly
+/// Opaque handle for a tool parser instance Note: For streaming, we need
+/// mutable access, so we use Arc<Mutex<>> internally Note.
 pub struct ToolParserHandle {
     parser: Arc<tokio::sync::Mutex<Box<dyn ToolParser>>>,
     model: String,                            // Store model name for ID generation
@@ -32,17 +31,7 @@ pub struct ToolParserHandle {
     tool_index_to_id: HashMap<usize, String>, // Map tool_index to ID for incremental updates
 }
 
-/// Create a tool parser
-///
-/// # Arguments
-/// * `parser_type` - Parser type name (e.g., "json", "llama", "mistral") or model name (e.g., "gpt-4")
-/// * `error_out` - Optional pointer to receive error message
-///
-/// # Returns
-/// * Pointer to ToolParserHandle on success, null on failure
-///
-/// # Safety
-/// `parser_type` must be a valid NUL-terminated UTF-8 string.
+/// Create a tool parser # Arguments * `parser_type` - Parser type name (e.g., "json", "llama", "mistral") or model name (e.g., "gpt-4").
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_create(
     parser_type: *const c_char,
@@ -80,20 +69,7 @@ pub unsafe extern "C" fn sgl_tool_parser_create(
     }))
 }
 
-/// Parse complete tool calls from text
-///
-/// # Arguments
-/// * `handle` - Tool parser handle
-/// * `text` - Input text to parse
-/// * `result_json_out` - Pointer to receive JSON result (must be freed with sgl_free_string)
-/// * `error_out` - Optional pointer to receive error message
-///
-/// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `handle` must be live; `text` must be NUL-terminated UTF-8; `result_json_out`
-/// must be writable and its buffer freed with `sgl_free_string`.
+/// Parse complete tool calls from text # Arguments * `handle` - Tool parser handle * `text` - Input text to parse * `result_json_out` - Pointer.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_parse_complete(
     handle: *mut ToolParserHandle,
@@ -178,21 +154,7 @@ pub unsafe extern "C" fn sgl_tool_parser_parse_complete(
     }
 }
 
-/// Parse tool calls incrementally from streaming chunks
-///
-/// # Arguments
-/// * `handle` - Tool parser handle
-/// * `chunk` - New text chunk from stream
-/// * `tools_json` - JSON array of available tools (for validation, can be null/empty)
-/// * `result_json_out` - Pointer to receive JSON result (must be freed with sgl_free_string)
-/// * `error_out` - Optional pointer to receive error message
-///
-/// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `handle` must be live; `chunk` must be NUL-terminated UTF-8 and `tools_json`
-/// null or UTF-8; `result_json_out` must be writable.
+/// Parse tool calls incrementally from streaming chunks # Arguments * `handle` - Tool parser handle * `chunk` - New text chunk.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_parse_incremental(
     handle: *mut ToolParserHandle,
@@ -310,10 +272,7 @@ pub unsafe extern "C" fn sgl_tool_parser_parse_incremental(
     }
 }
 
-/// Reset the parser state for reuse
-///
-/// # Safety
-/// `handle` must be null or a live pointer returned by `sgl_tool_parser_create`.
+/// Reset the parser state for reuse # Safety `handle` must be null or a live pointer returned.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_reset(handle: *mut ToolParserHandle) {
     if handle.is_null() {
@@ -334,11 +293,7 @@ pub unsafe extern "C" fn sgl_tool_parser_reset(handle: *mut ToolParserHandle) {
     handle_ref.tool_index_to_id.clear();
 }
 
-/// Free a tool parser handle
-///
-/// # Safety
-/// `handle` must be null or a pointer returned by `sgl_tool_parser_create` that
-/// has not already been freed.
+/// Free a tool parser handle # Safety `handle` must be null or a pointer returned by `sgl_tool_parser_create`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_free(handle: *mut ToolParserHandle) {
     if !handle.is_null() {

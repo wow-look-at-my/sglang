@@ -1,14 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Tests that the router does not wedge indefinitely when an upstream
-//! worker accepts the TCP connection but never sends response headers.
-//!
-//! Without a configured `.timeout(...)` on the reqwest client, a stalled
-//! backend hangs the axum handler future forever and the test harness
-//! would just timeout. We assert here that the router returns a fast,
-//! clean 504 (`upstream_timeout`) instead — a timeout is a gateway timeout,
-//! the same status class as the stale-deadline cancel.
+//! Tests that the router does not wedge indefinitely when an upstream worker accepts the TCP connection.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -111,10 +104,9 @@ async fn non_streaming_request_times_out_when_worker_hangs() {
     );
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     let body_str = String::from_utf8_lossy(&bytes);
-    // A hung worker is the most common hard worker failure there is, so it must
-    // land in `outcome="error"` — the series a per-worker error-ratio alert
-    // watches. Deriving the outcome from the 504 status instead would silently
-    // reclassify it as `cancelled` and blind that alert.
+    // A hung worker is the most common hard worker failure there is, so it
+    // must land in `outcome="error"` — the series a per-worker error-ratio
+    // alert watches.
     assert!(
         ctx.metrics
             .render()

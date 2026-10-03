@@ -1,9 +1,4 @@
-//! Mesh management HTTP handlers
-//!
-//! Provides REST API for mesh cluster management:
-//! - Configuration CRUD operations
-//! - Health checks
-//! - Cluster status
+//! Mesh management HTTP.
 
 use std::sync::Arc;
 

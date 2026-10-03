@@ -1,32 +1,5 @@
 #!/bin/sh
 # Teach python/sglang/kernels/aot/setup_rocm.py to build for gfx1151 (Strix Halo).
-# Applied at image-build time by docker/rocm-gfx1151.Dockerfile; the repo files are
-# left untouched because gfx1151 is not a supported SGLang target.
-#
-# Two changes:
-#   1. Lift the {gfx942, gfx950, gfx1250} allowlist, which otherwise sys.exit(1)s.
-#      Current main gives non-gfx942 targets a 40KB TopK dynamic-LDS budget,
-#      which already fits gfx1151's 64KB workgroup limit.
-#   2. Force a single WARP_SIZE across the host and device compiler passes.
-#      include/utils.h resolves WARP_SIZE to 64 whenever __HIP_DEVICE_COMPILE__
-#      is undefined -- i.e. on the host pass -- and to 32 on a non-__GFX9__
-#      device pass. On CDNA both come out 64 and nothing is wrong, which is why
-#      upstream never sees this. On gfx1151 the two passes disagree, and the MoE
-#      TopK kernels use WARP_SIZE on both sides of the launch:
-#         moe_topk_softmax_kernels.cu  __launch_bounds__(WARPS_PER_CTA * WARP_SIZE)  -> device, 4*32 = 128
-#         moe_topk_softmax_kernels.cu  dim3 block_dim(WARP_SIZE, WARPS_PER_TB)       -> host,   64*4 = 256
-#      Launching 256 threads into a 128-thread bound fails with
-#      hipErrorLaunchFailure, poisons the queue, and typically surfaces as a
-#      page fault in whatever kernel runs next (moe_align_block_size_kernel),
-#      which makes it easy to misattribute. The same pattern is in
-#      moe_topk_sigmoid_kernels.cu. It also desynchronizes the launcher's
-#      TopkConstants math (ROWS_PER_WARP, VECs_PER_THREAD) from the kernel's.
-#      Only MoE models hit this; dense models never call these kernels.
-#      32 is simply correct here -- gfx1151 is a wave32 part -- so the override
-#      pins both passes to 32 rather than renaming the symbol per call site.
-#
-# Each edit is guarded: if the upstream line has changed, fail rather than
-# silently produce an image whose kernels were built with the wrong limits.
 set -e
 
 FILE="${1:?usage: sgl-kernel-gfx1151.sh <path to setup_rocm.py>}"

@@ -16,10 +16,7 @@ pub struct WorkerRemovalRequest {
     pub dp_aware: bool,
 }
 
-/// Step to find workers to remove based on URL.
-///
-/// For DP-aware workers, finds all workers with matching URL prefix.
-/// For regular workers, finds the single worker with exact URL match.
+/// Step to find workers to remove based on URL. For DP-aware workers, finds all workers with matching URL prefix.
 pub struct FindWorkersToRemoveStep;
 
 #[async_trait]

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use sgl_router::config::{
@@ -72,8 +72,7 @@ fn build_ctx_with_worker(url: &str) -> Arc<AppContext> {
         bootstrap_port: None,
     });
     let policies = Arc::new(build_policy_registry(&cfg).unwrap());
-    // Per-request worker URLs flow from the registry through
-    // `forward_*_to(&worker.url, ...)`; the proxy itself is URL-less.
+    // Per-request worker URLs flow from the registry through `forward_*_to(&worker.url, ...)`.
     let proxy = Arc::new(Proxy::new(TEST_TIMEOUT).unwrap());
     Arc::new(AppContext::new(cfg, tokenizers, proxy, registry, policies))
 }
@@ -134,10 +133,7 @@ async fn non_streaming_returns_200() {
     assert_eq!(v["choices"][0]["message"]["content"], "ok");
 }
 
-/// Edge counters fire through the real middleware: `requests_total` at entry +
-/// `responses_total` on exit, with matched-route/method labels. The unit tests
-/// call record_* directly, so this is the only check that the middleware is
-/// actually wired (MatchedPath -> record_ingress / record_response).
+/// Edge counters fire through the real middleware: `requests_total` at entry + `responses_total` on exit.
 #[tokio::test]
 async fn edge_counters_recorded_through_middleware() {
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -280,19 +276,12 @@ async fn streaming_first_chunk_before_completion() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
 
-    // Asserting first-byte timing under axum::Body::from_stream requires
-    // poll-by-poll instrumentation; here we only sanity-check that the body
-    // collects at all so that a regression that buffers the entire stream
-    // before yielding will at minimum still pass through bytes.
+    // Asserting first-byte timing under axum::Body::from_stream requires poll-by-poll instrumentation.
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     assert!(bytes.windows(5).any(|w| w == b"first"));
 }
 
-/// A successful (2xx) streaming request records both TTFT (fired by the SSE
-/// pump on the first chunk) and end-to-end request_duration (recorded by the
-/// drop-guard when the stream completes). End-to-end coverage of the chat
-/// handler installing the hooks — the sse-level unit tests only cover the
-/// pump primitive in isolation.
+/// A successful (2xx) streaming request records both TTFT (fired by the SSE pump on the first chunk) and end-to-end request_duration.
 #[tokio::test]
 async fn streaming_2xx_request_records_ttft_and_duration() {
     let chunks: Vec<&'static str> = vec![
@@ -318,11 +307,9 @@ async fn streaming_2xx_request_records_ttft_and_duration() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    // Draining drives the pump to completion: fires the TTFT hook on the
-    // first chunk and drops the duration guard at stream end.
+    // Draining drives the pump to completion: fires the TTFT hook on the first chunk and drops the duration guard.
     let _ = res.into_body().collect().await.unwrap().to_bytes();
-    // The duration guard records from the pump task; give it a beat to drop,
-    // matching the active-load streaming tests' synchronization.
+    // The duration guard records from the pump task.
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let m = ctx.metrics.render();
@@ -336,10 +323,7 @@ async fn streaming_2xx_request_records_ttft_and_duration() {
     );
 }
 
-/// A non-2xx streaming response must NOT record TTFT (the error body is not a
-/// generated token — the gate lives in `Proxy::forward_streaming_to`), but it
-/// MUST still record request_duration (latency of a failed request matters)
-/// and the response status. Guards the 2xx-gating decision end-to-end.
+/// A non-2xx streaming response must NOT record TTFT.
 #[tokio::test]
 async fn streaming_5xx_request_records_duration_and_status_but_not_ttft() {
     let worker = crate::common::mock_worker::MockWorker::start_returning_error(
@@ -463,9 +447,7 @@ async fn streaming_upstream_5xx_preserves_content_type() {
 #[tokio::test]
 async fn non_streaming_upstream_429_preserved() {
     // Regression: a legitimate worker 4xx (rate limit, invalid model, etc.)
-    // must be proxied verbatim. The router is only a 502-wrapper for
-    // transport failures (connect/dns/timeout); upstream-application errors
-    // are OpenAI-compatible passthrough.
+    // must be proxied verbatim.
     let upstream_body = serde_json::json!({
         "error": {
             "type": "rate_limit_error",
@@ -503,9 +485,8 @@ async fn non_streaming_upstream_429_preserved() {
         res.headers().get("content-type").unwrap().to_str().unwrap(),
         "application/json",
     );
-    // Router envelope headers must NOT be set — this is upstream's response.
-    // Their absence is exactly how a gateway tells "the engine said this" from
-    // "the router said this".
+    // Router envelope headers must NOT be set — this is upstream's
+    // response.
     assert!(
         res.headers().get("x-router-error-code").is_none(),
         "router envelope header must NOT be set on upstream-passthrough responses",
@@ -522,8 +503,7 @@ async fn non_streaming_upstream_429_preserved() {
 #[tokio::test]
 async fn non_streaming_upstream_500_preserved() {
     // Regression: worker-side 5xx (model crashed, OOM, etc.) is proxied
-    // verbatim on non-streaming requests. Mirrors streaming behaviour. Only
-    // transport failures get 502-wrapped.
+    // verbatim on non-streaming requests. Mirrors streaming behaviour.
     let upstream_body = serde_json::json!({
         "error": {"type": "server_error", "message": "internal worker failure"}
     });
@@ -563,11 +543,7 @@ async fn non_streaming_upstream_500_preserved() {
     assert_eq!(got, upstream_body);
 }
 
-/// A response the router FORWARDS from a worker with a non-2xx status is an
-/// `Ok(Response)` at the router layer — only transport failures become `Err`.
-/// The per-worker `worker_requests_total` outcome must therefore be derived from
-/// the client-visible HTTP status, not from `Result::Ok`/`Err`: a forwarded 5xx
-/// is counted `outcome="error"`, NOT credited as a success.
+/// A response the router FORWARDS from a worker with a non-2xx status is an `Ok(Response)` at the router layer.
 #[tokio::test]
 async fn forwarded_5xx_records_worker_outcome_error_not_success() {
     let worker = crate::common::mock_worker::MockWorker::start_returning_error(
@@ -635,16 +611,8 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for VecWriter {
     }
 }
 
-/// Install a permissive global subscriber once per test binary.
-///
-/// `tracing` caches each callsite's "interest" the first time it is hit. Under
-/// the parallel test harness a thread with no subscriber of its own evaluates
-/// the `http_request` callsite against `NoSubscriber`, which caches it as
-/// *never* interested — after which a per-test `set_default` capture on another
-/// thread records nothing, and an access-log assertion fails depending only on
-/// which test ran first. A global subscriber that is interested in everything
-/// keeps the callsite live; it discards what it receives, so per-test
-/// `set_default` buffers stay isolated to their own thread.
+/// Install a permissive global subscriber once per test binary. `tracing`
+/// caches each callsite's "interest" the first time it is hit.
 fn prime_tracing_callsites() {
     static PRIMED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     PRIMED.get_or_init(|| {
@@ -657,12 +625,7 @@ fn prime_tracing_callsites() {
     });
 }
 
-/// The access-log line for a DISPATCHED request must name the worker it was
-/// dispatched to. Only the chat handler knows that, so it attaches a
-/// `RequestLogContext` to the response — including on the post-dispatch error
-/// path, which is where "which engine failed" matters most. Without the attach
-/// the line is still emitted, just anonymous, so only a log assertion catches a
-/// regression here.
+/// The access-log line for a DISPATCHED request must name the worker it was dispatched to.
 #[tokio::test]
 async fn dispatched_error_names_its_worker_in_the_access_log() {
     prime_tracing_callsites();
@@ -719,11 +682,6 @@ async fn dispatched_error_names_its_worker_in_the_access_log() {
 async fn non_streaming_upstream_4xx_body_passthrough() {
     // Regression: the worker's response bytes must reach the client
     // unmodified — no router envelope wrap, no field rewriting.
-    //
-    // We register `tiny` as the model so the handler resolves it against
-    // the registry, then have the worker simulate a 4xx — this test is
-    // about *upstream-returned* errors passing through, not about a
-    // router-side model-not-found error.
     let upstream_body = serde_json::json!({
         "error": {"type": "invalid_request_error", "message": "bad input"}
     });
@@ -750,24 +708,19 @@ async fn non_streaming_upstream_4xx_body_passthrough() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
-    // Byte-exact passthrough — compare via Value to be insensitive to
-    // whitespace, which is the only legal axis of variation for JSON.
+    // Byte-exact passthrough — compare via Value to be insensitive to whitespace, which is the only legal axis of variation.
     let got: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(got, upstream_body);
 }
 
 #[tokio::test]
 async fn oversized_request_body_returns_413() {
-    // Regression: the router must enforce a body-size cap on
-    // `/v1/chat/completions`. A multi-MiB body from a hostile client must be
-    // rejected at the layer BEFORE the handler reads it into memory, and
-    // must NOT be forwarded to the upstream worker.
+    // Regression: the router must enforce a body-size cap on `/v1/chat/completions`.
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
     let ctx = build_ctx_with_worker(&worker.url);
     let app = build_router(ctx);
 
-    // One byte over the configured cap, so the test tracks the cap
-    // (`MAX_CHAT_BODY_BYTES`) instead of a hardcoded size.
+    // One byte over the configured cap, so the test tracks the cap (`MAX_CHAT_BODY_BYTES`) instead of a hardcoded size.
     let big = vec![b'x'; MAX_CHAT_BODY_BYTES + 1];
     let req = Request::builder()
         .method("POST")
@@ -793,9 +746,7 @@ async fn oversized_request_body_returns_413() {
 
 #[tokio::test]
 async fn chat_rejects_null_body_400() {
-    // Regression: a JSON `null` body is syntactically valid JSON but is NOT
-    // a chat-completions request shape. The router must reject it with 400
-    // BadRequest and NOT forward it to the worker.
+    // Regression: a JSON `null` body is syntactically valid JSON but is NOT a chat-completions request shape.
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
     let ctx = build_ctx_with_worker(&worker.url);
     let app = build_router(ctx);
@@ -822,8 +773,7 @@ async fn chat_rejects_null_body_400() {
 
 #[tokio::test]
 async fn chat_rejects_array_body_400() {
-    // Regression: a JSON array `[]` body is not a chat-completions request
-    // shape (object expected). Router must 400 and not forward.
+    // Regression: a JSON array `[]` body is not a chat-completions request shape (object expected).
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
     let ctx = build_ctx_with_worker(&worker.url);
     let app = build_router(ctx);
@@ -846,8 +796,7 @@ async fn chat_rejects_array_body_400() {
 
 #[tokio::test]
 async fn chat_rejects_string_body_400() {
-    // Regression: a JSON string `"hi"` is not a chat-completions request
-    // shape. Router must 400 and not forward.
+    // Regression: a JSON string `"hi"` is not a chat-completions request shape.
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
     let ctx = build_ctx_with_worker(&worker.url);
     let app = build_router(ctx);
@@ -871,12 +820,7 @@ async fn chat_rejects_string_body_400() {
 #[tokio::test]
 async fn non_streaming_mid_body_drop_classified_as_upstream_body_incomplete() {
     // Regression: when the upstream replies with a status line and headers
-    // but drops the connection mid-body, the failure is NOT
-    // "upstream_unreachable" (the upstream demonstrably DID reply). It must
-    // be classified as `upstream_body_incomplete` so the operator-visible
-    // envelope reflects that the worker partially served the request — and the
-    // worker's own status must survive in `x-router-upstream-status` rather
-    // than being replaced by the router's synthesized 502.
+    // but drops the connection mid-body.
     let worker = crate::common::mock_worker::MockWorker::start_returning_partial_body(
         StatusCode::OK,
         b"{\"partial\": ",
@@ -988,10 +932,7 @@ async fn unknown_model_without_workers_returns_404() {
     assert_eq!(response.headers()["x-router-error-code"], "model_not_found");
 }
 
-/// A worker is registered for a model that is NOT the configured `cfg.model` (so the
-/// policy registry has no entry for it).  The handler returns 404
-/// `model_not_found` rather than 500 — clients can recover by sending a
-/// different model name; an internal_error would mask the misconfiguration.
+/// A worker is registered for a model that is NOT the configured `cfg.model`.
 #[tokio::test]
 async fn unknown_model_with_no_policy_returns_404_model_not_found() {
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -1034,12 +975,6 @@ async fn unknown_model_with_no_policy_returns_404_model_not_found() {
 
 #[tokio::test]
 async fn forward_json_to_records_failure_on_body_drop() {
-    // Regression: previously `forward_json_to` recorded breaker
-    // success/failure right after headers — so a worker that returned
-    // 200 OK and then dropped the body got credited as healthy. A worker
-    // that does this repeatedly stays eligible. The fix moves the
-    // breaker record to after the body completes, treating a body-drop
-    // as failure.
     use sgl_router::health::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
     use sgl_router::server::error::ApiError;
     use std::sync::Arc;
@@ -1079,21 +1014,7 @@ async fn forward_json_to_records_failure_on_body_drop() {
 
 #[tokio::test]
 async fn forward_json_to_records_success_only_after_body_completes() {
-    // Counterpart of the body-drop regression: clean 2xx + clean body
-    // MUST call `record_success` on the breaker, even if there were
-    // prior failures. Without this, the breaker can never recover from
-    // a transient failure spike — it would open on the threshold-th
-    // failure and stay open until cool_down, ignoring any successful
-    // traffic in between.
-    //
-    // An earlier version of this test only asserted `breaker.would_allow()`
-    // after a single clean call against a fresh breaker, which is true
-    // by default — the test never actually observed the success path
-    // affecting breaker state. We instead seed one prior failure (one
-    // short of threshold), make a clean call, then induce one more
-    // failure. If `record_success` fired on the clean call, the failure
-    // count is back to 1 and the breaker stays closed. If it didn't,
-    // the count is now 2 and the breaker opens.
+    // Counterpart of the body-drop regression: clean 2xx + clean body MUST call `record_success` on the breaker, even.
     use sgl_router::health::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
     use sgl_router::server::error::ApiError;
     use std::sync::Arc;
@@ -1130,9 +1051,6 @@ async fn forward_json_to_records_success_only_after_body_completes() {
         .await;
     assert!(res.is_ok(), "clean OK call must succeed: {res:?}");
 
-    // The observable side-effect of `record_success` on the OK body
-    // path: failure count is reset to 0. One more failure now must
-    // leave us at 1 (not 2), so the breaker stays closed.
     breaker.record_failure();
     assert!(
         breaker.would_allow(),
@@ -1144,11 +1062,7 @@ async fn forward_json_to_records_success_only_after_body_completes() {
 
 #[tokio::test]
 async fn forward_streaming_to_records_failure_on_mid_stream_drop() {
-    // Streaming counterpart of the body-drop regression. Headers say 200
-    // OK, then the worker drops mid-body. The breaker must observe this
-    // as a failure — `bytes_stream_to_body` reads the rest of the
-    // stream on a spawned pump, so the recording has to flow through
-    // that pump's completion path.
+    // Streaming counterpart of the body-drop regression.
     use http_body_util::BodyExt;
     use sgl_router::health::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
     use sgl_router::server::error::ApiError;
@@ -1186,11 +1100,9 @@ async fn forward_streaming_to_records_failure_on_mid_stream_drop() {
         .await;
 
     let resp = res.expect("headers are 200 OK; transport-level Ok");
-    // Drain the body — the pump will see the mid-flight drop and
-    // surface an error chunk, then close.
+    // Drain the body — the pump will see the mid-flight drop and surface an error chunk, then close.
     let _ = resp.into_body().collect().await;
     // After the stream drains, the breaker MUST have recorded failure.
-    // Poll briefly because the pump runs on a spawned task.
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     while breaker.would_allow() && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1202,12 +1114,6 @@ async fn forward_streaming_to_records_failure_on_mid_stream_drop() {
 }
 
 /// Client-visible contract of a streaming mid-body drop, through `build_router`.
-/// This is the asymmetric half of the non-streaming case: headers were already
-/// sent as 200, so the client keeps a 200 (NOT the synthesized 502 of the
-/// non-streaming path), there is NO `x-router-error-code` /
-/// `x-router-upstream-status`, and `responses_total` counts it as a 200 (the
-/// breaker / duration metrics capture the mid-stream failure — see the breaker
-/// test above).
 #[tokio::test]
 async fn streaming_mid_body_drop_stays_200_with_no_router_headers() {
     let worker = crate::common::mock_worker::MockWorker::start_returning_partial_body(
@@ -1331,11 +1237,7 @@ async fn forward_json_to_rejects_when_breaker_open() {
     }
 }
 
-/// A malformed worker URL (operator typo in `discovery.static_urls`, broken k8s
-/// annotation) must surface as 503 `worker_misconfigured` (not 500
-/// `internal_error`) AND trip the worker's circuit breaker so the malformed
-/// worker drops out of `healthy_workers_for` and subsequent requests skip
-/// it.
+/// A malformed worker URL (operator typo in `discovery.static_urls`, broken k8s annotation) must surface as `worker_misconfigured`.
 #[tokio::test]
 async fn forward_json_to_malformed_url_returns_worker_misconfigured_and_trips_breaker() {
     use sgl_router::health::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
@@ -1376,12 +1278,7 @@ async fn forward_json_to_malformed_url_returns_worker_misconfigured_and_trips_br
     );
 }
 
-/// Regression test: LoadGuard must be held for the *body* lifetime of a
-/// streaming response, not just for the handler lifetime.
-///
-/// Before the fix, the handler dropped `_guard` as soon as it returned
-/// (which happens when headers arrive), so `router_inflight_load()` was 0 while
-/// the SSE pump was still relaying bytes. This test catches that bug.
+/// Regression test: LoadGuard must be held for the *body* lifetime of a streaming response, not just for the handler lifetime. Before the fix.
 #[tokio::test]
 async fn streaming_load_guard_persists_for_body_lifetime() {
     let chunks: Vec<&'static str> = vec![
@@ -1440,8 +1337,7 @@ async fn streaming_load_guard_persists_for_body_lifetime() {
 
     let res = app.oneshot(req).await.unwrap();
 
-    // The handler has returned (headers arrived).  Wait a moment for the
-    // first chunk's delay to pass, then assert load is still held.
+    // The handler has returned (headers arrived).
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(
         w_handle.router_inflight_load() >= 1,
@@ -1452,8 +1348,7 @@ async fn streaming_load_guard_persists_for_body_lifetime() {
     // Drain the entire body — this drives the SSE pump to completion.
     let _bytes = BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
 
-    // After the body is fully consumed and dropped, the guard must be
-    // released.  Give the spawned task a brief moment to clean up.
+    // After the body is fully consumed and dropped, the guard must be released.
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(
         w_handle.router_inflight_load(),
@@ -1462,10 +1357,7 @@ async fn streaming_load_guard_persists_for_body_lifetime() {
     );
 }
 
-/// Task A: the chat handler mints an `RouterInflightLoadGuard` from the shared
-/// `RouterInflightLoadRegistry` and drops it when the request completes. The
-/// non-streaming path drops the guard on handler exit; this test
-/// asserts the round-trip increment → 0 across a single request.
+/// Task A: the chat handler mints an `RouterInflightLoadGuard` from the shared `RouterInflightLoadRegistry` and drops it.
 #[tokio::test]
 async fn non_streaming_active_load_increments_then_returns_to_zero() {
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -1512,11 +1404,7 @@ async fn non_streaming_active_load_increments_then_returns_to_zero() {
     );
 }
 
-/// Task A: the streaming path holds the `RouterInflightLoadGuard` until the
-/// SSE pump finishes. Mid-stream the registry shows `inflight_count >= 1`;
-/// after the body drains it returns to 0. Counterpart to
-/// `streaming_load_guard_persists_for_body_lifetime` — both guards must
-/// live for the FULL response lifetime.
+/// Task A: the streaming path holds the `RouterInflightLoadGuard` until the SSE pump finishes.
 #[tokio::test]
 async fn streaming_active_load_persists_for_body_lifetime() {
     let chunks: Vec<&'static str> = vec![
@@ -1562,8 +1450,7 @@ async fn streaming_active_load_persists_for_body_lifetime() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
 
-    // The handler has returned (headers arrived). The streaming pump is
-    // still running, so the registry's per-request entry must remain.
+    // The handler has returned (headers arrived).
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(
         router_inflight_load.inflight_count() >= 1,
@@ -1593,14 +1480,11 @@ async fn streaming_active_load_persists_for_body_lifetime() {
     );
 }
 
-/// Task A: a streaming client that disconnects mid-stream still drops
-/// both guards. The SSE pump's `tx.send().await.is_err()` branch is what
-/// triggers the drop — when the axum Body is dropped on the client side,
-/// the channel receiver closes and the pump exits.
+/// Task A: a streaming client that disconnects mid-stream still drops both guards.
 #[tokio::test]
 async fn streaming_active_load_drops_on_client_disconnect() {
-    // Slow stream: 4 chunks × 100 ms each. The test only reads the
-    // first chunk then drops the body, simulating a client disconnect.
+    // Slow stream: chunks × ms each. The test only reads the first
+    // chunk then drops the body, simulating a client disconnect.
     let chunks: Vec<&'static str> = vec![
         "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n",
@@ -1634,17 +1518,7 @@ async fn streaming_active_load_drops_on_client_disconnect() {
     );
 }
 
-/// Task D: stale-request janitor expiry surfaces as HTTP 504 with
-/// `x-router-error-code: stale_request_expired`. The chat handler
-/// races the upstream fetch against the janitor's per-request
-/// cancellation token; when the token wins, the handler returns
-/// `ApiError::StaleRequestExpired`.
-///
-/// Wiring: build an `AppContext` with a short
-/// `stale_request_timeout` `RouterInflightLoadRegistry` + spawn a janitor
-/// with sub-second cadence + dispatch to a slow upstream that takes
-/// longer than the timeout. The janitor sweeps before the upstream
-/// returns; cancellation fires; handler returns 504.
+/// Task D: stale-request janitor expiry surfaces as HTTP 504 with `x-router-error-code: stale_request_expired`.
 #[tokio::test]
 async fn janitor_expiry_returns_504_stale_request_expired() {
     // Upstream that takes 2s to respond — longer than the helper's 50ms
@@ -1725,10 +1599,7 @@ async fn assert_engine_abort(worker: &crate::common::mock_worker::MockWorker) {
     );
 }
 
-/// Task A: a non-streaming request that errors out (upstream
-/// unreachable) still drops the active-load guard. The handler's normal
-/// return path is the only drop point — confirming the guard is on the
-/// stack (not inside a long-lived future) is what this test pins.
+/// Task A: a non-streaming request that errors out (upstream unreachable) still drops the active-load guard.
 #[tokio::test]
 async fn non_streaming_error_path_drops_active_load_guard() {
     // Dead upstream — first connect attempt fails fast.

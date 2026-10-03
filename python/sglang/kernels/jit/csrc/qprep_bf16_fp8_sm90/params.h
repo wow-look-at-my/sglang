@@ -1,6 +1,6 @@
-/* Copyright 2026 SGLang Team. All Rights Reserved.
+/* Copyright SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
+Licensed under the Apache License, Version.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -13,9 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-// Parameters for the SM90 Q8KV8 born-fp8 q-prep kernel (absorbed-q bmm +
-// nope/rope concat + fp32 -> bf16 -> fp8_e4m3 cast).  All strides are in
-// ELEMENTS of the respective tensor's dtype (fp8 strides == byte strides).
+// Parameters for the SM90 Q8KV8 born-fp8 q-prep kernel.
 
 #pragma once
 
@@ -32,8 +30,6 @@ struct QprepBf16Fp8Sm90Params {
   const void* q_nope;
   int64_t a_s0, a_s1;
 
-  // w_kc: [H, K, N] bf16 with K contiguous (stride(1) == 1; production layout
-  // is (K*N, 1, K), i.e. the N-major absorbed weight)
   const void* w_kc;
   int64_t b_s0, b_s2;
 
@@ -46,8 +42,7 @@ struct QprepBf16Fp8Sm90Params {
   // out: [T, pad_heads, N + R] fp8_e4m3; only [:, :H, :] is written
   void* out;
   int64_t o_s0, o_s1;
-  // 16B-aligned out rows (base pointer and both strides) -> smem-staged
-  // coalesced uint4 stores for the nope half (else direct u16 stores)
+  // 16B-aligned out rows (base pointer and both strides) -> smem-staged coalesced uint4 stores for the nope half.
   bool out_vec16;
 
   cudaStream_t stream;

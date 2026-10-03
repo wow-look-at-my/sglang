@@ -1,10 +1,7 @@
 // Single `export const config` literal — no spreads/calls/IIFE (Mintlify re-evals at hydration).
 // Cells are denormalized: no `--nnodes`/`--node-rank`/`--dist-init-addr`/`--host`/`--port` literals — engine injects them.
 //
-// Qwen3.8-2.4T-A95B: 92 layers as 23 repeats of (3 x Gated DeltaNet -> MoE, then
-// 1 x Gated Attention -> MoE), so 69 linear-attention layers to 23 full-attention
-// ones; MoE with 512 experts, 10 routed + 1 shared active; 2.4T total / 95B
-// active params. Text-only, and reasoning cannot be disabled.
+// Text-only, and reasoning cannot be disabled.
 //
 // A hardware x quantization x strategy combination with no launch recipe has no
 // cell, and the engine greys it out.
@@ -17,27 +14,20 @@ export const config = {
   variants: [
     { id: "default", label: "Default" },
   ],
-  // Checkpoint precisions. NVFP4 is NVIDIA's FP4 format (Blackwell only); MXFP4
-  // is the OCP format AMD CDNA4 supports natively (mi350x/mi355x only). Not to be
-  // confused with the Playground's "FlashInfer (MXFP4)" MoE runner chip, an
-  // unrelated NVIDIA kernel that shares the name.
+  // Checkpoint precisions.
   quantizations: [
     { id: "bf16",  label: "BF16"  },
     { id: "fp8",   label: "FP8"   },
     { id: "nvfp4", label: "NVFP4" },
     { id: "mxfp4", label: "MXFP4" },
   ],
-  // Three operating points on the throughput/latency curve, plus `dspark`, which
-  // swaps NEXTN for the trained DSpark draft model. Only GB300/FP8 carries the
-  // full ladder; single-recipe hardware parks under `balanced`.
   strategies: [
     { id: "low-latency",     label: "Low Latency"     },
     { id: "balanced",        label: "Balanced"        },
     { id: "high-throughput", label: "High Throughput" },
     { id: "dspark",          label: "DSpark"          },
   ],
-  // Node counts a recipe spans. GB300 hosts are 4 GPUs, so its TP16 shapes take
-  // 4 nodes; everything else is an 8-GPU host.
+  // Node counts a recipe spans.
   nodesOptions: [
     { id: "single",  label: "Single Node" },
     { id: "multi-2", label: "2 Nodes"     },
@@ -69,7 +59,7 @@ export const config = {
 
   latencyPercentile: "Mean",
 
-  // The "⚡ Reproduce" modal's benchmark command. --random-range-ratio 1 pins ISL
+  // The "⚡ Reproduce" modal's benchmark command. --random-range-ratio pins ISL
   // exactly rather than drawing a range, so runs stay comparable.
   benchmarkCommands: {
     speed:
@@ -85,9 +75,7 @@ export const config = {
     numPromptsByConc: { 1: 8, 16: 32, 64: 128, 256: 512, 1024: 2048, 4096: 4096 },
   },
 
-  // Per-hardware image for Docker mode. The two ROCm images are not
-  // interchangeable: MI300X (gfx942) takes the mi30x build on ROCm 7.00,
-  // MI350X/MI355X (gfx950) the mi35x build on ROCm 7.20.
+  // Per-hardware image for Docker mode.
   dockerImages: {
     h200:   "lmsysorg/sglang:qwen38",
     b200:   "lmsysorg/sglang:qwen38",
@@ -143,9 +131,6 @@ export const config = {
 
   playgroundFeatures: {
 
-    // ----- Card: "Attention Parallelism" -----
-    // 23 GQA full-attention layers expose the usual TP/DP-Attention knobs; the
-    // range is widened past the template default given the model's scale.
     attention: {
       knobs: [
         { id: "tp", label: "TP", values: [null, 1, 2, 4, 8, 16, 32, 64] },
@@ -155,8 +140,6 @@ export const config = {
       ],
     },
 
-    // ----- Card: "MoE Parallelism" -----
-    // 512 routed experts + 1 shared, top-10 routing.
     moe: {
       backend: {
         options: [
@@ -164,9 +147,8 @@ export const config = {
           { id: "deepep",           label: "DeepEP",            flags: ["--moe-a2a-backend deepep"] },
           { id: "megamoe",          label: "MegaMoE",           flags: ["--moe-a2a-backend megamoe"],
             requiresHw: ["b200", "b300", "gb300"] },
-          // FlashInfer is CUDA-only — this is the NVIDIA MoE runner kernel, NOT
-          // the AMD "mxfp4" checkpoint quantization above (unrelated despite
-          // the shared name). Gate it off AMD so it can't be picked there.
+          // FlashInfer is CUDA-only — this is the NVIDIA MoE runner kernel, NOT the AMD "mxfp4" checkpoint quantization above (unrelated
+          // despite the shared name).
           { id: "flashinfer_mxfp4", label: "FlashInfer (MXFP4)", flags: ["--moe-runner-backend flashinfer_mxfp4"],
             requiresHw: ["h200", "b200", "b300", "gb300"] },
           { id: "marlin",           label: "Marlin (W4A16)",    flags: ["--moe-runner-backend marlin"] },
@@ -182,8 +164,6 @@ export const config = {
             env: ["SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=8320"] },
         ],
       },
-      // WideEP — the launch post's large-scale-EP claim — so the range goes past
-      // the template default's 16.
       ep: { label: "EP", values: [null, 1, 2, 4, 8, 16, 32, 64] },
     },
 
@@ -206,9 +186,6 @@ export const config = {
         { id: "mtp",     label: "EAGLE / MTP",
           flags: ["--speculative-algorithm EAGLE", "--speculative-num-steps 3",
                   "--speculative-eagle-topk 1", "--speculative-num-draft-tokens 4"] },
-        // _handle_dspark (arg_groups/speculative_hook.py) raises rather than
-        // degrading: pp_size must be 1, and under DP-Attention it also needs
-        // --enable-dp-lm-head, moe_a2a_backend none, and no context parallel.
         // Gate the chip on both so the panel can't emit a command that aborts.
         { id: "dspark",  label: "DSpark",
           flags: ["--speculative-algorithm DSPARK",
@@ -230,12 +207,11 @@ export const config = {
       ],
     },
 
-    // ----- Card: "PD Disaggregation" -----
-    // Role flags follow the P/D bundle's own prefill and decode workers. Two
-    // flags those recipes carry are deliberately not emitted:
-    // --prefill-round-robin-balance no longer exists on current SGLang (it was
-    // a deprecated no-op), and --mamba-track-interval is context-dependent (the source
-    // recipes set it equal to their context cap) so a fixed value here would be
+    // ----- Card: "PD Disaggregation" ----- Role flags follow the P/D bundle's own
+    // prefill and decode workers. Flags those recipes carry are deliberately not
+    // emitted: --prefill-round-robin-balance no longer exists on current SGLang (it
+    // was a deprecated no-op), and --mamba-track-interval is context-dependent (the
+    // source recipes set it equal to their context cap) so a fixed value here would be
     // wrong for cells serving the native window.
     pdDisagg: {
       modes: [
@@ -267,8 +243,6 @@ export const config = {
         { id: "nixl", label: "NiXL" },
       ],
       ibDevices: [{ id: "auto", label: "Auto" }, "mlx5_0", "mlx5_7"],
-      // Ports come from the engine's PD_PORTS, not literals — the decode role
-      // serves on 30100, so a hardcoded target would not reach it.
       // In PD mode, --policy is the prefill fallback; keep decode explicit.
       router: {
         port: 8000,
@@ -307,9 +281,7 @@ export const config = {
     // ----- Axis: Flag Selects (GDN state knobs) -----
     flagSelects: [
       {
-        // Opt-in row for ReplaySSM on a speculative run. Bit-identical to the
-        // recurrent baseline per the launch post, so there's no accuracy
-        // tradeoff — only a memory one.
+        // Opt-in row for ReplaySSM on a speculative run.
         id: "replaySsm", title: "ReplaySSM (spec)",
         showWhen: (b) => b.spec === "dspark",
         stripPrefixes: ["--enable-linear-replayssm-spec"],
@@ -324,8 +296,7 @@ export const config = {
         ],
       },
       {
-        // Radix prefix caching over the GDN state — see "ReplaySSM and Overlap
-        // for the GDN State" above for what extra_buffer buys.
+        // Radix prefix caching over the GDN state — see "ReplaySSM and Overlap for the GDN State" above.
         id: "mambaRadix", title: "GDN Radix Cache Strategy",
         stripPrefixes: ["--mamba-radix-cache-strategy"],
         options: [
@@ -348,13 +319,7 @@ export const config = {
   // Ordering: the first cell seeds the Deploy panel's default selection.
   cells: [
     {
-      // GB300 / FP8, balanced — DP4 attention with per-DP TP4, MoE EP16 over
-      // DeepEP v2 hybrid, NEXTN 3+1 with ReplaySSM. The capacity set
-      // (max-total-tokens / max-running-requests / mamba pool / decode graph
-      // ladder) is tuned as a unit; retune the values together.
-      //
-      // The SGLANG_DEEPEP_V2_*_PER_RANK envs size the a2a buffers against
-      // --chunked-prefill-size 32768 — the default 128 cap refuses to start.
+      // GB300 / FP8, balanced — DP4 attention with per-DP TP4, MoE EP16 over DeepEP v2 hybrid.
       match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "balanced", nodes: "multi-4" },
       verified: true,
       env: [
@@ -400,10 +365,7 @@ export const config = {
       ],
     },
     {
-      // GB300 / FP8, low-latency — TP16 across 4 nodes, narrow EP, NEXTN with
-      // ReplaySSM, CuteDSL AllReduce fusion. --max-mamba-cache-size 80 is
-      // 16 concurrent requests x the 5 GDN state slots extra_buffer budgets each;
-      // retune the two together.
+      // GB300 / FP8, low-latency — TP16 across multiple nodes, narrow EP, NEXTN with ReplaySSM.
       match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "multi-4" },
       verified: true,
       env: [
@@ -437,9 +399,6 @@ export const config = {
     },
     {
       // GB300 / FP8, high-throughput — same wide-EP shape as balanced, MTP off.
-      // MASKED=384 caps the decode slab, which would otherwise default to the
-      // full 2048 and cost GiBs at graph capture. --max-total-tokens 2800000 is
-      // the accuracy-oriented value; throughput runs use 2000000.
       match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "high-throughput", nodes: "multi-4" },
       verified: true,
       env: [
@@ -478,10 +437,6 @@ export const config = {
       ],
     },
     {
-      // GB300 / NVFP4, low-latency — TP8 narrow EP across 2 nodes, NEXTN 3+1 with
-      // ReplaySSM, CuteDSL AllReduce fusion. --fp4-gemm-backend and
-      // --moe-runner-backend are real overrides: auto picks the CuTe DSL FP4
-      // kernels on SM100 and never enables the TRT-LLM fused NVFP4 MoE path.
       match: { hw: "gb300", variant: "default", quant: "nvfp4", strategy: "low-latency", nodes: "multi-2" },
       verified: true,
       env: [
@@ -519,14 +474,7 @@ export const config = {
       ],
     },
     {
-      // GB300 / NVFP4, high-throughput — full DP16 attention with EP16 MoE over
-      // FlashInfer one-sided A2A, MTP off. flashinfer_trtllm_routed must stay:
-      // with a2a=flashinfer the auto runner resolution aborts at startup.
-      // SGLANG_FLASHINFER_NUM_MAX_DISPATCH_TOKENS_PER_RANK is load-bearing —
-      // unset it falls back to 1024 and startup raises once 1024 x ep_size no
-      // longer covers the largest CuteDSL MoE forward.
-      // --disable-prefill-cuda-graph is required at chunk 131072, where graph
-      // capture would OOM; --skip-server-warmup goes with it.
+      // GB300 / NVFP4, high-throughput — full DP16 attention with EP16 MoE over FlashInfer one-sided A2A.
       match: { hw: "gb300", variant: "default", quant: "nvfp4", strategy: "high-throughput", nodes: "multi-4" },
       verified: true,
       env: [
@@ -569,11 +517,6 @@ export const config = {
       ],
     },
     {
-      // GB300 / BF16 — full-precision weights, TP32 across 8 nodes x 4 GPUs.
-      // 4.8TB does not fit 16 GPUs, and GB300 is the one platform where a flat
-      // TP32 stays on rack-scale NVLink instead of crossing IB. KV stays at model
-      // precision (no --kv-cache-dtype), the highest-fidelity configuration here.
-      // The sizing is derived, not measured.
       match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "balanced", nodes: "multi-8" },
       env: [
         "SGLANG_FLASHINFER_MNNVL_CUTEDSL_AR_FUSION=1",
@@ -597,11 +540,6 @@ export const config = {
       ],
     },
     {
-      // H200 / FP8 — 4 nodes x 8 GPUs, TP8 x PP4 over IB. The one Hopper recipe,
-      // and the only cell where the flashinfer linear-attention backends are real
-      // overrides: SM90 defaults to triton for both GDN halves. --page-size 64 is
-      // likewise non-default on Hopper. mem-fraction is left to the auto
-      // heuristic, which prices the graph set into its reserve.
       match: { hw: "h200", variant: "default", quant: "fp8", strategy: "balanced", nodes: "multi-4" },
       verified: true,
       env: [],
@@ -624,11 +562,6 @@ export const config = {
       ],
     },
     {
-      // B300 / FP8 — 2 nodes x 8 GPUs, TP8 x PP2 over IB (~2.4TB of weights do not
-      // fit one 2.30TB node). pp > 1 forbids speculative decoding and
-      // auto-disables the overlap scheduler, so extra_buffer budgets 4 GDN slots
-      // per request rather than 5. --context-length 262144 is the model's native
-      // window written out, not a cap.
       match: { hw: "b300", variant: "default", quant: "fp8", strategy: "balanced", nodes: "multi-2" },
       verified: true,
       env: [],
@@ -662,11 +595,7 @@ export const config = {
       ],
     },
     {
-      // B300 / NVFP4 — single node, TP8, NEXTN with ReplaySSM and the CuteDSL
-      // AllReduce fusion. BF16 KV: the only NVFP4 cell serving KV at model
-      // precision. --mamba-ssm-dtype bfloat16 is load-bearing — the SM100
-      // flashinfer GDN decode default is gated on it, and without it decode falls
-      // back to Triton.
+      // B300 / NVFP4 — single node, TP8, NEXTN with ReplaySSM and the CuteDSL AllReduce fusion.
       match: { hw: "b300", variant: "default", quant: "nvfp4", strategy: "balanced", nodes: "single" },
       verified: true,
       env: [
@@ -694,9 +623,6 @@ export const config = {
       ],
     },
     {
-      // B200 / FP8 — 2 nodes x 8 GPUs, TP8 x PP2, same shape as the B300 FP8 cell
-      // but leaner: ~0.6TB free after weights instead of ~2.1TB, so the
-      // concurrency ceiling and mem-fraction are both left derived.
       match: { hw: "b200", variant: "default", quant: "fp8", strategy: "balanced", nodes: "multi-2" },
       verified: true,
       env: [],
@@ -716,10 +642,6 @@ export const config = {
       ],
     },
     {
-      // B200 / NVFP4 — 2 nodes x 8 GPUs, TP8 x PP2. Not the single-node shape the
-      // weights would allow: at TP8 on one node ~153.6GB of weights leaves only
-      // ~25GB per GPU for the pools, so this recipe pipelines two nodes and cuts
-      // the per-GPU weight share to ~77GB. pp > 1 forbids speculative decoding.
       match: { hw: "b200", variant: "default", quant: "nvfp4", strategy: "balanced", nodes: "multi-2" },
       verified: true,
       env: [],
@@ -743,10 +665,7 @@ export const config = {
       ],
     },
     {
-      // MI355X / MXFP4 — single node, TP8. SGLANG_USE_AITER gates the AITER
-      // MXFP4-MoE / GEMM / norm / rope kernels; the ROCm image sets it, a
-      // bare-pip host does not. mem-fraction 0.9 is pre-scaling — aiter
-      // multiplies it by 0.85 above 8K context, so ~0.765 effective.
+      // MI355X / MXFP4 — single node, TP8.
       match: { hw: "mi355x", variant: "default", quant: "mxfp4", strategy: "balanced", nodes: "single" },
       verified: true,
       env: [
@@ -764,8 +683,7 @@ export const config = {
       ],
     },
     {
-      // MI350X — identical command to MI355X (same CDNA4 gfx950, same 288GB, same
-      // mi35x ROCm image).
+      // MI350X — identical command to MI355X (same CDNA4 gfx950, same 288GB, same mi35x ROCm image).
       match: { hw: "mi350x", variant: "default", quant: "mxfp4", strategy: "balanced", nodes: "single" },
       verified: true,
       env: [
@@ -783,10 +701,6 @@ export const config = {
       ],
     },
     {
-      // MI300X / FP8 — 2 nodes x 8 GPUs, TP8 x PP2 (gfx942 has no MXFP4 hardware,
-      // and ~2.4TB of FP8 does not fit 1.5TB per node). --disable-custom-all-reduce
-      // puts the intra-node all-reduce on RCCL and must be on every rank;
-      // mem-fraction 1.0 is ~0.85 effective after the aiter scale.
       match: { hw: "mi300x", variant: "default", quant: "fp8", strategy: "balanced", nodes: "multi-2" },
       verified: true,
       env: [
@@ -810,9 +724,7 @@ export const config = {
       ],
     },
     {
-      // GB300 / FP8, DSpark — the low-latency TP16 narrow-EP shape with the DSpark
-      // draft model in place of NEXTN. The balanced tier is not a candidate: its
-      // DeepEP v2 a2a rules DSpark out under DP-attention.
+      // GB300 / FP8, DSpark — the low-latency TP16 narrow-EP shape with the DSpark draft model in place of NEXTN.
       match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "dspark", nodes: "multi-4" },
       env: [
         "SGLANG_FLASHINFER_MNNVL_CUTEDSL_AR_FUSION=1",
@@ -836,8 +748,7 @@ export const config = {
       ],
     },
     {
-      // GB300 / NVFP4, DSpark — the low-latency TP8 shape with the DSpark draft
-      // model in place of NEXTN.
+      // GB300 / NVFP4, DSpark — the low-latency TP8 shape with the DSpark draft model in place of NEXTN.
       match: { hw: "gb300", variant: "default", quant: "nvfp4", strategy: "dspark", nodes: "multi-2" },
       env: [
         "SGLANG_FLASHINFER_MNNVL_CUTEDSL_AR_FUSION=1",
@@ -871,8 +782,7 @@ export const config = {
       ],
     },
     {
-      // GB300 / BF16, DSpark — the TP32 shape with the DSpark draft model in place
-      // of NEXTN.
+      // GB300 / BF16, DSpark — the TP32 shape with the DSpark draft model in place of NEXTN.
       match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "dspark", nodes: "multi-8" },
       env: [
         "SGLANG_FLASHINFER_MNNVL_CUTEDSL_AR_FUSION=1",
@@ -895,11 +805,7 @@ export const config = {
       ],
     },
     {
-      // B300 / NVFP4, DSpark — single-node TP8 with the DSpark draft model. The
-      // draft needs its own weights and KV, so mem-fraction drops to 0.80 and
-      // --context-length trims the native window to buy that room back.
-      // SGLANG_ENABLE_MOE_DEFERRED_FINALIZE defers the MoE finalize so it fuses
-      // into the CuteDSL AllReduce workspace.
+      // B300 / NVFP4, DSpark — single-node TP8 with the DSpark draft model.
       match: { hw: "b300", variant: "default", quant: "nvfp4", strategy: "dspark", nodes: "single" },
       verified: true,
       env: [

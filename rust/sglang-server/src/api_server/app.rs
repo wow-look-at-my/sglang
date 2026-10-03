@@ -1,6 +1,5 @@
 //! Router assembly and the shared handler state: every endpoint module
-//! registers its routes here, and [`serve`] runs the assembled app on the
-//! pre-bound listener until shutdown.
+//! registers its routes here.
 
 use std::sync::{
     Arc,
@@ -20,13 +19,8 @@ use crate::message::config::ServerArgs;
 use crate::tokenizer_manager::from_scheduler::ActivityCounter;
 use crate::tokenizer_manager::wiring::Senders;
 
-/// Shared handler state: submission handles, immutable server configuration,
-/// and the API-owned chat formatter.
-///
-/// axum clones the router state into **every** request, so it is mounted as
-/// `Arc<AppState>` — one refcount bump per request instead of cloning each
-/// `flume::Sender` and the chat formatter. Deliberately not `Clone`, so it
-/// can only be shared through that `Arc`.
+/// Shared handler state: submission handles, immutable server configuration, and the API-owned chat formatter. axum clones the router state into **every** request, so it is mounted as `Arc<AppState>` — one refcount bump per request instead of cloning each
+/// `flume::Sender` and the chat formatter.
 pub(super) struct AppState {
     pub(super) senders: Senders,
     pub(super) response_buf: usize,
@@ -34,9 +28,7 @@ pub(super) struct AppState {
     pub(super) chat_formatter: Option<openai::ChatFormatter>,
     /// Response heartbeat (bumped per drained ring frame).
     pub(super) response_activity: ActivityCounter,
-    /// Whether the main process's startup warmup has completed. The listener
-    /// binds before warmup so `/model_info` is available to construct that
-    /// request, but health endpoints must not advertise readiness yet.
+    /// Whether the main process's startup warmup has completed.
     pub(super) startup_readiness: StartupReadiness,
 }
 
@@ -65,7 +57,6 @@ impl Default for StartupReadiness {
 }
 
 /// Private marker attached by the main process to its startup warmup request.
-/// The middleware flips readiness only after that request returns successfully.
 const STARTUP_WARMUP_HEADER: &str = "x-sglang-startup-warmup";
 
 async fn mark_startup_ready(
@@ -93,10 +84,7 @@ pub async fn serve(
     response_buf: usize,
     server_args: Arc<ServerArgs>,
     response_activity: ActivityCounter,
-    // The runtime's shutdown signal, shared with every worker stage: it fires
-    // (disconnects) when `Runtime::request_shutdown` drops the sender, at
-    // which point `serve` stops accepting and its in-flight handlers are
-    // aborted with the api runtime.
+    // The runtime's shutdown signal, shared with every worker stage: it fires (disconnects).
     shutdown: flume::Receiver<()>,
 ) {
     let chat_formatter = openai::load_chat_support(&server_args);
@@ -114,11 +102,7 @@ pub async fn serve(
         .merge(native_api::routes())
         .merge(openai::routes());
 
-    // TODO(auth): no API-key boundary yet. Python gates every route (except
-    // /health*, /metrics*, OPTIONS) via `add_api_key_middleware`; until ported,
-    // a configured `api_key` does NOT protect these routes.
-    //
-    // No body limit, matching the Python server.
+    // TODO(auth): no API-key boundary yet.
     let mut app = router
         .layer(axum::extract::DefaultBodyLimit::disable())
         .layer(axum::middleware::from_fn_with_state(
@@ -127,10 +111,7 @@ pub async fn serve(
         ))
         .with_state(state);
 
-    // Prefill-only KV bootstrap registry. Merged AFTER `with_state` — its
-    // router carries its own Arc<Registry> state, so it cannot merge into the
-    // Router<Arc<AppState>> above — and before `log::apply`, so bootstrap traffic
-    // shows in the access log.
+    // Prefill-only KV bootstrap registry.
     if server_args.enable_pd_bootstrap() {
         let (routes, sweeper) = pd_bootstrap::router_and_sweeper();
         tokio::spawn(sweeper); // cancelled with the runtime on shutdown

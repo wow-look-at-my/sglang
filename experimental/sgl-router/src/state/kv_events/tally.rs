@@ -1,37 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Counters for the KV-cache event stream the pump consumes: events by kind
-//! and by the storage `medium` tag each carried, plus the batches the
-//! transport lost. Rendered as `sgl_router_kv_events_total`,
-//! `sgl_router_kv_event_blocks_total` and `sgl_router_kv_event_batches_lost_total`.
-//!
-//! WHY this exists: an engine running a hierarchical cache publishes a
-//! host-tier store for every block it backs up and a device-tier removal when
-//! the device copy goes. Whether those tagged events reach the router, and at
-//! what volume, was not observable anywhere — the tree consumed them and
-//! nothing counted them — so a router discarding the tag looked identical to
-//! an engine never sending it. Counting by medium makes the tier stream a
-//! time series: `block_stored/CPU_PINNED` tracks the engine's D2H backup
-//! volume and `block_removed/GPU` its device eviction volume. The two are NOT
-//! equal — the engine also evicts device blocks that were never backed up,
-//! and counts those itself as `sglang_hicache_dropped_tokens_total` — but a
-//! `CPU_PINNED` row pinned at zero with hicache enabled points at the
-//! publisher or the subscription, not the tree.
-//!
-//! Every cell is rendered, zeros included: the zero IS the finding.
-//!
-//! Label cardinality is fixed: the medium label is folded to the values the
-//! tree can rank plus `untagged` (no `medium` field) and `unknown` (a string
-//! this build does not recognise), so a misbehaving publisher cannot mint
-//! series.
-//!
-//! WHY lost batches are counted here rather than left to the tree: ZMQ drops
-//! at the publisher's high-water mark, and since a tagged removal now clears
-//! only its own tier, losing the batch that carried a block's LAST removal
-//! leaves the worker owning that block until the next `AllBlocksCleared` or
-//! worker teardown. The tree cannot see that it happened; only the sequence
-//! numbers can.
+//! Counters for the KV-cache event stream the pump consumes.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,9 +11,7 @@ use tracing::warn;
 
 use super::tree::Tiers;
 
-/// Medium labels, in the order [`EventTally`] stores them: the wire strings
-/// the tree ranks, read off [`Tiers::WIRE_MEDIA`] so the two can never
-/// disagree, then the two folds.
+/// Medium labels, in the order [`EventTally`] stores them.
 pub const MEDIUM_LABELS: [&str; 6] = [
     Tiers::WIRE_MEDIA[0].0,
     Tiers::WIRE_MEDIA[1].0,
@@ -59,19 +27,10 @@ const _: () = assert!(
     "MEDIUM_LABELS lists every WIRE_MEDIA entry before the folds",
 );
 
-/// Cap on the distinct unrecognised `medium` strings remembered for
-/// warn-once. A publisher cannot grow router memory by inventing media; past
-/// the cap the warning simply repeats.
+/// Cap on the distinct unrecognised `medium` strings remembered for warn-once.
 const MAX_REMEMBERED_UNKNOWN_MEDIA: usize = 16;
 
 /// Which event a tally entry describes.
-///
-/// [`Self::slot`] and [`Self::label`] are exhaustive matches rather than a
-/// discriminant cast into a parallel `&[&str]` table: a cast plus a
-/// length assertion still lets an APPENDED variant compile and then panic on
-/// an out-of-range index inside the pump task, which would take the whole
-/// cache-aware path down with no restart. A new variant here is two compile
-/// errors instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventKind {
     BlockStored,
@@ -124,8 +83,6 @@ pub struct TallyRow {
     pub medium: &'static str,
     /// Events applied.
     pub events: u64,
-    /// Block hashes those events carried (0 for `all_blocks_cleared`, whose
-    /// wire type carries no hashes).
     pub blocks: u64,
 }
 
@@ -134,11 +91,9 @@ pub struct TallyRow {
 pub struct EventTally {
     events: [[AtomicU64; MEDIUM_LABELS.len()]; EventKind::ALL.len()],
     blocks: [[AtomicU64; MEDIUM_LABELS.len()]; EventKind::ALL.len()],
-    /// Batches the transport lost, inferred from gaps in the publisher's
-    /// dense sequence.
+    /// Batches the transport lost, inferred from gaps in the publisher's dense sequence.
     batches_lost: AtomicU64,
-    /// Unrecognised `medium` strings already warned about, so an engine that
-    /// adds a tier logs once per string rather than once per event.
+    /// Unrecognised `medium` strings already warned about, so an engine that adds a tier logs once per string rather than once.
     warned_unknown_media: Mutex<HashSet<String>>,
 }
 
@@ -157,8 +112,7 @@ impl EventTally {
         {
             Some(slot) => slot,
             None => {
-                // Only an unrecognised medium takes the lock, so the common
-                // path stays allocation- and lock-free.
+                // Only an unrecognised medium takes the lock, so the common path stays allocation- and lock-free.
                 self.warn_unknown_medium(m);
                 UNKNOWN
             }
@@ -168,7 +122,7 @@ impl EventTally {
     /// Log the first sighting of each unrecognised `medium`. This is the
     /// "the engine added a storage tier, upgrade the router" line: the tree
     /// drops a store tagged with one ([`Tiers::for_store`]) and would
-    /// otherwise do it in silence, and silence about a discarded tag is the
+    /// otherwise do it in silence.
     /// bug this module exists to prevent recurring.
     fn warn_unknown_medium(&self, medium: &str) {
         let mut seen = self.warned_unknown_media.lock();
@@ -193,8 +147,6 @@ impl EventTally {
         self.blocks[e][m].fetch_add(blocks as u64, Ordering::Relaxed);
     }
 
-    /// Book `count` batches the transport dropped between two applied
-    /// sequence numbers.
     pub fn record_lost_batches(&self, count: u64) {
         self.batches_lost.fetch_add(count, Ordering::Relaxed);
     }
@@ -252,8 +204,7 @@ mod tests {
         assert_eq!(cell(&rows, "block_removed", "CPU_PINNED").events, 0);
     }
 
-    /// A publisher inventing media must not grow router memory without bound;
-    /// past the cap the warning repeats instead.
+    /// A publisher inventing media must not grow router memory without bound; past the cap the warning repeats instead.
     #[test]
     fn remembered_unknown_media_are_bounded() {
         let t = EventTally::new();

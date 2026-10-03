@@ -627,13 +627,7 @@ impl crate::routers::RouterTrait for OpenAIRouter {
                         }
                     } else {
                         // Streaming response: pass the reqwest byte stream
-                        // through `BreakerTrackedStream`, which records the
-                        // circuit-breaker outcome exactly once on drop (success
-                        // on clean end, failure on stream error, neither on
-                        // client disconnect). For non-2xx responses we pre-mark
-                        // the wrapper as Errored — otherwise the small error
-                        // body would stream cleanly to `None` and Drop would
-                        // record a spurious success.
+                        // through `BreakerTrackedStream`.
                         let mut tracked = BreakerTrackedStream::new(
                             resp.bytes_stream(),
                             Arc::clone(&worker),

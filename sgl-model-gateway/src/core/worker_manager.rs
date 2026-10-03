@@ -1,6 +1,4 @@
-//! Worker Management Module
-//!
-//! Provides worker lifecycle operations and fan-out request utilities.
+//! Worker Management.
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 

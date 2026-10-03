@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Chat request validation, optional tokenization, and outgoing body preparation.
@@ -112,8 +112,7 @@ impl PreparedChatRequest {
             &self.sampling_defaults,
             engine_rid,
         )?;
-        // Book only after the outgoing body exists; a request rejected here
-        // (an f64-overflow literal re-parsed for PD bootstrap) was never dispatched.
+        // Book only after the outgoing body exists.
         ctx.metrics
             .record_input_ids_forwarding(&self.model.0, forwarding);
         if forwarding == InputIdsForwarding::TokenizeFailed {
@@ -144,7 +143,7 @@ enum SamplingValue {
     Unusable,
 }
 
-/// Cap numeric-string parsing and its stack buffer at 64 bytes.
+/// Cap numeric-string parsing and its stack buffer at many bytes.
 const MAX_SAMPLING_NUMERIC_LEN: usize = 64;
 
 /// Match engine coercion: trim ordinary numbers, but preserve whitespace for underscored ones.
@@ -413,7 +412,6 @@ fn requests_multiple_samples(
 }
 
 fn estimate_prefill_tokens(body: &Bytes) -> usize {
-    // Never 0: a zero-load entry is invisible to the cache-aware imbalance fast path.
     (body.len() / BYTES_PER_TOKEN_ESTIMATE).max(1)
 }
 
@@ -477,7 +475,7 @@ fn build_outgoing_body(
 ) -> Result<Bytes, ApiError> {
     let needs_parse = input_ids.is_some() || bootstrap.is_some();
     if !needs_parse && sampling_defaults.is_empty() && rid.is_none() {
-        // Cloning Bytes shares the original allocation when no injection is needed.
+        // Cloning Bytes shares the allocation when no injection is needed.
         return Ok(body.clone());
     }
     if !needs_parse {
@@ -517,21 +515,13 @@ fn build_outgoing_body(
 }
 
 /// Forward generated IDs only for request shapes verified against the engine.
-/// The engine uses `input_ids` verbatim, bypassing its chat-template processing.
-///
-/// Preserve caller-provided IDs. Exclude requests that may render differently
-/// with dynamo-render:
-/// - Non-leading system turns or consecutive users, which strict templates rewrite.
-/// - Historical `reasoning_content`, which may be injected into message content.
-/// - Tools and tool-call history, which the engine merges and normalizes
+/// The engine uses `input_ids` verbatim, bypassing its chat-template
+/// processing. Preserve caller-provided IDs. Exclude requests that may render
+/// differently with dynamo-render: - Non-leading system turns or consecutive
+/// users, which strict templates rewrite. - Historical `reasoning_content`,
+/// which may be injected into message content. - Tools and tool-call history,
+/// which the engine merges and normalizes
 ///   before rendering.
-/// - Non-string or missing content, which the engine flattens or blanks.
-/// - Template overrides, kwargs, reasoning controls, or task selection.
-/// - Assistant continuations, whose final turn the engine handles separately.
-///
-/// Matching model files and engine defaults are still required. Worker template
-/// overrides and default kwargs cannot be inferred from the request.
-/// `--disable-input-ids-forwarding` gates forwarding separately for such fleets.
 fn can_forward_chat_tokens(value: &Value) -> bool {
     if has_caller_input_ids(value)
         || request_has_tools(value)
@@ -565,7 +555,6 @@ fn can_forward_chat_tokens(value: &Value) -> bool {
 
 /// Whether router-rendered `input_ids` replace engine tokenization.
 ///
-/// Only chats with forwarding enabled that pass the forwarding guard are
 /// eligible; an eligible chat without chat-rendered tokens is a failed offload.
 /// Multimodal chats are reported apart from other guard exclusions.
 fn input_ids_forwarding(
@@ -1409,7 +1398,6 @@ mod tests {
     }
 
     #[test]
-    // Expected values were checked against pydantic 2.13.5 with Optional[float].
     fn numeric_strings_are_read_the_way_the_engine_reads_them() {
         #[rustfmt::skip]
         let cases: &[(&str, Option<f64>)] = &[

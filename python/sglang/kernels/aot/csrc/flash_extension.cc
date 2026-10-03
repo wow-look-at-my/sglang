@@ -1,6 +1,6 @@
-/* Copyright 2025 SGLang Team. All Rights Reserved.
+/* Copyright SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
+Licensed under the Apache License, Version.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -40,8 +40,8 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "    Tensor?  page_table,"      // (b_k, max_num_pages_per_seq)
       "    Tensor?  kv_batch_idx,"    // b
       "    Tensor?  leftpad_k,"       // b
-      "    Tensor?  rotary_cos,"      // seqlen_ro x (rotary_dim / 2)
-      "    Tensor?  rotary_sin,"      // seqlen_ro x (rotary_dim / 2)
+      "    Tensor?  rotary_cos,"
+      "    Tensor?  rotary_sin,"
       "    Tensor?  seqlens_rotary,"  // b
       "    Tensor?  q_descale,"       // (b, h_k)
       "    Tensor?  k_descale,"       // (b, h_k)
@@ -53,7 +53,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "    int      attention_chunk,"  // NEW
       "    float    softcap,"          // promoted to double in C++; schema float is fine
       "    bool     is_rotary_interleaved,"
-      "    Tensor?  scheduler_metadata,"  // (b + 1)
+      "    Tensor?  scheduler_metadata,"
       "    int      num_splits,"
       "    bool?    pack_gqa,"
       "    int      sm_margin,"

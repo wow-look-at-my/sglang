@@ -6,9 +6,6 @@ ROCM_VERSION=${1:-}
 if [[ "${ROCM_VERSION}" == "720" ]]; then
   IMAGE="rocm/pytorch:rocm7.2_ubuntu22.04_py3.10_pytorch_release_2.9.1"
 elif [[ "${ROCM_VERSION}" == "1000" ]]; then
-  # Ubuntu 24.04 / Python 3.12 / torch 2.11 matches the stack the released
-  # ROCm 10 images carry, and this image is built for every device arch, so one
-  # wheel can still cover both gfx942 and gfx950.
   IMAGE="rocm/pytorch:rocm10.0_ubuntu24.04_py3.12_pytorch_release_2.11.0"
 else
   echo "ERROR: Unsupported ROCM_VERSION='${ROCM_VERSION}'. Only '720' and '1000' are supported." >&2
@@ -18,11 +15,6 @@ fi
 PYTHON_ROOT_PATH="/opt/venv/bin"
 AMDGPU_TARGET="gfx942;gfx950"
 
-# ROCm 10.0.0 is distributed as pip packages that unpack into site-packages, so
-# the image has neither the /opt/rocm tree CMakeLists_rocm.txt looks for
-# hip-lang under nor, being a runtime image, a devel tree to compile against.
-# These are the same fixups docker/rocm.Dockerfile's rocm1000-base stage makes
-# for the released images.
 ROCM_SETUP=""
 if [[ "${ROCM_VERSION}" == "1000" ]]; then
   ROCM_SETUP=$(cat <<'ROCM1000_SETUP'
@@ -46,11 +38,6 @@ ROCM1000_SETUP
 )
 fi
 
-# ROCm 10 has no /opt/rocm-<version> directory for rename_wheels_rocm.sh to read
-# the local version tag from, so name it here instead. Keeping it in step with
-# the `--rocm` argument release-whl-kernel.yml passes to
-# scripts/update_kernel_whl_index.py is what puts the wheel in the index it
-# gets published under.
 WHEEL_ROCM_VERSION=""
 if [[ "${ROCM_VERSION}" == "1000" ]]; then
   WHEEL_ROCM_VERSION="1000"

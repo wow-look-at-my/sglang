@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod adapter;
@@ -27,10 +27,7 @@ impl ChatFormatterEntry {
         }
     }
 
-    /// Log a per-request fallback to raw prompt-text hashing. "Enabled but
-    /// failing every request" must be distinguishable from "healthy" at the
-    /// default (info) log level — otherwise cache-aware overlap silently
-    /// degrades to 0 with no signal — so the first failure for a model logs at
+    /// Log a per-request fallback to raw prompt-text hashing.
     /// warn; subsequent ones at debug to avoid a per-request log flood.
     fn log_fallback(&self, model_id: &str, cause: &str) {
         if !self.fallback_warned.swap(true, Ordering::Relaxed) {
@@ -47,8 +44,7 @@ impl ChatFormatterEntry {
 #[derive(Default)]
 pub struct TokenizerRegistry {
     inner: DashMap<String, Arc<Tokenizer>>,
-    /// Per-model chat formatter, present only when the model's prompt format is
-    /// known; models without one fall back to raw prompt-text tokenization.
+    /// Per-model chat formatter, present only when the model's prompt format is known.
     formatters: DashMap<String, Arc<ChatFormatterEntry>>,
 }
 
@@ -105,8 +101,7 @@ impl TokenizerRegistry {
 
     /// Render with dynamo-render and tokenize; return `None` when unavailable or unsuccessful.
     pub fn encode_chat(&self, model_id: &str, request: &serde_json::Value) -> Option<Vec<u32>> {
-        // Clone the Arc and drop the DashMap guard before the CPU-bound
-        // render+encode (mirrors `get`), so no shard read-lock is held across it.
+        // Clone the Arc and drop the DashMap guard before the CPU-bound render+encode (mirrors `get`).
         let entry = Arc::clone(&*self.formatters.get(model_id)?);
         let tokenizer = self.get(model_id)?;
         match entry.formatter.encode(&tokenizer, request) {
@@ -126,9 +121,7 @@ impl TokenizerRegistry {
         self.inner.iter().map(|kv| kv.key().clone()).collect()
     }
 
-    /// Attach a chat formatter to an already-loaded model. Lets policy tests in
-    /// other modules exercise the chat-aware routing path without a co-located
-    /// fixture.
+    /// Attach a chat formatter to an already-loaded model.
     #[cfg(test)]
     pub(crate) fn attach_chat_formatter_for_test(&self, model_id: &str, formatter: ChatFormatter) {
         self.formatters.insert(
@@ -137,8 +130,7 @@ impl TokenizerRegistry {
         );
     }
 
-    /// Convenience: attach a Jinja chat formatter built from an inline
-    /// `tokenizer_config.json` value.
+    /// Convenience: attach a Jinja chat formatter built from an inline `tokenizer_config.json` value.
     #[cfg(test)]
     pub(crate) fn attach_chat_template_for_test(
         &self,
@@ -221,26 +213,13 @@ mod tests {
         assert_eq!(text, "hello world");
     }
 
-    /// Forces `decode_complete` through its `DecodeResult::Partial` branch.
-    ///
-    /// The fixture is a no-merge byte-level BPE. The 4-byte UTF-8 emoji
-    /// `😀` (`\xF0\x9F\x98\x80`) encodes to its raw byte token ids:
-    /// `[240, 159, 152, 128]`. Decoding only a prefix yields leading bytes
-    /// that the HF adapter passes through `String::from_utf8_lossy`,
-    /// producing a trailing U+FFFD. dynamo's `DecodeResult::from_decoded`
-    /// then classifies that as `Partial`.
-    ///
-    /// Pinning the literal token ids keeps the test deterministic: if the
-    /// fixture shape or upstream byte-level handling ever shifts, this fails
-    /// loudly rather than silently dropping back into `Complete` and losing
-    /// coverage.
+    /// Forces `decode_complete` through its `DecodeResult::Partial` branch. The fixture is a no-merge byte-level BPE.
     #[test]
     fn decode_complete_returns_string_on_partial_utf8() {
         let r = TokenizerRegistry::load_from_config(&cfg()).unwrap();
         let t = r.get("tiny").unwrap();
 
-        // Sanity-check that the fixture still tokenises `😀` the way we
-        // expect; if upstream changes this we want a loud failure here.
+        // Sanity-check that the fixture still tokenises `😀` the way we expect.
         let full = adapter::encode(&t, "😀").unwrap();
         assert_eq!(
             full,
@@ -248,29 +227,13 @@ mod tests {
             "fixture tokenisation drift: '😀' no longer encodes to [240, 159, 152, 128]"
         );
 
-        // Feed only the first three bytes of a 4-byte UTF-8 codepoint,
-        // which is incomplete.
+        // Feed only the first a few bytes of a 4-byte UTF-8 codepoint, which is incomplete.
         let s = adapter::decode_complete(&t, &full[..3], false).unwrap();
 
-        // We pin the exact output: the lossy decoder folds the 3 leading
-        // bytes into a single U+FFFD. Anything else (empty string, Err, or
-        // the original bytes) would be a regression.
         assert_eq!(s, "\u{FFFD}");
     }
 
-    /// Concurrent encode against one shared `Arc<Tokenizer>`. Pins that the
-    /// registry's `Arc<Tokenizer>` is `Send + Sync` and that
-    /// `dynamo_tokenizers::Tokenizer::encode` can be called concurrently
-    /// without interior mutability hazards. A regression that wraps
-    /// `Tokenizer` in `RefCell` / `!Sync` data would fail to compile;
-    /// a regression that introduces non-thread-safe internal caches
-    /// would surface as one of the tasks returning wrong ids (caught by
-    /// the per-task assertion against the sequentially-computed
-    /// reference).
-    ///
-    /// Uses a multi-thread runtime + `JoinSet` so the 10 tasks really do
-    /// run in parallel on distinct worker threads — a single-thread
-    /// runtime wouldn't exercise the `Sync` contract.
+    /// Concurrent encode against one shared `Arc<Tokenizer>`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn tokenizer_supports_concurrent_encode() {
         use tokio::task::JoinSet;
@@ -396,9 +359,7 @@ mod tests {
             .is_none());
     }
 
-    /// `encode_chat` renders the template then tokenizes the result — and that
-    /// token sequence differs from tokenizing the raw message content (the very
-    /// reason raw-content hashing missed the engine's chat-templated blocks).
+    /// `encode_chat` renders the template then tokenizes the result — and that token sequence differs from tokenizing the raw message content.
     #[test]
     fn encode_chat_renders_then_tokenizes() {
         let reg = TokenizerRegistry::default();
@@ -472,9 +433,7 @@ mod tests {
         assert!(reg.encode_chat("tiny", &request).is_none());
     }
 
-    /// A template that fails to render (here, one that calls `raise_exception`)
-    /// makes `encode_chat` return `None`, so the policy falls back to the raw
-    /// prompt-text path rather than failing the request.
+    /// A template that fails to render (here, one that calls `raise_exception`) makes `encode_chat` return `None`.
     #[test]
     fn encode_chat_none_on_render_failure() {
         let reg = TokenizerRegistry::default();

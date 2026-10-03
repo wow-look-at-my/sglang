@@ -14,9 +14,7 @@ env:
   IMAGE_TAG: experimental-router-dev
 
 jobs:
-  # Build each arch natively (no QEMU emulation) and push the image by digest.
-  # The manifest job then stitches the per-arch digests into one multi-arch
-  # tag, so `docker pull` resolves the right arch automatically.
+  # Build each arch natively (no QEMU emulation) and push the image by digest. The manifest job then stitches the per-arch digests into one multi-arch tag, so `docker pull` resolves the right arch automatically.
   build:
     if: github.repository == 'sgl-project/sglang'
     strategy:

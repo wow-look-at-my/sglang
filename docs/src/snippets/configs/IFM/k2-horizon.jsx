@@ -1,9 +1,7 @@
 // Single `export const config` literal — Mintlify re-evaluates this module at
 // hydration time, so keep the cookbook data self-contained.
 //
-// The serving settings in the six base recipes below were benchmarked with the
-// K2 Horizon runtime support in sgl-project/sglang#37654 and the pinned model
-// revisions. Playground overrides remain separate from the verified commands.
+// Playground overrides remain separate from the verified commands.
 
 export const config = {
   modelName: "K2 Horizon",
@@ -82,8 +80,7 @@ sgl-eval run gsm8k \\
     ["gsm8k_pct", "GSM8K", "%"],
   ],
 
-  // The page covers a family, so use the largest checkpoint as the canonical
-  // issue-form model while each recipe still resolves its exact HF repository.
+  // The page covers a family.
   github: {
     cookbookModel: "IFM/K2-Horizon-375B-A23B",
   },

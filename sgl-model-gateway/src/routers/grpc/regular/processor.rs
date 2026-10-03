@@ -1,7 +1,4 @@
-//! Shared response processing logic for gRPC routers
-//!
-//! This module contains response processing functions that are shared between
-//! the regular router and PD router.
+//! Shared response processing logic.
 
 use std::{sync::Arc, time::Instant};
 
@@ -94,7 +91,6 @@ impl ResponseProcessor {
             final_text.push_str(&t);
         }
 
-        // Step 1: Handle reasoning content parsing
         let mut reasoning_text: Option<String> = None;
         let mut processed_text = final_text;
 
@@ -119,7 +115,6 @@ impl ResponseProcessor {
             }
         }
 
-        // Step 2: Handle tool call parsing
         let mut tool_calls: Option<Vec<ToolCall>> = None;
         let tool_choice_enabled = !matches!(
             &original_request.tool_choice,
@@ -153,7 +148,6 @@ impl ResponseProcessor {
             }
         }
 
-        // Step 3: Use finish reason directly from proto (already OpenAI-compatible string)
         let finish_reason_str = complete.finish_reason();
 
         // Override finish reason if we have tool calls
@@ -172,7 +166,6 @@ impl ResponseProcessor {
             None => None,
         };
 
-        // Step 4: Convert output logprobs if present
         let logprobs = if let Some(proto_logprobs) = complete.output_logprobs() {
             match utils::convert_proto_to_openai_logprobs(proto_logprobs, tokenizer) {
                 Ok(logprobs) => Some(logprobs),
@@ -185,7 +178,6 @@ impl ResponseProcessor {
             None
         };
 
-        // Step 5: Build ChatCompletionMessage (proper response message type)
         let chat_message = ChatCompletionMessage {
             role: "assistant".to_string(),
             content: if processed_text.is_empty() {
@@ -197,7 +189,6 @@ impl ResponseProcessor {
             reasoning_content: reasoning_text,
         };
 
-        // Step 6: Build ChatChoice
         Ok(ChatChoice {
             index: index as u32,
             message: chat_message,
@@ -318,7 +309,6 @@ impl ResponseProcessor {
         let result = {
             let parser = pooled_parser.lock().await;
             parser.parse_complete(processed_text).await
-            // Lock is dropped here
         };
 
         match result {

@@ -1,14 +1,8 @@
 # `sglang.kernels.ops.diffusion`
 
-Fused kernels for diffusion (multimodal-generation) models — DiT transformer
-blocks, VAE encoders/decoders, and the sequence-parallel plumbing around them.
+Fused kernels for diffusion (multimodal-generation) models — DiT transformer blocks, VAE encoders/decoders, and the sequence-parallel plumbing around them.
 
-Unlike the LLM operator groups, almost nothing here is a general-purpose
-operator. Each kernel replaces a **specific eager op chain in a specific
-model**, and its value comes as much from *which rounding boundaries it
-reproduces* as from its bandwidth. Multi-step denoising amplifies a per-step
-rounding difference into visible quality loss, so "close enough" is a
-different product from "bit-exact", and the two are gated differently.
+Unlike the LLM operator groups, almost nothing here is a general-purpose operator. Each kernel replaces a **specific eager op chain in a specific model**, and its value comes as much from *which rounding boundaries it reproduces*. This is as from its bandwidth. Multi-step denoising amplifies a per-step rounding difference into visible quality loss, so "close enough" is a different product from "bit-exact". The two are gated differently.
 
 ## Import surface
 
@@ -16,21 +10,13 @@ different product from "bit-exact", and the two are gated differently.
 from sglang.kernels.ops.diffusion import fused_rmsnorm_scale_shift_bitexact
 ```
 
-**Import from the package, never from a submodule.** The internal layout is
-free to move; the facade is not. Callers should use the facade, with
-a small allowlist for tests that deliberately exercise one backend.
+**Import from the package, not from a submodule.** The internal layout is free to move. The facade is not. Callers must use the facade, with a small allowlist for tests that deliberately exercise one backend.
 
-Resolution is lazy (PEP 562): the backends have disjoint heavy dependencies
-(Triton, CUTLASS/CuTe-DSL, and FlyDSL on ROCm), so an eager
-re-export would make all of them import-time requirements everywhere.
+Resolution is lazy (PEP 562): the backends have disjoint heavy dependencies (Triton, CUTLASS/CuTe-DSL, and FlyDSL on ROCm), so an eager re-export will make all of them import-time requirements everywhere.
 
 ## Layout
 
-Ordinary implementations use one subpackage per **operator domain**; the
-compiler is a **filename suffix** (`_triton`, `_jit`, `_cutedsl`, `_flydsl`, or
-`_bitexact` where that says more). Implementations with Kernel Design Agents
-provenance live under `sglang.kernels.kda_kernels`; this facade remains their
-only supported runtime import surface.
+Ordinary implementations use one subpackage per **operator domain**. The compiler is a **filename suffix** (`_triton`, `_jit`, `_cutedsl`, `_flydsl`, or `_bitexact` where that says more). Implementations with Kernel Design Agents provenance live under `sglang.kernels.kda_kernels`. This facade remains their only supported runtime import surface.
 
 ```
 norm/        RMSNorm / LayerNorm / GroupNorm and their fused epilogues
@@ -49,34 +35,13 @@ ext/         JIT C++/CUDA extensions (Hunyuan3D raster/inpaint) — NOT kernels
 
 ## Numerical contracts and quality policy
 
-**Bit-exact (`torch.equal` vs the eager chain) → mounted unconditionally.**
-These kernels reproduce every aten rounding boundary, sometimes down to the
-reduction tree: `../../kda_kernels/layernorm_modulate_triton.py` replicates torch 2.11's
-`vectorized_layer_norm_kernel` (128-thread Welford, `_rcp4` guarded
-reciprocal, `shfl.down` fold order, `div.rn` + `MUFU.RSQ`), and
-`norm/rmsnorm_scale_shift_bitexact.py` replicates flashinfer's CuTe-DSL
-`RMSNormKernel` fragment order and `shfl.bfly` fold. They still verify
-themselves against the live eager chain on first sight via
-`sites/bitexact_gate.py` and fall back permanently on mismatch — the
-dispatch they replicate can change under them.
+**Bit-exact (`torch.equal` vs the eager chain) → mounted unconditionally.** These kernels reproduce every aten rounding boundary, sometimes down to the reduction tree: `../../kda_kernels/layernorm_modulate_triton.py` replicates torch 2.11's `vectorized_layer_norm_kernel` (128-thread Welford, `_rcp4` guarded reciprocal, `shfl.down` fold order, `div.rn` + `MUFU.RSQ`). `norm/rmsnorm_scale_shift_bitexact.py` replicates flashinfer's CuTe-DSL `RMSNormKernel` fragment order and `shfl.bfly` fold. They still verify themselves against the live eager chain on first sight via `sites/bitexact_gate.py` and fall back permanently on mismatch. The dispatch they replicate can change under them.
 
-**Not bit-exact → quality-gated.** Mounted onto marked `nn.Module` sites only
-for `quality="extra-high"` and `quality="high"` requests, at batch boundaries,
-all-or-nothing per transformer (`sites/quality_gate.py`). `extra-high` adds
-only these request-gated DiT/VAE fusions; `high` is cumulative and may also
-enable model-owned approximate paths such as Cache-DiT or a lower-precision
-decode. A plain fp32 single-pass norm fusion looks harmless and is not: on
-ERNIE-Image it moved the 50-step trajectory to PSNR 18.83 dB, which is what
-motivated the bit-exact rewrite.
+**Not bit-exact → quality-gated.** Mounted onto marked `nn.Module` sites only for `quality="extra-high"` and `quality="high"` requests, at batch boundaries, all-or-nothing per transformer (`sites/quality_gate.py`). `extra-high` adds only these request-gated DiT/VAE fusions. `high` is cumulative and may also enable model-owned approximate paths such as Cache-DiT or a lower-precision decode. A plain fp32 single-pass norm fusion looks harmless and is not. On ERNIE-Image it moved the 50-step trajectory to PSNR 18.83 dB, which is what motivated the bit-exact rewrite.
 
-**Model/checkpoint-native.** Generic close-contract kernels, sparse operators,
-and FP8/NVFP4 producers can belong to the selected model or deployment path.
-The request `quality` tier neither selects nor disables those independent
-choices.
+**Model/checkpoint-native.** Generic close-contract kernels, sparse operators, and FP8/NVFP4 producers can belong to the selected model or deployment path. The request `quality` tier neither selects nor disables those independent choices.
 
-SANA-Video's quality-gated linear-attention site keeps BF16 inputs for the
-first GEMM while requesting FP32 accumulation/output, then runs the second
-GEMM in FP32. The default path still promotes Q/K/V before both GEMMs.
+SANA-Video's quality-gated linear-attention site keeps BF16 inputs for the first GEMM while requesting FP32 accumulation/output. This is then runs the second GEMM in FP32. The default path still promotes Q/K/V before both GEMMs.
 
 ## Entry-point protocol
 
@@ -89,9 +54,7 @@ else:
     out = <reference chain>
 ```
 
-The kernel raises on an unsupported input. It does not return `None` — a
-silent `None` is too easy to forget to check, and the failure mode is a
-wrong-looking image rather than an exception.
+The kernel raises on an unsupported input. It does not return `None` — a silent `None` is too easy to forget to check. The failure mode is a wrong-looking image rather than an exception.
 
 ## Selection matrix
 
@@ -129,11 +92,7 @@ Several norms look interchangeable and are not. Start here.
 |---|---|---|---|
 | `residual_gate_add` | KDA (JIT CUDA) | bit-exact `residual + update * gate` | contiguous tensors, or a transposed-dense `[B, tokens, hidden]` residual/output with contiguous update and row-broadcast gate (SANA-Video) |
 
-The transposed-dense path uses a shared-memory tile to read the update in
-logical row-major order while keeping residual reads and output writes
-coalesced in their `[B, hidden, tokens]` backing layout. Do not insert a
-`.contiguous()` merely to reach the ordinary path; that restores an entire
-tensor copy per residual site.
+The transposed-dense path uses a shared-memory tile to read the update in logical row-major order while keeping residual reads. Output writes coalesced in their `[B, hidden, tokens]` backing layout. Do not insert a `.contiguous()` merely to reach the ordinary path. That restores an entire tensor copy per residual site.
 
 ### RoPE / QK-norm
 
@@ -178,49 +137,21 @@ tensor copy per residual site.
 
 ### Data movement and quantized layout producers
 
-`usp_merge_heads`, `pack_qkv_destination_major`, `fused_pack_qkv`,
-`fused_pack_segmented_qkv`, `fused_scatter_to_padded`,
-`fused_causal_conv3d_cat_pad_cuda`,
-`cat_pad_channels_last_3d`, `dup_up3d_add`, `nearest_upsample_nhwc`,
-`fused_temb_table_slices`,
-and `ltx2_ada_values9` are bit-exact data movement or same-order arithmetic.
-`fused_layernorm_modulate_fp8_quant_raw` folds FLUX.2 LayerNorm, adaLN
-modulation, and static FP8 quantization. `try_flux2_token_cat_fp8` and
-`try_flux2_token_cat_nvfp4` fuse branch concatenation directly into the
-quantized representation selected by the FLUX.2 checkpoint path.
+`usp_merge_heads`, `pack_qkv_destination_major`, `fused_pack_qkv`, `fused_pack_segmented_qkv`, `fused_scatter_to_padded`, `fused_causal_conv3d_cat_pad_cuda`, `cat_pad_channels_last_3d`, `dup_up3d_add`, `nearest_upsample_nhwc`, `fused_temb_table_slices`, and `ltx2_ada_values9` are bit-exact data movement or same-order arithmetic. `fused_layernorm_modulate_fp8_quant_raw` folds FLUX.2 LayerNorm, adaLN modulation, and static FP8 quantization. `try_flux2_token_cat_fp8` and `try_flux2_token_cat_nvfp4` fuse branch concatenation directly into the quantized representation selected by the FLUX.2 checkpoint path.
 
-`nearest_upsample_nhwc` replaces `nn.Upsample(nearest / nearest-exact,
-integer factor)` on a dense channels_last input with a Triton gather: same
-values and layout as aten, but aten's own NHWC nearest kernel is several times
-slower than its NCHW sibling, which is what the Wan-family VAE decoders hit
-once they run channels_last end-to-end.
+`nearest_upsample_nhwc` replaces `nn.Upsample(nearest / nearest-exact, integer factor)` on a dense channels_last input with a Triton gather: same values and layout as aten, but aten's own NHWC. Nearest kernel is several times slower than its NCHW sibling. This is what the Wan-family VAE decoders hit once they run channels_last end-to-end.
 
-`fused_temb_table_slices` is worth knowing about: the eager
-`(table + temb.float()).chunk(6, dim=2)` materializes ~8 GB of fp32 at
-704p/121f *and* hands six strided slices downstream, whose `.contiguous()`
-calls copy each one again.
+`fused_temb_table_slices` is worth knowing about: the eager `(table + temb.float()).chunk(6, dim=2)` materializes ~8 GB of fp32 at 704p/121f. The eager `(table + temb.float()).chunk(6, dim=2) hands six strided slices downstream, whose `.contiguous()` calls copy each one again.
 
 ## What is not a kernel
 
-`sites/` rewrites `nn.Module` trees (mark / mount / unmount) and `ext/` builds
-C++/CUDA extensions that have no backend dimension and no numerical contract.
-They live here because they are diffusion-specific and share this package's
-build machinery, but they are deliberately in their own directories: nothing
-in `sites/` or `ext/` belongs in an operator domain, and `sites/` is the one
-place allowed to reference `multimodal_gen` types (lazily, inside functions) —
-inspecting model modules is its whole job.
+`sites/` rewrites `nn.Module` trees (mark / mount / unmount) and `ext/` builds C++/CUDA extensions that have no backend dimension and no numerical contract. They live here because they are diffusion-specific and share this package's build machinery. However, they are deliberately in their own directories: nothing in `sites/` or `ext/` belongs in an operator domain. `sites/` is the one place allowed to reference `multimodal_gen` types (lazily, inside functions). Inspecting model modules is its whole job.
 
 ## Adding a kernel
 
-1. Put ordinary implementations in their operator domain. Put a kernel
-   generated by the KDA workflow in `sglang.kernels.kda_kernels`, together
-   with its source revision and any JIT CUDA source files.
-2. Export it from `__init__.py` (`_EXPORTS`) and register a `KernelSpec`
-   (`_SPECS`).
-3. Give it a `can_use_*` predicate; raise, don't return `None`.
-4. State the numerical contract in the module docstring, including which
-   shapes it was verified on.
-5. If it is not bit-exact, gate it through `sites/`. It must mount for both
-   `extra-high` and `high`, never for the default `lossless` path.
-6. Test it in the domain suite (`test/registered/kernels/ops/diffusion/`), and
-   the model wiring in `test_model_fast_paths.py`.
+1. Put ordinary implementations in their operator domain. Put a kernel generated by the KDA workflow in `sglang.kernels.kda_kernels`, together with its source revision and any JIT CUDA source files.
+2. Export it from `__init__.py` (`_EXPORTS`) and register a `KernelSpec` (`_SPECS`).
+3. Give it a `can_use_*` predicate. Raise, do not return `None`.
+4. State the numerical contract in the module docstring, including which shapes it was verified on.
+5. If it is not bit-exact, gate it through `sites/`. It must mount for both `extra-high` and `high`, not for the default `lossless` path.
+6. Test it in the domain suite (`test/registered/kernels/ops/diffusion/`), and the model wiring in `test_model_fast_paths.py`.

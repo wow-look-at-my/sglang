@@ -98,10 +98,6 @@ sgl-eval run gsm8k \\
         {
           id: "dspark",
           label: "DSPARK (draft model)",
-          // --linear-replayssm-cache-len 32: the draft's block size 8 makes the
-          // verify window 9 tokens, and the KDA ReplaySSM ring must be a power
-          // of two >= 2x the window — the 16 default is too small and the
-          // server refuses to start.
           flags: [
             "--speculative-algorithm DSPARK",
             "--speculative-draft-model-path inclusionAI/Ling-3.0-flash-dspark",
@@ -170,9 +166,6 @@ sgl-eval run gsm8k \\
     { id: "nodes", title: "Nodes", options: [{ id: "single", label: "Single Node" }] },
   ],
 
-  // DSPARK twins of the low-latency cells: same shape, NEXTN swapped for the
-  // external-draft path. --linear-replayssm-cache-len 32 because the draft's
-  // block size 8 needs a power-of-two ring >= 2x the 9-token verify window.
   // Everything lives inside this IIFE because Mintlify's snippet compiler only
   // evaluates the exported expression — top-level module code is dropped.
   cells: (() => {
@@ -188,8 +181,7 @@ sgl-eval run gsm8k \\
       match: { ...cell.match, spec: "dspark" },
       flags: cell.flags.flatMap((f) => (f === "--speculative-algorithm NEXTN" ? DSPARK_FLAGS : [f])),
     });
-    // hw|quant pairs with a measured full-GSM8K DSPARK run; see the mdx
-    // DSPARK tip for scores and stop rates.
+    // hw|quant pairs with a measured full-GSM8K DSPARK run; see the mdx DSPARK tip for scores and stop rates.
     const DSPARK_VERIFIED = new Set(["b200|bf16", "h200|bf16", "h200|fp8"]);
     const lowLatencyCells = [
     {

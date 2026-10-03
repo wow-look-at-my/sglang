@@ -1,10 +1,4 @@
-//! Python-`int(...)`-tolerant integer deserialization: accepts a JSON number
-//! or a numeric string (surrounding whitespace ok), so wire fields the Python
-//! side coerces with `int(data[...])` stay as tolerant here as the original.
-//! Field types remain plain integers — apply per field with
-//! `#[serde(deserialize_with = "parse_int")]`; generic over any
-//! `FromStr + Deserialize` integer width. The `_opt` / `_vec` variants exist
-//! because serde's `deserialize_with` does not compose through containers.
+//! Python-`int(...)`-tolerant integer deserialization: accepts a JSON number or a numeric string (surrounding whitespace ok).
 
 use serde::{Deserialize, Deserializer};
 
@@ -62,7 +56,7 @@ where
 mod tests {
     use super::*;
 
-    /// One struct exercising all three container shapes and two widths.
+    /// One struct exercising all container shapes and widths.
     #[derive(Deserialize)]
     struct Probe {
         #[serde(deserialize_with = "parse_int")]
@@ -75,10 +69,7 @@ mod tests {
         vec: Vec<i64>,
     }
 
-    /// Python `int(...)` parity across scalar/Option/Vec and integer widths:
-    /// numbers and (whitespace-padded) numeric strings both parse; a missing
-    /// optional defaults. Guards the wire tolerance for every consumer, not
-    /// just the one field the pd_bootstrap HTTP contract test pins.
+    /// Python `int(...)` parity across scalar/Option/Vec and integer widths.
     #[test]
     fn accepts_numbers_and_numeric_strings() {
         let p: Probe = serde_json::from_value(serde_json::json!({
@@ -99,8 +90,7 @@ mod tests {
         assert_eq!(p.opt, None, "missing optional defaults to None");
     }
 
-    /// Non-numeric strings and out-of-range values are errors, not silent
-    /// defaults — the tolerance is exactly `int(...)`-wide, no wider.
+    /// Non-numeric strings and out-of-range values are errors, not silent defaults — the tolerance is exactly `int(...)`-wide.
     #[test]
     fn rejects_non_numeric_and_out_of_range() {
         for body in [

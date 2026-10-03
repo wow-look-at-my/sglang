@@ -41,7 +41,6 @@ pub struct RouterConfig {
     pub pool_max_idle_per_host: usize,
     #[serde(default = "default_tcp_keepalive_secs")]
     pub tcp_keepalive_secs: u64,
-    /// Set to -1 to disable rate limiting
     pub max_concurrent_requests: i32,
     pub queue_size: usize,
     pub queue_timeout_secs: u64,
@@ -50,7 +49,7 @@ pub struct RouterConfig {
     pub cors_allowed_origins: Vec<String>,
     pub retry: RetryConfig,
     pub circuit_breaker: CircuitBreakerConfig,
-    /// When true, overrides retry.max_retries to 1
+    /// When true, overrides retry.max_retries to
     #[serde(default)]
     pub disable_retries: bool,
     /// When true, overrides circuit_breaker.failure_threshold to u32::MAX
@@ -281,16 +280,12 @@ pub enum PolicyConfig {
     },
 
     /// Manual routing policy with sticky sessions using DashMap.
-    /// - X-SMG-Routing-Key: Routes to a cached worker or assigns a new one
-    /// - Provides true sticky sessions with zero key redistribution on worker add
-    /// - Falls back to random selection if no routing key is provided
-    /// - Supports LRU eviction when cache size exceeds max_entries
     #[serde(rename = "manual")]
     Manual {
-        /// Interval between TTL eviction cycles (seconds, default: 60)
+        /// Interval between TTL eviction cycles (seconds, default:)
         #[serde(default = "default_manual_eviction_interval_secs")]
         eviction_interval_secs: u64,
-        /// Maximum idle time before eviction (seconds, default: 14400 = 4 hours)
+        /// Maximum idle time before eviction (seconds, default: = 4 hours)
         #[serde(default = "default_manual_max_idle_secs")]
         max_idle_secs: u64,
         /// Assignment mode for new routing keys (default: random)
@@ -298,25 +293,17 @@ pub enum PolicyConfig {
         assignment_mode: ManualAssignmentMode,
     },
 
-    /// Consistent hashing policy using hash ring for session affinity:
-    /// - X-SMG-Target-Worker: Direct routing to a specific worker by URL
-    /// - X-SMG-Routing-Key: Consistent hash routing for session affinity
-    /// - Provides O(log n) lookup with minimal redistribution (~1/N keys) on topology change
+    /// Consistent hashing policy using hash ring for session affinity: - X-SMG-Target-Worker: Direct routing to a specific worker by URL.
     #[serde(rename = "consistent_hashing")]
     ConsistentHashing,
 
-    /// Prefix hash policy for KV cache-aware load balancing.
-    /// A lightweight alternative to cache_aware radix tree.
-    /// Routes requests based on prefix token hash for cache locality.
-    /// - Uses consistent hash ring with bounded load balancing
-    /// - Walks ring if worker is overloaded (load > avg * load_factor)
-    /// - O(log n) lookup instead of O(prefix_len) radix tree traversal
+    /// Prefix hash policy for KV cache-aware load balancing. A lightweight alternative to cache_aware radix tree.
     #[serde(rename = "prefix_hash")]
     PrefixHash {
-        /// Number of prefix tokens to hash (default: 256)
+        /// Number of prefix tokens to hash (default:)
         #[serde(default = "default_prefix_token_count")]
         prefix_token_count: usize,
-        /// Load factor threshold - walk ring if load > avg * factor (default: 1.25)
+        /// Load factor threshold - walk ring if load > avg * factor (default:.)
         #[serde(default = "default_load_factor")]
         load_factor: f64,
     },
@@ -404,7 +391,7 @@ pub struct RetryConfig {
     pub initial_backoff_ms: u64,
     pub max_backoff_ms: u64,
     pub backoff_multiplier: f32,
-    /// D' = D * (1 + U[-j, +j]) where j is jitter factor
+    /// D' = D * ( + U[-j, +j]) where j is jitter factor
     #[serde(default = "default_retry_jitter_factor")]
     pub jitter_factor: f32,
 }
@@ -510,8 +497,8 @@ impl Default for RouterConfig {
             host: "0.0.0.0".to_string(),
             port: 3001,
             max_payload_size: 536_870_912,     // 512MB
-            request_timeout_secs: 1800,        // 30 minutes
-            worker_startup_timeout_secs: 1800, // 30 minutes for large model loading
+            request_timeout_secs: 1800,        // Many
+            worker_startup_timeout_secs: 1800, // Many minutes for large model
             worker_startup_check_interval_secs: 30,
             dp_aware: false,
             api_key: None,

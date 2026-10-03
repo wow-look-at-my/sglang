@@ -4,7 +4,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 
-const BACKLOG: i32 = 2048; // matches uvicorn's default (asyncio's own is 100)
+const BACKLOG: i32 = 2048;
 const RECV_BUF_SIZE: usize = 16 * 1024 * 1024;
 
 /// Bind and tune the API listener, returning it ready for

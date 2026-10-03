@@ -1,12 +1,4 @@
-//! Postprocessing FFI functions for gRPC stream chunks
-//!
-//! This module provides C-compatible functions for postprocessing gRPC stream chunks:
-//! - Parse tool calls from model output
-//! - Convert proto format to OpenAI format
-//! - Handle reasoning content parsing
-//!
-//! These functions are designed to be called for each stream chunk, but can be optimized
-//! with batching in the future.
+//! Postprocessing FFI functions.
 
 use serde_json::Value;
 use std::ffi::{CStr, CString};
@@ -26,26 +18,7 @@ use tokio::runtime::Runtime;
 static RUNTIME: Lazy<Runtime> =
     Lazy::new(|| Runtime::new().expect("Failed to create tokio runtime for postprocessor FFI"));
 
-/// Postprocess a gRPC stream chunk to OpenAI format
-///
-/// This function:
-/// 1. Parses the proto chunk from JSON
-/// 2. Converts it to OpenAI format using the converter handle
-/// 3. Returns the OpenAI format JSON
-///
-/// # Arguments
-/// * `converter_handle` - Converter handle (created with sgl_grpc_response_converter_create)
-/// * `proto_chunk_json` - JSON string of proto.GenerateResponse
-/// * `openai_json_out` - Pointer to receive OpenAI format JSON (must be freed with sgl_free_string)
-/// * `is_done_out` - Pointer to receive is_done flag (1 if stream is complete, 0 otherwise)
-/// * `error_out` - Optional pointer to receive error message
-///
-/// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `converter_handle` must be live; `proto_chunk_json` must be NUL-terminated
-/// UTF-8; the out pointers must be null or writable.
+/// Postprocess a gRPC stream chunk to OpenAI format This function:. Parses the proto chunk from JSON.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_postprocess_stream_chunk(
     converter_handle: *mut GrpcResponseConverterHandle,
@@ -224,25 +197,7 @@ pub unsafe extern "C" fn sgl_postprocess_stream_chunk(
     }
 }
 
-/// Postprocess multiple gRPC stream chunks in batch (reduces FFI overhead)
-///
-/// This function processes multiple chunks in a single FFI call, significantly reducing
-/// FFI overhead in streaming scenarios.
-///
-/// # Arguments
-/// * `converter_handle` - Converter handle (created with sgl_grpc_response_converter_create)
-/// * `proto_chunks_json_array` - JSON array string of proto.GenerateResponse chunks
-/// * `max_chunks` - Maximum number of chunks to process (for safety)
-/// * `openai_chunks_json_array_out` - Pointer to receive JSON array of OpenAI format chunks (must be freed with sgl_free_string)
-/// * `chunks_count_out` - Pointer to receive number of processed chunks
-/// * `error_out` - Optional pointer to receive error message
-///
-/// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `converter_handle` must be live; `proto_chunks_json_array` must be
-/// NUL-terminated UTF-8; the out pointers must be null or writable.
+/// Postprocess multiple gRPC stream chunks in batch (reduces FFI overhead) This function processes multiple chunks in a single FFI call.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_postprocess_stream_chunks_batch(
     converter_handle: *mut GrpcResponseConverterHandle,
@@ -433,7 +388,6 @@ pub unsafe extern "C" fn sgl_postprocess_stream_chunks_batch(
                 results.push(openai_response);
             }
             Ok(None) => {
-                // Empty response, skip
             }
             Err(e) => {
                 error_msg = format!("Postprocessing failed for chunk: {}", e);

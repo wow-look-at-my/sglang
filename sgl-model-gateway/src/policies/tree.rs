@@ -14,12 +14,6 @@ use tracing::debug;
 type NodeRef = Arc<Node>;
 
 /// Shard counts for DashMaps to balance concurrency vs allocation overhead.
-/// Default DashMap uses num_cpus * 4 shards (e.g., 256 on 64-core machines).
-///
-/// Root node uses higher shard count since ALL requests pass through it.
-/// Other nodes use lower count as traffic diverges through the tree.
-///
-/// This reduces memory by ~90% vs default while maintaining good concurrency.
 const ROOT_SHARD_COUNT: usize = 32;
 const NODE_SHARD_COUNT: usize = 8;
 
@@ -35,8 +29,7 @@ fn new_tenant_map() -> DashMap<TenantId, u64> {
     DashMap::with_shard_amount(NODE_SHARD_COUNT)
 }
 
-/// Interned tenant ID to avoid repeated string allocations.
-/// Using Arc<str> allows cheap cloning and comparison.
+/// Interned tenant ID to avoid repeated string allocations. Using Arc<str> allows cheap cloning and comparison.
 pub type TenantId = Arc<str>;
 
 /// Result of a prefix match operation, including char counts to avoid recomputation.
@@ -51,7 +44,6 @@ pub struct PrefixMatchResult {
 }
 
 /// A fast identity hasher for single-character keys (used in children DashMap).
-/// Since chars have good distribution already, we use identity hashing with mixing.
 #[derive(Default)]
 struct CharHasher(u64);
 
@@ -85,9 +77,7 @@ impl Hasher for CharHasher {
 
 type CharHasherBuilder = BuildHasherDefault<CharHasher>;
 
-/// Advance a string slice by N characters, returning the remaining slice.
-/// Returns empty string if n >= char count.
-/// Optimized: uses direct byte slicing for ASCII, falls back to char_indices for UTF-8.
+/// Advance a string slice by N characters, returning the remaining slice. Returns empty string if n >= char count.
 #[inline]
 fn advance_by_chars(s: &str, n: usize) -> &str {
     if n == 0 {
@@ -99,7 +89,6 @@ fn advance_by_chars(s: &str, n: usize) -> &str {
     // Fast path: if first N bytes are all ASCII, we can slice directly
     let bytes = s.as_bytes();
     if bytes[..n].is_ascii() {
-        // Safe: we verified all bytes in [0..n] are ASCII (valid UTF-8 boundary)
         return &s[n..];
     }
     // Slow path: UTF-8 requires char-by-char traversal
@@ -110,7 +99,6 @@ fn advance_by_chars(s: &str, n: usize) -> &str {
 }
 
 /// Get the first N characters of a string as a new String.
-/// More efficient than chars().take(n).collect() for known bounds.
 #[inline]
 fn take_chars(s: &str, n: usize) -> String {
     if n == 0 {
@@ -162,7 +150,6 @@ impl NodeText {
     }
 
     /// Split the text at a character boundary, returning the prefix and suffix.
-    /// This is more efficient than slice_by_chars as it computes both at once.
     #[inline]
     fn split_at_char(&self, char_idx: usize) -> (NodeText, NodeText) {
         if char_idx == 0 {
@@ -206,21 +193,10 @@ impl Clone for NodeText {
     }
 }
 
-/// Global epoch counter for LRU ordering.
-/// Uses a simple incrementing counter instead of wall clock time.
-///
-/// Benefits:
-/// - No syscall overhead (vs SystemTime::now())
-/// - Smaller memory footprint (u64 vs u128)
-/// - Perfectly monotonic (no clock skew issues)
-///
-/// For LRU eviction, relative ordering is all that matters.
+/// Global epoch counter for LRU ordering. Uses a simple incrementing counter instead of wall clock time.
 static EPOCH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Get the next epoch value for LRU timestamp ordering.
-/// Uses fetch_add for lock-free, monotonically increasing values.
-/// Relaxed ordering is sufficient since we only need eventual consistency
-/// for approximate LRU behavior.
+/// Get the next epoch value for LRU timestamp ordering. Uses fetch_add for lock-free, monotonically increasing values.
 #[inline]
 fn get_epoch() -> u64 {
     EPOCH_COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -228,8 +204,7 @@ fn get_epoch() -> u64 {
 
 #[derive(Debug)]
 struct Node {
-    /// Children nodes indexed by first character.
-    /// Using custom hasher optimized for char keys.
+    /// Children nodes indexed by first character. Using custom hasher optimized for char keys.
     children: DashMap<char, NodeRef, CharHasherBuilder>,
     /// Node text with cached character count
     text: RwLock<NodeText>,
@@ -238,7 +213,6 @@ struct Node {
     /// Parent pointer for upward traversal during timestamp updates
     parent: RwLock<Option<NodeRef>>,
     /// Cached last-accessed tenant for O(1) lookup during prefix match.
-    /// Avoids O(shards) DashMap iteration in the common case.
     last_tenant: parking_lot::RwLock<Option<TenantId>>,
 }
 
@@ -278,13 +252,9 @@ impl PartialEq for EvictionEntry {
     }
 }
 
-// For char operations
-// Note that in rust, `.len()` or slice is operated on the "byte" level. It causes issues for UTF-8 characters because one character might use multiple bytes.
-// https://en.wikipedia.org/wiki/UTF-8
+// For char operations in rust, `.len()` or slice is operated on the "byte" level.
 
-/// Count matching prefix characters between two strings.
-/// Returns the number of characters that match from the start.
-/// Optimized: uses fast byte comparison for ASCII, falls back to char iteration for UTF-8.
+/// Count matching prefix characters between strings. Returns the number of characters that match from the start.
 #[inline]
 fn shared_prefix_count(a: &str, b: &str) -> usize {
     let a_bytes = a.as_bytes();
@@ -328,19 +298,9 @@ impl Default for Tree {
 }
 
 impl Tree {
-    /*
-    Thread-safe multi tenant radix tree
-
-    1. Storing data for multiple tenants (the overlap of multiple radix tree)
-    2. Node-level lock to enable concurrent access on nodes
-    3. Leaf LRU eviction based on tenant access time
-
-    Optimizations:
-    - Cached character counts in NodeText to avoid O(n) chars().count() calls
-    - Interned tenant IDs (Arc<str>) for cheap cloning and comparison
-    - Batched timestamp updates to reduce syscalls
-    - Custom hasher for char keys in children DashMap
-    */
+    /* Thread-safe multi tenant radix tree. Storing data for multiple
+       tenants (the overlap of multiple radix tree). Node-level lock to
+       enable concurrent access on nodes. */
 
     pub fn new() -> Self {
         Tree {
@@ -360,8 +320,7 @@ impl Tree {
     }
 
     pub fn insert(&self, text: &str, tenant: &str) {
-        // Insert text into tree with given tenant
-        // Use slice-based traversal to avoid Vec<char> allocation
+        // Insert text into tree with given tenant Use slice-based traversal to avoid Vec<char> allocation
 
         // Intern the tenant ID once for reuse
         let tenant_id = intern_tenant(tenant);
@@ -396,8 +355,7 @@ impl Tree {
             // Use entry API for atomic check-and-insert semantics (required for thread safety)
             let step = match prev.children.entry(first_char) {
                 Entry::Vacant(entry) => {
-                    // No match - create new node with remaining text (this is the leaf)
-                    // Compute remaining char count lazily - only here when creating leaf
+                    // No match - create new node with remaining text (this is the leaf) Compute remaining char count lazily - only here.
                     let remaining_char_count = remaining.chars().count();
                     let epoch = get_epoch();
 
@@ -461,8 +419,9 @@ impl Tree {
                         *matched_node.text.write().unwrap() = contracted_text;
                         *matched_node.parent.write().unwrap() = Some(Arc::clone(&new_node));
 
-                        // Attach tenant to the new split node (intermediate - no timestamp update)
-                        // The cloned DashMap already has the tenant; just ensure char count is correct
+                        // Attach tenant to the new split node (intermediate -
+                        // no timestamp update) The cloned DashMap already has
+                        // the tenant; ensure char count is correct
                         if !new_node
                             .tenant_last_access_time
                             .contains_key(tenant_id.as_ref())
@@ -506,7 +465,7 @@ impl Tree {
                 }
             };
 
-            // Entry guard is now dropped - safe to update prev
+            // Entry guard
             match step {
                 InsertStep::Done => return, // New leaf created with timestamp, we're done
                 InsertStep::Continue {
@@ -519,8 +478,7 @@ impl Tree {
             }
         }
 
-        // Loop exited normally (remaining empty) - prev is the leaf node
-        // Update its timestamp for LRU ordering
+        // Loop exited normally (remaining empty) - prev is the leaf node Update its timestamp for LRU ordering
         let epoch = get_epoch();
         prev.tenant_last_access_time
             .insert(Arc::clone(&tenant_id), epoch);
@@ -600,8 +558,6 @@ impl Tree {
         let tenant: TenantId = found.unwrap_or_else(|| Arc::from("empty"));
 
         // Compute input char count directly from input text.
-        // This is equivalent to matched_chars + remaining.chars().count() but avoids
-        // needing to track remaining precisely through the traversal.
         let input_char_count = text.chars().count();
 
         PrefixMatchResult {
@@ -817,8 +773,7 @@ impl Tree {
         // Intern tenant ID once for efficient lookups
         let tenant_id = intern_tenant(tenant);
 
-        // 1. Find all the leaves for the tenant
-        // A leaf is a node that has this tenant but no children have it
+        // 1. Find all the leaves for the tenant A leaf is a node that has this tenant but no children have it
         let mut stack = vec![Arc::clone(&self.root)];
         let mut queue = VecDeque::new();
 
@@ -1129,7 +1084,7 @@ mod tests {
     fn test_exact_match_concurrent() {
         let tree = Arc::new(Tree::new());
 
-        // spawn 3 threads for insert
+        // spawn multiple threads for insert
         let tree_clone = Arc::clone(&tree);
 
         let texts = ["hello", "apple", "banana"];
@@ -1154,7 +1109,7 @@ mod tests {
             handle.join().unwrap();
         }
 
-        // spawn 3 threads for match
+        // spawn multiple threads for match
         let mut handles = vec![];
 
         let tree_clone = Arc::clone(&tree);
@@ -1183,7 +1138,7 @@ mod tests {
     fn test_partial_match_concurrent() {
         let tree = Arc::new(Tree::new());
 
-        // spawn 3 threads for insert
+        // spawn multiple threads for insert
         let tree_clone = Arc::clone(&tree);
 
         static TEXTS: [&str; 3] = ["apple", "apabc", "acbdeds"];
@@ -1206,7 +1161,7 @@ mod tests {
             handle.join().unwrap();
         }
 
-        // spawn 3 threads for match
+        // spawn multiple threads for match
         let mut handles = vec![];
 
         let tree_clone = Arc::clone(&tree);
@@ -1340,8 +1295,7 @@ mod tests {
 
     #[test]
     fn test_utf8_split_seq() {
-        // The string should be indexed and split by a utf-8 value basis instead of byte basis
-        // use .chars() to get the iterator of the utf-8 value
+        // The string should be indexed and split by a utf-8 value basis instead of byte basis use .chars() to get the iterator.
         let tree = Arc::new(Tree::new());
 
         static TEST_PAIRS: [(&str, &str); 3] = [
@@ -1421,11 +1375,11 @@ mod tests {
         let max_size = 5;
 
         // Insert strings for both tenants
-        tree.insert("hello", "tenant1"); // size 5
+        tree.insert("hello", "tenant1");
 
-        tree.insert("hello", "tenant2"); // size 5
+        tree.insert("hello", "tenant2");
         thread::sleep(Duration::from_millis(10));
-        tree.insert("world", "tenant2"); // size 5, total for tenant2 = 10
+        tree.insert("world", "tenant2");
 
         tree.pretty_print();
 
@@ -1501,14 +1455,13 @@ mod tests {
                     // Run eviction
                     tree.evict_tenant_by_size(max_size);
 
-                    // Sleep for 5 seconds
+                    // Sleep for a few seconds
                     thread::sleep(Duration::from_secs(5));
                 }
             });
             handles.push(handle);
         }
 
-        // Spawn 4 worker threads
         for thread_id in 0..4 {
             let tree = Arc::clone(&tree);
             let handle = thread::spawn(move || {
@@ -1517,7 +1470,6 @@ mod tests {
                 let prefix = format!("prefix{}", thread_id);
 
                 while start_time.elapsed() < test_duration {
-                    // Random decision: match or insert (70% match, 30% insert)
                     if rng.random_bool(0.7) {
                         // Perform match operation
                         let random_len = rng.random_range(3..10);
@@ -1528,7 +1480,6 @@ mod tests {
                         let random_len = rng.random_range(5..15);
                         let insert_str = format!("{}{}", prefix, random_string(random_len));
                         tree.insert(&insert_str, &tenant);
-                        // println!("Thread {} inserted: {}", thread_id, insert_str);
                     }
 
                     // Small random sleep to vary timing
@@ -1615,7 +1566,7 @@ mod tests {
         let sizes = tree.get_used_size_per_tenant();
         tree.pretty_print();
         println!("{:?}", sizes);
-        assert_eq!(sizes.get("tenant3").unwrap(), &2); // 2 Chinese characters
+        assert_eq!(sizes.get("tenant3").unwrap(), &2);
 
         tree.pretty_print();
     }
@@ -1794,8 +1745,7 @@ mod tests {
         assert_eq!(matched, "application");
         assert_eq!(tenant, "tenant1");
 
-        // Match "apple" - matches "app" + "l" from the child node = "appl"
-        // Then 'e' doesn't match 'i' in the remaining suffix, so stops at 4 chars
+        // Match "apple" - matches "app" + "l" from the child node = "appl" Then 'e' doesn't match 'i' in the remaining suffix.
         let (matched, _tenant) = tree.prefix_match("apple");
         assert_eq!(matched, "appl");
     }
@@ -1818,8 +1768,7 @@ mod tests {
         assert_eq!(matched, "application");
         assert_eq!(tenant, "tenant2");
 
-        // "applesauce" matches "app" + "l" from the child node = "appl"
-        // Then 'e' in "esauce" doesn't match 'i' in the suffix, so matching stops
+        // "applesauce" matches "app" + "l" from the child node = "appl" Then 'e' in "esauce" doesn't match 'i' in the suffix.
         let (matched, _tenant) = tree.prefix_match("applesauce");
         assert_eq!(matched, "appl");
     }
@@ -1858,7 +1807,7 @@ mod tests {
     fn test_prefix_match_with_counts_utf8() {
         let tree = Tree::new();
 
-        // UTF-8 string: 5 characters, more bytes
+        // UTF-8 string: a few characters, more bytes
         tree.insert("你好世界呀", "tenant1");
 
         let result = tree.prefix_match_with_counts("你好世界呀");
@@ -2212,15 +2161,12 @@ mod tests {
 
                     match op {
                         0..=6 => {
-                            // Insert (70%)
                             tree.insert(&key, &tenant);
                         }
                         7..=8 => {
-                            // Match (20%)
                             let _ = tree.prefix_match(&key);
                         }
                         _ => {
-                            // Match with counts (10%)
                             let _ = tree.prefix_match_with_counts(&key);
                         }
                     }
@@ -2254,7 +2200,7 @@ mod tests {
     fn test_very_long_strings() {
         let tree = Tree::new();
 
-        // Create a very long string (10KB)
+        // Create a long string (10KB)
         let long_string: String = (0..10000)
             .map(|i| ((i % 26) as u8 + b'a') as char)
             .collect();
@@ -2275,7 +2221,7 @@ mod tests {
     fn test_many_tenants_same_path() {
         let tree = Tree::new();
 
-        // 100 tenants all insert same string
+        // Tenants all insert same string
         for i in 0..100 {
             tree.insert("shared_path", &format!("tenant{}", i));
         }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! SSE parsing and body-collection helpers for integration tests.
@@ -26,19 +26,10 @@ pub async fn collect_body(body: axum::body::Body) -> Bytes {
 mod tests {
     use super::*;
 
-    /// Ported from SMG tests/api/streaming_tests.rs::test_sse_format_parsing.
-    /// Verifies that parse_sse_data:
-    ///   1. Extracts standard `data: …` lines.
-    ///   2. Silently ignores SSE `event: …` type fields (not data lines).
-    ///   3. Silently ignores SSE `: …` comment lines.
-    ///   4. Correctly parses `[DONE]` sentinel.
-    ///
-    /// These edge-cases matter because SGLang workers may emit `event: message`
-    /// fields in their SSE frames. A parser that accidentally leaks those into
-    /// the payload list would cause clients to fail on JSON-parse.
+    /// .rs::test_sse_format_parsing.
     #[test]
     fn parse_sse_data_extracts_data_lines_only() {
-        // Basic: three data lines including the [DONE] sentinel.
+        // Basic: data lines including the [DONE] sentinel.
         let basic =
             b"data: {\"text\":\"Hello\"}\n\ndata: {\"text\":\" world\"}\n\ndata: [DONE]\n\n";
         let events = parse_sse_data(basic);

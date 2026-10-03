@@ -5,8 +5,7 @@ use std::sync::OnceLock;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 
-/// Keeps the non-blocking log writer's background thread alive for the process
-/// lifetime (dropping the guard would stop log delivery).
+/// Keeps the non-blocking log writer's background thread alive for the process lifetime.
 static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 /// Install the global `tracing` subscriber once; a no-op if the host process

@@ -55,13 +55,6 @@ fn has_wasm_extension(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("wasm"))
 }
 
-/// Step 1: Validate module descriptor
-///
-/// Validates that the module descriptor has all required fields:
-/// - Module name is not empty
-/// - File path is not empty
-/// - File exists and is readable
-/// - File size is not zero
 pub struct ValidateDescriptorStep;
 
 #[async_trait]
@@ -104,7 +97,8 @@ impl StepExecutor<WasmRegistrationWorkflowData> for ValidateDescriptorStep {
             });
         }
 
-        // Check for path traversal components (.. or symbolic links that could escape)
+        // Check for path traversal components (. or symbolic links that could
+        // escape)
         for component in path.components() {
             match component {
                 PathComponent::ParentDir => {
@@ -220,10 +214,6 @@ impl StepExecutor<WasmRegistrationWorkflowData> for ValidateDescriptorStep {
     }
 }
 
-/// Step 2: Calculate SHA256 hash of the module file
-///
-/// Reads the file and calculates its SHA256 hash for deduplication.
-/// This step is I/O intensive and may take time for large files.
 pub struct CalculateHashStep;
 
 #[async_trait]
@@ -282,10 +272,6 @@ impl StepExecutor<WasmRegistrationWorkflowData> for CalculateHashStep {
     }
 }
 
-/// Step 3: Check for duplicate SHA256 hash
-///
-/// Checks if a module with the same SHA256 hash already exists in the manager.
-/// This prevents duplicate modules from being registered.
 pub struct CheckDuplicateStep;
 
 #[async_trait]
@@ -340,10 +326,6 @@ impl StepExecutor<WasmRegistrationWorkflowData> for CheckDuplicateStep {
     }
 }
 
-/// Step 4: Load WASM bytes into memory
-///
-/// Reads the entire WASM file into memory for faster execution.
-/// This is an I/O operation that may take time for large files.
 pub struct LoadWasmBytesStep;
 
 #[async_trait]
@@ -379,10 +361,6 @@ impl StepExecutor<WasmRegistrationWorkflowData> for LoadWasmBytesStep {
     }
 }
 
-/// Step 5: Validate WASM component format
-///
-/// Validates that the loaded WASM bytes represent a valid component.
-/// This catches format errors early during registration rather than during execution.
 pub struct ValidateWasmComponentStep;
 
 #[async_trait]
@@ -436,10 +414,6 @@ impl StepExecutor<WasmRegistrationWorkflowData> for ValidateWasmComponentStep {
     }
 }
 
-/// Step 6: Register module in WasmModuleManager
-///
-/// Creates the WasmModule object and registers it in the manager's module map.
-/// This is the final step that makes the module available for execution.
 pub struct RegisterModuleStep;
 
 #[async_trait]
@@ -532,23 +506,16 @@ impl StepExecutor<WasmRegistrationWorkflowData> for RegisterModuleStep {
     }
 }
 
-/// Create WASM module registration workflow
-///
-/// This workflow handles the complete process of registering a WASM module:
-/// - Validates the module descriptor
-/// - Calculates SHA256 hash for deduplication
-/// - Checks for duplicates
-/// - Loads WASM bytes into memory
-/// - Validates WASM component format
-/// - Registers the module in the manager
-///
-/// Workflow configuration:
-/// - ValidateDescriptor: No retry, 5s timeout (fast validation)
-/// - CalculateHash: 3 retries, 60s timeout (I/O intensive, may need retry)
-/// - CheckDuplicate: No retry, 5s timeout (fast check)
-/// - LoadWasmBytes: 3 retries, 60s timeout (I/O intensive)
-/// - ValidateWasmComponent: No retry, 30s timeout (CPU intensive validation)
-/// - RegisterModule: No retry, 5s timeout (fast registration)
+/// Create WASM module registration workflow This workflow handles the
+/// complete process of registering a WASM module.
+/// duplicates - Loads WASM bytes into memory - Validates WASM component
+/// format - Registers the module in the manager Workflow configuration: -
+/// ValidateDescriptor: No retry, 5s timeout (fast validation) -
+/// CalculateHash: retries, 60s timeout (I/O intensive, may need retry) -
+/// CheckDuplicate: No retry, 5s timeout (fast check) - LoadWasmBytes:
+/// retries, 60s timeout (I/O intensive) - ValidateWasmComponent: No retry,
+/// 30s timeout (CPU intensive validation) - RegisterModule: No retry, 5s
+/// timeout (fast registration)
 pub fn create_wasm_module_registration_workflow() -> WorkflowDefinition<WasmRegistrationWorkflowData>
 {
     WorkflowDefinition::new("wasm_module_registration", "WASM Module Registration")

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 check_vram_clear() {
-    local vram_threshold_percent=5  # Allow up to 5% VRAM usage
+    local vram_threshold_percent=5
     local memory_threshold_mb=500   # Allow up to 500MB memory usage
 
     if command -v rocm-smi >/dev/null 2>&1; then

@@ -1,5 +1,5 @@
 #!/bin/bash
-# shellcheck disable=SC2034  # OPTIONAL_DEPS is retained for CLI compatibility.
+# shellcheck disable=SC2034 # OPTIONAL_DEPS is retained for CLI compatibility.
 set -euo pipefail
 
 # Parse command line arguments
@@ -24,13 +24,9 @@ done
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 STACK_HELPER="${SCRIPT_DIR}/musa_python_stack.py"
-# Keep installed packages isolated in PYTHONUSERBASE, but let pip reuse its
-# content-addressed wheel cache across jobs. Disabling the cache made every
-# MUSA lane cold-download hundreds of megabytes and exceed the install timeout.
+# Keep installed packages isolated in PYTHONUSERBASE, but let pip reuse its content-addressed wheel cache across jobs.
 PIP_INSTALL=(python3 -m pip install)
 readonly MUSA_TRITON_VERSION="3.2.0"
-# Current MUSA CI uses the CPython 3.10 x86_64 wheel. A Python upgrade must
-# update this digest together with the pinned artifact.
 readonly MUSA_TRITON_SHA256="65b15d42fac24a2eca4c0c9f0ac68c8bd7cbe6bcc9f619c3483fb4f323391303"
 readonly MUSA_TRITON_INDEX_URL="https://dl.mthreads.com/repo/api/pypi/pypi/simple"
 readonly MUSA_TORCHADA_VERSION="0.1.82"
@@ -53,8 +49,7 @@ if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
     echo "Using task-local Python user base: ${PYTHONUSERBASE}"
 fi
 
-# torchada has an unpinned Torch dependency. Installing it from the public
-# index before the MUSA wheel bundle can pull CUDA Torch and CUDA Triton.
+# torchada has an unpinned Torch dependency.
 "${PIP_INSTALL[@]}" --upgrade pip "$MUSA_SETUPTOOLS_SPEC" --user
 
 echo "Checking stale torchada extension locks..."
@@ -162,8 +157,7 @@ if [ -z "$MUSA_TRITON_WHEEL" ]; then
         --triton-only; then
         echo "Reusing the installed MUSA Triton"
     else
-        # Existing runner bundles do not contain Triton yet. Keep a hash-pinned
-        # vendor-index fallback until the wheel is shipped in /sglang-checkout/whl.
+        # Existing runner bundles do not contain Triton yet.
         download_musa_triton
     fi
 fi
@@ -176,8 +170,7 @@ if [ -n "$MUSA_TRITON_WHEEL" ]; then
     echo "Using MUSA Triton wheel: ${MUSA_TRITON_WHEEL}"
 fi
 
-# torchada declares an unpinned dependency on Torch. Install the exact wheel
-# with --no-deps so a fresh user site cannot resolve public CUDA Torch/Triton.
+# torchada declares an unpinned dependency on Torch.
 find_bundled_torchada
 if [ -z "$MUSA_TORCHADA_WHEEL" ]; then
     download_torchada
@@ -249,12 +242,7 @@ else
 
     rm -f "${REPO_ROOT}/python/pyproject.toml" && mv "${REPO_ROOT}/python/pyproject_other.toml" "${REPO_ROOT}/python/pyproject.toml"
 
-    # setuptools-rust builds the sglang-mm extension
-    # (sglang.srt.rust_extensions._multimodal)
-    # declared in pyproject_other.toml, so a Rust toolchain must be present like
-    # on the CUDA/AMD CI paths. Idempotent; installs per-user under $HOME/.cargo.
-    # Export PATH here because the pip install below runs in this same shell
-    # (install_rustup.sh's own export/GITHUB_PATH only reach subsequent steps).
+    # setuptools-rust builds the sglang-mm extension (sglang.srt.rust_extensions._multimodal) declared in pyproject_other.toml.
     bash "${REPO_ROOT}/scripts/ci/utils/install_rustup.sh"
     export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:${PATH}"
 

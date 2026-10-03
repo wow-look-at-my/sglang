@@ -1,8 +1,7 @@
 //! Conversion utilities for translating between /v1/responses and /v1/chat/completions formats
 //!
-//! This module implements the conversion approach where:
-//! 1. ResponsesRequest → ChatCompletionRequest (for backend processing)
-//! 2. ChatCompletionResponse → ResponsesResponse (for client response)
+//! This module implements the conversion approach where.
+//! ChatCompletionResponse → ResponsesResponse (for client response)
 //!
 //! This allows the gRPC router to reuse the existing chat pipeline infrastructure
 //! without requiring Python backend changes.
@@ -137,9 +136,9 @@ pub(crate) fn responses_to_chat(req: &ResponsesRequest) -> Result<ChatCompletion
                     ResponseInputOutputItem::FunctionCallOutput {
                         call_id, output, ..
                     } => {
-                        // Function call output - add as tool message
-                        // Note: The function name is looked up from prev_outputs in Harmony path
-                        // For Chat path, we just use the call_id
+                        // Function call output - add as tool message Note:
+                        // The function name is looked up from prev_outputs in
+                        // Harmony path For Chat path.
                         messages.push(ChatMessage::Tool {
                             content: MessageContent::Text(output.clone()),
                             tool_call_id: call_id.clone(),
@@ -155,10 +154,7 @@ pub(crate) fn responses_to_chat(req: &ResponsesRequest) -> Result<ChatCompletion
         return Err("Request must contain at least one message".to_string());
     }
 
-    // 3. Extract function tools from ResponseTools
-    // Only function tools are extracted here (include_mcp: false).
-    // MCP tools are merged later by the tool loop (see tool_loop.rs:prepare_chat_tools_and_choice)
-    // before the chat pipeline, where tool_choice constraints are applied to ALL tools combined.
+    // 3. Extract function tools from ResponseTools Only function tools are extracted here (include_mcp: false).
     let function_tools = extract_tools_from_response_tools(req.tools.as_deref(), false);
     let tools = if function_tools.is_empty() {
         None
@@ -323,7 +319,7 @@ pub(crate) fn chat_to_responses(
                 call_id: tool_call.id.clone(),
                 name: tool_call.function.name.clone(),
                 arguments: tool_call.function.arguments.clone().unwrap_or_default(),
-                output: None, // Tool hasn't been executed yet
+                output: None,
                 status: "in_progress".to_string(),
             });
         }

@@ -1,7 +1,4 @@
-//! The scheduler wire structs — the Rust mirror of the Python `io_struct`
-//! messages this server sends (`python/sglang/srt/managers/io_struct.py`).
-//! Each is a msgspec `array_like=True` struct, so **field order is wire order**
-//! and `rmp_serde`'s default struct-as-array encoding reproduces it.
+//! The scheduler wire structs — the Rust mirror of the Python `io_struct` messages this server sends.
 
 use bytes::Bytes;
 use serde::Serialize;
@@ -13,9 +10,7 @@ use super::types::{Tagged, control_messages, wire_struct};
 use crate::utils::error::Error;
 
 wire_struct! {
-    /// The scheduler's `TokenizedGenerateReqInput`. Keep in lockstep with the
-    /// Python declaration: inserting a field anywhere but the end shifts every
-    /// later field on the wire.
+    /// The scheduler's `TokenizedGenerateReqInput`.
     pub(super) TokenizedGenerateReqInput<'a> {
         input_text: Option<&'a str>,
         /// Always nil: the ids ride the ring's columnar buffer, not msgpack.
@@ -33,8 +28,7 @@ wire_struct! {
         return_sampling_mask: bool,
         return_flat_raw_top_logprobs: bool,
         return_hidden_states: bool,
-        /// Filler block (not exposed by this server yet): default/nil slots so
-        /// the PD fields below land on their Python wire indices (25–31).
+        /// Filler block (not exposed by this server yet): default/nil slots so the PD fields below land on their Python wire indices.
         return_routed_experts: bool,
         routed_experts_start_len: i64,
         return_indexer_topk: bool,
@@ -43,9 +37,7 @@ wire_struct! {
         lora_id: (),
         custom_logit_processor: (),
         positional_embed_overrides: (),
-        /// PD-disaggregation block — the last fields emitted; everything after
-        /// `disagg_prefill_dp_rank` in Python has a msgspec default and is
-        /// omitted (short arrays decode with defaulted tails).
+        /// PD-disaggregation block — the last fields emitted.
         bootstrap_host: Option<&'a str>,
         bootstrap_port: Option<i64>,
         bootstrap_room: Option<i64>,
@@ -57,9 +49,7 @@ wire_struct! {
 }
 
 // Owned-rid messages: these are held by a [`ControlRequest`] inside an owned
-// `Request`, so they cannot borrow the rid that request owns. `pub(crate)`
-// because that enum is crate-visible — their fields stay private, so only the
-// constructors below can build one.
+// `Request`, so they cannot borrow the rid that request owns.
 control_messages! {
     /// The scheduler's `AbortReq`: stop generating for one rid.
     AbortReq {
@@ -74,12 +64,12 @@ control_messages! {
 }
 
 /// Borrow a request as its wire struct, resolving `Option` scalars to the wire
-/// defaults Python's own fields carry. Borrowed, not owned: every field is a
-/// reference into `req`, so an owning `From` would return references to a
+/// defaults Python's own fields carry. Borrowed, not owned. reference
+/// into `req`.
 /// dropped local.
 ///
 /// The rid comes from [`GenerateRequest::rid`] — the same value `submit` copied
-/// into the owning `Request`, so the scheduler, the detok registration and
+/// into the owning `Request`, so the scheduler.
 /// `meta_info.id` cannot disagree.
 impl<'a> From<&'a GenerateRequest> for TokenizedGenerateReqInput<'a> {
     fn from(req: &'a GenerateRequest) -> Self {
@@ -157,9 +147,7 @@ mod tests {
         assert!(arr[5].is_nil());
     }
 
-    /// The header must be positionally aligned: `input_embeds` (idx 5) /
-    /// `token_type_ids` (idx 7) present as nil so `sampling_params` lands at idx 8 and
-    /// the array reaches msgspec's min length. Regression guard for that decode failure.
+    /// The header must be positionally aligned: `input_embeds` (idx) / `token_type_ids` (idx) present as nil so `sampling_params` lands.
     #[test]
     fn to_header_msgpack_is_positionally_aligned() {
         let req = GenerateRequest {
@@ -180,21 +168,16 @@ mod tests {
         let bytes = TokenizedGenerateReqInput::from(&req).encode().unwrap();
         let val = rmpv::decode::read_value(&mut &bytes[..]).unwrap();
         let arr = val.as_array().expect("array");
-        // msgspec requires >= 14 (through `stream`); we emit 32 (through
-        // `disagg_prefill_dp_rank`). Trailing defaulted fields are omitted.
         assert_eq!(arr.len(), 32, "header ends at disagg_prefill_dp_rank");
         assert_eq!(arr[0].as_str(), Some("TokenizedGenerateReqInput"));
         assert_eq!(arr[1].as_str(), Some("r1"));
         assert!(arr[5].is_nil(), "idx 5 must be input_embeds (nil)");
         assert!(arr[7].is_nil(), "idx 7 must be token_type_ids (nil)");
-        // An ARRAY, not a map: Python's `SamplingParams` is
-        // `msgspec.Struct(array_like=True)`, so it decodes positionally.
+        // An ARRAY, not a map: Python's `SamplingParams` is `msgspec.Struct(array_like=True)`.
         assert!(arr[8].is_array(), "sampling_params must land at idx 8");
         assert_eq!(arr[9].as_bool(), Some(true), "return_logprob at idx 9");
         assert_eq!(arr[11].as_u64(), Some(3), "top_logprobs_num at idx 11");
         assert_eq!(arr[13].as_bool(), Some(true), "stream at idx 13");
-        // idx 14 is `return_sampling_mask` (never client-set); a shift here would
-        // silently flip the wrong scheduler field.
         assert_eq!(
             arr[14].as_bool(),
             Some(false),
@@ -212,9 +195,7 @@ mod tests {
         );
     }
 
-    /// The PD block must land on Python's wire indices 25–31, with the filler
-    /// block (17–24) holding its defaults — a shift here silently routes KV
-    /// transfers to the wrong host/room.
+    /// The PD block must land on Python's wire indices –.
     #[test]
     fn header_bootstrap_block_is_positionally_aligned() {
         let req = GenerateRequest {
@@ -222,7 +203,7 @@ mod tests {
             text: Some("hi".into()),
             bootstrap_host: Some("10.0.0.1".into()),
             bootstrap_port: Some(8998),
-            bootstrap_room: Some(i64::MAX), // routers draw from [0, 2^63)
+            bootstrap_room: Some(i64::MAX),
             bootstrap_pair_key: Some("pk".into()),
             decode_tp_size: Some(2),
             routed_dp_rank: Some(3),

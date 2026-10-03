@@ -39,10 +39,7 @@ pub use factory::RouterFactory;
 // Re-export HTTP routers for convenience
 pub use http::{pd_router, pd_types, router};
 
-/// Core trait for all router implementations
-///
-/// This trait provides a unified interface for routing requests,
-/// regardless of whether it's a regular router or PD router.
+/// Core trait for all router implementations This trait provides a unified interface for routing requests.
 #[async_trait]
 pub trait RouterTrait: Send + Sync + Debug {
     /// Get a reference to self as Any for downcasting

@@ -7,9 +7,6 @@ use wfaas::{StepExecutor, StepResult, WorkflowContext, WorkflowError, WorkflowRe
 use crate::core::steps::workflow_data::WorkerRemovalWorkflowData;
 
 /// Step to remove workers from the policy registry.
-///
-/// Removes each worker from cache-aware policies and notifies
-/// the policy registry of worker removal.
 pub struct RemoveFromPolicyRegistryStep;
 
 #[async_trait]
@@ -44,7 +41,7 @@ impl StepExecutor<WorkerRemovalWorkflowData> for RemoveFromPolicyRegistryStep {
                 .remove_worker_from_cache_aware(&model_id, worker_url);
 
             // PD mode keeps prefill/decode cache-aware policies separate from
-            // model_policies, so also drop the worker from the matching pool's policy.
+            // model_policies.
             app_context
                 .policy_registry
                 .remove_pd_worker_from_cache_aware(worker.as_ref());

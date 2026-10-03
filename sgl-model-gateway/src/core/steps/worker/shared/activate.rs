@@ -9,9 +9,6 @@ use wfaas::{
 use crate::core::steps::workflow_data::WorkerRegistrationData;
 
 /// Unified step to activate workers by marking them as healthy.
-///
-/// This is the final step in any worker registration workflow.
-/// Works with any workflow data type that implements `WorkerRegistrationData`.
 pub struct ActivateWorkersStep;
 
 #[async_trait]

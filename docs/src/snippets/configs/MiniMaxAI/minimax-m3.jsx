@@ -4,12 +4,10 @@
 // MXFP8 MoE: validated single-node tp4 on NVIDIA Blackwell — B200 (sm_100),
 // B300 (sm_103), GB300 (sm_103, aarch64 Grace); GB200 (sm_100, aarch64) is
 // inferred-supported (both axes validated above) but not directly benchmarked.
-// AMD: validated single-node tp8 — MI355X (gfx950, CDNA4) serves MXFP8
-// natively; MI300X (gfx942, CDNA3) auto-converts MXFP8 -> block-fp8 [128,128]
-// at load and serves it with the tuned ROCm kernels. MI350X (gfx950) and
-// MI325X (gfx942) are inferred-supported from their same-arch siblings.
-// Hopper (H200) cannot run the MXFP8 kernels, so it serves the bf16 build
-// (MiniMaxAI/MiniMax-M3) at tp8 — validated on 8xH200. See §2.4 on the page.
+// MI350X (gfx950) and MI325X (gfx942) are inferred-supported from their
+// same-arch siblings. Hopper (H200) cannot run the MXFP8 kernels, so it serves
+// the bf16 build (MiniMaxAI/MiniMax-M3) at tp8 — validated on 8xH200. See
+// §2.4 on the page.
 
 export const config = {
   modelName: "MiniMax-M3",
@@ -92,11 +90,7 @@ sgl-eval run mmmu_pro \\
   ],
 
   dockerImages: {
-    // M3-specific dev images (multi-arch amd64+arm64). cu13 carries the sm_103
-    // (B300/GB300) + Grace arm64 builds; cu12 is the final Hopper/CUDA-12 build
-    // (that lane is retired, so it no longer rebuilds); dev-minimax-m3 is the
-    // rolling default. M3 model support is not yet in a tagged release, so
-    // :latest cannot serve it.
+    // M3-specific dev images (multi-arch amd64+arm64). cu13 carries the sm_103 (B300/GB300) + Grace arm64 builds.
     b200: "lmsysorg/sglang:dev-minimax-m3",
     b300: "lmsysorg/sglang:dev-cu13-minimax-m3",
     gb200: "lmsysorg/sglang:dev-cu13-minimax-m3",
@@ -115,11 +109,9 @@ sgl-eval run mmmu_pro \\
 
   playgroundFeatures: {
 
-    // ----- Attention Parallelism -----
-    // No CP knob: prefill Context Parallel needs model-side integration in
-    // SGLang (DeepSeek-family / Qwen-MoE / Mellum have it) and
-    // MiniMaxM3SparseForCausalLM has none — the engine's CP knob would emit
-    // --enable-prefill-cp flags that don't work on this model.
+    // ----- Attention Parallelism ----- No CP knob: prefill Context Parallel
+    // needs model-side integration in SGLang (DeepSeek-family / Qwen-MoE /
+    // Mellum have it).
     attention: {
       knobs: [
         { id: "tp",     label: "TP", values: [null, 1, 2, 4, 8] },
@@ -197,12 +189,6 @@ sgl-eval run mmmu_pro \\
     },
   },
 
-  // NVIDIA Blackwell: one validated single-node recipe per family — tp4 across
-  // B300 / GB200 / GB300, tp8 on B200. fa4 + page 128 + deep_gemm are the M3
-  // SM100 auto-defaults on current main, so this is also the bare-launch
-  // behavior; they engage MiniMax's MSA sparse-attention kernel (fmha_sm100,
-  // pre-installed in the dev-minimax-m3 images; see Configuration Tips), Triton
-  // fallback otherwise.
   // AMD: tp8. MI350X/MI355X (gfx950) serve MXFP8 natively (backends auto). MI300X/
   // MI325X (gfx942) need --attention-backend aiter + --moe-runner-backend triton,
   // and the MXFP8 weights are auto-converted to block-fp8 at load; the cold-start
@@ -245,8 +231,7 @@ sgl-eval run mmmu_pro \\
       ],
     },
     {
-      // GB200 (sm_100 + aarch64): inferred-supported (both axes validated on
-      // B200 and GB300), not directly benchmarked. Same recipe as the others.
+      // GB200 (sm_100 + aarch64): inferred-supported (both axes validated on B200 and GB300), not directly benchmarked.
       match: { hw: "gb200", variant: "default", quant: "mxfp8", strategy: "balanced", nodes: "single" },
       env: [],
       flags: [
@@ -301,8 +286,7 @@ sgl-eval run mmmu_pro \\
       ],
     },
     {
-      // MI350X (gfx950, CDNA4): inferred-supported from MI355X (same arch),
-      // not directly benchmarked. Same native-MXFP8 recipe.
+      // MI350X (gfx950, CDNA4): inferred-supported from MI355X (same arch), not directly benchmarked.
       match: { hw: "mi350x", variant: "default", quant: "mxfp8", strategy: "balanced", nodes: "single" },
       env: ["SGLANG_USE_AITER=1"],
       flags: [
@@ -320,9 +304,6 @@ sgl-eval run mmmu_pro \\
       ],
     },
     {
-      // MI300X (gfx942, CDNA3): no hardware MX matmul — SGLang converts MXFP8 ->
-      // block-fp8 [128,128] at load. aiter attention + triton MoE runner are the
-      // validated backends; watchdog/skip-warmup ride out the cold-start AITER JIT.
       match: { hw: "mi300x", variant: "default", quant: "mxfp8", strategy: "balanced", nodes: "single" },
       verified: true,
       env: ["SGLANG_USE_AITER=1"],
@@ -345,8 +326,7 @@ sgl-eval run mmmu_pro \\
       ],
     },
     {
-      // MI325X (gfx942, CDNA3): inferred-supported from MI300X (same arch),
-      // not directly benchmarked. Same MXFP8 -> block-fp8 recipe.
+      // MI325X (gfx942, CDNA3): inferred-supported from MI300X (same arch), not directly benchmarked.
       match: { hw: "mi325x", variant: "default", quant: "mxfp8", strategy: "balanced", nodes: "single" },
       env: ["SGLANG_USE_AITER=1"],
       flags: [
@@ -368,12 +348,7 @@ sgl-eval run mmmu_pro \\
       ],
     },
     {
-      // Hopper (H200): MXFP8 MoE kernels are Blackwell-only, so Hopper serves the
-      // full-precision bf16 build (MiniMaxAI/MiniMax-M3) at tp8 — bf16 weights don't
-      // fit a single 4-GPU node. Everything else auto-resolves for Hopper: fa3
-      // attention, page_size 1, MoE auto-pins to Triton (the bf16 deep_gemm path is
-      // not used), decode keeps full CUDA graph; MSA (§2.1) is Blackwell-only so the
-      // sparse step runs on the built-in Triton fallback. See §2.4.
+      // Hopper (H200): MXFP8 MoE kernels are Blackwell-only.
       match: { hw: "h200", variant: "default", quant: "bf16", strategy: "balanced", nodes: "single" },
       verified: true,
       env: [],

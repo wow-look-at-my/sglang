@@ -1,16 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Engine-reported runtime load, fed by the load subscriber.
-//!
-//! Workers publish a [`LoadStat`] gauge on their dedicated load socket (see
-//! `python/sglang/srt/managers/scheduler_components/load_publisher.py`). The
-//! load subscriber routes those into this table, keyed per
-//! `(worker_url, dp_rank)`. Request handling captures the freshest complete
-//! aggregate and falls back to Router-local load when it is unavailable.
-//!
-//! Load is a *gauge*, not a delta: last value wins, no sequence/replay
-//! semantics. Entries older than [`EngineReportedLoadTable::freshness`] are ignored.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -23,9 +14,6 @@ use serde::de::{self, Deserializer, IgnoredAny, SeqAccess, Visitor};
 use serde::Deserialize;
 
 /// Per-rank load fields consumed by native Cache-Aware.
-///
-/// Short frames cannot drive admission or pressure guards, so native
-/// `cache_aware` falls back to Router-local load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeCacheRankLoad {
     pub num_waiting_uncached_tokens: u64,
@@ -35,14 +23,7 @@ pub struct NativeCacheRankLoad {
     pub total_prefill_busy_us: u64,
 }
 
-/// Per-scheduler runtime load snapshot. Mirrors the Python `LoadStat` in
-/// `managers/scheduler_components/load_publisher.py`, published on the
-/// worker's dedicated load socket (separate from KV-cache events).
-///
-/// The stable prefix remains `["LoadStat", running, waiting, used_tokens,
-/// max_tokens, attn_dp_rank]`; V4 appends the V3 native Cache-Aware fields.
-/// Older publishers therefore decode successfully with `native_cache=None`,
-/// which deliberately excludes them from monitor-backed admission/guard.
+/// Per-scheduler runtime load snapshot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadStat {
     /// Requests currently running on the engine.
@@ -51,17 +32,12 @@ pub struct LoadStat {
     pub num_waiting_reqs: u64,
     /// KV tokens currently in use.
     pub num_tokens: u64,
-    /// KV-cache token capacity; 0 when unknown.
     pub max_total_num_tokens: u64,
-    /// V3 native Cache-Aware semantics. `None` means the publisher is an old
-    /// four-field #34608 producer or sent a truncated extension.
+    /// V3 native Cache-Aware semantics.
     pub native_cache: Option<NativeCacheRankLoad>,
 }
 
 /// Engine-reported request and KV counters for one worker, summed across DP ranks.
-///
-/// The four #34608 fields are summed across DP ranks. `captured_at` retains
-/// the oldest rank timestamp so later local dispatches can be added.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineReportedWorkerLoad {
     pub num_running_reqs: u64,
@@ -72,11 +48,6 @@ pub struct EngineReportedWorkerLoad {
 }
 
 /// Engine-reported per-worker scheduling load: capacity, queue pressure, and prefill estimates.
-///
-/// Shared by cache-aware, power-of-two, session-aware, and decode selection and admission.
-///
-/// Prefill throughput and queue time require two monotonic samples from every
-/// DP rank. Initial samples and counter resets leave both values unavailable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EngineReportedSchedulingLoad {
     pub num_running_reqs: u64,
@@ -92,9 +63,6 @@ pub struct EngineReportedSchedulingLoad {
 }
 
 /// Immutable fleet-wide view of engine-reported load, captured once at request ingress.
-///
-/// Keys are worker URLs used for dispatch. Missing, stale, or rank-incomplete
-/// workers are omitted and must use Router-local active load.
 #[derive(Debug, Clone, Default)]
 pub struct EngineReportedLoadSnapshot {
     pub version: u64,
@@ -108,20 +76,8 @@ impl EngineReportedLoadSnapshot {
     }
 
     /// True when some worker in `fleet_urls` has a fresh queue reading
-    /// strictly below `floor` — a destination where a diverted request would
-    /// provably wait behind fewer than `floor` others. Workers with no fresh
-    /// sample do not count: the saturation pin asks whether a provably better
-    /// destination exists, and an unknown queue is not proof. This is the
-    /// opposite polarity from the queue gate's fail-open, and the two
-    /// compose: both leave the request with its prefix owner when the signal
-    /// is missing.
-    ///
-    /// The caller passes the routable fleet rather than letting this scan the
-    /// whole table: the table is router-wide, so it also holds decode peers,
-    /// other models' workers, and workers no longer healthy enough to receive
-    /// this request. None of those is a destination a diversion could reach,
-    /// and a decode peer idling at zero waiting would otherwise veto the pin
-    /// on every PD deployment.
+    /// strictly below `floor` — a destination where a diverted request
+    /// would provably wait behind fewer than `floor` others.
     pub fn any_fresh_queue_below<'u>(
         &self,
         fleet_urls: impl IntoIterator<Item = &'u str>,
@@ -207,10 +163,7 @@ impl<'de> Deserialize<'de> for LoadStat {
                         "expected \"LoadStat\" tag, got {tag:?}"
                     )));
                 }
-                // The Python publisher always emits all four counts. Treat a
-                // shortened frame as malformed rather than inventing zeros:
-                // a partial gauge must fall back to router-local load, never
-                // make a worker appear artificially idle.
+                // The Python publisher always emits all counts.
                 let num_running_reqs: u64 = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::missing_field("num_running_reqs"))?;
@@ -223,14 +176,10 @@ impl<'de> Deserialize<'de> for LoadStat {
                 let max_total_num_tokens: u64 = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::missing_field("max_total_num_tokens"))?;
-                // `attn_dp_rank` is informational: the subscriber's socket
-                // rank is authoritative for aggregation. Keep accepting null
-                // and integer values from both old and new publishers.
+                // `attn_dp_rank` is informational: the subscriber's socket rank is authoritative for aggregation.
                 let _attn_dp_rank: Option<IgnoredAny> = seq.next_element()?;
 
-                // The extension is deliberately all-or-nothing. A four-field
-                // #34608 message remains valid for lightweight queue routing,
-                // but a partial semantic tail is not valid monitor data.
+                // The extension is deliberately all-or-nothing.
                 let native_cache = match seq.next_element::<u64>()? {
                     None => None,
                     Some(num_waiting_uncached_tokens) => {
@@ -276,9 +225,7 @@ pub fn decode_load_stat(payload: &[u8]) -> Result<LoadStat, rmp_serde::decode::E
     rmp_serde::from_slice(payload)
 }
 
-/// A per-rank load snapshot older than this is treated as stale, so a silent
-/// or slow publisher degrades to the router-side load signal rather than
-/// pinning a worker at its last reported value.
+/// A per-rank load snapshot older than this is treated as stale.
 const DEFAULT_FRESHNESS: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
@@ -291,14 +238,11 @@ struct LoadEntry {
 type NativeRankObservation = (LoadStat, Option<NativeCacheRankLoad>, bool, Instant);
 type NativeWorkerObservations = HashMap<u32, NativeRankObservation>;
 
-/// Per-`(worker_url, dp_rank)` engine-reported load, written by the load
-/// subscriber pump and captured once at request ingress.
+/// Per-`(worker_url, dp_rank)` engine-reported load, written by the load subscriber pump and captured once.
 #[derive(Debug)]
 pub struct EngineReportedLoadTable {
     by_rank: DashMap<(String, u32), LoadEntry>,
-    /// Per-rank publishers the worker advertised. A worker is usable only
-    /// when every advertised rank has a fresh value; accepting a partial
-    /// aggregate would make a silent rank look idle and attract traffic.
+    /// Per-rank publishers the worker advertised.
     expected: DashSet<(String, u32)>,
     freshness: Duration,
     version: AtomicU64,
@@ -360,7 +304,7 @@ impl EngineReportedLoadTable {
 
     /// Shared accumulation pass behind [`Self::capture_snapshot`]. It sums
     /// fields across ranks and keeps the oldest snapshot timestamp, but only for workers whose
-    /// every advertised rank is present and fresh**. A missing or stale rank is
+    /// every advertised rank is present and fresh**.
     /// omitted, so the caller falls back to its own load signal. (Summing
     /// only the fresh ranks would make a worker whose other ranks went silent
     /// look misleadingly idle and draw *more* traffic.) Callers that never
@@ -429,7 +373,6 @@ impl EngineReportedLoadTable {
 
     /// Aggregates complete native Cache-Aware monitor data.
     ///
-    /// Every rank must be fresh, capacity-valid, and include the #34608
     /// extension. Otherwise the worker is omitted from monitor-backed guards.
     fn fresh_native_cache_worker_loads(
         &self,
@@ -642,7 +585,6 @@ mod tests {
         t.set("http://w:30000", 0, load(5, 1), now);
         t.set("http://w:30000", 1, load(3, 2), now);
         let fresh = t.capture_snapshot(now);
-        // (5+1) + (3+2) = 11
         let load = fresh.fresh_load_for_url("http://w:30000").unwrap();
         assert_eq!(load.num_running_reqs + load.num_waiting_reqs, 11);
     }
@@ -674,9 +616,7 @@ mod tests {
         assert!(snapshot.fresh_load_for_url("http://other:30000").is_some());
     }
 
-    /// A worker with any stale rank is omitted entirely (not summed over only
-    /// its fresh ranks), so a partially-silent worker falls back to the
-    /// router-side counter instead of looking misleadingly idle.
+    /// A worker with any stale rank is omitted entirely (not summed over only its fresh ranks).
     #[test]
     fn partial_freshness_excludes_worker() {
         let t = EngineReportedLoadTable::with_freshness(Duration::from_secs(5));

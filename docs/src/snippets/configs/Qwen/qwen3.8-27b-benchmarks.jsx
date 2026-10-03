@@ -2,32 +2,13 @@
 // speed/accuracy schema.
 //
 // STRUCTURALLY UNMATCHED since the strategy->overlay migration: every entry
-// below keys on the removed `strategy` match dim, and the three gb300
-// `high-throughput` cells they were measured against were deleted (MTP is now
-// the Speculative Decoding OVERLAY row, which never participates in cell
-// matching). No current cell tuple matches these rows, so the UI shows no
-// benchmark card. The numbers are kept as measurement provenance ONLY — do
-// not re-key them onto the new cells without re-measuring: the overlay-era
-// commands differ (explicit --kv-cache-dtype fp8_e4m3, strategy flag emitted
-// by the tier row) and the accept lengths are protocol-specific.
-//
-// All six rows are ONE-BATCH measurements (sglang.bench_serving --flush-cache,
-// random dataset, ISL=1024 / OSL=1024, --random-range-ratio 1, request-rate inf,
-// max_concurrency 1/16/64, n=64/64/256 respectively) on a single GB300 GPU
-// (Blackwell Ultra SM103, 288GB HBM) on 2026-08-14. SGLang binary:
-// lmsysorg/sglang:dev resolving to commit c4271c3fe1262fc2adbd162c33b25de5255251c5.
-// With no --attention-backend pin, that commit on GB300 resolves attention to
-// triton; a newer sglang (c7c03ec+) resolves trtllm_mha. Same binary and
-// protocol for all six cells so the numbers are apples-to-apples. MTP rows
-// show mean speculative accept_length across all decode batches.
-//
-// Accuracy (sgl-eval run gsm8k, full 1319, stop_rate 1.0, truncated_rate 0.0):
-// only the W4A4-NVFP4 checkpoint has been GSM8K'd on a GB300 single-GPU box —
-// via a sibling experiment pinned to sglang c7c03ec53b1e664c2d415db4f02e43f86661f31d
-// with an explicit `--kv-cache-dtype` A/B. The bf16-KV row (96.82%) is the better
-// baseline to cite; the default fp8-KV the NVFP4 checkpoint auto-enables scores
-// 96.44%. FP8 / BF16 GB300 GSM8K has not been measured and stays null below
-// (see journal 2026-08-14-1048-claude-jrn_f6c1265be8cbdf86c44fe36c).
+// below keys on the removed `strategy` match dim, and those gb300
+// `high-throughput` cells they were measured against. No current cell tuple
+// matches these rows, so the UI shows no benchmark card. The numbers are kept
+// as measurement provenance ONLY — do not re-key them onto the new cells
+// without re-measuring: the overlay-era commands differ (explicit
+// --kv-cache-dtype fp8_e4m3, strategy flag emitted by the tier row) and the
+// accept lengths are protocol-specific.
 export const benchmarks = [
   {
     match: { hw: "gb300", variant: "default", quant: "nvfp4-fp4-head", strategy: "balanced", nodes: "single" },

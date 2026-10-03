@@ -1,9 +1,6 @@
 "use strict";
 // Visual scheduler simulator: the prefill-priority rule and the fork's
 // time-sharing balancer, side by side, fed the same traffic.
-// schedsim's fit on the 28-hour log: "prefill.0 ms +. us/token +
-// 7.43e-11/token/ctx + 5.54e-16/token/ctx^; decode.269 ms +. ms/req +
-// 6e-09 s/token-ctx (accept.78); pool tokens".
 const LOG_CALIBRATION = {
     chunk: 4096,
     prefillBase: 10e-3,

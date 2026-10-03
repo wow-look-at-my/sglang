@@ -1,9 +1,6 @@
 name: Nightly Test (AMD MI355X Disagg)
 
-# Self-hosted runners on the amd-sglang login node salloc two or four MI355X
-# nodes and run the Docker harness (prefill + decode over MORI, a standalone
-# load balancer, then an sglang.bench_serving concurrency sweep) via
-# scripts/ci/slurm/launch_mi355x.sh.
+# Self-hosted runners on the amd-sglang login node salloc two or four MI355X nodes and run the Docker harness (prefill + decode over MORI, a standalone load balancer, then an sglang.bench_serving concurrency sweep) via scripts/ci/slurm/launch_mi355x.sh.
 on:
   schedule:
     - cron: '0 7 * * *'
@@ -26,11 +23,7 @@ env:
   SGLANG_IS_IN_CI: true
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Reads scripts/ci/slurm/nightly-configs.yaml and generates one matrix entry
-  # per recipe YAML for runner=mi355x. To add/remove configs, edit
-  # nightly-configs.yaml only.
-  # ---------------------------------------------------------------------------
+  # --------------------------------------------------------------------------- Reads scripts/ci/slurm/nightly-configs.yaml and generates one matrix entry per recipe YAML for runner=mi355x. To add/remove configs, edit nightly-configs.yaml only. ---------------------------------------------------------------------------
   setup:
     if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
@@ -44,14 +37,7 @@ jobs:
 
       - name: Resolve latest MI35x ROCm 10 nightly image
         id: image
-        # Track the newest published image so the nightly actually catches
-        # regressions instead of re-testing one pinned build. We resolve on the
-        # GitHub-hosted runner (clean Docker Hub access, no rate limits) and pass
-        # the tag to the self-hosted runner. Scope is deliberately tight: only
-        # the clean main MI35x ROCm 10 line
-        # `lmsysorg/sglang-rocm:v*-rocm10-mi35x-YYYYMMDD` (excludes -test-,
-        # miles-, mori-, vllm- variants). If resolution fails, use the pinned
-        # ROCm 10 image from the last validated full workflow run.
+        # Track the newest published image so the nightly actually catches regressions instead of re-testing one pinned build. We resolve on the GitHub-hosted runner (clean Docker Hub access, no rate limits) and pass the tag to the self-hosted runner. Scope is deliberately tight: only the clean main MI35x ROCm 10 line `lmsysorg/sglang-rocm:v*-rocm10-mi35x-YYYYMMDD` (excludes -test-, miles-, mori-, vllm- variants). If resolution fails, use the pinned. ROCm 10 image from the last validated full workflow run.
         run: |
           set -o pipefail
           FALLBACK_IMAGE="lmsysorg/sglang-rocm:v0.5.20-rocm10-mi35x-20260922"
@@ -68,16 +54,13 @@ jobs:
       - name: Record which image this run uses
         env:
           DISPATCH_IMAGE: ${{ inputs.image }}
-          RESOLVED_IMAGE: ${{ steps.image.outputs.image }}
         run: |
-          IMAGE="${DISPATCH_IMAGE:-$RESOLVED_IMAGE}"
+          IMAGE="${DISPATCH_IMAGE:-${{ steps.image.outputs.image }}}"
           echo "### Image" >> "$GITHUB_STEP_SUMMARY"
           echo "\`$IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate benchmark matrix
         id: generate
-        env:
-          CONFIGS_FILTER: ${{ inputs.configs }}
         run: |
           pip install pyyaml -q
 
@@ -87,10 +70,10 @@ jobs:
           echo "$ALL_MATRIX" | python3 -c "import json,sys; [print(f'  - {e[\"name\"]}') for e in json.load(sys.stdin)]"
 
           FILTER_ARG=()
-          if [ -n "$CONFIGS_FILTER" ]; then
+          if [ -n "${{ inputs.configs }}" ]; then
             echo ""
-            echo "Filtering to: $CONFIGS_FILTER"
-            FILTER_ARG=(--filter "$CONFIGS_FILTER")
+            echo "Filtering to: ${{ inputs.configs }}"
+            FILTER_ARG=(--filter "${{ inputs.configs }}")
           fi
           MATRIX=$(python3 scripts/ci/slurm/generate_matrix.py \
             scripts/ci/slurm/nightly-configs.yaml --runner mi355x "${FILTER_ARG[@]}")
@@ -142,12 +125,7 @@ jobs:
       CONFIG_FILE: ${{ matrix.config.config_file }}
       RESULT_FILENAME: mi355x-${{ matrix.config.name }}
       MATRIX_CONFIG_NAME: ${{ matrix.config.name }}
-      # NOTE: RUNNER_NAME is a built-in default env var on every runner, so the
-      # launch + cleanup steps read it directly. Do NOT set it here from
-      # ${{ runner.name }} -- the `runner` context is not available in job-level
-      # env and makes the whole workflow file invalid.
-      # Shared-NFS HuggingFace cache dir; the launcher resolves the live snapshot
-      # via refs/main. Per-model value comes from nightly-configs.yaml model_path.
+      # NOTE: RUNNER_NAME is a built-in default env var on every runner, so the launch + cleanup steps read it directly. Do NOT set it here from ${{ runner.name }} -- the `runner` context is not available in job-level env and makes the whole workflow file invalid. Shared-NFS HuggingFace cache dir; the launcher resolves the live snapshot via refs/main. Per-model value comes from nightly-configs.yaml model_path.
       MODEL_PATH: ${{ matrix.config.model_path }}
 
     steps: &mi355x-steps
@@ -171,17 +149,16 @@ jobs:
           # what makes this selective, and that is unique per runner, so the
           # filter is equally precise without it.
           if [ -z "${RUNNER_NAME:-}" ]; then echo "RUNNER_NAME unset; skipping"; exit 0; fi
-          STALE_JOBS=$(squeue --noheader --format="%i %200j" | grep -F "mi355x-ci-${RUNNER_NAME}-" | awk '{print $1}' || true)
+          STALE_JOBS=$(squeue --noheader --format="%i %200j" | grep -F "mi355x-ci-${{ runner.name }}-" | awk '{print $1}' || true)
           if [ -n "$STALE_JOBS" ]; then
-            echo "Cancelling stale jobs for ${RUNNER_NAME}: $STALE_JOBS"
+            echo "Cancelling stale jobs for ${{ runner.name }}: $STALE_JOBS"
             scancel $STALE_JOBS
           fi
 
       - name: Launch MI355X benchmark
         timeout-minutes: 180
         env:
-          # Manual dispatch input wins; otherwise use the latest image resolved
-          # by the setup job; otherwise the launcher falls back to the recipe default.
+          # Manual dispatch input wins; otherwise use the latest image resolved by the setup job; otherwise the launcher falls back to the recipe default.
           IMAGE_OVERRIDE: ${{ inputs.image != '' && inputs.image || needs.setup.outputs.image }}
         run: bash scripts/ci/slurm/launch_mi355x.sh
 
@@ -247,7 +224,7 @@ jobs:
           # mi355x-ci-<RUNNER_NAME>-<GITHUB_RUN_ID>-<config>. GITHUB_RUN_ID +
           # config are unique per matrix leg, so a concurrent leg is never hit.
           if [ -z "${RUNNER_NAME:-}" ]; then echo "RUNNER_NAME unset; skipping"; exit 0; fi
-          JOB_TAG="mi355x-ci-${RUNNER_NAME}-${GITHUB_RUN_ID}-${MATRIX_CONFIG_NAME}"
+          JOB_TAG="mi355x-ci-${{ runner.name }}-${GITHUB_RUN_ID}-${MATRIX_CONFIG_NAME}"
           ACTIVE_JOBS=$(squeue --noheader --format="%i %200j" | grep -F "$JOB_TAG" | awk '{print $1}' || true)
           if [ -n "$ACTIVE_JOBS" ]; then
             echo "Cancelling jobs for ${JOB_TAG}: $ACTIVE_JOBS"

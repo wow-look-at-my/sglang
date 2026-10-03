@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Plain and PD chat forwarding, including load tracking and streaming metrics.
@@ -109,8 +109,7 @@ pub(super) async fn forward_chat_request(
         (prefill, prefill_load_guards)
     };
 
-    // In PD mode, prefill can finish before decode. Watch the registration
-    // held by the response so expiration remains live for its full lifetime.
+    // In PD mode, prefill can finish before decode.
     let expiration_token = response_load_guards.1.cancel_token().clone();
     let response_future = forward_to_response_worker(
         ctx,
@@ -207,7 +206,8 @@ async fn forward_to_response_worker(
     expiration: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
     if metrics.streaming {
-        // Load and duration guards live until the SSE pump ends, not just until headers arrive.
+        // Load and duration guards live until the SSE pump ends, not until
+        // headers arrive.
         let stream_guards: Box<dyn Send + 'static> =
             Box::new((load_guards, metrics.stream_duration_guard()));
         ctx.proxy

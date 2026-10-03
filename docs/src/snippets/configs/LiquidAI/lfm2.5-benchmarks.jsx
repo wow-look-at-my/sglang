@@ -1,12 +1,9 @@
-// One entry per cell `match` tuple (same 5 keys as the config cells). Speed
-// measured with python3 -m sglang.bench_serving on Modal cloud GPUs (one GPU,
-// TP=1): latency = 10 prompts at concurrency 1, throughput = 1000 prompts at
-// concurrency 100 (`random` dataset, 1024/1024 token caps). Accuracy comes
-// from the config's `defaultAccuracy` (Liquid-AI-reported GPQA / AIME25).
+// One entry per cell `match` tuple (same keys as the config cells). Accuracy
+// comes from the config's `defaultAccuracy` (Liquid-AI-reported GPQA /
+// AIME25).
 
 export const benchmarks = [
-  // ====================================================================
-  // H100
+  // ==================================================================== H100
   // ====================================================================
   {
     match: { hw: "h100", variant: "8b-a1b", quant: "bf16", strategy: "default", nodes: "single" },
@@ -88,8 +85,7 @@ export const benchmarks = [
         ttft_ms: 1604.2, tpot_ms: 3.38, tokens_per_sec_per_gpu: 29704 },
     ],
   },
-  // ====================================================================
-  // H200
+  // ==================================================================== H200
   // ====================================================================
   {
     match: { hw: "h200", variant: "8b-a1b", quant: "bf16", strategy: "default", nodes: "single" },
@@ -171,8 +167,7 @@ export const benchmarks = [
         ttft_ms: 1544.41, tpot_ms: 3.14, tokens_per_sec_per_gpu: 31235 },
     ],
   },
-  // ====================================================================
-  // B200
+  // ==================================================================== B200
   // ====================================================================
   {
     match: { hw: "b200", variant: "8b-a1b", quant: "bf16", strategy: "default", nodes: "single" },

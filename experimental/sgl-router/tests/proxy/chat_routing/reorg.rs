@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -119,7 +119,7 @@ fn context(workers: &[(&str, Stage, &MockWorker)], buckets: Vec<Bucket>) -> Arc<
         tokenizers,
         Arc::new(Proxy::new(TEST_TIMEOUT).unwrap()),
         registry,
-        // The reorg route must not require the legacy policy registry.
+        // The reorg route must not require the policy registry.
         Arc::new(PolicyRegistry::default()),
     );
     ctx.chat_routing = ChatRouting::Reorg(

@@ -155,8 +155,7 @@ mod retry_tests {
         );
 
         // Should take some time due to backoff (at least initial_backoff_ms)
-        // With 2 retries and 10ms initial backoff, should take at least 10ms
-        // But don't make this too strict as timing can vary
+        // With multiple retries and 10ms initial backoff.
         assert!(
             elapsed.as_millis() >= 5,
             "Should have some backoff delay, got {}ms",

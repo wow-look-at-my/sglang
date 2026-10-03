@@ -1,45 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Router-local per-worker in-flight load tracking with RAII guards and a stale-request
-//! janitor.
-//!
-//! The per-worker `Worker::active_requests` counter tracks in-flight HTTP
-//! requests and is drop-safe through [`crate::workers::LoadGuard`].
-//!
-//! This module adds two things on top of that:
-//!
-//! 1. **Per-request bookkeeping** keyed on a `RequestId` so a background
-//!    janitor can sweep requests that outlive the configured
-//!    `stale_request_timeout` and decrement the counters they were holding.
-//!    Without this, a request whose `LoadGuard` is leaked (proxy task
-//!    panics before the future drops, server hits a panic-catching
-//!    middleware, etc.) would inflate a worker's load forever.
-//! 2. **Two-axis tracking** so PD-disaggregation can score prefill (token
-//!    count) separately from decode (block count). The two counters share
-//!    the same registry shape; we expose them as a single
-//!    [`RouterInflightLoadGuard`] holding both so the proxy's hot path mints one
-//!    guard per request rather than two.
-//!
-//! # Drop semantics
-//!
-//! Guards decrement on drop AND remove themselves from the request tracker
-//! so the janitor never double-decrements. The implementation uses
-//! `Option<RegistryHandle>` inside the guard: the janitor's `expire_now`
-//! path takes the handle (rendering subsequent drop a no-op for that
-//! request), while normal RAII drop also takes the handle (rendering
-//! subsequent janitor sweep a no-op). Either path may run first — the
-//! other becomes a no-op. Rust's affine type system makes a literal
-//! double-drop of the same guard value unreachable.
-//!
-//! # Clock injection
-//!
-//! [`RouterInflightLoadRegistry::new`] is generic over the clock so tests can drive
-//! the janitor deterministically. Production wires a `SystemTimeClock`;
-//! tests use a `MockClock`. The `Instant`-based timestamp on registration
-//! is sufficient for the timeout comparison (monotonic), so the clock
-//! abstraction is just two methods: `now()` and an associated `Instant`
-//! type whose `duration_since(other)` returns the wall-clock delta.
+//! Router-local per-worker in-flight load tracking with RAII guards and a stale-request janitor.
 
 use crate::discovery::WorkerId;
 use crate::server::metrics::{MetricsRegistry, RouterInflightLoadKind};
@@ -51,9 +13,7 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-/// Unique identifier for an in-flight request. Minted by
-/// [`RouterInflightLoadRegistry::register`] and carried inside [`RouterInflightLoadGuard`]
-/// so the janitor can address one request at a time.
+/// Unique identifier for an in-flight request.
 #[derive(Clone, Eq, Hash, PartialEq, Debug)]
 pub struct RequestId(pub Uuid);
 
@@ -70,12 +30,6 @@ impl std::fmt::Display for RequestId {
 }
 
 /// Per-worker counters for prefill and decode work.
-///
-/// Production tracks **active requests** as the unit (count of in-flight
-/// requests pinning the worker), not raw token / block counts — until the
-/// proxy wires real prompt-token / completion-block accounting through to
-/// `register`. The two axes will become meaningful once the proxy starts
-/// passing `prompt_tokens` and `output_blocks` to it.
 #[derive(Debug, Default)]
 struct WorkerCounters {
     prefill_load: AtomicUsize,
@@ -83,29 +37,10 @@ struct WorkerCounters {
 }
 
 /// Per-request bookkeeping the janitor consults to find expired requests.
-///
-/// `cancel` is a [`CancellationToken`] the janitor fires when the entry
-/// is swept. The chat handler holds a clone (via
-/// [`RouterInflightLoadGuard::cancel_token`]) and aborts its upstream fetch
-/// with `ApiError::StaleRequestExpired` when the token resolves —
-/// surfacing the stale-request expiry as a 504 to the client instead
-/// of leaving the handler hung on a long-lived upstream.
-///
-/// `counters` is the **exact** `WorkerCounters` instance that was
-/// incremented at register time. Holding the `Arc` directly (instead
-/// of re-looking-up `workers.get(&worker)` at sweep time) pins the
-/// decrement to the same instance — so a worker that is
-/// `forget_worker`-removed and re-added under the same `WorkerId`
-/// does not underflow the new (zero-initialized) counters slot.
 #[derive(Debug)]
 struct RequestEntry {
     worker: WorkerId,
-    /// Worker URL captured at register time. The metrics gauge
-    /// (`sgl_router_active_load`) is keyed by URL, not by `WorkerId`, so
-    /// drop / sweep paths need the URL to emit the decremented gauge
-    /// value. Stored on the entry (not looked up via the worker
-    /// registry) so a `forget_worker` between register and drop still
-    /// produces a coherent metric trace.
+    /// Worker URL captured at register time.
     worker_url: String,
     counters: Arc<WorkerCounters>,
     prefill_load: usize,
@@ -115,11 +50,6 @@ struct RequestEntry {
 }
 
 /// Clock abstraction so tests can drive the janitor deterministically.
-///
-/// We only need `now()`; ordering is via `Instant::duration_since` which
-/// already exists on the std type. Production implementers return the
-/// monotonic system instant; tests return whatever value `MockClock` is set
-/// to via `set_now`.
 pub trait Clock: Send + Sync + std::fmt::Debug {
     fn now(&self) -> Instant;
 }
@@ -135,9 +65,6 @@ impl Clock for SystemTimeClock {
 }
 
 /// Test-only clock that returns a caller-controlled instant.
-///
-/// Wrapped in `parking_lot::Mutex` because tests cross await points; the
-/// type is `Send + Sync` so it can be stored behind `Arc<dyn Clock>`.
 #[derive(Debug)]
 pub struct MockClock {
     now: Mutex<Instant>,
@@ -165,34 +92,18 @@ impl Clock for MockClock {
 }
 
 /// Registry of in-flight requests + per-worker active-load counters.
-///
-/// Constructed once per `AppContext`; the proxy holds an [`RouterInflightLoadGuard`]
-/// per request so counters decrement on drop. A background task periodically calls
-/// [`Self::sweep_stale`] to evict requests that outlived
-/// `stale_request_timeout`.
 #[derive(Debug)]
 pub struct RouterInflightLoadRegistry {
     workers: DashMap<WorkerId, Arc<WorkerCounters>>,
     requests: DashMap<RequestId, RequestEntry>,
     clock: Arc<dyn Clock>,
     stale_request_timeout: Duration,
-    /// Optional Prometheus metrics sink. When attached via
-    /// [`Self::attach_metrics`] (typically from `AppContext`), every
-    /// `register` / drop / `sweep_stale` emits the live per-worker
-    /// `sgl_router_active_load` gauge for both axes. Late binding via
-    /// `Mutex<Option<...>>` keeps construction order flexible: the
-    /// registry can be created before the metrics registry exists.
+    /// Optional Prometheus metrics sink.
     metrics: Mutex<Option<Arc<MetricsRegistry>>>,
 }
 
 impl RouterInflightLoadRegistry {
     /// Construct an [`RouterInflightLoadRegistry`] wrapped in an [`Arc`].
-    ///
-    /// The registry is always shared (proxy + janitor + selector all hold
-    /// the same instance), so the public constructor mints the `Arc`
-    /// directly to remove an easy footgun where callers forget to wrap
-    /// it. Tests that need the inner type for direct field access also
-    /// receive `Arc<Self>`.
     pub fn new(clock: Arc<dyn Clock>, stale_request_timeout: Duration) -> Arc<Self> {
         Arc::new(Self {
             workers: DashMap::new(),
@@ -203,10 +114,8 @@ impl RouterInflightLoadRegistry {
         })
     }
 
-    /// Attach (or replace) the [`MetricsRegistry`] this registry pushes
-    /// gauge updates into. Idempotent; safe to call multiple times.
-    /// Production wires this from `AppContext` after the metrics registry
-    /// is constructed; tests skip it unless they assert on the gauge.
+    /// Attach (or replace) the [`MetricsRegistry`] this registry pushes gauge
+    /// updates into. Idempotent; safe to call multiple times.
     pub fn attach_metrics(&self, metrics: Arc<MetricsRegistry>) {
         *self.metrics.lock() = Some(metrics);
     }
@@ -214,8 +123,6 @@ impl RouterInflightLoadRegistry {
     /// Snapshot the current per-worker load and push it to the metrics
     /// gauge (if any). Called from the register / drop / sweep paths
     /// after the counter mutation completes. Reading `counters.load()`
-    /// here (rather than computing from the delta) keeps the gauge
-    /// eventually-consistent with the canonical counter even under
     /// concurrent register + drop interleavings.
     fn publish_gauge(&self, counters: &WorkerCounters, worker_url: &str) {
         let Some(metrics) = self.metrics.lock().clone() else {
@@ -234,13 +141,7 @@ impl RouterInflightLoadRegistry {
     }
 
     /// Default-config registry: monotonic system clock + 10-minute stale
-    /// timeout. Convenience constructor for production callers; tests use
-    /// [`Self::new`] with a `MockClock`. Mirrors
-    /// `default_stale_request_timeout_secs` in `config::types`.
-    ///
-    /// 10 minutes is comfortable above 99p generation tail latency
-    /// (including long-queue throughput-focused workloads) while
-    /// bounding leak-induced load inflation.
+    /// timeout.
     pub fn with_defaults() -> Arc<Self> {
         Self::new(
             Arc::new(SystemTimeClock) as Arc<dyn Clock>,
@@ -252,9 +153,8 @@ impl RouterInflightLoadRegistry {
     /// active-load counters up. The guard's drop / explicit complete path
     /// decrements the counters and removes the request entry.
     ///
-    /// `worker_url` is captured on the entry so drop / sweep can emit a
     /// coherent gauge update via the attached [`MetricsRegistry`] (if
-    /// any). Callers in the request path pass `&worker.url`; tests pass a
+    /// any). Callers in the request path pass `&worker.url`.
     /// stable placeholder.
     pub fn register(
         self: &Arc<Self>,
@@ -299,16 +199,7 @@ impl RouterInflightLoadRegistry {
         }
     }
 
-    /// Drop a worker's per-worker counters entry. Called from
-    /// [`crate::workers::manager`] on `DiscoveryEvent::Removed` so the
-    /// `WorkerCounters` slot for a now-gone worker does not leak.
-    ///
-    /// Guards still alive for that worker remain valid; their drop tries
-    /// `workers.get(&entry.worker)` which returns `None`, and the
-    /// per-request `requests` entry is still removed cleanly. A subsequent
-    /// `register` for the same `WorkerId` reinitializes the slot to 0 —
-    /// the in-flight guards' loads are NOT re-added, by design (the
-    /// worker is gone, those loads no longer mean anything).
+    /// Drop a worker's per-worker counters entry.
     pub fn forget_worker(&self, id: &WorkerId) {
         self.workers.remove(id);
     }
@@ -345,8 +236,6 @@ impl RouterInflightLoadRegistry {
     /// the past. Returns the number of entries expired.
     ///
     /// Decrements both axes' worker counters for each expired entry. Safe
-    /// to call concurrently with `register` and with guard drops — each
-    /// `remove` operation is atomic and the per-worker counters are
     /// `AtomicUsize` so partial visibility cannot under-decrement.
     pub fn sweep_stale(&self) -> usize {
         let now = self.clock.now();
@@ -363,11 +252,7 @@ impl RouterInflightLoadRegistry {
             // returns `None` and we skip (no double-decrement).
             if let Some((_, entry)) = self.requests.remove(&id) {
                 // Decrement the **captured** counters Arc — the same
-                // instance the register call incremented. This stays
-                // correct across `forget_worker` + re-register cycles:
-                // even if `self.workers[&entry.worker]` now points at a
-                // brand-new `WorkerCounters`, our decrement targets the
-                // original one (still alive via this Arc clone).
+                // instance the register call incremented.
                 entry
                     .counters
                     .prefill_load
@@ -377,11 +262,7 @@ impl RouterInflightLoadRegistry {
                     .decode_load
                     .fetch_sub(entry.decode_load, Ordering::Relaxed);
                 self.publish_gauge(&entry.counters, &entry.worker_url);
-                // Wake the chat handler awaiting this request so it can
-                // return `ApiError::StaleRequestExpired` to the client.
-                // Cancellation is idempotent; if the handler already
-                // finished and dropped the guard, the token is already
-                // dropped and `cancel()` is a no-op for everyone.
+                // Wake the chat handler awaiting this request so it can return `ApiError::StaleRequestExpired` to the client. Cancellation is idempotent.
                 entry.cancel.cancel();
                 count += 1;
                 tracing::warn!(
@@ -399,16 +280,6 @@ impl RouterInflightLoadRegistry {
 
 /// Spawn a background janitor task that periodically calls
 /// [`RouterInflightLoadRegistry::sweep_stale`].
-///
-/// Returns a [`JanitorHandle`] that owns the join handle and a cancellation
-/// token. Dropping the handle cancels the task; calling
-/// [`JanitorHandle::shutdown`] cancels and awaits the join.
-///
-/// `interval` is the wall-clock cadence of the sweep. A sensible default
-/// is half the configured `stale_request_timeout` so an expired entry is
-/// reaped within 1.5× the timeout in the worst case. Pass a fresh
-/// `Arc<RouterInflightLoadRegistry>` (cloned from the shared one held in
-/// `AppContext`).
 pub fn spawn_janitor(
     registry: Arc<RouterInflightLoadRegistry>,
     interval: Duration,
@@ -419,9 +290,8 @@ pub fn spawn_janitor(
 /// Spawn a background task that calls `sweep` on a fixed cadence until its
 /// [`JanitorHandle`] is cancelled or dropped.
 ///
-/// `sweep` returns the number of entries it removed; a non-zero count is
-/// logged at info under `{label} janitor`. This is the shared engine
-/// behind [`spawn_janitor`] (active-load stale-request reaping) and the
+/// `sweep` returns the number of entries it removed.
+/// logged at info under `{label} janitor`.
 /// sticky policy's idle-assignment eviction — both want the same
 /// cancel-aware ticker loop, differing only in what they sweep.
 ///
@@ -458,9 +328,7 @@ where
     }
 }
 
-/// Owner handle for the background janitor task. Dropping the handle
-/// cancels the task; calling [`Self::shutdown`] cancels AND awaits join,
-/// giving callers a clean shutdown path.
+/// Owner handle for the background janitor task.
 #[must_use = "JanitorHandle owns the background task; dropping it cancels the janitor"]
 pub struct JanitorHandle {
     cancel: CancellationToken,
@@ -471,8 +339,6 @@ impl JanitorHandle {
     pub async fn shutdown(mut self) {
         self.cancel.cancel();
         if let Some(j) = self.join.take() {
-            // 2 s ceiling guards against a runtime-teardown hang; the
-            // janitor exits within one tick of `cancelled()`.
             let _ = tokio::time::timeout(Duration::from_secs(2), j).await;
         }
     }
@@ -485,26 +351,14 @@ impl Drop for JanitorHandle {
 }
 
 /// RAII guard returned by [`RouterInflightLoadRegistry::register`].
-///
-/// `#[must_use]`: a statement-form `registry.register(...)` would drop the
-/// guard on the same line and decrement the counter before the request
-/// actually executed, defeating the purpose. The compile-time warning
-/// catches that misuse.
 #[must_use = "RouterInflightLoadGuard must be held for the request's lifetime; dropping it immediately decrements counters"]
 #[derive(Debug)]
 pub struct RouterInflightLoadGuard {
     registry: Option<Arc<RouterInflightLoadRegistry>>,
-    /// `None` after the janitor expired this request — drop becomes a
-    /// no-op in that case. The guard keeps only the `RequestId`; the
-    /// per-axis amounts (and the captured `Arc<WorkerCounters>`) live
-    /// in the registry's `RequestEntry` so drop and the janitor
-    /// consult the same source of truth.
+    /// `None` after the janitor expired this request — drop becomes a no-op in that case.
     request_id: Option<RequestId>,
     worker: WorkerId,
-    /// Cancellation token mirrored from `RequestEntry::cancel`. The
-    /// chat handler awaits `cancel.cancelled()` in a `tokio::select!`
-    /// branch so the janitor can interrupt an upstream fetch and force
-    /// the handler to return `ApiError::StaleRequestExpired` (HTTP 504).
+    /// Cancellation token mirrored from `RequestEntry::cancel`.
     cancel: CancellationToken,
 }
 
@@ -514,10 +368,7 @@ impl RouterInflightLoadGuard {
         &self.worker
     }
 
-    /// Borrow the cancellation token. The chat handler clones it for
-    /// the `tokio::select!` branch (`token.cancelled().await`) so the
-    /// guard itself can still move into the SSE pump task (or stay in
-    /// the buffered-response scope) without losing the wake-up channel.
+    /// Borrow the cancellation token.
     pub fn cancel_token(&self) -> &CancellationToken {
         &self.cancel
     }
@@ -526,17 +377,12 @@ impl RouterInflightLoadGuard {
 impl Drop for RouterInflightLoadGuard {
     fn drop(&mut self) {
         // If the janitor already expired this request (or `expire_now` was
-        // called explicitly), `request_id` is `None` and we skip — the
-        // janitor already decremented the counters.
+        // called explicitly).
         let (Some(registry), Some(id)) = (self.registry.take(), self.request_id.take()) else {
             return;
         };
-        // `remove` returns `Some` exactly once; if the janitor races us
-        // and wins, we skip the decrement here. Decrement the **same**
-        // counters Arc the register call incremented (see
-        // `RouterInflightLoadGuard::counters`) — pinning the decrement to a
-        // specific WorkerCounters instance keeps the math correct
-        // across `forget_worker` + re-register cycles.
+        // `remove` returns `Some` exactly once; if the janitor races us and
+        // wins, we skip the decrement here.
         if let Some((_, entry)) = registry.requests.remove(&id) {
             entry
                 .counters
@@ -620,15 +466,7 @@ mod tests {
         assert_eq!(registry.prefill_load(&w1), 11);
     }
 
-    /// Gap closer #2: double-drop safety.
-    ///
-    /// Rust's affine type system makes a literal double-drop of the same
-    /// `RouterInflightLoadGuard` value impossible — the compiler rejects
-    /// `drop(g); drop(g);`. The interesting property is that the
-    /// registry's own bookkeeping never under-decrements, even if the
-    /// janitor and a guard's drop race. We assert that by simulating the
-    /// race: the janitor wins (entry removed via `sweep_stale`), then the
-    /// guard's drop runs — must be a no-op.
+    /// Gap closer #: double-drop safety.
     #[test]
     fn janitor_then_guard_drop_does_not_underflow() {
         let (registry, clock) = registry_with_mock_clock(Duration::from_secs(1));
@@ -646,14 +484,14 @@ mod tests {
         assert_eq!(registry.inflight_count(), 0);
     }
 
-    /// Gap closer #4: stale-request janitor expiry zeroes counters.
+    /// Gap closer #: stale-request janitor expiry zeroes counters.
     #[test]
     fn janitor_expires_stale_requests() {
         let (registry, clock) = registry_with_mock_clock(Duration::from_secs(5));
         let w = WorkerId("w0".into());
         let _g = registry.register(w.clone(), "test://100-4", 100, 4);
         assert_eq!(registry.prefill_load(&w), 100);
-        // Just below the threshold — no expiry.
+        // Below the threshold — no expiry.
         clock.advance(Duration::from_secs(4));
         assert_eq!(registry.sweep_stale(), 0);
         assert_eq!(registry.prefill_load(&w), 100);
@@ -686,11 +524,7 @@ mod tests {
         assert_eq!(registry.prefill_load(&w), 50);
     }
 
-    /// Spawned janitor sweeps stale entries on its periodic tick. Uses
-    /// real (short) sleeps so that the tokio interval timer fires; the
-    /// registry's clock is the real `SystemTimeClock` so both views of
-    /// "now" advance together. 200 ms total wait is comfortably above
-    /// the 30 ms timeout we configure.
+    /// Spawned janitor sweeps stale entries on its periodic tick.
     #[tokio::test]
     async fn spawn_janitor_sweeps_stale_entries() {
         let clock: Arc<dyn Clock> = Arc::new(SystemTimeClock);
@@ -700,8 +534,6 @@ mod tests {
         assert_eq!(registry.inflight_count(), 1);
 
         let handle = spawn_janitor(Arc::clone(&registry), Duration::from_millis(20));
-        // Wait long enough for at least one sweep to find the entry
-        // past the 30 ms timeout. 200 ms allows ~9 ticks of slack.
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(registry.inflight_count(), 0, "janitor should have swept");
         assert_eq!(registry.prefill_load(&w), 0);
@@ -709,8 +541,7 @@ mod tests {
         handle.shutdown().await;
     }
 
-    /// Shutdown is idempotent — calling `shutdown` once must cleanly
-    /// terminate the janitor without hanging.
+    /// Shutdown is idempotent — calling `shutdown` once must cleanly terminate the janitor without hanging.
     #[tokio::test]
     async fn spawn_janitor_shutdown_is_clean() {
         let clock: Arc<dyn Clock> = Arc::new(SystemTimeClock);
@@ -721,9 +552,7 @@ mod tests {
         assert!(r.is_ok(), "janitor shutdown timed out");
     }
 
-    /// Task B: `forget_worker` drops the per-worker counters entry so a
-    /// disappeared worker does not leak a `WorkerCounters` slot.
-    /// Existing guards still drop cleanly (no underflow / panic).
+    /// Task B: `forget_worker` drops the per-worker counters entry.
     #[test]
     fn forget_worker_drops_counters_entry() {
         let (registry, _) = registry_with_mock_clock(Duration::from_secs(60));
@@ -737,14 +566,10 @@ mod tests {
             !registry.is_known(&w),
             "worker counters entry must be removed after forget_worker",
         );
-        // Per-worker counters are gone, so the load query reads 0.
         assert_eq!(registry.prefill_load(&w), 0);
         assert_eq!(registry.decode_load(&w), 0);
 
-        // The guard still has a live request entry pointing at the
-        // now-forgotten worker. Drop must NOT panic; the registry's
-        // worker map being empty for this id is treated as the
-        // "already-cleaned-up" terminal state.
+        // The guard still has a live request entry pointing at the now-forgotten worker.
         drop(g);
         assert_eq!(
             registry.inflight_count(),
@@ -754,39 +579,25 @@ mod tests {
     }
 
     /// Task B: forgetting an unknown worker is a no-op (idempotent).
-    /// The manager calls `forget_worker` unconditionally on `Removed`,
-    /// so a double-Removed event or a Removed for a never-seen worker
-    /// must not panic.
     #[test]
     fn forget_unknown_worker_is_noop() {
         let (registry, _) = registry_with_mock_clock(Duration::from_secs(60));
         registry.forget_worker(&WorkerId("never-registered".into()));
-        // No assertion beyond "did not panic"; the body of the test
-        // exercises the contract.
     }
 
-    /// Task B regression: an in-flight guard must NOT underflow the
-    /// counters of a freshly re-registered worker that reuses its
-    /// predecessor's `WorkerId`. This is the exact scenario `forget_
-    /// worker` is supposed to make safe — and it requires Drop to
-    /// decrement the **captured** `Arc<WorkerCounters>`, not the
-    /// current `workers[worker]` lookup.
+    /// Task B regression: an in-flight guard must NOT underflow the counters of a freshly re-registered worker.
     #[test]
     fn forget_then_reregister_does_not_underflow_new_counters() {
         let (registry, _) = registry_with_mock_clock(Duration::from_secs(60));
         let w = WorkerId("w0".into());
         let old_guard = registry.register(w.clone(), "test://7-2", 7, 2);
         registry.forget_worker(&w);
-        // Re-register under the same id → brand-new WorkerCounters
-        // slot. Fresh load of 0 (we mint a no-op guard to materialize
-        // the slot without bumping any counters).
+        // Re-register under the same id → brand-new WorkerCounters slot.
         let _new_guard = registry.register(w.clone(), "test://0-0", 0, 0);
         assert_eq!(registry.prefill_load(&w), 0);
         assert_eq!(registry.decode_load(&w), 0);
 
-        // Dropping the OLD guard must subtract from the OLD counters
-        // (which are now orphaned but kept alive via the Arc captured
-        // in the RequestEntry). The NEW counters' values are unaffected.
+        // Dropping the guard must subtract from the counters.
         drop(old_guard);
         assert_eq!(
             registry.prefill_load(&w),
@@ -800,8 +611,7 @@ mod tests {
         );
     }
 
-    /// Task D: janitor expiry fires the guard's cancellation token so
-    /// the in-flight handler can return `StaleRequestExpired`.
+    /// Task D: janitor expiry fires the guard's cancellation token.
     #[tokio::test]
     async fn janitor_expiry_fires_guard_cancel_token() {
         let (registry, clock) = registry_with_mock_clock(Duration::from_secs(1));
@@ -816,9 +626,7 @@ mod tests {
         clock.advance(Duration::from_secs(2));
         assert_eq!(registry.sweep_stale(), 1);
 
-        // The sweep must have fired the token. We don't await
-        // `cancelled()` because the test is single-threaded and the
-        // token resolves synchronously after `cancel.cancel()`.
+        // The sweep must have fired the token.
         assert!(
             cancel.is_cancelled(),
             "stale sweep must cancel the guard's token",
@@ -828,9 +636,6 @@ mod tests {
     }
 
     /// Task D: normal completion (guard drop) does NOT cancel the token.
-    /// The chat handler's `select!` branch is meant to fire only on a
-    /// janitor expiry — successful completion drops the guard without
-    /// touching the token, so the request returns 200 OK.
     #[test]
     fn guard_drop_does_not_cancel_token() {
         let (registry, _) = registry_with_mock_clock(Duration::from_secs(60));
@@ -844,11 +649,7 @@ mod tests {
         );
     }
 
-    /// When a [`MetricsRegistry`] is attached, the per-worker active-load
-    /// gauge mirrors the live counter on register / drop / sweep.
-    /// Regression: prior code exposed [`MetricsRegistry::set_router_inflight_load`]
-    /// but nothing in the request hot path ever called it, leaving
-    /// `sgl_router_active_load` permanently at 0 in production.
+    /// When a [`MetricsRegistry`] is attached.
     #[test]
     fn metrics_gauge_tracks_active_load_on_register_and_drop() {
         use crate::server::metrics::MetricsRegistry;
@@ -866,7 +667,6 @@ mod tests {
             "no gauge entry expected before first register; got:\n{rendered}"
         );
 
-        // Register a request with prefill_load=100, decode_load=5.
         let g = registry.register(w.clone(), url, 100, 5);
         let rendered = metrics.render();
         assert!(
@@ -882,7 +682,6 @@ mod tests {
             "expected decode_blocks=5 gauge, got:\n{rendered}"
         );
 
-        // Drop the guard → gauge returns to 0.
         drop(g);
         let rendered = metrics.render();
         assert!(
@@ -932,8 +731,7 @@ mod tests {
         );
     }
 
-    /// Concurrent stress: many guards on the same worker should leave the
-    /// counter back at zero once all guards drop.
+    /// Concurrent stress: many guards on the same worker should leave the counter back at zero once all guards drop.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_register_drop_returns_to_zero() {
         let (registry, _) = registry_with_mock_clock(Duration::from_secs(60));

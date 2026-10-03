@@ -1,19 +1,9 @@
-/*
- * Modified by Neural Magic
- * Copyright (C) Marlin.2024 Elias Frantar
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/*You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0 Unless required by applicable
+ * law or agreed to in writing, software distributed under the License is
+ * distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the specific
+ * language governing permissions and limitations under the License. */
 
 /*
  * Adapted from https://github.com/IST-DASLab/marlin
@@ -215,7 +205,7 @@ __device__ inline void scale4(
   frag_b[1] = __hmul2(frag_b[1], s_val_3_4);
 }
 
-// Given 2 floats multiply by 2 scales (halves)
+// Given floats multiply by multiple scales (halves)
 template <typename scalar_t>
 __device__ inline void scale_float(float* c, typename ScalarType<scalar_t>::FragS& s) {
   scalar_t* s_ptr = reinterpret_cast<scalar_t*>(&s);
@@ -252,7 +242,7 @@ __device__ inline void barrier_release(int* lock, bool reset = false) {
   }
 }
 
-// Wait until value of lock to be negative, and then add 1
+// Wait until value of lock to be negative, and then add
 __device__ inline void wait_negative_and_add(int* lock) {
   if (threadIdx.x == 0) {
     int state = 0;
@@ -304,10 +294,6 @@ __global__ void Marlin(
     bool use_atomic_add,                      // whether to use atomic add to reduce
     bool use_fp32_reduce,                     // whether to use fp32 global reduce
     int max_shared_mem) {
-  // Each threadblock processes one "stripe" of the B matrix with (roughly) the
-  // same size, which might involve multiple column "slices" (of width 16 *
-  // `thread_n_blocks`). Stripes are defined as shown in the 3x3 matrix 5 SM
-  // example:
   //   0 1 3
   //   0 2 3
   //   1 2 4
@@ -345,8 +331,8 @@ __global__ void Marlin(
   constexpr int pack_factor = 32 / w_type.size_bits();
   static_assert(thread_m_blocks == 1 || !m_block_size_8);
 
-  // For larger GEMMs we run multiple batchsize 64 versions in parallel for a
-  // better partitioning with less reductions
+  // For larger GEMMs we run multiple batchsize many versions in parallel for
+  // a better partitioning with less reductions
   int parallel = 1;
   if (prob_m > m_block_size) {
     parallel = prob_m / m_block_size;
@@ -371,7 +357,7 @@ __global__ void Marlin(
   int slice_col = slice_col_par;
   int slice_iters;      // number of threadblock tiles in the current slice
   int slice_count = 0;  // total number of active threadblocks in the current slice
-  int slice_idx;        // index of threadblock in current slice; numbered bottom to
+  int slice_idx;        // index of threadblock in current slice.
                         // top
 
   int par_id = 0;
@@ -435,9 +421,6 @@ __global__ void Marlin(
         }
       }
       // After write zero to output, write a negative value to lock.
-      // Every SM that processes the same slice would wait for
-      // the negative value, and then atomicAdd 1 to it.
-      // After all SMs are processed, the lock value would back to 0 again.
       __syncthreads();
       if (threadIdx.x == 0) locks[locks_off] = 1 - slice_count;
     }
@@ -500,8 +483,8 @@ __global__ void Marlin(
   // Scale size/strides with act_order
   constexpr int tb_k = 16 * thread_k_blocks;
   constexpr int g_idx_stage = has_act_order ? (tb_k * sizeof(int)) / 16 : 0;
-  // constexpr int act_s_row_stride      = 1;
-  // int           act_s_col_stride      = act_s_row_stride * num_groups;
+  // constexpr int act_s_row_stride = 1; int act_s_col_stride =
+  // act_s_row_stride * num_groups;
   constexpr int act_s_max_num_groups = 32;
   int act_s_col_stride = 1;
   int act_s_col_warp_stride = act_s_col_stride * 8;
@@ -591,9 +574,6 @@ __global__ void Marlin(
     }
   }
 
-  // Precompute which thread should not read memory in which iterations; this is
-  // needed if there are more threads than required for a certain tilesize or
-  // when the batchsize is not a multiple of 16.
   bool a_sh_wr_pred[a_sh_wr_iters];
 #pragma unroll
   for (int i = 0; i < a_sh_wr_iters; i++)
@@ -601,10 +581,8 @@ __global__ void Marlin(
 
   // To ensure that writing and reading A tiles to/from shared memory, the
   // latter in fragment format, is fully bank conflict free, we need to use a
-  // rather fancy XOR-based layout. The key here is that neither reads nor
-  // writes of the 16-byte `int4` blocks of 8 consecutive threads involve the
-  // same shared memory banks. Further, it seems (based on NSight-Compute) that
-  // each warp must also write a consecutive memory segment?
+  // rather fancy XOR-based layout. Further, it seems (based on NSight-Compute)
+  // that each warp must also write a consecutive memory segment?
   auto transform_a = [&](int i) {
     int row = i / a_gl_rd_delta_o;
     return a_gl_rd_delta_o * row + (i % a_gl_rd_delta_o) ^ (row % 8);
@@ -906,7 +884,7 @@ __global__ void Marlin(
     // Determine "position" inside the thread-block (based on warp and
     // thread-id)
     auto warp_id = threadIdx.x / 32;
-    int n_warps = thread_n_blocks / 4;  // Each warp processes 4 16-size tiles over N
+    int n_warps = thread_n_blocks / 4;
 
     int warp_row = warp_id / n_warps;
     int warp_col = warp_id % n_warps;
@@ -1161,9 +1139,7 @@ __global__ void Marlin(
       constexpr int red_sh_delta = b_sh_stride_threads;
       int red_sh_rd = red_sh_stride * (threadIdx.x / b_sh_stride_threads) + (threadIdx.x % b_sh_stride_threads);
 
-      // Parallel logarithmic shared memory reduction. We make sure to avoid any
-      // unnecessary read or write iterations, e.g., for two warps we write only
-      // once by warp 1 and read only once by warp 0.
+      // Parallel logarithmic shared memory reduction.
 
 #pragma unroll
       for (int m_block = 0; m_block < thread_m_blocks; m_block++) {
@@ -1463,9 +1439,7 @@ __global__ void Marlin(
   // Main loop.
   while (slice_iters) {
     // We unroll over both the global fetch and the register load pipeline to
-    // ensure all shared memory accesses are static. Note that both pipelines
-    // have even length meaning that the next iteration will always start at
-    // index 0.
+    // ensure all shared memory accesses are static.
 
 #pragma unroll
     for (int pipe = 0; pipe < stages;) {

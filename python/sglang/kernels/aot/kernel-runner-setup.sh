@@ -57,7 +57,6 @@ for CUDA_VERSION in "${CUDA_VERSION_ARRAY[@]}"; do
     # Trim whitespace
     CUDA_VERSION=$(echo "$CUDA_VERSION" | xargs)
 
-    # Convert format: 12-8 -> 12.8
     CUDA_VERSION_DOTTED=$(echo "$CUDA_VERSION" | tr '-' '.')
 
     DOCKER_IMAGE="${BUILDER_NAME}:cuda${CUDA_VERSION_DOTTED}"
@@ -65,7 +64,7 @@ for CUDA_VERSION in "${CUDA_VERSION_ARRAY[@]}"; do
     echo ""
     echo "Pulling ${DOCKER_IMAGE}..."
 
-    # Use newgrp to ensure docker commands work (user was just added to docker group)
+    # Use newgrp to ensure docker commands work (user
     if sg docker -c "docker pull ${DOCKER_IMAGE}"; then
         echo "✓ Successfully pulled ${DOCKER_IMAGE}"
     else
@@ -115,7 +114,7 @@ rm cuda-keyring.deb
 echo "CUDA keyring installed successfully!"
 echo ""
 
-# Split CUDA versions and install each one
+# Split CUDA versions and install each
 IFS=',' read -ra CUDA_VERSION_ARRAY <<< "$CUDA_VERSIONS"
 
 echo "==================================="

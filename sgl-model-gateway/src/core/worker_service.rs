@@ -1,8 +1,4 @@
-//! Worker Service - Business logic layer for worker operations
-//!
-//! This module provides a clean separation between HTTP concerns (in routers)
-//! and business logic for worker management. The service orchestrates
-//! WorkerRegistry and JobQueue operations.
+//! Worker Service - Business logic layer.
 
 use std::sync::Arc;
 
@@ -180,11 +176,8 @@ impl IntoResponse for GetWorkerResponse {
     }
 }
 
-/// Worker Service - Orchestrates worker business logic
-///
-/// This service provides a clean API for worker operations, separating
-/// business logic from HTTP concerns. Handlers in server.rs become thin
-/// wrappers that translate between HTTP and this service.
+/// Worker Service - Orchestrates worker business logic This service provides
+/// a clean API for worker operations.
 pub struct WorkerService {
     worker_registry: Arc<WorkerRegistry>,
     job_queue: Arc<std::sync::OnceLock<Arc<JobQueue>>>,

@@ -1,15 +1,4 @@
 //! Microbench for `BreakerTrackedStream` per-poll overhead.
-//!
-//! The cancel feature wraps every upstream streaming response body in
-//! `BreakerTrackedStream`, which sits in the per-chunk hot path. This bench
-//! drains a synthetic in-memory chunk stream both bare and wrapped so the
-//! delta isolates the wrapper's cost (state machine + Pin dispatch +
-//! terminal-state bookkeeping) with no network noise.
-//!
-//! Run via `cargo bench --bench streaming_utils_bench`. For A/B against
-//! main, use Criterion's baseline machinery:
-//! `cargo bench --bench streaming_utils_bench -- --save-baseline main`
-//! on main, then `--baseline main` on the feature branch.
 
 use std::{fmt, sync::Arc};
 
@@ -22,8 +11,7 @@ use smg::{
 };
 use tokio::runtime::Runtime;
 
-/// Minimal `Display`-able error type — keeps the wrapper generic so we
-/// don't have to fabricate `reqwest::Error` instances.
+/// Minimal `Display`-able error type — keeps the wrapper generic so we don't have.
 #[derive(Debug)]
 struct BenchErr;
 
@@ -100,7 +88,7 @@ fn bench_tracked_clean(c: &mut Criterion) {
 }
 
 /// `mark_completed` is the PD-streaming `[DONE]`-sentinel fast-path: the
-/// caller pre-marks the wrapper completed and stops polling. Times the
+/// caller pre-marks the wrapper completed and stops polling.
 /// allocation + mark + drop sequence so changes to the `Terminal`
 /// state-machine or `Drop` impl surface here too.
 fn bench_tracked_mark_completed_drop(c: &mut Criterion) {

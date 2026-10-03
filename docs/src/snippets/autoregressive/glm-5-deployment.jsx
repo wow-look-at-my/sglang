@@ -73,7 +73,6 @@ export const GLM5Deployment = () => {
     }
   };
 
-  // BF16 always 2× the GPUs of FP8.
   const modelConfigs = {
     h100:   { fp8: { tp: 16, mem: 0.85 }, bf16: { tp: 32, mem: 0.85 } },
     h200:   { fp8: { tp: 8,  mem: 0.85 }, bf16: { tp: 16, mem: 0.85 } },

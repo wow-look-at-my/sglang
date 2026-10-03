@@ -47,7 +47,7 @@ pub fn preserve_response_headers(reqwest_headers: &HeaderMap) -> HeaderMap {
         // Skip hop-by-hop headers that shouldn't be forwarded
         // Use eq_ignore_ascii_case to avoid string allocation
         if should_forward_header_no_alloc(name.as_str()) {
-            // The original name and value are already valid, so we can just clone them
+            // The name and value are already valid, so we can clone them
             headers.insert(name.clone(), value.clone());
         }
     }
@@ -181,9 +181,8 @@ pub fn apply_provider_headers(
 /// Passthrough mode: User's Authorization header takes priority.
 /// Fallback: Worker's API key is used only if user didn't provide auth.
 ///
-/// This enables use cases where:
-/// 1. Users send their own API keys (multi-tenant, BYOK)
-/// 2. Router has a default key for users who don't provide one
+/// This enables use cases where.
+/// Router has a default key for users who don't provide one
 pub fn extract_auth_header(
     headers: Option<&HeaderMap>,
     worker_api_key: &Option<String>,

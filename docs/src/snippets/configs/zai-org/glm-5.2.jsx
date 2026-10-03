@@ -79,9 +79,8 @@ sgl-eval run aime25 \\
     numPromptsByConc: { 1: 8, 16: 64, 64: 128, 256: 512, 1024: 2048, 4096: 8192 },
   },
 
-  // Per-variant accuracy applied to every cell; per-cell `accuracy` overrides.
-  // Both measured via sgl-eval (thinking mode) on H200. aime25 = pass@1 avg-of-16
-  // (n-repeats 16, max-tokens 64000, temp 1.0, top-p 0.95); pass@16 100%, majority@16 93.3%.
+  // Per-variant accuracy applied to every cell; per-cell `accuracy`
+  // overrides.
   defaultAccuracy: {
     default: { gsm8k_pct: 98.2, aime25_pct: 87.7 },
   },
@@ -108,18 +107,15 @@ sgl-eval run aime25 \\
 
   playgroundFeatures: {
 
-    // ----- Card 1: "Attention Parallelism" -----
-    // DSA prefill Context Parallelism (CP) splits the long-prefill attention across
-    // `cp` ranks — runs on Hopper (H200) and Blackwell (B200/GB300/B300).
-    // CP sizes auto-gate in the engine to the runtime derivation
-    // attn_cp_size = tp/dp (a user-passed --attn-cp-size is overridden).
-    // CP is single-machine only (tp_size <= 8). Interleave CP + DP-Attention
-    // currently fails the runtime's dp_size == 1 assert but is allowed here
-    // with a warning (combined support is planned upstream).
-    // Strategy knob: interleave (ex round-robin-split) is the layout verified
-    // here and the default; zigzag (ex in-seq-split) is exposed as an
-    // experiment — the runtime auto-configures deepep + ep=tp for it and
-    // restricts it to batch_size=1 (long-context single-request runs).
+    // CP sizes auto-gate in the engine to the runtime derivation attn_cp_size
+    // = tp/dp (a user-passed --attn-cp-size is overridden). CP is
+    // single-machine only (tp_size <= 8). Interleave CP + DP-Attention fails
+    // the runtime's dp_size == 1 assert but is allowed here with a warning
+    // (combined support is planned upstream). Strategy knob: interleave (ex
+    // round-robin-split) is the layout verified here and the default; zigzag
+    // (ex in-seq-split) is exposed as an experiment — the runtime
+    // auto-configures deepep + ep=tp for it and restricts it to batch_size=1
+    // (long-context single-request runs).
     attention: {
       knobs: [
         { id: "tp", label: "TP", values: [null, 4, 8] },
@@ -149,7 +145,6 @@ sgl-eval run aime25 \\
       ],
     },
 
-    // ----- Card 2: "MoE Parallelism" -----
     moe: {
       backend: {
         options: [
@@ -160,7 +155,6 @@ sgl-eval run aime25 \\
       ep: { label: "EP", values: [null, 4, 8] },
     },
 
-    // ----- Card 3: "Parsers" -----
     parsers: {
       items: [
         { id: "reasoning", label: "Reasoning Parser", flag: "--reasoning-parser glm45" },
@@ -168,9 +162,6 @@ sgl-eval run aime25 \\
       ],
     },
 
-    // ----- Card 4: "Speculative Decoding" -----
-    // GLM-5.2 ships a single MTP (nextn) layer; index_share_for_mtp_iteration reuses the
-    // DSA indexer topk across draft steps (topk==1 only).
     speculative: {
       options: [
         { id: "current", label: "Inherited from base" },
@@ -197,11 +188,9 @@ sgl-eval run aime25 \\
       ],
     },
 
-    // ----- Card 5: "PD Disaggregation" -----
-    // GLM-5.2 is a DSA model (same family as DeepSeek-V3.2/V4) and supports
-    // prefill/decode disaggregation. Owns the `--disaggregation-*` flags; the
-    // engine also pins role-specific serving ports (spaced apart) so prefill +
-    // decode don't collide on one host.
+    // Owns the `--disaggregation-*` flags; the engine also pins role-specific
+    // serving ports (spaced apart) so prefill + decode don't collide on one
+    // host.
     pdDisagg: {
       modes: [
         { id: "off",     label: "Off" },
@@ -238,7 +227,6 @@ sgl-eval run aime25 \\
       },
     },
 
-    // ----- Card 6: "Hierarchical KV Cache" -----
     hicache: {
       backends: [
         { id: null,       label: "Auto" },
@@ -288,8 +276,7 @@ sgl-eval run aime25 \\
         "--speculative-eagle-topk 1",
         "--speculative-num-draft-tokens 2",
         "--mem-fraction-static 0.85",
-        // Large chunked-prefill is the dominant balanced lever (prefill-bound at this
-        // concurrency); max-running tracks KV capacity (~60-80 for 8K+1K reqs on 8xH200).
+        // Large chunked-prefill is the dominant balanced lever (prefill-bound at this concurrency).
         "--chunked-prefill-size 32768",
         "--max-running-requests 256",
         "--host {{HOST_IP}}",
@@ -314,7 +301,7 @@ sgl-eval run aime25 \\
     },
 
     // ====================================================================
-    // B200 + FP8 (Blackwell) — TP8.  low-latency verified on b200-verda-k8s
+    // B200 + FP8 (Blackwell) — TP8. low-latency verified on b200-verda-k8s
     // ====================================================================
     {
       match: { hw: "b200", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
@@ -347,8 +334,7 @@ sgl-eval run aime25 \\
         "--speculative-eagle-topk 1",
         "--speculative-num-draft-tokens 2",
         "--mem-fraction-static 0.85",
-        // Large chunked-prefill is the dominant balanced lever (prefill-bound at this
-        // concurrency); max-running tracks KV capacity (~89 for 8K+1K reqs on 8xB200).
+        // Large chunked-prefill is the dominant balanced lever (prefill-bound at this concurrency).
         "--chunked-prefill-size 32768",
         "--max-running-requests 256",
         "--host {{HOST_IP}}",
@@ -373,11 +359,10 @@ sgl-eval run aime25 \\
     },
 
     // ====================================================================
-    // GB300 + FP8 (Grace-Blackwell, 4-GPU single node) — TP4.
-    // Flags mirror the B200 (sm100) configs; all three strategies verified end-to-end on
-    // a single 4xGB300 node (v0.5.13.post1). GB300 leads B200 per-GPU in every regime.
-    // Stage the weights on node-local NVMe first — shared cluster-storage reads are slow.
-    // ====================================================================
+    // GB300 + FP8 (Grace-Blackwell, 4-GPU single node) — TP4. Flags mirror
+    // the B200 (sm100) configs; all strategies verified end-to-end on a
+    // single 4xGB300 node (v0.5.13.post1). GB300 leads B200 per-GPU in every
+    // regime.
     {
       match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
       verified: true,
@@ -435,10 +420,9 @@ sgl-eval run aime25 \\
     },
 
     // ====================================================================
-    // B300 + FP8 (Blackwell Ultra, 8-GPU single node) — TP8. Verified on 8xB300 (v0.5.13.post1).
-    // Recipe mirrors the verified B200 (sm100) FP8 path. B300 (sm103) currently trails B200 per-GPU
-    // because deep_gemm/DSA are tuned for sm100; expected to improve as sm103 gets first-class kernels.
-    // ====================================================================
+    // B300 + FP8 (Blackwell Ultra, 8-GPU single node) — TP8. Verified on
+    // 8xB300 (v0.5.13.post1). Recipe mirrors the verified B200 (sm100) FP8
+    // path.
     {
       match: { hw: "b300", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
       verified: true,
@@ -494,11 +478,8 @@ sgl-eval run aime25 \\
     },
 
     // ====================================================================
-    // B300 + BF16 (Blackwell Ultra, 8-GPU single node) — TP8. Verified on 8xB300 (v0.5.13.post1).
-    // The unquantized GLM-5.2 (~700B, ~1.51 TB) only fits single-node on 8xB300
-    // (~2.1 TB HBM); smaller GPUs need multi-node (e.g. 2x 8xH200). balanced/HT run plain TP8
-    // (no DP-Attention/DeepEP), so they trail the FP8 recipe at high concurrency.
-    // ====================================================================
+    // B300 + BF16 (Blackwell Ultra, 8-GPU single node) — TP8. Verified on
+    // 8xB300 (v0.5.13.post1).
     {
       match: { hw: "b300", variant: "default", quant: "bf16", strategy: "low-latency", nodes: "single" },
       verified: true,
@@ -547,12 +528,9 @@ sgl-eval run aime25 \\
       ],
     },
 
-    // ====================================================================
-    // BF16 multi-node (inferred) — the 1.51 TB checkpoint spread over 2 nodes.
     // 2x 8xH200 / 2x 8xB200 at TP16, 2x 4xGB300 at TP8. The engine injects
-    // --nnodes / --node-rank / --dist-init-addr from the Multi-Nodes selector.
-    // Recipes inferred from the single-node B300 path; not benchmarked → verified:false.
-    // ====================================================================
+    // --nnodes / --node-rank / --dist-init-addr from the Multi-Nodes
+    // selector.
     {
       match: { hw: "h200", variant: "default", quant: "bf16", strategy: "low-latency", nodes: "multi-2" },
       verified: false,
@@ -696,12 +674,8 @@ sgl-eval run aime25 \\
     },
 
     // ====================================================================
-    // NVFP4 — nvidia/GLM-5.2-NVFP4 (Model Optimizer). TP8 on B200/B300, TP4 on GB300.
-    // B200/B300: 8-GPU single node, TP8 (low-latency / balanced / high-throughput); balanced &
-    // high-throughput add DP-Attention (dp8). low-latency uses MTP 5-1-6, balanced MTP 2-1-3.
-    // GB300: 4-GPU single node, TP4 (the node fits the ~381 GB build); GB300 adds dp4 on
-    // balanced & high-throughput; low-latency uses MTP 5-1-6.
-    // ====================================================================
+    // NVFP4 — nvidia/GLM-5.2-NVFP4 (Model Optimizer). TP8 on B200/B300, TP4
+    // on GB300.
     {
       match: { hw: "b200", variant: "default", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
       verified: true,
@@ -730,13 +704,10 @@ sgl-eval run aime25 \\
         "--quantization modelopt_fp4",
         "--dp 8",
         "--enable-dp-attention",
-        // Shorter draft (MTP 2-1-3) than low-latency's 5-1-6: at this concurrency the
-        // verify overhead of a long draft outweighs the accept-length gain.
         "--speculative-algorithm EAGLE",
         "--speculative-num-steps 2",
         "--speculative-eagle-topk 1",
         "--speculative-num-draft-tokens 3",
-        // Larger chunked-prefill (32768 → ~4096/rank under dp8) is the dominant balanced lever.
         "--chunked-prefill-size 32768",
         "--mem-fraction-static 0.92",
         "--max-running-requests 256",
@@ -792,15 +763,10 @@ sgl-eval run aime25 \\
         "--dp 8",
         "--enable-dp-attention",
         "--quantization modelopt_fp4",
-        // Shorter draft (MTP 2-1-3) than low-latency's 5-1-6: at this concurrency the
-        // verify overhead of a long draft outweighs the accept-length gain.
         "--speculative-algorithm EAGLE",
         "--speculative-num-steps 2",
         "--speculative-eagle-topk 1",
         "--speculative-num-draft-tokens 3",
-        // Two required flags for DP-Attention + MTP here: `decode`-mode spec attention
-        // avoids a CUDA-graph capture deadlock, and max-running 256 lifts the default
-        // ~48-request throttle so DP-Attention can fill all 8 ranks.
         "--speculative-attention-mode decode",
         "--max-running-requests 256",
         "--chunked-prefill-size 8192",
@@ -857,8 +823,6 @@ sgl-eval run aime25 \\
         "--quantization modelopt_fp4",
         "--dp 4",
         "--enable-dp-attention",
-        // Shorter draft (MTP 2-1-3) than low-latency's 5-1-6: at this concurrency the
-        // verify overhead of a long draft outweighs the accept-length gain.
         "--speculative-algorithm EAGLE",
         "--speculative-num-steps 2",
         "--speculative-eagle-topk 1",
@@ -888,22 +852,10 @@ sgl-eval run aime25 \\
       ],
     },
     // ====================================================================
-    // AMD MI300X / MI325X / MI355X (ROCm) — TP8, DSA tilelang backend.
-    // No MTP: disabled in the Speculative card for AMD (the gfx950 spec-decode
-    // draft kernel is not yet validated, and num-steps>3 hits a separate build
-    // issue). Strategies differ only by batch-shaping levers
-    // (cuda-graph-max-bs / max-running-requests / chunked-prefill):
-    //   low-latency      — large chunked-prefill, default bs.
-    //   balanced         — chunked-prefill 32768 + bs128, max-running 80.
-    //   high-throughput  — bs256, max-running 256.
-    // ACCURACY: the earlier gfx950 block-FP8 bpreshuffle miscompile (GSM8K ~0) is
-    // fixed as of the pinned mi355x image (...-20260618); MI355X FP8 was re-validated
-    // (GSM8K ~0.96, NIAH 15/15 to ~118K) and all three FP8 strategies are benchmarked
-    // + marked verified:true (see glm-5.2-benchmarks.jsx). All BF16 and all gfx942
-    // (MI325X/MI300X) cells stay verified:false (not yet benchmarked, but correct).
-    // BF16 (~1.51 TB) only fits single-node on MI325X (2 TB) / MI355X (2.3 TB);
-    // MI300X (1.5 TB) needs multi-node, so its BF16 cells are omitted.
-    // ====================================================================
+    // AMD MI300X / MI325X / MI355X (ROCm) — TP8, DSA tilelang backend. No
+    // MTP: disabled in the Speculative card for AMD (the gfx950 spec-decode
+    // draft kernel is not yet validated, and num-steps>3 hits a separate
+    // build issue).
     {
       match: { hw: "mi355x", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
       verified: true,
@@ -1008,14 +960,13 @@ sgl-eval run aime25 \\
     },
     // ====================================================================
     // AMD MI355X + MXFP4 — amd/GLM-5.2-MXFP4 (Quark). TP4: the 4-bit MoE
-    // weights fit a 4-GPU slice, mirroring the amd/GLM-5.1-MXFP4 MI355X recipe (same DSA
-    // architecture family) — --trust-remote-code (Quark custom quant config)
-    // and --kv-cache-dtype fp8_e4m3 both come from that precedent. Pinned to a
-    // newer image (v0.5.20, see dockerImages["mi355x|mxfp4"]) than the FP8/BF16
-    // mi355x cells. Low-Latency uses validated TP8/EP1; High-Throughput uses
-    // validated TP4/EP4. Both use five-step MTP from InferenceX PR #2900.
-    // DSA backend: triton (SGLang's ROCm default).
-    // ====================================================================
+    // weights fit a 4-GPU slice, mirroring the amd/GLM-5.1-MXFP4 MI355X
+    // recipe (same DSA architecture family) — --trust-remote-code (Quark
+    // custom quant config) and --kv-cache-dtype fp8_e4m3 both come from that
+    // precedent. Pinned to a newer image (v0.5.20, see
+    // dockerImages["mi355x|mxfp4"]) than the FP8/BF16 mi355x cells.
+    // Low-Latency uses validated TP8/EP1; High-Throughput uses validated
+    // TP4/EP4.
     {
       match: { hw: "mi355x", variant: "default", quant: "mxfp4", strategy: "low-latency", nodes: "single" },
       verified: false,
@@ -1085,14 +1036,6 @@ sgl-eval run aime25 \\
         "--port {{PORT}}",
       ],
     },
-    // MI355X + MXFP4 + MTP (mtp-314): validated AgentX recipe.
-    // steps=3 stays within the gfx950 spec-decode build envelope (≤3).
-    // mem-fraction-static 0.80: headroom for MTP draft buffer on top of
-    // 4-bit MoE weights + KV cache (matches InferenceX AgentX harness conc≤16).
-    // For benchmarking: set SGLANG_SIMULATE_ACC_LEN=2.99,
-    // SGLANG_SIMULATE_ACC_METHOD=match-expected,
-    // SGLANG_SIMULATE_ACC_TOKEN_MODE=real-draft-token
-    // (golden AL: golden_al_distribution/glm5.2_mtp.yaml, thinking_on, num_speculative_tokens=3).
     {
       match: { hw: "mi355x", variant: "default", quant: "mxfp4", strategy: "mtp-314", nodes: "single" },
       verified: false,

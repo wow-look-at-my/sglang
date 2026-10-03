@@ -18,14 +18,6 @@ use crate::{
     protocols::worker_spec::WorkerConfigRequest,
 };
 
-/// Step 3: Create worker object(s) with merged configuration + metadata.
-///
-/// This step:
-/// 1. Merges discovered labels with config labels
-/// 2. Determines the model ID from various sources
-/// 3. Creates ModelCard with metadata
-/// 4. Builds worker(s) - either single worker or multiple DP-aware workers
-/// 5. Outputs unified `workers: Vec<Arc<dyn Worker>>` for downstream steps
 pub struct CreateLocalWorkerStep;
 
 #[async_trait]
@@ -191,7 +183,6 @@ fn build_model_card(
         if !id2label_json.is_empty() {
             // Parse JSON: keys are string indices, values are label names
             if let Ok(string_map) = serde_json::from_str::<HashMap<String, String>>(id2label_json) {
-                // Convert string keys ("0", "1") to u32 keys (0, 1)
                 let id2label: HashMap<u32, String> = string_map
                     .into_iter()
                     .filter_map(|(k, v)| k.parse::<u32>().ok().map(|idx| (idx, v)))
@@ -209,7 +200,6 @@ fn build_model_card(
     else if let Some(num_labels_str) = labels.get("num_labels") {
         if let Ok(num_labels) = num_labels_str.parse::<u32>() {
             if num_labels > 0 {
-                // Create default mapping: {0: "LABEL_0", 1: "LABEL_1", ...}
                 let id2label: HashMap<u32, String> = (0..num_labels)
                     .map(|i| (i, format!("LABEL_{}", i)))
                     .collect();

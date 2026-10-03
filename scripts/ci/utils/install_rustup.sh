@@ -1,51 +1,30 @@
 #!/bin/bash
-# Ensure a Rust toolchain (rustc/cargo) is installed for crates built from
-# source, e.g. the native gRPC extension bundled into the sglang wheel via
-# setuptools-rust. Minimum supported version is 1.85 (edition 2024).
-#
-# Also pre-installs the workspace-pinned toolchain from rust/rust-toolchain.toml
-# (best-effort) so cargo commands run inside rust/ don't pay the rustup
-# auto-install on first use.
+# Ensure a Rust toolchain (rustc/cargo) is installed for crates built from source.
 set -euxo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUST_WORKSPACE_DIR="${SCRIPT_DIR}/../../../rust"
 
-# Channel pinned by rust/rust-toolchain.toml, used as the default toolchain:
-# setuptools-rust wheel builds run cargo from python/ — outside the pin's
-# cwd-based scope — so only the default toolchain makes them use the same
-# rustc as the workspace. Falls back to stable if the pin can't be parsed.
+# Channel pinned by rust/rust-toolchain.toml, used as the default toolchain: setuptools-rust wheel builds run cargo from python/.
 PINNED_CHANNEL="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' "${RUST_WORKSPACE_DIR}/rust-toolchain.toml" 2>/dev/null || true)"
 DEFAULT_CHANNEL="${PINNED_CHANNEL:-stable}"
 
-# Make cargo/rustc visible to the rest of this shell and to subsequent
-# GitHub Actions steps in the same job.
+# Make cargo/rustc visible to the rest of this shell and to subsequent GitHub Actions steps in the same job.
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:${PATH}"
 if [ -n "${GITHUB_PATH:-}" ]; then
-    # Self-heal if _runner_file_commands/ disappears mid-job on some self-hosted
-    # runners; the runner reads this file by its registered UUID at step end, so
-    # recreating the path keeps PATH propagation working for subsequent steps.
+    # Self-heal if _runner_file_commands/ disappears mid-job on some self-hosted runners.
     mkdir -p "$(dirname "${GITHUB_PATH}")" 2>/dev/null || true
     echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "${GITHUB_PATH}" || true
 fi
 
-# An in-cluster HTTP mirror may be available (e.g. on NPU runners); export it
-# up front so every rustup invocation below (self-heal and pinned-toolchain
-# install included) goes through the mirror.
+# An in-cluster HTTP mirror may be available (e.g. on NPU runners).
 if [ -n "${RUSTUP_CACHE_URL:-}" ]; then
     export RUSTUP_DIST_SERVER="${RUSTUP_CACHE_URL}/rustup"
     export RUSTUP_UPDATE_ROOT="${RUSTUP_CACHE_URL}/rustup/rustup"
 fi
 
 install_workspace_pinned_toolchain() {
-    # Pre-install the toolchain pinned by rust/rust-toolchain.toml: with no
-    # arguments and cwd inside rust/, `rustup toolchain install` (rustup >=
-    # 1.28) resolves channel/profile from the toolchain file; older rustups
-    # fall back to parsing the channel out of the file. Best-effort: the pin
-    # only governs cargo runs with cwd inside rust/ — setuptools-rust wheel
-    # builds run cargo from python/ and use the default toolchain, so a failure
-    # here must not fail the build (rustup auto-installs the pin on first use
-    # anyway).
+    # Pre-install the toolchain pinned by rust/rust-toolchain.toml.
     if ! command -v rustup >/dev/null 2>&1; then
         return 0
     fi
@@ -74,11 +53,7 @@ if command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
         echo "rust already installed: $(rustc --version), $(cargo --version)"
     elif command -v rustup >/dev/null 2>&1; then
         echo "rustup shims present but no usable default toolchain; installing ${DEFAULT_CHANNEL} as default..."
-        # `rustup default <channel>` alone is not enough: the toolchain dir may
-        # exist but be corrupt (a partial install baked into a runner image
-        # fails later with "Missing manifest in toolchain '...'"), and rustup
-        # treats any existing dir as installed. Remove it and install fresh
-        # before selecting it as default.
+        # `rustup default <channel>` alone is not enough.
         rustup toolchain uninstall "${DEFAULT_CHANNEL}" || true
         rustup toolchain install "${DEFAULT_CHANNEL}"
         rustup default "${DEFAULT_CHANNEL}"
@@ -125,14 +100,7 @@ fi
 
 install_workspace_pinned_toolchain
 
-# An image that already ships a usable rustc takes the "rust already installed"
-# path above, leaving its own toolchain selected so crates needing the pin fail.
-#
-# RUSTUP_TOOLCHAIN rather than `rustup default`: the latter rewrites the shared
-# ~/.rustup on this self-hosted runner, which concurrent jobs would race on. It
-# also outranks rust-toolchain.toml, so it covers cargo runs started outside
-# rust/, which is how setuptools-rust invokes it. As a child process this only
-# reaches later steps; same-step builders export it themselves.
+# An image that already ships a usable rustc takes the "rust already installed" path above.
 export RUSTUP_TOOLCHAIN="${DEFAULT_CHANNEL}"
 if [ -n "${GITHUB_ENV:-}" ]; then
     # Self-heal a missing _runner_file_commands/, as with GITHUB_PATH above.

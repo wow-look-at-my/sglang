@@ -186,8 +186,7 @@ async fn execute_mcp_tool_loop_streaming(
         "tools": tool_items
     });
 
-    // Store the completed item data and mark as completed FIRST
-    // This ensures it appears in final response even if event sending fails
+    // Store the completed item data and mark as completed FIRST This ensures it appears in final response even.
     emitter.emit_output_item_done(output_index, &item_done);
     emitter.complete_output_item(output_index);
 
@@ -228,7 +227,7 @@ async fn execute_mcp_tool_loop_streaming(
         "Emitted mcp_list_tools on first iteration"
     );
 
-    // MCP tool loop (max 10 iterations)
+    // MCP tool loop (max iterations)
     let mut iteration_count = 0;
     loop {
         iteration_count += 1;
@@ -383,8 +382,8 @@ async fn execute_mcp_tool_loop_streaming(
                         "Function tool calls present - exiting MCP loop and emitting completion"
                     );
 
-                    // Function tool calls were already emitted during streaming processing
-                    // Just emit response.completed with usage
+                    // Function tool calls were already emitted during
+                    // streaming processing emit response.completed with usage
                     let usage_json = json!({
                         "input_tokens": usage.prompt_tokens,
                         "output_tokens": usage.completion_tokens,
@@ -417,7 +416,6 @@ async fn execute_mcp_tool_loop_streaming(
                     }
                 };
 
-                // Continue loop
             }
             ResponsesIterationResult::Completed { response, usage } => {
                 debug!(
@@ -484,9 +482,7 @@ async fn execute_without_mcp_streaming(
         }
     };
 
-    // Process stream (emits all output items during streaming - function tool path emits function_call_arguments.* events)
-    // Pass empty HashSet so all tools are treated as function tools (per-tool detection)
-    // Load guards are held during processing and dropped when iteration completes
+    // Process stream (emits all output items during streaming - function tool path emits function_call_arguments.* events).
     let empty_mcp_tools = std::collections::HashSet::new();
     let iteration_result = match HarmonyStreamingProcessor::process_responses_iteration_stream(
         execution_result,

@@ -1,9 +1,5 @@
 name: Release Docker Images
-#
-# Builds and publishes framework Docker images (full development environment):
-#   - lmsysorg/sglang:v{version}, lmsysorg/sglang:latest (cuda 13)
-#   - lmsysorg/sglang:v{version}-cu130, lmsysorg/sglang:latest-cu130
-#
+# Builds and publishes framework Docker images (full development environment): - lmsysorg/sglang:v{version}, lmsysorg/sglang:latest (cuda 13) - lmsysorg/sglang:v{version}-cu130, lmsysorg/sglang:latest-cu130
 on:
   push:
     tags:

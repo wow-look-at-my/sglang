@@ -12,7 +12,6 @@ RUN_DIR="${RUN_ID}-attempt-${RUN_ATTEMPT}"
 
 # Date tag for grouping coverage data. In CI, prefer GITHUB_RUN_STARTED_AT
 # (same value across all jobs in one run, immune to midnight rollover).
-# Fall back to local date for non-CI execution.
 if [ -n "${GITHUB_RUN_STARTED_AT:-}" ]; then
   COV_DATE_TAG="${GITHUB_RUN_STARTED_AT:0:10}"
   COV_DATE_TAG="${COV_DATE_TAG//-/}"
@@ -33,12 +32,6 @@ overall_status=0
 
 results=()
 
-# Derive a filesystem-safe directory name from a test target:
-#   1. strip the trailing ".py"
-#   2. flatten path separators:  /  ->  __
-#   3. flatten pytest separators: ::  ->  --
-#   4. replace any remaining unsafe character with "_"
-# Each test gets its own COVERAGE_FILE so results never collide.
 setup_coverage() {
   local target="$1"
   local name="${target%.py}"
@@ -76,9 +69,7 @@ for target in "${targets[@]}"; do
   run_one "${target}"
 done
 
-# ====================
-# Test result summary
-# ====================
+# ==================== Test result summary ====================
 passed_list=()
 failed_list=()
 

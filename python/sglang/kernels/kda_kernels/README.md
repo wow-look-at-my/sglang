@@ -1,15 +1,8 @@
 # Kernel Design Agent kernels
 
-This directory is the implementation home for kernels produced or extended by
-the Humanize2 / Kernel Design Agents workflow. `KernelBackend.KDA` records that
-provenance; it does not identify the implementation language. A KDA kernel may
-use CUDA, Triton, or CuTe DSL.
+This directory is the implementation home for kernels produced or extended by the Humanize2 / Kernel Design Agents workflow. `KernelBackend.KDA` records that provenance. It does not identify the implementation language. A KDA kernel may use CUDA, Triton, or CuTe DSL.
 
-Runtime code must continue to import the stable operator facade under
-`sglang.kernels.ops`. The facade owns registration and fallback policy, while
-this directory owns generated implementation modules and their CUDA sources.
-Importing `sglang.kernels` therefore remains metadata-only and does not eagerly
-load Triton, CUTLASS, or compile a JIT extension.
+Runtime code must continue to import the stable operator facade under `sglang.kernels.ops`. The facade owns registration and fallback policy, while this directory owns generated implementation modules and their CUDA sources. Importing `sglang.kernels` therefore remains metadata-only and does not eagerly load Triton, CUTLASS, or compile a JIT extension.
 
 | Kernel family | Implementation | Provenance |
 |---|---|---|
@@ -22,6 +15,4 @@ load Triton, CUTLASS, or compile a JIT extension.
 | FLUX.2 FP8 producer and QKV packing fusions | `layernorm_modulate_triton.py`, `flux2_qkv_epilogue_jit.py`, `flux2_token_cat_fp8_triton.py` | [sgl-project/sglang#37162](https://github.com/sgl-project/sglang/pull/37162), merge commit `1c3ad92438` |
 | Qwen3.8 QSA packed-varlen decode on SM121 | `qwen38_qsa_sm121/` | [radixark/KDA-1.5#4](https://github.com/radixark/KDA-1.5/pull/4) at `414ce456e14a`; see the package README |
 
-For JIT kernels, the Python entry module and the corresponding source under
-`csrc/` move together. The shared `sglang.kernels.jit` loader remains build
-infrastructure rather than an ownership directory.
+For JIT kernels, the Python entry module and the corresponding source under `csrc/` move together. The shared `sglang.kernels.jit` loader remains build infrastructure rather than an ownership directory.

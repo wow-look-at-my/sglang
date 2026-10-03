@@ -13,14 +13,6 @@ namespace {
 //      `tree_mask` is a flat [batches * qlen * qlen] bool tensor in
 //      TreeMaskMode::QLEN_ONLY layout, where qlen == extend_seq_lens[bs] ==
 //      max_len_extend (uniform across the batch, equal to draft_token_num).
-//      Row i = query draft token, column j = key draft token; true means query i
-//      may attend key j (each row marks self + ancestors + root). The committed
-//      prefix (stage 1) is implicitly fully visible to every draft token, which
-//      is why the mask only covers the qlen x qlen new-token block; the GPU
-//      FULL_MASK layout carries the prefix columns explicitly but they are
-//      all-true for EAGLE. When tree_mask is absent, stage 2 falls back to the
-//      plain causal mask (correct for non-spec extend and topk == 1 chains).
-//
 
 template <typename scalar_t, typename packed_t, typename index_t, int BLOCK_M, int BLOCK_N>
 void extend_attention_kernel_impl(
@@ -100,7 +92,7 @@ void extend_attention_kernel_impl(
     // Btmp: [BLOCK_N, max(head_size, head_size_v)]
     scalar_t* __restrict__ Btmp = reinterpret_cast<scalar_t*>(s_delta + BLOCK_M * BLOCK_N);
 
-    // init Btmp just once for each thread to prevent NaN
+    // init Btmp once for each thread to prevent NaN
     fill_stub(Btmp, 0.f, BLOCK_N * ldb_tmp);
     fill_stub(s_delta, 0.f, BLOCK_M * BLOCK_N);
 
@@ -151,14 +143,11 @@ void extend_attention_kernel_impl(
       fill_stub(v_prime, 0.f, m_size * head_size_v);
       fill_stub(s_prime, 0.f, m_size);
       fill_stub(m_prime, -std::numeric_limits<scalar_t>::infinity(), m_size);
-      // stage 1: compute scores with prefix
-      // kv_from_cache has no stage 2, so cover the extend range and stop at the diagonal
       int kv_start = 0;
       int kv_end = is_cross_attn ? encoder_lens[bs] : (kv_from_cache ? seq_len_prefix + m + m_size : seq_len_prefix);
       for (int n = kv_start; n < kv_end; n += BLOCK_N) {
         int n_size = std::min(BLOCK_N, kv_end - n);
 
-        // `n_size` is K in 2nd gemm, pad to TILE_K;
         const int padded_n_size = div_up(n_size, TILE_K) * TILE_K;
 
         // get key and pack
@@ -207,8 +196,7 @@ void extend_attention_kernel_impl(
             }
           }
           if (row_is_empty) {
-            // s_delta is reused across blocks - zero an empty row rather than
-            // skip it, or P @ V below applies the previous block's weights here
+            // s_delta is reused across blocks - zero an empty row rather than skip it.
             fill_stub(s_delta + row * BLOCK_N, 0.f, padded_n_size);
             continue;
           }
@@ -241,12 +229,10 @@ void extend_attention_kernel_impl(
             /* C     */ v_prime);
       }  // loop with seq_len_prefix
       if (!is_cross_attn && !kv_from_cache) {
-        // stage 2: compute the triangle part (or, when !is_causal, the full square)
         int num_keys = is_causal ? std::min(seq_len_extend, m + BLOCK_M) : seq_len_extend;
         for (int n = 0; n < num_keys; n += BLOCK_N) {
           int n_size = std::min(BLOCK_N, num_keys - n);
 
-          // `n_size` is K in 2nd gemm, pad to TILE_K;
           const int padded_n_size = div_up(n_size, TILE_K) * TILE_K;
 
           // get key and pack
@@ -274,12 +260,6 @@ void extend_attention_kernel_impl(
           // apply tree mask (speculative TARGET_VERIFY) or causal mask
           if (tree_mask != nullptr) {
             // [Note] tree mask for EAGLE topk > 1 (TreeMaskMode::QLEN_ONLY).
-            // mask[bs][m + row][n + col] == false -> query draft token (m + row)
-            // may not attend key draft token (n + col); set the score to -inf
-            // before softmax. The tree mask subsumes the causal constraint:
-            // ancestors always precede descendants in the draft token ordering,
-            // so permitted keys satisfy j <= i and the causal `num_keys` bound
-            // above remains valid.
             const bool* __restrict__ mask_base =
                 tree_mask + (static_cast<int64_t>(bs) * seq_len_extend + m) * seq_len_extend + n;
             for (int row = 0; row < m_size; ++row) {
@@ -292,25 +272,11 @@ void extend_attention_kernel_impl(
               }
             }
           } else if (is_causal && n + n_size - 1 > m) {
-            // apply causal mask
-            // [Note] condition to apply causal mask.
-            // Mask any block whose last key (n + n_size - 1) is strictly after the first query position (m), i.e. n +
-            // n_size - 1 > m. The original condition was `num_keys - n <= BLOCK_N` (last n-block only). That was
-            // correct when BLOCK_M <= BLOCK_N/2 because earlier n-blocks were guaranteed to contain only past keys.
-            // With BLOCK_M=512, BLOCK_N=768:
-            //   BLOCK_M > BLOCK_N/2, so the first n-block can contain future keys.
-            //   Example: m=512 (mb=1), num_keys=1024, first n-block covers keys [0, 768).
-            //   Query row=0 is at position 512, so keys 513..767 are future and must be
-            //   masked — but `num_keys - 0 = 1024 > BLOCK_N` skips masking entirely,
-            //   producing wrong (non-causal) attention for rows 0..254 of this m-block.
+            // apply causal mask [Note] condition to apply causal mask. The condition was `num_keys - n <= BLOCK_N` (last n-block only).
             for (int row = 0; row < m_size; ++row) {
               int last_col = m + row - n;
-              // [Note] mask the entire row if last_col < 0.
-              // Clamp to -1: when n > m + row every key in this block is a future
-              // key, so the entire row should be masked.  Without this clamp,
-              // last_col+1 <= 0 and fill_stub would write before row_ptr.
               last_col = std::max(last_col, -1);
-              // fill [last_col + 1, n_size) to -inf
+              // fill [last_col + n_size) to -inf
               float* row_ptr = s_i + row * BLOCK_N;
               fill_stub(row_ptr + last_col + 1, -std::numeric_limits<float>::infinity(), n_size - last_col - 1);
             }
@@ -434,23 +400,18 @@ inline int resize_buffer(at::Tensor& buffer, int num_threads, int head_size, int
         has_sink);                                                                         \
   } while (0)
 
-// q_extend, k_extend, v_extend, o_extend: contiguous tensors
-// k_buffer, v_buffer: (prefix + extend) tensors in mem_manager
+// q_extend, k_extend, v_extend, o_extend: contiguous tensors k_buffer,
+// v_buffer: (prefix + extend) tensors in mem_manager
 //
-// q_extend: [num_tokens, num_heads, head_size]
-// k_extend: [num_extend_tokens, num_heads, head_size]
-// v_extend: [num_extend_tokens, num_heads, head_size]
-// o_extend: [num_tokens, num_heads, head_size]
-// k_buffer: [max_total_num_tokens, num_heads, head_size]
-// v_buffer: [max_total_num_tokens, num_heads, head_size]
-// req_to_token: [max_num_reqs, max_context_len] int32 or int64
-// req_pool_indices: [num_seqs] int64
-// seq_lens: [num_seqs] int64
-// extend_seq_lens: [num_seqs]
-// extend_start_loc: [num_seqs]
-// encoder_lens: [num_seqs] int64 or None
-// sinks: [num_heads] or None
-// tree_mask: [num_seqs * max_len_extend * max_len_extend] bool or None
+// q_extend: [num_tokens, num_heads, head_size] k_extend: [num_extend_tokens,
+// num_heads, head_size] v_extend: [num_extend_tokens, num_heads, head_size]
+// o_extend: [num_tokens, num_heads, head_size] k_buffer:
+// [max_total_num_tokens, num_heads, head_size] v_buffer:
+// [max_total_num_tokens, num_heads, head_size] req_to_token: [max_num_reqs,
+// max_context_len] int32 or int64 req_pool_indices: [num_seqs] int64
+// seq_lens: [num_seqs] int64 extend_seq_lens: [num_seqs] extend_start_loc:
+// [num_seqs] encoder_lens: [num_seqs] int64 or None sinks: [num_heads] or
+// None tree_mask: [num_seqs * max_len_extend * max_len_extend] bool or None
 //   TreeMaskMode::QLEN_ONLY tree mask for speculative TARGET_VERIFY; see [NOTE] 5 above.
 void extend_attention_cpu(
     at::Tensor& q_extend,
@@ -476,10 +437,6 @@ void extend_attention_cpu(
     std::optional<at::Tensor> tree_mask,
     bool is_causal = true) {
   TORCH_CHECK(k_extend_opt.has_value() == v_extend_opt.has_value(), "k_extend and v_extend must be given together");
-  // A KV-shared layer (Gemma 4) passes no extend K/V - the layer it shares with
-  // already wrote them to the cache, so this kernel masks causally itself. Cross
-  // attention can also arrive without K/V but reads an encoder sequence that
-  // carries no causal order, so it keeps its own path.
   const bool kv_from_cache = !is_cross_attn && !k_extend_opt.has_value();
   // unused when the range comes from the cache - bind them to the buffers
   auto k_extend = k_extend_opt.has_value() ? k_extend_opt.value() : k_buffer;
@@ -582,9 +539,7 @@ void extend_attention_cpu(
         tree_mask_t.numel());
     TORCH_CHECK(!is_cross_attn, "extend: tree_mask is not supported for cross attention");
     TORCH_CHECK(!kv_from_cache, "extend: tree_mask is not supported for KV-shared layers");
-    // The window mask derives query positions from the row index
-    // (seq_len_prefix + m + row), but tree-mask rows sit at their tree depth,
-    // which is <= the row index; combining the two would over-mask the prefix.
+    // The window mask derives query positions from the row index (seq_len_prefix + m + row), but tree-mask rows sit at their tree depth.
     TORCH_CHECK(sliding_window_size <= 0, "extend: tree_mask is not supported with sliding window attention");
     tree_mask_ptr = tree_mask_t.data_ptr<bool>();
   }

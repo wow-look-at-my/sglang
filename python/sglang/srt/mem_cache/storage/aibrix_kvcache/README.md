@@ -1,17 +1,16 @@
 # AIBrix KVCache as L3 KV Cache
-This document provides brief instructions for setting up a AIBrixKVCache storage backend +  AIBrixKVCache + SGLang runtime environment from scratch, describing how to utilize AIBrixKVCache as the L3 KV cache for SGLang.
-The process consists of three main steps:
+This document provides brief instructions for setting up a AIBrixKVCache storage backend + AIBrixKVCache + SGLang runtime environment from scratch, describing how to utilize AIBrixKVCache. This is as the L3 KV cache for SGLang. The process consists of multiple main steps:
 
 ## Step1:Install AIbrix KVCache
-Refer to the [AIBrix KVCache documentation](https://github.com/vllm-project/aibrix/blob/main/python/aibrix_kvcache/README.md) to install  AIBrix KVCache.
+Refer to the [AIBrix KVCache documentation](https://github.com/vllm-project/aibrix/blob/main/python/aibrix_kvcache/README.md) to install AIBrix KVCache.
 
 ## Step2: Deploy AIBrix Distributed KVCache Storage
 
-AIBrix KVCache currently supports multiple distributed KVCache backends, including ByteDance's open-source Infinistore and the not-yet-open source PrisKV incubated by ByteDance's PrisDB & IAAS & DMI team.
+AIBrix KVCache supports multiple distributed KVCache backends, including ByteDance's open-source Infinistore and the not-yet-open source PrisKV incubated. This is by ByteDance's PrisDB & IAAS & DMI team.
 
 For the Infinistore installation process, please refer to [this link](https://github.com/bytedance/InfiniStore).
 
-PrisKV for AIBrix KVCache is currently in the open-source preparation stage, and no public documentation is available yet.
+PrisKV for AIBrix KVCache is in the open-source preparation stage, and no public documentation is available yet.
 
 
 ## Step3: Deploy Model Serving

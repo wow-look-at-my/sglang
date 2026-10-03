@@ -146,7 +146,7 @@ check-server:
 		exit 1; \
 	fi
 
-# Find sglang project root (4 levels up from oai_server)
+# Find sglang project root (a few levels up from oai_server)
 SGLANG_ROOT := $(shell cd $(ROOT_DIR)/../../../../.. && pwd)
 
 # Run end-to-end test with bench_serving.py

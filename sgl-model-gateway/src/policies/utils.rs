@@ -91,20 +91,17 @@ mod tests {
         thread::sleep(Duration::from_millis(1200));
         assert!(counter.load(Ordering::SeqCst) >= 1);
 
-        // Task will be stopped on drop
     }
 
     #[test]
     fn test_periodic_task_responds_to_shutdown() {
         let task = PeriodicTask::spawn(60, "test", || {
-            // Long interval task
         });
 
         let start = Instant::now();
         drop(task);
         let elapsed = start.elapsed();
 
-        // Should shutdown within ~200ms (2 check intervals), not 60 seconds
         assert!(elapsed < Duration::from_millis(500));
     }
 }

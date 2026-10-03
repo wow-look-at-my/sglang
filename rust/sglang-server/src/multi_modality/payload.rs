@@ -1,9 +1,4 @@
-//! Convert a parked request's [`MmWorkItem`] into the typed [`MmInput`] the
-//! `sglang-mm` driver consumes — an in-process handoff, nothing serialized.
-//!
-//! Every `Err` rejects the request back to the client; the message says whether
-//! the input is malformed or merely outside the pipeline's scope (video/audio,
-//! precomputed features, …).
+//! Convert a parked request's [`MmWorkItem`] into the typed [`MmInput`] the `sglang-mm` driver consumes — an in-process handoff.
 
 use bytes::Bytes;
 use sglang_mm::common::fetch::{ByteBudget, fetch_bytes_budgeted};
@@ -13,7 +8,7 @@ use crate::message::multimodal::MmItem;
 use crate::message::request::{MmWorkItem, ProcessorExtensions};
 
 /// Fully resolved media for a multimodal processor. I/O sources were
-/// prefetched on the async API layer; data URLs and bare base64 are decoded on
+/// prefetched on the async API layer.
 /// the MM worker.
 pub struct ResolvedMediaWork {
     pub text: Option<String>,
@@ -21,8 +16,7 @@ pub struct ResolvedMediaWork {
     pub images: Vec<Bytes>,
     pub videos: Vec<Bytes>,
     pub audios: Vec<Bytes>,
-    /// Request fields owned by the selected processor rather than this shared
-    /// payload layer.
+    /// Request fields owned by the selected processor rather than this shared payload layer.
     pub processor_extensions: ProcessorExtensions,
 }
 
@@ -90,11 +84,8 @@ fn collect_media(
         .collect()
 }
 
-/// True for sources the API layer must resolve before MM dispatch: I/O — network
-/// *or* disk, since a network mount can hang past any HTTP timeout — never runs
-/// on the fixed MM worker pool (see `api_server::prefetch`). `data:` and bare
-/// base64 are pure CPU and stay on the worker. Lives next to [`image_source`]
-/// so the prefetch walk and the parse walk cannot drift.
+/// True for sources the API layer must resolve before MM dispatch: I/O —
+/// network *or* disk.
 pub fn is_io_source(src: &str) -> bool {
     src.starts_with("http://")
         || src.starts_with("https://")
@@ -224,8 +215,7 @@ mod tests {
         );
     }
 
-    /// I/O-backed sources (URLs, file paths) take their prefetched bytes in walk
-    /// order; one left unfetched errors, so no I/O can reach an MM worker.
+    /// I/O-backed sources (URLs, file paths) take their prefetched bytes in walk order; one left unfetched errors.
     #[test]
     fn io_sources_use_prefetched_bytes() {
         let image = vec![

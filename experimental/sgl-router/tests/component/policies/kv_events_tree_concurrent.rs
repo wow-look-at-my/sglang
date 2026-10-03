@@ -1,26 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Concurrent-mutation stress test for `HashTree`.
-//!
-//! The inline tests in `state::kv_events::tree` are all
-//! single-threaded.  Under production load, multiple worker subscribers
-//! drive `insert` / `remove` / `clear_worker` against the same tree from
-//! tokio worker threads while the chat handler simultaneously calls
-//! `match_prefix` from many concurrent requests.
-//!
-//! The tree is documented as taking a write-lock for mutations and a
-//! read-lock for `match_prefix`; this test exercises that contract under
-//! heavy contention to catch:
-//!
-//!   * Deadlocks between the reverse index and the arena's RwLock.
-//!   * Logical races where a removed worker still appears in the reverse
-//!     index (or vice versa).
-//!   * Panics from a node arena being mutated mid-read.
-//!
-//! After the storm settles, the tree must be self-consistent: every
-//! worker that was fully cleared must be absent from every node's worker
-//! set, and `node_count()` must converge to zero.
 
 use std::sync::Arc;
 use std::thread;
@@ -34,10 +15,7 @@ fn worker(i: usize) -> KvWorkerId {
     }
 }
 
-/// 8 mutator threads × 200 ops + 4 reader threads × 500 match queries.
-/// Each mutator inserts a chain, queries it, then clears the worker; the
-/// invariant is that after every thread joins, the tree is empty (every
-/// worker was cleared) and no thread panicked.
+/// mutator threads × ops + reader threads × match queries.
 #[test]
 fn tree_survives_concurrent_inserts_removes_and_matches() {
     let tree = Arc::new(HashTree::new());
@@ -49,10 +27,8 @@ fn tree_survives_concurrent_inserts_removes_and_matches() {
         handles.push(thread::spawn(move || {
             let w = worker(tid);
             for round in 0..200_u64 {
-                // Each round uses a fresh chain so different mutators
-                // don't trample each other's nodes — we want contention
-                // on the lock, not contention on the keys (those are
-                // covered by the single-threaded reinsert/remove tests).
+                // Each round uses a fresh chain so different mutators do not
+                // trample each other's nodes.
                 let chain: Vec<i64> = (0..4)
                     .map(|i| ((tid as i64) << 32) | ((round as i64) << 8) | i as i64)
                     .collect();
@@ -72,8 +48,7 @@ fn tree_survives_concurrent_inserts_removes_and_matches() {
                     tree.clear_worker(&w);
                 }
             }
-            // Final blanket clear in case the last iteration used `remove`
-            // on only part of the chain.
+            // Final blanket clear in case the last iteration used `remove` on only part of the chain.
             tree.clear_worker(&w);
         }));
     }
@@ -103,10 +78,8 @@ fn tree_survives_concurrent_inserts_removes_and_matches() {
          residual nodes indicate a missed clear_worker path",
     );
 
-    // The arena and the reverse index must agree: zero non-root nodes
-    // means zero `by_hash` entries. A bug that prunes the arena but not
-    // the reverse index would leak memory and corrupt future inserts;
-    // this assertion turns that into an immediate test failure.
+    // The arena and the reverse index must agree: zero non-root nodes means
+    // zero `by_hash` entries.
     assert_eq!(
         tree.reverse_index_size(),
         0,
@@ -114,9 +87,7 @@ fn tree_survives_concurrent_inserts_removes_and_matches() {
     );
 }
 
-/// A mutator races `clear_worker` against a reader that is mid-`match_prefix`
-/// on a deep chain.  The reader must never see a partially-mutated tree
-/// (no panic, no double-counted workers in the result set).
+/// A mutator races `clear_worker` against a reader that is mid-`match_prefix` on a deep chain.
 #[test]
 fn match_prefix_is_consistent_with_concurrent_clear() {
     let tree = Arc::new(HashTree::new());
@@ -149,10 +120,7 @@ fn match_prefix_is_consistent_with_concurrent_clear() {
     for _ in 0..2_000 {
         let m = tree.match_prefix(None, &chain);
         // Either the worker was present (matched_blocks == chain.len(),
-        // workers set contains w) or it was cleared mid-walk (matched_blocks
-        // == 0 OR matched_blocks > 0 with empty workers if the chain is
-        // partially present).  Whichever — the result must be internally
-        // consistent.
+        // workers set contains w) or it was cleared mid-walk.
         if m.matched_blocks == chain.len() {
             assert!(
                 m.holds(&w),
@@ -166,22 +134,11 @@ fn match_prefix_is_consistent_with_concurrent_clear() {
     mutator.join().unwrap();
 }
 
-/// Reader storm concurrent with a writer hammering insert/remove on
-/// DISTINCT chain roots — the pattern sharding targets. Asserts
-/// CORRECTNESS under that contention: warm chains are pre-inserted and
-/// never removed, so a reader must always get a full match with the warm
-/// worker present, and the writer's scratch chains are fully removed each
-/// round, so after join only the warm chains remain.
-///
-/// No sleeps, no wall-clock — the readers run a fixed number of bounded
-/// iterations and the writer churns until they are done, so nothing here
-/// can flake on timing.
+/// Reader storm concurrent with a writer hammering insert/remove on DISTINCT chain roots.
 #[test]
 fn readers_unaffected_by_writer_on_distinct_roots() {
     let tree = Arc::new(HashTree::new());
 
-    // Fixed chains the readers query and the writer never touches, on
-    // distinct roots (1_000 apart) so they spread across shards.
     let warm = KvWorkerId {
         url: "http://warm:30000".into(),
         dp_rank: 0,
@@ -219,8 +176,7 @@ fn readers_unaffected_by_writer_on_distinct_roots() {
         })
     };
 
-    // Each reader asserts the warm worker is present at full depth on every
-    // warm chain, regardless of writer churn.
+    // Each reader asserts the warm worker is present at full depth on every warm chain, regardless of writer churn.
     let mut readers = Vec::new();
     for _ in 0..4 {
         let tree = tree.clone();
@@ -252,7 +208,7 @@ fn readers_unaffected_by_writer_on_distinct_roots() {
         .join()
         .expect("writer thread panicked under contention");
 
-    // Only the warm chains remain: 16 chains x 3 nodes = 48 non-root nodes.
+    // Only the warm chains remain: chains x nodes = 48 non-root nodes.
     assert_eq!(
         tree.node_count(),
         (WARM_CHAINS * 3) as usize,

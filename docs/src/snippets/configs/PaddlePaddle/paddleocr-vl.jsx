@@ -1,9 +1,4 @@
 // PaddleOCR-VL cookbook config. Consumed by _deployment.jsx + _playground.jsx.
-//
-// All three releases (0.9B / 1.5 / 1.6) ship an identical `config.json` — same
-// PaddleOCRVLForConditionalGeneration architecture, same SigLIP tower and
-// ERNIE-4.5-0.3B backbone — so one recipe serves every variant and only the HF
-// slug changes.
 
 export const config = {
   modelName: "PaddleOCR-VL",
@@ -25,10 +20,6 @@ export const config = {
     "v09|bf16": "PaddlePaddle/PaddleOCR-VL",
   },
 
-  // Page resolution is the dominant cost knob: the ViT and the prefill both
-  // scale with the patch count, and `max_pixels` is expressed in 28x28 units
-  // (patch 14 x 2x2 merge), so the value divided by 784 is the image-token
-  // budget per page. 1280 is the checkpoint's own preprocessor default.
   overlayDims: [
     {
       id: "pageRes",
@@ -98,7 +89,6 @@ export const config = {
   },
 
   cells: [
-    // ==== 1.6 ====
     {
       match: {
         hw: "h100",
@@ -162,7 +152,6 @@ export const config = {
         "--port {{PORT}}",
       ],
     },
-    // ==== 1.5 ====
     {
       match: {
         hw: "h100",

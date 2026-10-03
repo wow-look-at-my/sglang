@@ -5,8 +5,7 @@ on:
     branches: [ main ]
   workflow_dispatch:
     inputs:
-      # target_stage is the job id (e.g. stage-b-e2e-test-mlx), distinct from
-      # the run_suite.py suite name it dispatches (e.g. stage-b-e2e-mlx).
+      # target_stage is the job id (e.g. stage-b-e2e-test-mlx), distinct from the run_suite.py suite name it dispatches (e.g. stage-b-e2e-mlx).
       target_stage:
         description: "Select a stage to run from dropdown (leave empty for auto-detect)"
         required: false
@@ -62,8 +61,7 @@ jobs:
 
   stage-a-unit-test-mlx:
     needs: [check-changes, pr-gate]
-    # !cancelled() lets dispatch past a skipped pr-gate; the pull_request
-    # path still requires pr-gate success, keeping the run-ci gate intact.
+    # !cancelled() lets dispatch past a skipped pr-gate; the pull_request path still requires pr-gate success, keeping the run-ci gate intact.
     if: |
       !cancelled() && (
         (needs.pr-gate.result == 'success' &&
@@ -103,7 +101,6 @@ jobs:
       - name: Install dependencies (MLX / srt_mps extra)
         timeout-minutes: 30
         run: |
-          test -f python/pyproject_other.toml || { echo "alt pyproject_other.toml missing"; exit 1; }
           # Swap in the Apple Silicon pyproject; srt_mps skips the all_mps diffusion chain.
           rm -f python/pyproject.toml
           mv python/pyproject_other.toml python/pyproject.toml
@@ -147,7 +144,6 @@ jobs:
       - name: Install dependencies (MLX / srt_mps extra)
         timeout-minutes: 30
         run: |
-          test -f python/pyproject_other.toml || { echo "alt pyproject_other.toml missing"; exit 1; }
           rm -f python/pyproject.toml
           mv python/pyproject_other.toml python/pyproject.toml
           uv venv --python 3.11

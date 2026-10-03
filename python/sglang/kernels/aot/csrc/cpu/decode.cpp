@@ -11,11 +11,8 @@ namespace {
 //      and use actual num_kv_splits for small seq length
 //   3. try fast impl of `.tanh()`
 //   4. provide amx kernel for index_gemm_kernel_nn when M = 16
-//
 
 #if defined(CPU_CAPABILITY_AVX512)
-// key: from [N, 32] to [32/2, N, 2]
-// val: from [N, 32] to [N/2, 32, 2]
 template <typename scalar_t, typename packed_t, typename index_t>
 inline void pack_vnni_Nx32(
     scalar_t* __restrict__ dst0,
@@ -38,8 +35,6 @@ inline void pack_vnni_Nx32(
     vinputs[n] = _mm512_set1_epi32(0);
   }
 
-  // pack value, skip 64 elems for deepseek
-  // handle 2 vectors at a time from [2, 32] to [32, 2]
   if (convert_v) {
     for (int n = 0; n < 16; n += 2) {
       __m512i d0, d1;
@@ -66,7 +61,6 @@ inline void pack_vnni_Nx32(
 //
 //  * for   key: from [N, K/2, 2] to [K/2, N, 2]
 //  * for value: from [N/2, 2, Kv] to [N/2, Kv, 2]
-//
 template <typename scalar_t, typename packed_t, typename index_t>
 void pack_vnni(
     scalar_t* __restrict__ dst0,
@@ -112,7 +106,6 @@ void pack_vnni(
       }
     }
   }
-  // from [N/2, 2, K] to [N/2, K, 2]
   for (int n = 0; n < (N >> 1) * 2; n += 2) {
     index_t index0 = ind[n + 0];
     index_t index1 = ind[n + 1];
@@ -200,7 +193,6 @@ inline void copy_stub(scalar_t* __restrict__ out, const float* __restrict__ inpu
   constexpr int COLS = BLOCK_N / 16;
   auto store = [&](auto i) {
     constexpr int col = i % COLS;
-    // for COLS = 2, 4 use 512bit store
     if constexpr (col % 2 == 0) {
       auto [a_fvec0, a_fvec1] = load_float_vec2(input + col * 16);
       bVec out_bvec = convert_from_float_ext<scalar_t>(a_fvec0, a_fvec1);
@@ -214,7 +206,6 @@ inline void copy_stub(scalar_t* __restrict__ out, const float* __restrict__ inpu
 //   A : [M, K]
 //   B : [N, K] indexed
 //   C : [M, N]
-//
 template <typename scalar_t, typename packed_t, typename index_t, int BLOCK_M, int BLOCK_N>
 struct tinygemm_kernel_nt {
   static inline void apply(
@@ -511,8 +502,6 @@ struct tinygemm_kernel_nt<at::Half, at::Half, index_t, BLOCK_M, BLOCK_N> {
       K,                                                                    \
       max_tokens);
 
-// this is used when N isn't multiple of 16,
-// N corresponds to `head_size_v` which should be 16x
 template <typename scalar_t, typename index_t>
 inline void tinygemm_kernel_nn_scalar(
     const float* __restrict__ A,
@@ -545,7 +534,6 @@ inline void tinygemm_kernel_nn_scalar(
 //   A : [M, K]
 //   B : [K, N] indexed
 //   C ：[M, N]
-//
 template <typename scalar_t, typename index_t, int BLOCK_M, int BLOCK_N>
 struct tinygemm_kernel_nn {
   static inline void apply(
@@ -616,8 +604,6 @@ struct tinygemm_kernel_nn<at::BFloat16, index_t, BLOCK_M, BLOCK_N> {
         int64_t b_idx = indices[k];
         TORCH_CHECK(b_idx < max_tokens, "token index out of scope!");
 
-        // for COLS = 2, 4, 6, 8 use 512 bit load
-        // for COLS = 1, 3, 5, 7 use 256 bit load
         if constexpr (COLS % 2 == 0) {
           if constexpr (col % 2 == 0) {
             __m512i b16 = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(B + b_idx * ldb + col * 16));
@@ -696,8 +682,6 @@ struct tinygemm_kernel_nn<at::Float8_e4m3fn, index_t, BLOCK_M, BLOCK_N> {
         int64_t b_idx = indices[k];
         TORCH_CHECK(b_idx < max_tokens, "token index out of scope!");
 
-        // for COLS = 2, 4, 6, 8 use 512 bit load
-        // for COLS = 1, 3, 5, 7 use 256 bit load
         if constexpr (COLS % 2 == 0) {
           if constexpr (col % 2 == 0) {
             const __m512 b_scale = _mm512_mul_ps(_mm512_set1_ps(B_scale[0]), vexp);
@@ -783,8 +767,6 @@ struct tinygemm_kernel_nn<at::Half, index_t, BLOCK_M, BLOCK_N> {
         int64_t b_idx = indices[k];
         TORCH_CHECK(b_idx < max_tokens, "token index out of scope!");
 
-        // for COLS = 2, 4, 6, 8 use 512 bit load
-        // for COLS = 1, 3, 5, 7 use 256 bit load
         if constexpr (COLS % 2 == 0) {
           if constexpr (col % 2 == 0) {
             __m512i b16 = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(B + b_idx * ldb + col * 16));
@@ -842,7 +824,6 @@ void index_gemm_kernel_nt(
     int64_t ldb,
     int64_t ldc,
     int64_t max_tokens) {
-  // pattern: 1-8-8
   if (M == 1) {
     constexpr int64_t BLOCK_N = 8;
     const int64_t NB = div_up(N, BLOCK_N);
@@ -884,8 +865,6 @@ void index_gemm_kernel_nt(
     return;
   }
 
-  // default pattern: 1-6-24
-  // FP16 pattern: 2-8-16
   constexpr int64_t BLOCK_M = 4;
   constexpr int64_t BLOCK_N = std::is_same_v<scalar_t, at::Half> ? 4 : 6;
   const int64_t MB = div_up(M, BLOCK_M);
@@ -1003,7 +982,6 @@ void index_gemm_kernel_nn(
     return;
   }
 
-  // pattern: 1-8-8
   if (M == 1) {
     constexpr int64_t BLOCK_N = 8 * kVecSize;
     const int64_t NB = div_up(N, BLOCK_N);
@@ -1214,8 +1192,6 @@ void decode_accumulate_kv_splits(
   at::parallel_for(0, batches * num_heads, 0, [&](int64_t begin, int64_t end) {
     int64_t bi{0}, ni{0};
     data_index_init(begin, bi, batches, ni, num_heads);
-    // NB: here we use logits[b][h][0] as acc, since
-    // for the first kv split (kv_id == 0):
     //   m_delta = std::exp(-inf) = 0
     //   e_logic = std::exp(0) = 1
     //   acc = acc * m_delta + tv * e_logic = tv
@@ -1572,7 +1548,6 @@ void decode_attention_mla_kernel_impl(
               v_prime + h * l_stride1,
               head_size_v);
 
-          // pad s_delta with 0 first and then convert to scalar_t
           fill_stub(s_delta + h * BLOCK_N + n_size, 0.f, padded_n_size - n_size);
           copy_stub<scalar_t, BLOCK_N>(s_delta2 + h * BLOCK_N, s_delta + h * BLOCK_N);
         }
@@ -1803,16 +1778,6 @@ void decode_attention_grouped_kernel_impl(
 
 }  // anonymous namespace
 
-// query:            [num_tokens, num_heads, head_size]
-// output:           [num_tokens, num_heads, head_size]
-// k_buffer:         [max_total_num_tokens, num_heads, head_size]
-// v_buffer:         [max_total_num_tokens, num_heads, head_size_v]
-// attn_logits:      [num_seqs, num_heads, num_kv_splits, head_size_v + 1]
-// req_to_token:     [max_num_reqs, max_context_len] int32 or int64
-// req_pool_indices: [num_seqs] int64
-// seq_lens:         [num_seqs] int64
-// encoder_lens:     [num_seqs] int64 or None
-// sinks:            [num_heads] or None
 void decode_attention_cpu(
     at::Tensor& query,
     at::Tensor& k_buffer,

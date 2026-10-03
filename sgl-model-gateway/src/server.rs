@@ -466,8 +466,7 @@ async fn update_worker(
 }
 
 // ============================================================================
-// Tokenize / Detokenize Handlers
-// ============================================================================
+// Tokenize / Detokenize Handlers.
 
 async fn v1_tokenize(
     State(state): State<Arc<AppState>>,
@@ -753,7 +752,7 @@ pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Err
         sync_manager.update_rate_limit_membership();
 
         // Start rate limit window reset task
-        let window_manager = RateLimitWindow::new(sync_manager.clone(), 1); // Reset every 1 second
+        let window_manager = RateLimitWindow::new(sync_manager.clone(), 1);
         spawn(async move {
             window_manager.start_reset_task().await;
         });
@@ -899,7 +898,7 @@ pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Err
 
     // Start background refresh for ALL MCP servers (static + dynamic in LRU cache)
     if let Some(mcp_manager) = app_context.mcp_manager.get() {
-        let refresh_interval = Duration::from_secs(600); // 10 minutes
+        let refresh_interval = Duration::from_secs(600); // Several
         let _refresh_handle =
             Arc::clone(mcp_manager).spawn_background_refresh_all(refresh_interval);
         debug!("Started background refresh for all MCP servers (every 10 minutes)");
@@ -1090,8 +1089,7 @@ pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Err
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
     }
 
-    // HA handler shutdown is handled by the signal in mesh_run! macro
-    // No need to manually shutdown here
+    // HA handler shutdown is handled by the signal in mesh_run! macro No need to manually shutdown here
 
     Ok(())
 }

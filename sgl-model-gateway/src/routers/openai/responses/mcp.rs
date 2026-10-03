@@ -1,12 +1,4 @@
-//! MCP (Model Context Protocol) Integration Module
-//!
-//! This module contains all MCP-related functionality for the OpenAI router:
-//! - Tool loop state management for multi-turn tool calling
-//! - MCP tool execution and result handling
-//! - Output item builders for MCP-specific response formats
-//! - SSE event generation for streaming MCP operations
-//! - Payload transformation for MCP tool interception
-//! - Metadata injection for MCP operations
+//! MCP (Model Context Protocol) Integration Module This module contains all MCP-related functionality for the OpenAI router.
 
 use std::{io, sync::Arc};
 
@@ -29,12 +21,11 @@ use crate::{
 };
 
 // ============================================================================
-// Configuration and State Types
-// ============================================================================
+// Configuration.
 
 /// State for tracking multi-turn tool calling loop
 pub(super) struct ToolLoopState {
-    /// Current iteration number (starts at 0, increments with each tool call)
+    /// Current iteration number (starts at multiple increments with each tool call)
     pub iteration: usize,
     /// Total number of tool calls executed
     pub total_calls: usize,
@@ -252,12 +243,10 @@ pub(super) fn build_resume_payload(
         .as_object_mut()
         .ok_or_else(|| "payload not an object".to_string())?;
 
-    // Build input array: start with original user input
-    // Pre-allocate: 1 for user message + conversation history
     let mut input_array = Vec::with_capacity(1 + conversation_history.len());
 
-    // Add original user message
-    // For structured input, serialize the original input items
+    // Add original user message For structured input, serialize the input
+    // items
     match original_input {
         ResponseInput::Text(text) => {
             let user_item = json!({
@@ -293,8 +282,7 @@ pub(super) fn build_resume_payload(
     obj.insert("stream".to_string(), Value::Bool(is_streaming));
     obj.insert("store".to_string(), Value::Bool(false));
 
-    // Note: SGLang-specific fields were already removed from base_payload
-    // before it was passed to execute_tool_loop (see route_responses lines 1935-1946)
+    // Note: SGLang-specific fields were already removed from base_payload before it was passed to execute_tool_loop.
 
     Ok(payload)
 }
@@ -325,7 +313,6 @@ pub(super) fn send_mcp_list_tools_events(
         obj.insert("tools".to_string(), json!([]));
     }
 
-    // Event 1: response.output_item.added with empty tools
     let event1_payload = json!({
         "type": OutputItemEvent::ADDED,
         "sequence_number": *sequence_number,
@@ -342,7 +329,6 @@ pub(super) fn send_mcp_list_tools_events(
         return false; // Client disconnected
     }
 
-    // Event 2: response.mcp_list_tools.in_progress
     let event2_payload = json!({
         "type": McpEvent::LIST_TOOLS_IN_PROGRESS,
         "sequence_number": *sequence_number,
@@ -359,7 +345,6 @@ pub(super) fn send_mcp_list_tools_events(
         return false;
     }
 
-    // Event 3: response.mcp_list_tools.completed
     let event3_payload = json!({
         "type": McpEvent::LIST_TOOLS_COMPLETED,
         "sequence_number": *sequence_number,
@@ -376,7 +361,6 @@ pub(super) fn send_mcp_list_tools_events(
         return false;
     }
 
-    // Event 4: response.output_item.done with full tools list
     let event4_payload = json!({
         "type": OutputItemEvent::DONE,
         "sequence_number": *sequence_number,
@@ -421,7 +405,6 @@ pub(super) fn send_mcp_call_completion_events_with_error(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // Event 1: response.mcp_call.completed
     let completed_payload = json!({
         "type": McpEvent::CALL_COMPLETED,
         "sequence_number": *sequence_number,
@@ -439,7 +422,6 @@ pub(super) fn send_mcp_call_completion_events_with_error(
         return false;
     }
 
-    // Event 2: response.output_item.done (with completed mcp_call)
     let done_payload = json!({
         "type": OutputItemEvent::DONE,
         "sequence_number": *sequence_number,

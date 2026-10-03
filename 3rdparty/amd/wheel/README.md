@@ -24,14 +24,13 @@ pip uninstall sglang-kernel sglang amd-sglang
 pip install "amd-sglang[all-hip,rocm720]" -i https://pypi.amd.com/rocm-7.2.0/simple --extra-index-url https://pypi.org/simple
 ```
 
-Note: You must resolve the two dependencies, AITER and triton, below.  Others are optional depending on your applications.
+Note: You must resolve the dependencies, AITER and triton, below. Others are optional depending on your applications.
 
 ## Manual Dependency Resolution
 
 ### Resolving AITER
 
-[AITER](https://github.com/ROCm/aiter) is a fundamental dependency. Wheel-izing it is ongoing.
-Until we can pin it reliably, install it manually (typically following the [ROCm docker recipe](https://github.com/sgl-project/sglang/blob/main/docker/rocm.Dockerfile#L106).
+[AITER](https://github.com/ROCm/aiter) is a fundamental dependency. Wheel-izing it is ongoing. Until we can pin it reliably, install it manually (typically following the [ROCm docker recipe](https://github.com/sgl-project/sglang/blob/main/docker/rocm.Dockerfile#L106).
 
 ### Resolving triton
 

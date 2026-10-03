@@ -112,8 +112,7 @@ sgl-eval run gsm8k \\
       ],
     },
     {
-      // Verified with online dynamic FP8 (--quantization fp8 on the BF16
-      // checkpoint), the same serving path the FP8 repo uses natively.
+      // Verified with online dynamic FP8 (--quantization fp8 on the BF16 checkpoint).
       match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "balanced", nodes: "single" },
       verified: true,
       env: ["SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1"],

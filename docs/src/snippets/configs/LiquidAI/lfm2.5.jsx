@@ -115,13 +115,11 @@ sgl-eval run aime25 \\
     ["mmmu_pct",   "MMMU (val)",     "%"],
   ],
 
-  // Per-variant accuracy applied to every cell. ALL values are MEASURED through
-  // SGLang (B200, dev-cu13) with the exact commands in the Reproduce modal:
-  // gsm8k / gpqa / aime25 / mmlu via sgl-eval (registry defaults — gpqa pass@1
-  // avg-of-8, aime25 avg-of-16, gsm8k + mmlu single-shot), mmmu via
-  // sglang.test.run_eval (900 examples, card sampling). They agree with the
-  // LiquidAI model-card numbers within a few points where both exist; see the
-  // model cards for Liquid's own reported suite (IFEval / MATH500 / BFCL / ...).
+  // Per-variant accuracy applied to every cell. ALL values are MEASURED
+  // through SGLang (B200, dev-cu13) with the exact commands in the Reproduce
+  // modal: gsm8k / gpqa / aime25 / mmlu via sgl-eval (registry defaults —
+  // gpqa pass@avg-of-8, aime25 avg-of-16, gsm8k + mmlu single-shot), mmmu
+  // via sglang.test.run_eval (examples, card sampling).
   defaultAccuracy: {
     "8b-a1b":  { mmlu_pct: 76.61, gsm8k_pct: 91.96, gpqa_pct: 52.27, aime25_pct: 45.21 },
     thinking:  { mmlu_pct: 63.2, gsm8k_pct: 86.35, gpqa_pct: 39.08, aime25_pct: 27.08 },
@@ -146,9 +144,8 @@ sgl-eval run aime25 \\
   },
 
   playgroundFeatures: {
-    // TP override only: every variant fits on (and is verified at) TP=1; TP=2 is
-    // exposed for experimentation on the larger checkpoints. No Parsers axis —
-    // see the header note (parsers are variant-intrinsic and live in the cells).
+    // TP override only: every variant fits on (and is verified at) TP=1; TP=2
+    // is exposed for experimentation on the larger checkpoints.
     attention: {
       knobs: [
         { id: "tp", label: "TP", values: [null, 1, 2] },
@@ -392,10 +389,8 @@ sgl-eval run aime25 \\
     },
 
     // ====================================================================
-    // B200 (sm100) — explicit attention backend per variant:
-    // dense text → trtllm_mha; 8B-A1B + VL use a mamba-style conv state cache
-    // that needs a page-size-1 backend → flashinfer (VL adds fa4 vision tower)
-    // ====================================================================
+    // B200 (sm100) — explicit attention backend per variant: dense text →
+    // trtllm_mha.
     {
       match: { hw: "b200", variant: "8b-a1b", quant: "bf16", strategy: "default", nodes: "single" },
       verified: true,

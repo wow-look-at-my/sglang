@@ -9,9 +9,6 @@ use wfaas::{StepExecutor, StepResult, WorkflowContext, WorkflowError, WorkflowRe
 use crate::core::steps::workflow_data::WorkerUpdateWorkflowData;
 
 /// Step to update policies for updated workers.
-///
-/// After workers are updated, this step re-initializes cache-aware policies
-/// for the affected models to reflect any priority or label changes.
 pub struct UpdatePoliciesForWorkerStep;
 
 #[async_trait]

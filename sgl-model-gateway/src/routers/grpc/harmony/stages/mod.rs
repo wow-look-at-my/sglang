@@ -1,9 +1,4 @@
-//! Harmony-specific pipeline stages
-//!
-//! These stages replace their regular counterparts in the Harmony pipeline:
-//! - HarmonyPreparationStage: Harmony encoding instead of chat template + tokenization
-//! - HarmonyRequestBuildingStage: Token-based request building
-//! - HarmonyResponseProcessingStage: Harmony channel parsing
+//! Harmony-specific pipeline stages These stages replace their regular counterparts in the Harmony pipeline.
 
 pub(crate) mod preparation;
 pub(crate) mod request_building;

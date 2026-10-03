@@ -1,10 +1,4 @@
 //! Integration tests for control plane authentication.
-//!
-//! Tests the full authentication flow including:
-//! - JWT token validation with mock JWKS server
-//! - API key authentication
-//! - Role-based access control
-//! - Token expiration and replay protection
 
 use std::{
     net::SocketAddr,
@@ -102,7 +96,7 @@ fn create_claims(sub: &str, roles: Vec<&str>) -> TestClaims {
         sub: sub.to_string(),
         iss: "https://test-issuer.example.com".to_string(),
         aud: "test-gateway".to_string(),
-        exp: now + 3600, // 1 hour from now
+        exp: now + 3600,
         iat: now,
         jti: Some(uuid::Uuid::new_v4().to_string()),
         name: Some("Test User".to_string()),
@@ -145,9 +139,7 @@ async fn start_mock_jwks_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     (addr, handle)
 }
 
-// ============================================================================
-// JWT Authentication Tests
-// ============================================================================
+// ============================================================================ JWT Authentication Tests.
 
 #[tokio::test]
 async fn test_jwt_valid_token_with_admin_role() {
@@ -252,7 +244,7 @@ async fn test_jwt_expired_token() {
         sub: "user@example.com".to_string(),
         iss: "https://test-issuer.example.com".to_string(),
         aud: "test-gateway".to_string(),
-        exp: now - 3600, // Expired 1 hour ago
+        exp: now - 3600,
         iat: now - 7200,
         jti: None,
         name: None,
@@ -345,9 +337,7 @@ async fn test_jwt_wrong_issuer() {
     assert!(result.is_err(), "Wrong issuer should fail validation");
 }
 
-// ============================================================================
-// API Key Authentication Tests
-// ============================================================================
+// ============================================================================ API Key Authentication Tests.
 
 #[tokio::test]
 async fn test_api_key_valid_admin() {
@@ -423,17 +413,14 @@ async fn test_api_key_timing_attack_resistance() {
         audit_enabled: false,
     };
 
-    // These should all take roughly the same time due to constant-time comparison
-    // (We can't easily test timing in unit tests, but we verify the function works)
+    // These should all take roughly the same time due to constant-time comparison.
     assert!(config.find_api_key("sk-abcdefghijklmnop").is_some());
     assert!(config.find_api_key("sk-abcdefghijklmnox").is_none()); // One char different
     assert!(config.find_api_key("sk-xxxxxxxxxxxxxxxx").is_none()); // All different
     assert!(config.find_api_key("sk-a").is_none()); // Much shorter
 }
 
-// ============================================================================
-// Combined Auth Tests (JWT + API Key fallback)
-// ============================================================================
+// ============================================================================ Combined Auth Tests (JWT + API Key fallback).
 
 #[tokio::test]
 async fn test_combined_auth_jwt_and_api_keys() {
@@ -472,9 +459,7 @@ async fn test_combined_auth_jwt_and_api_keys() {
     assert!(result.is_ok());
 }
 
-// ============================================================================
-// Role-Based Access Control Tests
-// ============================================================================
+// ============================================================================ Role-Based Access Control Tests.
 
 #[tokio::test]
 async fn test_role_admin_has_access() {
@@ -496,9 +481,7 @@ async fn test_role_parsing() {
     assert_eq!("USER".parse::<Role>().unwrap(), Role::User);
 }
 
-// ============================================================================
-// try_init Helper Tests
-// ============================================================================
+// ============================================================================ try_init Helper Tests.
 
 #[tokio::test]
 async fn test_try_init_with_no_config() {
@@ -530,9 +513,7 @@ async fn test_try_init_with_api_keys_only() {
     assert!(result.is_some());
 }
 
-// ============================================================================
-// Audit Logging Tests
-// ============================================================================
+// ============================================================================ Audit Logging Tests.
 
 #[tokio::test]
 async fn test_audit_logging_enabled() {
@@ -564,9 +545,7 @@ async fn test_audit_logging_disabled() {
     assert!(!state.audit_logger.is_enabled());
 }
 
-// ============================================================================
-// JTI Replay Protection Tests
-// ============================================================================
+// ============================================================================ JTI Replay Protection Tests.
 
 #[tokio::test]
 async fn test_jwt_jti_replay_protection() {
@@ -626,7 +605,7 @@ async fn test_jwt_different_tokens_no_replay() {
         .await
         .expect("Failed to create JWT validator");
 
-    // Create two different tokens (different JTIs)
+    // Create different tokens (different JTIs)
     let claims1 = create_claims("user1@example.com", vec!["admin"]);
     let claims2 = create_claims("user2@example.com", vec!["admin"]);
     let token1 = create_test_token(&claims1);
@@ -643,9 +622,7 @@ async fn test_jwt_different_tokens_no_replay() {
     );
 }
 
-// ============================================================================
-// Malformed Token Tests
-// ============================================================================
+// ============================================================================ Malformed Token Tests.
 
 #[tokio::test]
 async fn test_jwt_malformed_token() {
@@ -730,9 +707,7 @@ async fn test_jwt_missing_kid_in_header() {
     );
 }
 
-// ============================================================================
-// Edge Cases and Security Tests
-// ============================================================================
+// ============================================================================ Edge Cases.
 
 #[tokio::test]
 async fn test_jwt_role_extraction_from_groups_claim() {
@@ -840,7 +815,6 @@ async fn test_jwt_no_role_defaults_to_user() {
         exp: u64,
         iat: u64,
         jti: String,
-        // No roles, groups, or role claims
     }
 
     let claims = MinimalClaims {

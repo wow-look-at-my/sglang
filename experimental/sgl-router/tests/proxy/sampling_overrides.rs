@@ -1,13 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `--override-sampling-params` end to end: from the CLI flag an operator
-//! writes in a manifest to the JSON body the engine actually receives.
-//!
-//! The unit tests in `config::sampling` and `server::routes::chat` cover
-//! parsing and the per-parameter decision; these drive the whole path, because
-//! the failure this flag exists to prevent (an engine serving sampling
-//! parameters the operator did not declare) is only observable on the wire.
+//! `--override-sampling-params` end to end: from the CLI flag an operator writes in a manifest.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -32,7 +26,7 @@ const OVERRIDES: &str = r#"{"temperature": 1, "top_p": 0.95, "top_k": 1000,
                             "frequency_penalty": 0, "presence_penalty": 0, "n": 1}"#;
 
 /// Build the config the way a deployment does — through `Cli`, so what these
-/// tests pin is the flag spelling in a manifest, not a hand-built struct that
+/// tests pin is the flag spelling in a manifest.
 /// could drift from what the parser produces.
 fn config(flags: &[&str]) -> Config {
     let mut argv = vec![
@@ -94,9 +88,7 @@ fn captured(mock: &MockWorker) -> Option<Value> {
     Some(serde_json::from_slice(&b).expect("captured body is valid JSON"))
 }
 
-/// The values an operator configures replace the engine's own defaults: a
-/// request that names no sampling parameter reaches the engine carrying every
-/// configured one.
+/// The values an operator configures replace the engine's own defaults.
 #[tokio::test]
 async fn configured_values_reach_the_engine_when_the_request_omits_them() {
     let mock = MockWorker::start(vec![]).await;
@@ -117,13 +109,10 @@ async fn configured_values_reach_the_engine_when_the_request_omits_them() {
     assert_eq!(body.get("n"), Some(&json!(1)));
 }
 
-/// Under the default `reject` mode a conflicting request is a 400 that never
-/// reaches a worker — the contract costs no engine round-trip and no
-/// admission slot.
+/// Under the default `reject` mode a conflicting request is a that never reaches a worker — the contract costs no engine round-trip.
 #[tokio::test]
 async fn reject_mode_400s_a_conflicting_request_without_touching_the_engine() {
-    // Covers the whole rejection contract: status, wire error code, and that
-    // the engine is never reached.
+    // Covers the whole rejection contract: status, wire error code, and that the engine is never reached.
     let mock = MockWorker::start(vec![]).await;
     let ctx = build_ctx(mock.url.clone(), &["--override-sampling-params", OVERRIDES]);
     let body = json!({
@@ -133,9 +122,7 @@ async fn reject_mode_400s_a_conflicting_request_without_touching_the_engine() {
     });
     let (status, code) = send_raw(ctx, serde_json::to_vec(&body).unwrap()).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    // Its own error code, so an operator rolling `reject` across a fleet can
-    // alert on contract rejections without them being buried among the
-    // `bad_request`s from clients sending malformed JSON.
+    // Its own error code, so an operator rolling `reject` across a fleet can alert.
     assert_eq!(code.as_deref(), Some("sampling_contract_violation"));
     assert!(
         captured(&mock).is_none(),
@@ -143,9 +130,7 @@ async fn reject_mode_400s_a_conflicting_request_without_touching_the_engine() {
     );
 }
 
-/// A repeated sampling key must not become a router-side 400: it is legal JSON
-/// that every engine reads last-wins, and the router forwarded it before these
-/// fields were probed. The contract judges the value the engine will use.
+/// A repeated sampling key must not become a router-side.
 #[tokio::test]
 async fn duplicate_sampling_key_is_judged_on_its_last_value() {
     // Last value agrees with the contract -> served.
@@ -178,10 +163,7 @@ async fn duplicate_sampling_key_is_judged_on_its_last_value() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-/// `temperature`, `top_p`, `top_k`, `min_p` and `repetition_penalty` are the
-/// parameters the engine resolves from the model's own `generation_config`, so
-/// they are the ones a fleet-wide pin exists for. Drive them the whole way to
-/// the engine.
+/// `temperature`, `top_p`, `top_k`, `min_p` and `repetition_penalty` are the parameters the engine resolves.
 #[tokio::test]
 async fn engine_defaulted_parameters_reach_the_engine() {
     let mock = MockWorker::start(vec![]).await;
@@ -203,8 +185,7 @@ async fn engine_defaulted_parameters_reach_the_engine() {
     assert_eq!(body.get("repetition_penalty"), Some(&json!(1.1)));
 }
 
-/// The same request under `allow` is forwarded with the client's value intact,
-/// and the parameters it did not name still get the configured ones.
+/// The same request under `allow` is forwarded with the client's value intact.
 #[tokio::test]
 async fn allow_mode_forwards_the_client_value_and_fills_the_rest() {
     let mock = MockWorker::start(vec![]).await;
@@ -235,8 +216,7 @@ async fn allow_mode_forwards_the_client_value_and_fills_the_rest() {
     assert_eq!(body.get("n"), Some(&json!(1)));
 }
 
-/// A band accepts anything inside it, 400s outside, and injects nothing:
-/// temperature tunable in [0, 1], everything else fixed.
+/// A band accepts anything inside it, 400s outside, and injects nothing: temperature tunable in [, ].
 #[tokio::test]
 async fn a_temperature_band_admits_in_range_values_and_injects_nothing() {
     let flags = [
@@ -272,7 +252,6 @@ async fn a_temperature_band_admits_in_range_values_and_injects_nothing() {
     let body = captured(&mock).expect("worker received a request");
     assert_eq!(body.get("temperature"), None);
 
-    // Outside the band: 400.
     let mock = MockWorker::start(vec![]).await;
     let ctx = build_ctx(mock.url.clone(), &flags);
     let status = send(
@@ -288,9 +267,7 @@ async fn a_temperature_band_admits_in_range_values_and_injects_nothing() {
     assert!(captured(&mock).is_none());
 }
 
-/// With the flag unset the router touches nothing: the body the client sent
-/// is the body the engine sees, including a sampling parameter the operator
-/// could have fixed.
+/// With the flag unset the router touches nothing.
 #[tokio::test]
 async fn unset_flag_forwards_the_body_untouched() {
     let mock = MockWorker::start(vec![]).await;

@@ -109,9 +109,7 @@ tracing = [
 # HIP (Heterogeneous-computing Interface for Portability) for AMD
 # => base docker rocm/vllm-dev:20250114, not from public vllm whl
 #
-# srt_hip_rocm724 below is the torch 2.11 variant of this list and differs only
-# in its compressed-tensors and torch pins. A dependency added here has to be
-# added there too; nothing enforces that.
+# A dependency added here has to be added there too; nothing enforces that.
 srt_hip = [
   "sglang[runtime_common]",
   "torch",
@@ -119,10 +117,8 @@ srt_hip = [
   "wave-lang==3.8.2",
 ]
 
-# Kept in step with srt_hip above by hand; only the two pins below differ.
+# Kept in step with srt_hip above by hand; only both pins below differ.
 srt_hip_rocm724 = [
-  # ROCm 7.2.4 uses torch 2.11. compressed-tensors 0.15.0 requires
-  # torch<2.11, while 0.16.0 supports torch>=2.10.
   "compressed-tensors==0.16.0",
   "petit_kernel==0.0.2",
   "sglang[runtime_common]",
@@ -132,7 +128,7 @@ srt_hip_rocm724 = [
 
 diffusion_hip = [
   "cache-dit==1.3.0",
-  "peft>=0.18.0,<0.19.0", # Pin to <0.19.0 due to torchao incompatibility
+  "peft>=0.18.0,<0.19.0",
   "runai_model_streamer>=0.15.5",
   "sglang[diffusion_common]",
   "st_attn==0.0.7",
@@ -206,7 +202,7 @@ test = [
   "jsonlines",
   "matplotlib",
   "pandas",
-  "peft>=0.18.0,<0.19.0", # Pin to <0.19.0 due to torchao incompatibility
+  "peft>=0.18.0,<0.19.0",
   "pytest",
   "sentence_transformers",
   "sgl-eval==0.1.2",

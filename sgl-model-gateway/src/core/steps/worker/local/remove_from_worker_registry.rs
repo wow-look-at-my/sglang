@@ -10,9 +10,7 @@ use crate::{
     core::steps::workflow_data::WorkerRemovalWorkflowData, observability::metrics::Metrics,
 };
 
-/// Step to remove workers from the worker registry.
-///
-/// Removes each worker by URL from the central worker registry.
+/// Step to remove workers from the worker registry. Removes each worker by URL from the central worker registry.
 pub struct RemoveFromWorkerRegistryStep;
 
 #[async_trait]
@@ -69,7 +67,6 @@ impl StepExecutor<WorkerRemovalWorkflowData> for RemoveFromWorkerRegistryStep {
             debug!("Removed {} worker(s) from registry", removed_count);
         }
 
-        // Update Layer 3 worker pool size metrics for unique configurations
         for (worker_type, connection_mode, model_id) in unique_configs {
             // Get labels before moving values into get_workers_filtered
             let worker_type_label = worker_type.as_metric_label();

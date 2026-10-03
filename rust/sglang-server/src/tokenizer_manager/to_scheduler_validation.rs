@@ -18,13 +18,7 @@ pub(super) fn validate(req: &mut Request, limits: &Limits) -> Result<(), Error> 
         .state
         .apply(Event::Validated(ValidationOutcome::NeedsTokenize));
 
-    // The rid is the request's identity everywhere downstream: it keys the detok
-    // table, and it rides on EVERY chunk of EVERY decode step. An unbounded
-    // client-supplied rid is therefore a per-step cost, not a one-off. Python's is
-    // a 32-byte uuid hex, so this is generous.
-    // Measured on the CLIENT-facing form: the uniquifier `Rid::from_client` appends
-    // is this server's own overhead, and charging the client for bytes it did not
-    // send would reject a rid exactly at the documented limit.
+    // The rid is the request's identity everywhere downstream: it keys the detok table.
     let client_rid_len = req.rid.client_facing().len();
     if client_rid_len > MAX_RID_LEN {
         return Err(Error::Validation(format!(
@@ -34,8 +28,6 @@ pub(super) fn validate(req: &mut Request, limits: &Limits) -> Result<(), Error> 
     if skip_tokenizer_init
         && matches!(&req.kind, RequestKind::Generate(g) if !g.already_tokenized())
     {
-        // `Validation` (400), not `Tokenize` (500): the client sent a request this
-        // server cannot serve, which is their error to fix — Python 400s it too.
         return Err(Error::Validation(
             "skip_tokenizer_init is set: request must provide input_ids".into(),
         ));
@@ -60,10 +52,7 @@ pub(super) fn validate(req: &mut Request, limits: &Limits) -> Result<(), Error> 
         }
     }
 
-    // Detokenize ids must fit the shard's `&[u32]` decode domain. No vocab
-    // bound — parity with the retired direct decode service: an unknown id is
-    // the tokenizer's error to report, and nothing here reaches the scheduler's
-    // embedding lookup.
+    // Detokenize ids must fit the shard's `&[u32]` decode domain.
     if let RequestKind::Detokenize { token_ids } = &req.kind {
         for &id in token_ids {
             if u32::try_from(id).is_err() {
@@ -72,9 +61,6 @@ pub(super) fn validate(req: &mut Request, limits: &Limits) -> Result<(), Error> 
         }
     }
 
-    // The scheduler only computes hidden states when launched for it, so without
-    // this the request would 200 with `meta_info.hidden_states` silently absent
-    // (Python `TokenizerManager._validate_one_request`).
     if !limits.enable_return_hidden_states
         && matches!(&req.kind, RequestKind::Generate(g) if g.return_hidden_states)
     {
@@ -105,10 +91,8 @@ pub(super) fn validate_input_ids(g: &GenerateRequest, vocab_size: u64) -> Result
 }
 
 /// The context-window checks that need the tokenized length, mirroring Python
-/// `TokenizerManager._validate_one_request`: the input alone must fit, and then
-/// input + `max_new_tokens` must fit. Without them the scheduler silently clamps
-/// and the client gets a 200 with a truncated completion instead of an actionable
-/// 400.
+/// `TokenizerManager._validate_one_request`: the input alone must fit.
+/// input + `max_new_tokens` must fit.
 ///
 /// Under `allow_auto_truncate` both clamp instead of rejecting — the launch flag
 /// opted into that.
@@ -153,11 +137,7 @@ pub(super) fn check_total_tokens(g: &mut GenerateRequest, limits: &Limits) -> Re
         )));
     }
     let clamped = max_req_len.saturating_sub(input_len) as i64;
-    // Re-check what the clamp can break. `verify` already ran (in Normalizing), so
-    // lowering `max_new_tokens` here can leave `min_new_tokens > max_new_tokens` —
-    // and `is_normalized: true` stops the scheduler from re-verifying, so nothing
-    // downstream would catch it. Python validates before it verifies; we can't
-    // reorder the FSM, so we re-assert the one invariant the clamp can violate.
+    // Re-check what the clamp can break.
     if g.sampling_params.min_new_tokens > clamped {
         return Err(Error::Validation(format!(
             "min_new_tokens must be in [0, max_new_tokens({clamped})], got {}",

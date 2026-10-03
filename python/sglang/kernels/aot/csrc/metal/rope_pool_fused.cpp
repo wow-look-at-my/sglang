@@ -141,8 +141,7 @@ class RopePoolFused : public Primitive {
     const std::string k_kname = std::string("rope_k_pool_") + dtype_suffix(k.dtype());
     const std::string v_kname = std::string("v_to_pool_") + dtype_suffix(v.dtype());
 
-    // Single rectangular dispatch uses one HEADS_PER_THREAD value for both
-    // Q and KV heads. Keep it valid for both head counts.
+    // Single rectangular dispatch uses one HEADS_PER_THREAD value for both Q and KV heads.
     uint32_t hpt = std::min(hpt_q, hpt_k);
     if (nq % hpt != 0 || nk % hpt != 0) hpt = 1;
 
@@ -180,7 +179,6 @@ class RopePoolFused : public Primitive {
         throw std::runtime_error("rope_pool_fused: failed to resolve kernels");
       }
 
-      // Kernel 1: Q rope
       {
         enc.set_compute_pipeline_state(q_pipe);
         enc.set_input_array(q, 0);
@@ -190,7 +188,6 @@ class RopePoolFused : public Primitive {
         enc.dispatch_threads(MTL::Size::Make(half_dim, num_tokens, gz), pick_tg(half_dim, num_tokens, gz));
       }
 
-      // Kernel 2: K rope + pool write
       {
         enc.set_compute_pipeline_state(k_pipe);
         enc.set_input_array(k, 0);
@@ -202,7 +199,6 @@ class RopePoolFused : public Primitive {
         enc.dispatch_threads(MTL::Size::Make(half_dim, num_tokens, gz), pick_tg(half_dim, num_tokens, gz));
       }
 
-      // Kernel 3: V copy to pool
       {
         enc.set_compute_pipeline_state(v_pipe);
         enc.set_input_array(v, 0);
@@ -211,7 +207,6 @@ class RopePoolFused : public Primitive {
         enc.dispatch_threads(MTL::Size::Make(hd, num_tokens, nk), pick_tg(hd, num_tokens, nk));
       }
     }
-    // No commit / synchronize - MLX's lazy graph batches into one buffer.
   }
 
   const char* name() const override {
@@ -235,7 +230,7 @@ class RopePoolFused : public Primitive {
   float rope_base_;
 };
 
-// Python entry: returns 4 arrays (q_rot, k_rot, k_pool_new, v_pool_new).
+// Python entry: returns multiple arrays (q_rot, k_rot, k_pool_new, v_pool_new).
 nb::tuple rope_pool_fused_py(
     nb::handle q_h,
     nb::handle k_h,
@@ -265,8 +260,7 @@ nb::tuple rope_pool_fused_py(
   if (q.dtype() != k.dtype() || q.dtype() != v.dtype() || q.dtype() != k_pool.dtype() || q.dtype() != v_pool.dtype())
     throw std::runtime_error("rope_pool_fused: all float arrays must share dtype");
   if ((head_dim & 1) != 0) throw std::runtime_error("rope_pool_fused: head_dim must be even");
-  // Shape cross-checks (catch any drift between Python pre-flight state
-  // and actual tensors at dispatch time).
+  // Shape cross-checks (catch any drift between Python pre-flight state and actual tensors at dispatch time).
   const int num_tokens = q.shape(0);
   if (k.shape(0) != num_tokens || v.shape(0) != num_tokens || positions.shape(0) != num_tokens ||
       slots.shape(0) != num_tokens)

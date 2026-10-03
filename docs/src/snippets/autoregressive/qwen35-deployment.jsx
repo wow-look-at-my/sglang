@@ -1,26 +1,5 @@
 export const Qwen35Deployment = () => {
-  // Qwen3.5 Configuration Generator
-  //
-  // MoE models (Gated Delta Networks + sparse MoE, hybrid architecture):
-  //   397B-A17B, 122B-A10B, 35B-A3B
-  //
-  // Dense models (standard transformer):
-  //   27B, 9B, 4B, 2B, 0.8B
-  //
-  // GPU requirements (BF16):
-  //   397B-A17B: H100 tp=16 (2 nodes), H200 tp=8, B200 tp=8, B300 tp=8, GB200 tp=8 (2 nodes, 4 GPUs/node), GB300 tp=8 (2 nodes, 4 GPUs/node), MI300X tp=8, MI325X tp=4, MI355X tp=4
-  //   122B-A10B: H100 tp=4,  H200 tp=4, B200 tp=2, B300 tp=2, GB200 tp=2, GB300 tp=2, MI300X tp=2, MI325X tp=1, MI355X tp=1
-  //   35B-A3B:   H100 tp=1 (tp=2 w/ MTP), H200 tp=1, B200 tp=1, B300 tp=1, GB200 tp=1, GB300 tp=1, MI300X tp=1, MI325X tp=1, MI355X tp=1
-  //   27B:       H100 tp=1 (tp=2 w/ MTP); tp=1 on all other hardware
-  //   9B/4B/2B/0.8B: tp=1 on all hardware (including MI300X, MI325X, MI355X)
-  //
-  // GPU requirements (FP8, where available):
-  //   397B-A17B: H100 tp=8, H200 tp=8 ep=8, B200 tp=4, B300 tp=4, GB200 tp=4, GB300 tp=4, MI300X tp=4, MI325X tp=2, MI355X tp=2
-  //   122B-A10B: H100 tp=2 (tp=4 w/ MTP), H200 tp=2, B200 tp=1, B300 tp=1, GB200 tp=1, GB300 tp=1, MI300X tp=1, MI325X tp=1, MI355X tp=1
-  //   35B-A3B:   H100 tp=1, H200 tp=1, B200 tp=1, B300 tp=1, GB200 tp=1, GB300 tp=1, MI300X tp=1, MI325X tp=1, MI355X tp=1
-  //   27B:       tp=1 on all hardware (including MI300X, MI325X, MI355X)
-  //
-  // FP4 (397B only): NVFP4 on Blackwell B200 tp=4 (tp=2 ep=2 w/ MTP) / B300 tp=4; AMD MXFP4 on MI355X tp=2
+  // Qwen3.5 Configuration Generator MoE models (Gated Delta Networks + sparse MoE, hybrid architecture): 397B-A17B, 122B-A10B.
 
   const MOE_MODELS = new Set(['397b', '122b', '35b']);
   const FP8_MODELS = new Set(['397b', '122b', '35b', '27b']);
@@ -117,8 +96,7 @@ export const Qwen35Deployment = () => {
     kvOffload: {
       name: 'kvOffload',
       title: 'KV Cache Offloading',
-      // HiCache adds a host-DRAM tier below the device KV cache. Only wired up
-      // for the MI355X MXFP4 recipe, which is the arm it is tuned on.
+      // HiCache adds a host-DRAM tier below the device KV cache.
       condition: (values) => values.hardware === 'mi355x' && values.quantization === 'fp4',
       items: [
         { id: 'disabled', label: 'Disabled',            default: true  },
@@ -322,9 +300,8 @@ export const Qwen35Deployment = () => {
     });
   };
 
-  // Multi-node flag template — mirrors DeepSeek-V4 cookbook's multiNodeFlags.
-  // Each launcher must be invoked on every node with <node-rank> set to its rank
-  // (0 on the head node) and <node0-ip> resolvable from every node.
+  // Multi-node flag template — mirrors DeepSeek-V4 cookbook's
+  // multiNodeFlags.
   const multiNodeFlags = (nnodes) => [
     `--nnodes ${nnodes}`,
     `--node-rank <node-rank>`,
@@ -350,17 +327,13 @@ export const Qwen35Deployment = () => {
       return '# Please select a valid hardware and quantization combination';
     }
 
-    // 35B / 27B H100 BF16 with MTP: bump TP to 2 and skip --mem-fraction-static.
     // Spread the base spec so any future fields (multinode, ep, ...) survive.
     if ((model === '35b' || model === '27b') && hardware === 'h100' && quantization === 'bf16' && speculative === 'enabled') {
       hwConfig = { ...hwConfig, tp: 2, mem: undefined };
     }
-    // 122B H100 FP8 with MTP: bump TP to 4 and skip --mem-fraction-static.
     if (model === '122b' && hardware === 'h100' && quantization === 'fp8' && speculative === 'enabled') {
       hwConfig = { ...hwConfig, tp: 4, mem: undefined };
     }
-    // 397B B200 NVFP4 with MTP: tp=2 with expert parallelism 2 (TEP2) beats
-    // tp=4 across the concurrency sweep.
     if (model === '397b' && hardware === 'b200' && quantization === 'fp4' && speculative === 'enabled') {
       hwConfig = { ...hwConfig, tp: 2, ep: 2, mem: 0.8 };
     }
@@ -400,21 +373,14 @@ export const Qwen35Deployment = () => {
     }
 
     // Multi-node wiring goes right after --tp / --expert-parallel-size so the
-    // distributed-init flags sit next to the parallelism flags they configure.
+    // distributed-init flags sit next.
     if (isMultinode) {
       for (const flag of multiNodeFlags(nnodes)) {
         cmd += ` \\\n  ${flag}`;
       }
     }
 
-    // Force Mamba V1 for AMD GPUs and Xeon CPUs (V2 requires FLA backend).
-    // Force Mamba V2 when MTP is enabled.
-    // Dense models with MTP off: force V1 — values.mambaCache is not
-    // re-resolved on a speculative toggle (useEffect deps are hardware/model),
-    // so it can stay at 'v2' from a prior MTP-on state. Reading it directly
-    // would emit a spurious --mamba-radix-cache-strategy extra_buffer. The UI
-    // radio is hidden for dense models, so users can't manually correct it.
-    // MoE keeps the old behavior — the UI radio is the recovery path there.
+    // Force Mamba V1 for AMD GPUs and Xeon CPUs (V2 requires FLA backend). Force Mamba V2 when MTP is enabled.
     const mamba_v1_dev = ['mi300x', 'mi325x', 'mi355x', 'xeon', 'arc_b'];
     const actualMambaCache = mamba_v1_dev.includes(hardware)
       ? 'v1'
@@ -432,10 +398,7 @@ export const Qwen35Deployment = () => {
     // Iterate options in order, applying commandRules
     for (const [key, option] of Object.entries(options)) {
       if (key === 'quantization' || key === 'model') continue;
-      // Skip options that don't pass their condition. mambaCache is special:
-      // its condition gates only the UI radio (hidden for dense models), but
-      // the rule still fires for dense models on NVIDIA + MTP to emit
-      // --mamba-radix-cache-strategy extra_buffer.
+      // Skip options that don't pass their condition. mambaCache is special: its condition gates only the UI radio (hidden for dense models).
       if (option.condition && !option.condition(values) && (key !== 'mambaCache' || speculative !== 'enabled')) continue;
       const rule = commandRules[key];
       if (rule) {
@@ -460,9 +423,7 @@ export const Qwen35Deployment = () => {
       cmd += ` \\\n  --tokenizer-worker-num 6`;
     }
 
-    // Enable FlashInfer allreduce fusion for NVIDIA Qwen3.5 configs (skip for FP4:
-    // benchmark only enables this for TP>=8). AMD MI GPUs use the AITER allreduce
-    // fusion flag instead, handled in the AMD backend block below.
+    // Enable FlashInfer allreduce fusion for NVIDIA Qwen3.5 configs.
     const amdGpu = hardware === 'mi300x' || hardware === 'mi325x' || hardware === 'mi355x';
     if (quantization !== 'fp4' && hardware !== 'xeon' && hardware !== 'arc_b' && !amdGpu) {
       cmd += ` \\\n  --enable-flashinfer-allreduce-fusion`;
@@ -493,9 +454,8 @@ export const Qwen35Deployment = () => {
       cmd += ` \\\n  --attention-backend flashinfer`;
     }
 
-    // Enable FlashInfer GDN (linear attention) prefill for Blackwell FP8 deployments.
-    // Not applied to GB200/GB300: their trtllm_mha attention backend (above) is the
-    // validated combination instead.
+    // Enable FlashInfer GDN (linear attention) prefill for Blackwell FP8
+    // deployments.
     if ((hardware === 'b200' || hardware === 'b300') && quantization === 'fp8') {
       cmd += ` \\\n  --linear-attn-prefill-backend flashinfer`;
     }
@@ -514,12 +474,9 @@ export const Qwen35Deployment = () => {
       }
     }
 
-    // Append AMD GPU-specific backend configurations.
-    // All AMD MI GPUs use the AITER unified-attention backend (pair with
-    // SGLANG_USE_AITER=1 and SGLANG_USE_AITER_UNIFIED_ATTN=1; see cookbook prose),
-    // which requires --page-size 16. Multi-GPU runs enable AITER allreduce fusion,
-    // except the MXFP4 MI355X recipe, which uses ROCm INT4 quantized quick
-    // all-reduce (ROCM_QUICK_REDUCE_QUANTIZATION=INT4) instead.
+    // Append AMD GPU-specific backend configurations. Multi-GPU runs enable AITER
+    // allreduce fusion, except the MXFP4 MI355X recipe, which uses ROCm INT4
+    // quantized quick all-reduce (ROCM_QUICK_REDUCE_QUANTIZATION=INT4) instead.
     if (amdGpu) {
       const amdFp4 = quantization === 'fp4' && hardware === 'mi355x';
       let amdEnv = "SGLANG_USE_AITER=1 \\\nSGLANG_USE_AITER_UNIFIED_ATTN=1 \\\nAITER_FLYDSL_FORCE=1 \\\n";
@@ -555,9 +512,8 @@ export const Qwen35Deployment = () => {
       }
     }
 
-    // Workaround: FlashInfer autotune's warmup dummy_run trips a CUDA grid-dim
-    // overflow in the GDN packed_decode Triton kernel (B*HV >= 65536). Remove
-    // once the kernel is fixed upstream.
+    // Workaround: FlashInfer autotune's warmup dummy_run trips a CUDA
+    // grid-dim overflow in the GDN packed_decode Triton kernel.
     if (hardware === 'b300' && quantization === 'bf16' && (model === '0.8b' || model === '2b')) {
       cmd += ` \\\n  --max-running-requests 4064`;
     }
@@ -565,14 +521,9 @@ export const Qwen35Deployment = () => {
     // FP4-specific backend settings
     if (quantization === 'fp4') {
       if (hardware === 'mi355x') {
-        // AMD MXFP4 on MI355X: backend / --page-size 16 and the INT4 quantized
-        // ROCm quick all-reduce env are emitted by the AMD backend block above
-        // (this recipe uses quick all-reduce instead of AITER allreduce fusion).
         // Add the FP4-specific flags here.
         if (kvOffload === 'hicache') {
-          // HiCache keeps a host-DRAM tier below the device KV cache, so the
-          // radix cache has to stay on: --enable-hierarchical-cache and
-          // --disable-radix-cache are rejected together at startup.
+          // HiCache keeps a host-DRAM tier below the device KV cache.
           cmd += ' \\\n  --enable-hierarchical-cache';
           cmd += ' \\\n  --hicache-ratio 1.5';
           cmd += ' \\\n  --hicache-write-policy write_through';
@@ -582,7 +533,6 @@ export const Qwen35Deployment = () => {
           cmd += ' \\\n  --disable-radix-cache';
         }
         cmd += ' \\\n  --kv-cache-dtype fp8_e4m3';
-        // Cap concurrency under MTP to avoid OOM at tp=2.
         if (speculative === 'enabled') {
           cmd += ' \\\n  --max-running-requests 128';
         }

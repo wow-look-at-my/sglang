@@ -1,23 +1,12 @@
 #!/bin/bash
 # Remove the per-job uv venv created by ci_install_dependency.sh.
-#
-# Meant to run in a post-job workflow step with `if: always()` so the venv is
-# destroyed even on job failure/cancel. Runner-level safety net: a cron or
-# startup task should also purge stale /tmp/sglang-ci-* directories to catch
-# cancelled or crashed jobs that never reached this cleanup.
 
 # Best-effort cleanup: never fail the job.
 set +e
 set -u
 
-# Bound the persistent uv cache (~/.cache/uv, bind-mounted and shared across all
-# runner containers). Nothing else evicts it, so it grows unbounded — on the 5090
-# hosts it reached ~500 GB and filled the disk, failing jobs with ENOSPC at
-# dependency install. Prune only under real disk pressure so healthy jobs pay
-# nothing (just a df check) and no rebuildable wheel is dropped until it matters:
-# `uv cache prune --ci` keeps downloaded wheels + sdist archives (no re-download)
-# but drops built wheels, so a later install may recompile source-built packages.
-# Best effort; runs regardless of venv mode; never fails the job.
+# Bound the persistent uv cache (~/.cache/uv, bind-mounted and shared across
+# all runner containers).
 if command -v uv >/dev/null 2>&1; then
     cache_dir="$(uv cache dir 2>/dev/null || echo "${HOME:-/root}/.cache/uv")"
     [ -d "$cache_dir" ] || cache_dir=/
@@ -28,9 +17,7 @@ if command -v uv >/dev/null 2>&1; then
     fi
 fi
 
-# Skip entirely when venv mode is disabled — no /tmp/sglang-ci-* dir exists
-# and there's nothing to sweep. Matches the USE_VENV parsing in
-# ci_install_dependency.sh (accepts 1/true/yes, case-insensitive).
+# Skip entirely when venv mode is disabled — no /tmp/sglang-ci-* dir exists and there's nothing to sweep.
 USE_VENV_RAW="${USE_VENV:-true}"
 case "$(printf '%s' "$USE_VENV_RAW" | tr '[:upper:]' '[:lower:]')" in
     1 | true | yes) ;;
@@ -63,7 +50,6 @@ else
 fi
 
 # Sweep stale venvs from cancelled/crashed jobs that never reached cleanup.
-# Any /tmp/sglang-ci-* dir older than 4 hours is considered orphaned.
 stale_count=0
 for venv in /tmp/sglang-ci-*; do
     [ -d "$venv" ] || continue

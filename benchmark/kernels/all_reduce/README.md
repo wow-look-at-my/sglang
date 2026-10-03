@@ -2,7 +2,7 @@
 
 [MSCCL++](https://github.com/microsoft/mscclpp) is a GPU-driven communication library that can replace NCCL for all-reduce operations. It supports CUDA graph capture and is optimized for small-to-medium message sizes commonly seen in tensor-parallel inference.
 
-Currently supported configurations: **TP=8** (single-node) and **TP=16** (two-node).
+Supported configurations: **TP=8** (single-node) and **TP=16** (two-node).
 
 ### Prerequisites
 

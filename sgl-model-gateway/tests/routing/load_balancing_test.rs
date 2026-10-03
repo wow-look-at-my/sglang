@@ -48,7 +48,6 @@ mod round_robin_tests {
             }
         }
 
-        // All requests should succeed with round robin across 3 healthy workers
         assert_eq!(
             success_count, num_requests,
             "All requests should succeed with round robin"

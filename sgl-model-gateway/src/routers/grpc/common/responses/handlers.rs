@@ -1,6 +1,4 @@
-//! Shared response handlers for both regular and harmony implementations
-//!
-//! These handlers are used by both pipelines for retrieving and cancelling responses.
+//! Shared response handlers for both regular.
 
 use axum::response::{IntoResponse, Response};
 use data_connector::ResponseId;

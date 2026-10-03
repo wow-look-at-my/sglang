@@ -1,23 +1,4 @@
 //! Per-worker KV-event publisher discovery.
-//!
-//! Calls the worker's `/server_info` endpoint (extended on the SGLang
-//! Python side) to learn where to connect its ZMQ KV-event publisher.
-//! Returns an [`EventConfig`] on success or `Ok(None)` when the worker
-//! is reachable but explicitly does not run an event publisher (older
-//! SGLang, `kv-events-config` unset, `null` publisher, etc.).
-//!
-//! # Failure semantics
-//!
-//! - Network errors and 5xx responses are **transient** and retried
-//!   inside [`fetch_event_config`] up to [`FETCH_MAX_ATTEMPTS`] with
-//!   exponential backoff. If every attempt fails, the call returns
-//!   `Err(_)` so the caller can distinguish "definitely not publishing"
-//!   (`Ok(None)`) from "we couldn't tell" (`Err`).
-//! - 4xx responses are non-retriable (the worker answered
-//!   authoritatively) and surface as `Err`.
-//! - Caller behaviour: [`super::index::KvEventIndex::add_worker`] logs
-//!   the error and skips subscription, but the worker remains in the
-//!   broader router registry. Future re-discovery may retry.
 
 use std::time::Duration;
 
@@ -26,55 +7,31 @@ use serde::Deserialize;
 use tracing::{debug, warn};
 use url::Url;
 
-/// Per-worker KV-event publisher configuration, resolved to something the
-/// gateway can directly use to open ZMQ SUB sockets.
+/// Per-worker KV-event publisher configuration, resolved to something the gateway can directly use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventConfig {
-    /// The host the gateway should connect to. If the worker reports a
-    /// wildcard bind host (`*`, `0.0.0.0`, `::`) this is replaced by the
-    /// host parsed out of the worker URL; otherwise the explicit
-    /// `endpoint_host` is kept verbatim.
+    /// The host the gateway should connect to.
     pub host: String,
-    /// Base port for rank 0. Per-rank port = `port_base + dp_rank`.
+    /// Per-rank port = `port_base + dp_rank`.
     pub port_base: u16,
     /// ZMQ topic prefix the gateway should SUBSCRIBE to.
     pub topic: String,
-    /// Base port of the worker's dedicated load-snapshot socket range
-    /// (per-rank load port = `load_port_base + dp_rank`). `None` when the
-    /// worker predates load publishing — the load subscriber is then skipped
-    /// and selection falls back to the router-side in-flight counter.
+    /// Base port of the worker's dedicated load-snapshot socket range.
     pub load_port_base: Option<u16>,
-    /// Topic prefix for the dedicated load socket. The publisher advertises
-    /// it with `load_port_base`; both fields are required before subscribing.
+    /// Topic prefix for the dedicated load socket.
     pub load_topic: Option<String>,
-    /// Worker-reported `page_size`. Callers MUST compare against their
-    /// own configured `block_size`; a mismatch produces silent
-    /// miscompute since [`super::hash::compute_block_hashes`] is keyed
-    /// on the caller's value, not on this one.
+    /// Worker-reported `page_size`.
     pub block_size: u32,
-    /// Number of attention-DP ranks publishing. The gateway opens this
-    /// many SUB connections (one per rank), skipping any rank whose
-    /// `port_base + dp_rank` overflows `u16`.
+    /// Number of attention-DP ranks publishing.
     pub dp_size: u32,
-    /// Whether the worker uses EAGLE-family speculative decoding (EAGLE /
-    /// EAGLE3 / FROZEN_KV_MTP), reported via `/server_info`'s top-level
-    /// `speculative_algorithm`. When true the worker hashes KV blocks over
-    /// overlapping token *bigrams* (`is_bigram = is_eagle`), so the router must
-    /// use [`super::hash::compute_block_hashes_bigram`] for its query hashes to
-    /// match the worker's stored hashes — otherwise cache-aware routing
-    /// silently never matches and degrades to min-load.
+    /// Whether the worker uses EAGLE-family speculative decoding (EAGLE / EAGLE3 / FROZEN_KV_MTP).
     pub is_bigram: bool,
 }
 
-/// Default timeout for the `/server_info` introspection request. The
-/// worker is on the same network as the gateway in production; 2 seconds
-/// is generous and still bounds gateway-startup latency.
+/// Default timeout for the `/server_info` introspection request.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Bounded retry for transient `/server_info` failures. A worker that just
-/// booted may need a few hundred ms before its HTTP server accepts
-/// requests; retry absorbs the race without permanently disabling
-/// cache-aware routing for that worker.
+/// Bounded retry for transient `/server_info` failures.
 const FETCH_MAX_ATTEMPTS: u32 = 3;
 const FETCH_BACKOFF_BASE: Duration = Duration::from_millis(100);
 
@@ -104,8 +61,7 @@ pub async fn fetch_event_config(
 
     let body = fetch_with_retry(&server_info_url, worker_url, client).await?;
 
-    // EAGLE-family speculative decoding ⇒ the worker hashes KV blocks over
-    // token bigrams; the router must mirror that on the selection side.
+    // EAGLE-family speculative decoding ⇒ the worker hashes KV blocks over token bigrams.
     let is_bigram = classify_bigram(body.speculative_algorithm.as_deref(), worker_url);
 
     let block = match body.kv_events {
@@ -119,9 +75,7 @@ pub async fn fetch_event_config(
         }
     };
 
-    // Wildcard bind hosts mean "any interface" on the worker side — the
-    // gateway has to connect to a routable address, which it learns from
-    // the worker URL.
+    // Wildcard bind hosts mean "any interface" on the worker side.
     let host = if matches!(
         block.endpoint_host.as_str(),
         "*" | "0.0.0.0" | "::" | "[::]"
@@ -144,7 +98,7 @@ pub async fn fetch_event_config(
 }
 
 /// Issue the `/server_info` request with bounded retry on transient errors
-/// (network failures, 5xx). 4xx responses and JSON-parse errors are
+/// (network failures, 5xx).
 /// non-retriable: the worker answered, just not with what we expect.
 async fn fetch_with_retry(
     server_info_url: &str,
@@ -208,9 +162,7 @@ async fn fetch_with_retry(
 struct ServerInfoResponse {
     #[serde(default)]
     kv_events: Option<KvEventsBlock>,
-    /// Top-level `/server_info` field. EAGLE-family values
-    /// (EAGLE / EAGLE3 / FROZEN_KV_MTP) mean the worker hashes KV blocks over
-    /// token bigrams — see [`EventConfig::is_bigram`].
+    /// Top-level `/server_info` field.
     #[serde(default)]
     speculative_algorithm: Option<String>,
 }
@@ -249,12 +201,7 @@ pub(crate) fn classify_bigram(speculative_algorithm: Option<&str>, worker_url: &
 
 #[derive(Deserialize)]
 struct KvEventsBlock {
-    // `publisher` is captured for forward-compatibility but unused: the
-    // only publisher implementation supported on the gateway side is
-    // ZMQ. Keeping the field optional means a future SGLang that adds a
-    // non-ZMQ publisher string won't fail this deserialize; the
-    // resulting subscriber will still try to open a ZMQ connection on
-    // `endpoint_host:endpoint_port_base` and fail visibly there.
+    // `publisher` is captured for forward-compatibility but unused.
     #[allow(dead_code)]
     #[serde(default)]
     publisher: Option<String>,
@@ -262,8 +209,7 @@ struct KvEventsBlock {
     endpoint_port_base: u16,
     #[serde(default)]
     topic: String,
-    /// Base port of the dedicated load-snapshot socket range. Absent on
-    /// workers that predate load publishing (`None` ⇒ no load subscriber).
+    /// Base port of the dedicated load-snapshot socket range.
     #[serde(default)]
     load_endpoint_port_base: Option<u16>,
     #[serde(default)]
@@ -312,8 +258,7 @@ mod tests {
             .unwrap()
     }
 
-    /// Happy path: worker advertises a ZMQ publisher; gateway substitutes
-    /// `*` with the worker host.
+    /// Happy path: worker advertises a ZMQ publisher; gateway substitutes `*` with the worker host.
     #[tokio::test]
     async fn fetch_returns_event_config_when_block_present() {
         let body = Arc::new(json!({
@@ -345,9 +290,7 @@ mod tests {
         );
     }
 
-    /// EAGLE-family `speculative_algorithm` (and only those) must set
-    /// `is_bigram`, so the router selects the bigram hasher and its query
-    /// hashes match the worker's bigram-stored block hashes.
+    /// EAGLE-family `speculative_algorithm` (and only those) must set `is_bigram`.
     #[tokio::test]
     async fn fetch_sets_is_bigram_for_eagle_family_only() {
         for (algo, expected) in [
@@ -381,8 +324,7 @@ mod tests {
         }
     }
 
-    /// Worker reports a specific bind host (not wildcard): gateway must
-    /// honour it instead of overwriting from the URL.
+    /// Worker reports a specific bind host (not wildcard): gateway must honour it instead of overwriting from the URL.
     #[tokio::test]
     async fn fetch_keeps_explicit_bind_host() {
         let body = Arc::new(json!({
@@ -400,8 +342,7 @@ mod tests {
         assert_eq!(got.unwrap().host, "10.1.2.3");
     }
 
-    /// Worker reachable but the `kv_events` field is null / missing:
-    /// caller should fall back to its static config.
+    /// Worker reachable but the `kv_events` field is null / missing: caller should fall back to its static config.
     #[tokio::test]
     async fn fetch_returns_none_when_block_null() {
         let body = Arc::new(json!({ "kv_events": null }));
@@ -410,8 +351,7 @@ mod tests {
         assert!(got.is_none());
     }
 
-    /// Worker is reachable but its `/server_info` response doesn't even
-    /// have a `kv_events` field (older SGLang).
+    /// Worker is reachable but its `/server_info` response doesn't even have a `kv_events` field (older SGLang).
     #[tokio::test]
     async fn fetch_returns_none_when_field_absent() {
         let body = Arc::new(json!({ "other_stuff": 1 }));
@@ -420,12 +360,7 @@ mod tests {
         assert!(got.is_none());
     }
 
-    /// Connection-refused: no server at the URL. The retry loop exhausts
-    /// every attempt and propagates `Err`. The caller (KvEventIndex) logs
-    /// + skips the subscriber so a single flaky worker doesn't poison
-    /// startup, but the failure remains distinguishable from "worker
-    /// reachable but not publishing" (`Ok(None)`) so future re-discovery
-    /// can retry.
+    /// Connection-refused: no server at the URL. The retry loop exhausts every attempt and propagates `Err`.
     #[tokio::test]
     async fn fetch_returns_err_on_connection_failure() {
         let url = "http://127.0.0.1:1"; // port 1 is reserved / refused
@@ -442,18 +377,14 @@ mod tests {
             .unwrap()
     }
 
-    /// Invalid worker URL is the one case we propagate as Err — there's
-    /// nothing to fall back to and the operator config is broken.
+    /// Invalid worker URL is the case we propagate as Err — there's nothing to fall back.
     #[tokio::test]
     async fn fetch_returns_err_on_invalid_url() {
         let got = fetch_event_config("not a url", &client()).await;
         assert!(got.is_err());
     }
 
-    /// Multi-DP publisher contract: a worker reporting `dp_size = 8`
-    /// produces an `EventConfig` with `dp_size = 8` and the base port
-    /// preserved.  The subscriber is responsible for opening 8 SUB
-    /// sockets at `port_base + 0..8`; discovery just carries the values.
+    /// Multi-DP publisher contract: a worker reporting `dp_size = 8` produces an `EventConfig` with `dp_size = 8`.
     #[tokio::test]
     async fn fetch_handles_multi_dp_publisher_dp_size_eight() {
         let body = Arc::new(json!({
@@ -478,20 +409,13 @@ mod tests {
         );
     }
 
-    /// Documents the discovery-layer contract for ports near the u16 ceiling:
-    /// discovery does NOT validate `port_base + dp_size` overflow. The
-    /// subscriber MUST defend against `port_base + dp_rank > u16::MAX`
-    /// when opening sockets.  Pinning this so that a future addition of
-    /// validation at the discovery layer is a deliberate design change,
-    /// not an accident.
+    /// Documents the discovery-layer contract for ports near the u16 ceiling.
     #[tokio::test]
     async fn fetch_accepts_high_port_base_near_u16_max() {
         let body = Arc::new(json!({
             "kv_events": {
                 "publisher": "zmq",
                 "endpoint_host": "*",
-                // u16::MAX = 65535. With dp_size = 4, ranks 2 and 3 would
-                // overflow.  Discovery still returns the EventConfig as-is.
                 "endpoint_port_base": 65533,
                 "topic": "kv",
                 "block_size": 64,

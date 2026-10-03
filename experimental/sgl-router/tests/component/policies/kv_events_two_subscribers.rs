@@ -1,21 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Two independent `KvEventIndex` instances subscribed to the same PUB
-//! socket — the in-process surrogate for "two router replicas watching
-//! the same SGLang worker's KV publisher."
-//!
-//! Why this matters: sgl-router v1 explicitly omits multi-replica state
-//! sync (deferred to v2 in the slim-design spec). Independent ZMQ
-//! subscription is the **only** mechanism by which two routers arrive at
-//! a consistent cache-aware view today. If a future change accidentally
-//! degraded that property — e.g. a worker that only allows one subscriber,
-//! a switch from PUB/SUB to PUSH/PULL, or a teardown bug that drops
-//! events to one of N subscribers — this test fails loudly.
-//!
-//! Property pinned: after publishing N `BlockStored` events, both trees
-//! report the same `match_prefix(matched_blocks, workers)` for the
-//! published key, and an unpublished key remains absent from both.
+//! Independent `KvEventIndex` instances subscribed to the same PUB socket — the in-process surrogate.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,10 +32,6 @@ async fn two_independent_subscribers_converge_to_same_tree_state() {
         is_bigram: false,
     };
 
-    // 2. Two independent router-process surrogates, each with its own
-    //    `KvEventIndex` (own tree, own subscriber, own pump task). Both
-    //    call `add_worker` with the same preresolved `EventConfig` — the
-    //    same shape production wires through `WorkerManager`.
     let router_a = KvEventIndex::new();
     let router_b = KvEventIndex::new();
     router_a.add_worker(worker_url, Some(cfg.clone())).await;
@@ -65,9 +47,7 @@ async fn two_independent_subscribers_converge_to_same_tree_state() {
     );
     let event_bytes = encode_block_stored_event(&hashes, None, &tokens, block_size);
     let payload = encode_event_batch(0.0, vec![event_bytes], Some(0));
-    // 4. Republish until both subscribers observe the event. PUB/SUB has
-    // no readiness acknowledgement, so a one-shot send can race a new
-    // subscriber's handshake under a parallel test load.
+    // 4. Republish until both subscribers observe the event.
     let target = hashes.len();
     let key = KvWorkerId {
         url: worker_url.into(),
@@ -88,9 +68,7 @@ async fn two_independent_subscribers_converge_to_same_tree_state() {
             && mb.holds(&key);
         if converged {
             // Both trees agree on count AND on the worker that holds the
-            // prefix. This is what the Radix Tree provider reads to
-            // pick a worker; both routers picking the same key here
-            // means they would route the same prompt to the same worker.
+            // prefix.
             assert_eq!(
                 ma.matched_blocks, mb.matched_blocks,
                 "subscribers disagreed on matched_blocks",
@@ -117,21 +95,12 @@ async fn two_independent_subscribers_converge_to_same_tree_state() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // 5. Negative leg: a key that was never published must not appear in
-    //    either tree. Guards against a future bug where one subscriber
-    //    accidentally inherits another's state (shared static, etc.).
     let unseen: Vec<i64> = vec![999_999_999_001, 999_999_999_002, 999_999_999_003];
     let na = router_a.tree().match_prefix(None, &unseen);
     let nb = router_b.tree().match_prefix(None, &unseen);
     assert_eq!(na.matched_blocks, 0, "router_a leaked unpublished key");
     assert_eq!(nb.matched_blocks, 0, "router_b leaked unpublished key");
 
-    // 6. Both shutdowns must complete cleanly — no hang from the second
-    //    subscriber holding a reference to a shared resource. The first
-    //    drains under a generous ceiling (worker thread joins, mpsc
-    //    receiver drop); the second has nothing left to wait on and
-    //    must complete promptly. A slow second shutdown indicates the
-    //    two subscribers were sharing a resource that serialized them.
     let r = tokio::time::timeout(Duration::from_secs(2), Arc::clone(&router_a).shutdown()).await;
     assert!(r.is_ok(), "router_a shutdown hung");
 
@@ -146,23 +115,7 @@ async fn two_independent_subscribers_converge_to_same_tree_state() {
     );
 }
 
-/// Two PUB sockets (two workers) + two `KvEventIndex` instances (two
-/// routers), each subscribed to **both** publishers. This is the real
-/// v1 HA shape: each router replica fans out subscriptions across the
-/// worker pool and merges every publisher's `BlockStored` stream into
-/// its own tree. The companion 1-PUB test above only verifies broadcast
-/// fan-out; this test verifies the per-worker attribution stays correct
-/// when events arrive from multiple sources concurrently.
-///
-/// Property pinned: after publishing prefix `X` on `pub_x` and prefix
-/// `Y` on `pub_y`, both trees report
-///   * `match_prefix(X) = {full, workers={worker_x}}`
-///   * `match_prefix(Y) = {full, workers={worker_y}}`
-/// with no cross-attribution (worker_x must NOT appear in match(Y)).
-/// A regression that wires both subscribers to the same internal
-/// channel — or that mis-keys events by their arrival socket rather
-/// than their announced worker URL — would surface here as cross-
-/// contamination of the worker sets.
+/// PUB sockets ( workers) + `KvEventIndex` instances ( routers).
 #[tokio::test]
 async fn two_subscribers_merge_events_from_two_publishers() {
     let (mut pub_x, port_x) = make_pub_bound().await;
@@ -199,10 +152,7 @@ async fn two_subscribers_merge_events_from_two_publishers() {
     router_b.add_worker(worker_x, Some(cfg_x.clone())).await;
     router_b.add_worker(worker_y, Some(cfg_y.clone())).await;
 
-    // Two non-overlapping token streams → two distinct hash chains. The
-    // gap between them (0..16 vs 1000..1016) keeps `compute_block_hashes`
-    // outputs disjoint so a cross-attribution bug can't be masked by
-    // hash collision.
+    // Non-overlapping token streams → distinct hash chains.
     let tokens_x: Vec<u32> = (0..16).collect();
     let tokens_y: Vec<u32> = (1000..1016).collect();
     let hashes_x = compute_block_hashes(&tokens_x, block_size as usize);
@@ -259,9 +209,7 @@ async fn two_subscribers_merge_events_from_two_publishers() {
             && by.holds(&key_y);
         if converged {
             // Negative attribution: prefix X must not be attributed to
-            // worker_y in either tree, and vice versa. A regression that
-            // keyed events by arriving socket rather than announced
-            // worker URL would set BOTH worker keys on each prefix.
+            // worker_y in either tree, and vice versa.
             assert!(
                 !ax.holds(&key_y),
                 "router_a cross-attributed worker_y to prefix X: {:?}",

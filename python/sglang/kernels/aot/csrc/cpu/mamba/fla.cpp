@@ -33,7 +33,6 @@ void pack_vnni2(scalar_t* __restrict__ dst, float* __restrict__ src, const float
     constexpr int kb = i / NB;
     constexpr int nb = i % NB;
 
-    // [K/2, 2, N/32, 32] -> [K/2, N/32, 32, 2]
     constexpr int k0 = kb * 2 + 0;
     constexpr int k1 = kb * 2 + 1;
     __m512 v00 = _mm512_loadu_ps(src + k0 * ld_src + nb * 32);
@@ -55,7 +54,6 @@ void pack_vnni2(scalar_t* __restrict__ dst, float* __restrict__ src, const float
   };
   Unroll<KB * NB>{}(trans);
 #else
-  // [K/2, 2, N] -> [K/2, N, 2]
   for (int k = 0; k < K; k += 2) {
     for (int n = 0; n < N; ++n) {
       const float v0 = src[(k + 0) * ld_src + n];
@@ -101,7 +99,6 @@ struct l2norm_kernel<at::BFloat16, D, has_scale> {
     constexpr float scale = 1.f / std::sqrt(D);
     __m512 vscale = _mm512_set1_ps(scale);
 
-    // step 1: load input and do reduce with avx512-bf16
     __m512 vsum = _mm512_set1_ps(0.f);
     auto reduce = [&](auto col) {
       va[col] = (__m512bh)(_mm512_loadu_si512(input + col * 32));
@@ -113,7 +110,6 @@ struct l2norm_kernel<at::BFloat16, D, has_scale> {
     float rscale = 1.f / std::sqrt(sqsum + eps);
     vrscale = _mm512_set1_ps(rscale);
 
-    // step 2: apply scale to output
     auto map = [&](auto col) {
       __m512i a16 = (__m512i)va[col];
       __m512 va0 = CVT_BF16_TO_FP32(_mm512_extracti32x8_epi32(a16, 0));
@@ -203,7 +199,6 @@ struct decay_mask_kernel<float, CHUNK_SIZE> {
     __m512 va;
     __m512 vb[COLS];
 
-    // step 1: load g[j]
     auto loadb = [&](auto i) { vb[i] = _mm512_loadu_ps(input + i * 16); };
     Unroll<COLS>{}(loadb);
 
@@ -216,7 +211,6 @@ struct decay_mask_kernel<float, CHUNK_SIZE> {
         va = _mm512_set1_ps(input[row]);
       }
 
-      // mask vb[col] (already loaded in step 1) for the lower-triangular region
       constexpr int len = std::max(0, std::min(row + 1 - col * 16, 16));
 
       __m512 vc;
@@ -267,8 +261,8 @@ struct apply_mask_kernel<at::BFloat16, CHUNK_SIZE, has_beta> {
 
     __m512 vbeta;
 
-    // has_beta: attn2 = -attn * beta * d  (strict lower)
-    // !has_beta: attn2 = attn * d         (lower incl. diagonal)
+    // has_beta: attn2 = -attn * beta * d (strict lower)
+    // !has_beta: attn2 = attn * d (lower incl. diagonal)
     auto compute = [&](auto i) {
       constexpr int row = i / COLS;
       constexpr int col = i % COLS;
@@ -336,9 +330,6 @@ struct solve_tril_kernel<at::BFloat16, CHUNK_SIZE> {
         }
       });
 
-      // row = attn[..., i, :i].clone()
-      // sub = attn[..., :i, :i].clone()
-      // vsum = row + (row.unsqueeze(-1) * sub).sum(-2)
       for (int k = 0; k < i; ++k) {
         va = _mm512_set1_ps(static_cast<float>(row_ptr[k]));
 
@@ -422,7 +413,6 @@ struct apply_beta_kernel<at::BFloat16, CHUNK_SIZE, D, has_beta, has_g> {
       }
 
       Unroll<COLS>{}([&](auto col) {
-        // load for 0, 2, 4, 6
         if constexpr (col % 2 == 0) {
           __m512i a16 = _mm512_loadu_si512(input + i * ld_src + col * 16);
           __m512 va0 = CVT_BF16_TO_FP32(_mm512_extracti32x8_epi32(a16, 0));
@@ -502,7 +492,6 @@ struct update_value_kernel<at::BFloat16, D> {
     // v2' = v - v'
     for (int i = 0; i < size; ++i) {
       Unroll<COLS>{}([&](auto col) {
-        // load for 0, 2, 4, 6
         if constexpr (col % 2 == 0) {
           __m512i v16 = _mm512_loadu_si512(v + i * v_strideT + col * 16);
           __m512 va0 = CVT_BF16_TO_FP32(_mm512_extracti32x8_epi32(v16, 0));
@@ -562,8 +551,6 @@ struct update_key_kernel<at::BFloat16, CHUNK_SIZE, D> {
     float scale_arr[16];
     __m256i va[16];
 
-    // from [C, D](MB, KB) to [D, C](KB, MB)
-    // pad size to 16 in this kernel so that transpose can be done in one loop
     for (int mb = 0; mb < MB; ++mb) {
       const int mb_size = std::min(size - mb * 16, 16);
       // prepare exp(g_last - g)
@@ -572,7 +559,6 @@ struct update_key_kernel<at::BFloat16, CHUNK_SIZE, D> {
       for (int kb = 0; kb < KB; ++kb) {
         const at::BFloat16* __restrict__ k_ptr = k + mb * 16 * k_strideT + kb * 16;
         at::BFloat16* __restrict__ k_updated_ptr = k_updated + kb * 16 * CHUNK_SIZE + mb * 16;
-        // load 16 regs
         Unroll<16>{}([&](auto m) {
           if (m < mb_size) {
             __m256i v16 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(k_ptr + m * k_strideT));
@@ -584,7 +570,6 @@ struct update_key_kernel<at::BFloat16, CHUNK_SIZE, D> {
         });
         // transpose 16x16
         transpose_16x16_16bit(va);
-        // store 16 regs
         Unroll<16>{}(
             [&](auto k) { _mm256_storeu_si256(reinterpret_cast<__m256i*>(k_updated_ptr + k * CHUNK_SIZE), va[k]); });
       }
@@ -637,10 +622,6 @@ void l2norm_fwd_kernel_impl(
   });
 }
 
-// g  : [B, T, Hv]
-// g_ : [B, Hv, NT, C] -> [B, NT, HB, BLOCK_H, C]
-// cu_seqlens : [num_seqs + 1]
-// chunk_indices : [NT * 2]
 template <typename scalar_t, int CHUNK_SIZE>
 void chunk_local_cumsum_kernel_impl(
     scalar_t* __restrict__ g_,
@@ -680,15 +661,6 @@ void chunk_local_cumsum_kernel_impl(
   DECL_BUF(type, name, size_expr);           \
   fill_stub<type, (size_expr)>(name, 0.f)
 
-// w : [B, T, Hv, D]
-// u : [B, T, Hv, Dv]
-// d : [B, NT, Hv, C, C]
-// k : [B, T, H, D]
-// v : [B, T, Hv, Dv]
-// g : [B, NT, Hv, C]
-// beta : [B, T, Hv]
-// cu_seqlens : [num_seqs + 1]
-// chunk_indices : [NT * 2]
 template <typename scalar_t, int D, int CHUNK_SIZE>
 void chunk_gated_delta_rule_fwd_intra_kernel_impl(
     scalar_t* __restrict__ w,
@@ -707,7 +679,6 @@ void chunk_gated_delta_rule_fwd_intra_kernel_impl(
     int64_t k_strideH,
     int64_t v_strideT,
     int64_t v_strideH) {
-  // head group, expect to be 1，2，4 for qwen3.5
   const int64_t HG = Hv / H;
 
   // strides
@@ -751,14 +722,12 @@ void chunk_gated_delta_rule_fwd_intra_kernel_impl(
       // mb_size` is K in 5.c, 5.g, pad to TILE_K;
       const int64_t padded_mb_size = div_up((int)mb_size, TILE_K) * TILE_K;
 
-      // step 1: decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().float()).tril()
       for (int64_t hv = h * HG; hv < h * HG + HG; ++hv) {
         const float* __restrict__ g_ptr = g + nt * (Hv * CHUNK_SIZE) + hv * CHUNK_SIZE;
         float* __restrict__ d_ptr = d + nt * (Hv * CHUNK_SIZE * CHUNK_SIZE) + hv * (CHUNK_SIZE * CHUNK_SIZE);
         decay_mask_kernel<float, CHUNK_SIZE>::apply(d_ptr, g_ptr);
       }
 
-      // step 2: attn = key @ key^T
       const scalar_t* __restrict__ k_ptr = k + (batch_offset + mb_start) * k_strideT + h * k_strideH;
       pack_vnni<scalar_t>(
           /*    dst */ k_packed,
@@ -781,17 +750,14 @@ void chunk_gated_delta_rule_fwd_intra_kernel_impl(
           /*     C */ attn);
 
       for (int64_t hv = h * HG; hv < h * HG + HG; ++hv) {
-        // step 3: attn2 = -attn * beta * d
         const scalar_t* __restrict__ beta_ptr = beta + (batch_offset + mb_start) * Hv + hv;
         const float* __restrict__ d_ptr = d + nt * (Hv * CHUNK_SIZE * CHUNK_SIZE) + hv * (CHUNK_SIZE * CHUNK_SIZE);
         apply_mask_kernel<scalar_t, CHUNK_SIZE, true>::apply(attn2, attn, beta_ptr, d_ptr, mb_size, Hv);
 
-        // step 4: solve_tril(attn2) -> (I + L)^{-1}, L = strict-lower from step 3
         //   for i in 1..C-1: attn2[i, :i] += (attn2[i, :i] * attn2[:i, :i]).sum(-1)
         //   attn2 += eye(C)
         solve_tril_kernel<scalar_t, CHUNK_SIZE>::apply(attn2, mb_size);
 
-        // step 5: recompute_w_u
         //   w = attn2 @ (k_beta * g.exp().unsqueeze(-1))
         //   u = attn2 @ value * beta.unsqueeze(-1)
         const float* __restrict__ g_ptr = g + nt * (Hv * CHUNK_SIZE) + hv * CHUNK_SIZE;
@@ -865,17 +831,6 @@ void chunk_gated_delta_rule_fwd_intra_kernel_impl(
   });
 }
 
-//
-// out           : [B, T, Hv, Dv]
-// state         : [num_seqs, Hv, Dv, D]
-// q             : [B, T, H, D]
-// k             : [B, T, H, D]
-// w             : [B, T, Hv, D]
-// u             : [B, T, Hv, Dv]
-// g             : [B, NT, Hv, C]
-// d             : [B, NT, Hv, C, C]
-// cu_seqlens    : [num_seqs + 1]
-// chunk_offsets : [num_seqs + 1]
 template <typename scalar_t, int D, int CHUNK_SIZE>
 void chunk_gated_delta_rule_fwd_inter_kernel_impl(
     scalar_t* __restrict__ out,
@@ -896,7 +851,6 @@ void chunk_gated_delta_rule_fwd_inter_kernel_impl(
     int64_t q_strideH,
     int64_t k_strideT,
     int64_t k_strideH) {
-  // head group, expect to be 1，2，4 for qwen3.5
   const int64_t HG = Hv / H;
 
   // strides
@@ -944,8 +898,6 @@ void chunk_gated_delta_rule_fwd_inter_kernel_impl(
         // mb_size` is K in 4.a, pad to TILE_K;
         const int64_t padded_mb_size = div_up((int)mb_size, TILE_K) * TILE_K;
 
-        // step 1.a: attn = query @ key^T
-        // attn_i = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
         const scalar_t* __restrict__ q_ptr = q + (batch_offset + mb_start) * q_strideT + h * q_strideH;
         const scalar_t* __restrict__ k_ptr = k + (batch_offset + mb_start) * k_strideT + h * k_strideH;
         pack_vnni<scalar_t>(
@@ -968,7 +920,6 @@ void chunk_gated_delta_rule_fwd_inter_kernel_impl(
             /*     B */ k_packed,
             /*     C */ attn);
 
-        // step 1.b: attn = attn * decay_mask.masked_fill_(mask, 0)
         const float* __restrict__ d_ptr = d + nt * (Hv * CHUNK_SIZE * CHUNK_SIZE) + hv * (CHUNK_SIZE * CHUNK_SIZE);
         apply_mask_kernel<scalar_t, CHUNK_SIZE, false>::apply(attn2, attn, nullptr, d_ptr, mb_size);
 
@@ -1042,15 +993,11 @@ void chunk_gated_delta_rule_fwd_inter_kernel_impl(
         scalar_t* __restrict__ o_ptr = out + (batch_offset + mb_start) * o_strideT + hv * o_strideH;
         update_kernel<scalar_t, D>::apply(o_ptr, attn_inter, mb_size, D, o_strideT);
 
-        // step 5: update state
         //   state_new = state * exp(g_last) + (k * exp(g_last - g)).T @ v2'
 
-        // step 5.1 state *= exp(g_last) fused with step 2.a
 
-        // step 5.2 k' = k * exp(g_last - g).T; TODO: fuse this with 1.a
         update_key_kernel<scalar_t, CHUNK_SIZE, D>::apply(k_updated, k_ptr, g_ptr, mb_size, k_strideT);
 
-        // step 5.3 state += k' @ v2'
         at::native::cpublas::brgemm(
             /*     M */ D,
             /*     N */ D,
@@ -1528,7 +1475,6 @@ std::tuple<at::Tensor, at::Tensor> chunk_gated_delta_rule_fwd_inter(
 //   beta: [B, T, Hv]
 //   initial_state: [num_seqs, Hv, Dv, D] FP32
 //   cu_seqlens: [num_seqs + 1] INT32
-//
 std::tuple<at::Tensor, at::Tensor> chunk_gated_delta_rule_cpu(
     const at::Tensor& query,
     const at::Tensor& key,
@@ -1597,16 +1543,6 @@ std::tuple<at::Tensor, at::Tensor> chunk_gated_delta_rule_cpu(
   return std::make_tuple(output, final_state);
 }
 
-// A_log: [v_num_heads]
-// dt_bias: [v_num_heads]
-// query: [seq_len, batch_size, num_heads, head_dim]
-// key: [seq_len, batch_size, num_heads, head_dim]
-// value: [seq_len, batch_size, v_num_heads, v_head_dim]
-// a: [batch_size, v_num_heads]
-// b: [batch_size, v_num_heads]
-// initial_state_source:[num_tokens, v_num_heads, head_dim, v_head_dim]
-// initial_state_indices: [batch_size]
-// cu_seqlens: [batch_size + 1]
 at::Tensor fused_sigmoid_gating_delta_rule_update_cpu(
     const at::Tensor& A_log,
     const at::Tensor& dt_bias,

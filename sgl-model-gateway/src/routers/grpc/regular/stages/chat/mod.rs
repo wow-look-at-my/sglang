@@ -1,7 +1,4 @@
-//! Chat endpoint pipeline stages
-//!
-//! These stages handle chat-specific preprocessing, request building, and response processing.
-//! They work with any model type by using injected model adapters.
+//! Chat endpoint pipeline stages These stages handle chat-specific preprocessing, request building.
 
 mod preparation;
 mod request_building;

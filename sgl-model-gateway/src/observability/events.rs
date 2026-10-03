@@ -1,6 +1,4 @@
 //! Request events for observability and monitoring.
-//!
-//! Events use DEBUG level when OTEL is disabled, INFO when enabled.
 
 use tracing::{debug, event, Level};
 

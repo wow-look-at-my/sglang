@@ -1,21 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Shared capacity admission and pressure guards for prefill and decode.
-//!
-//! Native Cache-Aware uses monitor-backed admission only when every expected
-//! DP rank has a fresh, complete #34608 ZMQ sample. Otherwise it falls back to
-//! Router-local load.
-//!
-//! The optional queue gate (`--worker-queue-limit`) is the one criterion here
-//! that reads [`EngineReportedWorkerLoad::num_waiting_reqs`] rather than the native
-//! monitor fields: a worker already making requests wait cannot win on cache
-//! affinity. It fails open on a missing sample — see [`queue_gate_admits`].
-//! The optional saturation floor (`--saturation-queue-floor`) cancels a
-//! diversion that has no payoff: when no candidate survives the gate and hard
-//! admission, at least one was gate-rejected, and no worker in the routable
-//! fleet reads below the floor, the request pins to the least-pressured
-//! prefix owner instead of cold-prefilling on a non-owner.
 
 use crate::policies::power_of_two::select_k_with_snapshot;
 use crate::policies::{CacheCandidate, CacheCandidateProposal, GuardHints, SelectionProposal};
@@ -28,9 +14,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A prefill candidate domain and its optional queue budget.
-///
-/// `max_pending_prefill_tokens` is enforced only when the native monitor
-/// provides `num_waiting_uncached_tokens`.
 pub struct CandidateRange<'a> {
     pub id: &'a str,
     pub workers: &'a [Arc<Worker>],
@@ -120,10 +103,7 @@ pub enum DecisionReason {
     BackupPressureGuard,
     RangeFallback,
     CapacityFallbackPowerOfTwo,
-    /// Fleet saturated: no cache candidate survived the queue gate and
-    /// capacity admission, at least one was rejected by the gate, and no
-    /// fleet worker has a fresh queue reading below the saturation floor —
-    /// so the request pinned to a prefix owner instead of diverting.
+    /// Fleet saturated: no cache candidate survived the queue gate and capacity admission, at least one was rejected by the gate.
     SaturationPin,
 }
 
@@ -141,32 +121,17 @@ pub struct FinalDecision {
 pub struct CacheCandidateResolution {
     pub decision: Option<FinalDecision>,
     pub prefill_pressure_source: &'static str,
-    /// Candidates actually put through KV-capacity / pending-prefill
-    /// admission. Queue-gate rejections are excluded: the gate runs first and
-    /// they are never evaluated, so counting them here would silently deflate
-    /// the rejected/evaluated ratio whenever the gate is armed.
+    /// Candidates put through KV-capacity / pending-prefill admission.
     pub admission_evaluated_candidates: u64,
-    /// Candidates rejected by KV-capacity / pending-prefill admission. Does
-    /// not include queue-gate rejections — those are counted separately so a
-    /// busy fleet never reads as a capacity problem.
+    /// Candidates rejected by KV-capacity / pending-prefill admission.
     pub admission_rejected_candidates: u64,
-    /// Candidates rejected by the queue gate: their engine queue is at or
-    /// over `--worker-queue-limit`. The gate runs BEFORE hard admission, so
-    /// these candidates were never evaluated against capacity and are
-    /// disjoint from `admission_rejected_candidates` by construction.
+    /// Candidates rejected by the queue gate: their engine queue is at or over `--worker-queue-limit`.
     pub queue_gate_rejected_candidates: u64,
-    /// Deepest matched prefix, in blocks, among the queue-gate-rejected
-    /// candidates — the locality a diversion gave up. 0 when the gate
-    /// rejected nothing.
+    /// Deepest matched prefix, in blocks.
     pub queue_gate_best_rejected_blocks: u32,
-    /// True when the gate removed EVERY candidate and nowhere in the fleet is
-    /// unqueued, so the winner came from the ungated candidate set instead.
-    /// The mirror of `range_fallback`'s second tier: diversion buys nothing
-    /// here, so discarding the prefix would be pure loss.
+    /// True when the gate removed EVERY candidate and nowhere in the fleet is unqueued.
     pub queue_gate_fell_back: bool,
-    /// True when no worker in the fleet has room before the gate. Computed
-    /// once here so the route handler does not re-derive the gate over the
-    /// fleet; always false when the gate is disabled.
+    /// True when no worker in the fleet has room before the gate.
     pub fleet_all_queued: bool,
     pub pressure_guard_compared_pairs: u64,
     pub pressure_guard_overrides: u64,
@@ -174,12 +139,7 @@ pub struct CacheCandidateResolution {
 
 /// The queue gate, in one place. Both subtle decisions live here: the
 /// boundary is `<` (a worker AT the limit is already making this request
-/// wait), and an unknown queue ADMITS. The gate reads
-/// [`EngineReportedWorkerLoad::num_waiting_reqs`] because that is what the request
-/// cares about, and the router-side in-flight counter cannot separate a
-/// running request from a waiting one — so there is no honest substitute,
-/// and the gate fails open rather than comparing the limit against a
-/// different quantity.
+/// wait), and an unknown queue ADMITS.
 pub(crate) fn queue_gate_admits(
     snapshot: &EngineReportedLoadSnapshot,
     worker: &Worker,
@@ -193,9 +153,7 @@ pub(crate) fn queue_gate_admits(
         .is_none_or(|load| load.num_waiting_reqs < limit)
 }
 
-/// True when the gate has provably nowhere unqueued to divert to: every
-/// worker in `fleet` has a fresh sample at or over the limit. An unset limit,
-/// an empty fleet, or a single worker with no fresh sample all make this
+/// True when the gate has provably nowhere unqueued to divert to: every worker in `fleet` has a fresh sample at or over the limit. An unset limit, an empty fleet, or a single worker with no fresh sample all make this
 /// false — an unknown queue is not a proven full one.
 pub(crate) fn fleet_is_all_queued(
     snapshot: &EngineReportedLoadSnapshot,
@@ -212,8 +170,8 @@ pub(crate) fn fleet_is_all_queued(
 /// Selects a worker from bounded cache candidates and records guard coverage.
 /// `fleet` is the worker set this request could actually be routed to (the
 /// model's healthy prefill pool). Only the saturation pin reads it, and it
-/// must be the routable fleet rather than the router-wide load table: that
-/// table also holds decode peers and other models' workers, none of which a
+/// must be the routable fleet rather than the router-wide load table. table
+/// also holds decode peers and other models' workers.
 /// diversion could reach.
 pub fn resolve_cache_candidates(
     proposal: &CacheCandidateProposal,
@@ -223,15 +181,9 @@ pub fn resolve_cache_candidates(
 ) -> CacheCandidateResolution {
     let queue_limit = proposal.worker_queue_limit;
     let fleet_all_queued = fleet_is_all_queued(snapshot, fleet, queue_limit);
-    // The queue gate runs before hard admission so a busy worker never
-    // pollutes the capacity-rejection counters, and so the diverted-overlap
-    // audit below sees exactly the candidates the gate removed. One pass:
-    // the gate answer per candidate is what splits the set, so asking twice
-    // would re-read the snapshot for every candidate on every request.
+    // The queue gate runs before hard admission so a busy worker never pollutes the capacity-rejection counters.
     let mut evaluated: Vec<&CacheCandidate> = Vec::with_capacity(proposal.candidates.len());
-    // Kept, not just counted: the saturation pin ranks these by pressure when
-    // it fires. Stays unallocated while the gate is disabled, because nothing
-    // is ever rejected then.
+    // Kept, not counted: the saturation pin ranks these by pressure when it fires.
     let mut queue_gate_rejected: Vec<&CacheCandidate> = Vec::new();
     let mut queue_gate_best_rejected_blocks = 0u32;
     for candidate in &proposal.candidates {
@@ -246,15 +198,7 @@ pub fn resolve_cache_candidates(
     let queue_gate_rejected_candidates = queue_gate_rejected.len() as u64;
     // Second tier, mirroring `range_fallback`: when the gate removed every
     // candidate AND nowhere in the fleet is unqueued, diversion cannot dodge
-    // a wait, so returning no decision would trade the whole prefix for
-    // nothing. Re-admit the ungated set. While an unqueued worker still
-    // exists the gate keeps its teeth and the request leaves the prefix.
-    //
-    // A configured saturation floor supersedes this tier rather than stacking
-    // with it: the floor names a weaker, tunable saturation condition and
-    // pins with a pressure-only ranking, where re-admission would re-rank by
-    // uncached work first. Both keep the prefix; only one may decide which
-    // owner, so the explicit knob wins and this tier covers the unset case.
+    // a wait.
     let queue_gate_fell_back = evaluated.is_empty()
         && queue_gate_rejected_candidates > 0
         && fleet_all_queued
@@ -262,10 +206,7 @@ pub fn resolve_cache_candidates(
     if queue_gate_fell_back {
         evaluated.extend(proposal.candidates.iter());
     }
-    // Built over the candidates that actually reach admission: a gated-out
-    // candidate missing native monitor data would otherwise break the
-    // lookup's full-coverage check and silently downgrade every pressure
-    // comparison (and `prefill_pressure_source`) to router-local.
+    // Built over the candidates that reach admission.
     let loads = FreshLoadLookup::new(
         Some(snapshot),
         evaluated.iter().copied().map(|candidate| &candidate.worker),
@@ -282,17 +223,16 @@ pub fn resolve_cache_candidates(
         .copied()
         .min_by_key(|candidate| candidate.uncached_tokens)
     else {
-        // Saturation pin: no candidate survived the gate and hard
-        // admission (and at least one was gate-rejected), but diverting
-        // only pays when a meaningfully idle destination exists. With a
-        // floor configured and no fresh queue reading below it, the request
-        // would wait wherever it lands — so waiting at a prefix owner
-        // dominates: same wait, prefill from cache instead of a full cold
-        // prefill that evicts other prefixes and manufactures the next
-        // round of misses. Saturation suspends the gate, not the tiebreak:
-        // pin to the least-pressured rejected owner, skipping any that also
-        // fail hard admission (a capacity-exhausted owner cannot take the
-        // request).
+        // Saturation pin: no candidate survived the gate and hard admission
+        // (and at least one was gate-rejected), but diverting only pays when
+        // a meaningfully idle destination exists. With a floor configured and
+        // no fresh queue reading below it, the request would wait wherever it
+        // lands — so waiting at a prefix owner dominates: same wait,
+        // prefill from cache instead of a full cold prefill that evicts other
+        // prefixes and manufactures the next round of misses. Saturation
+        // suspends the gate, not the tiebreak: pin to the least-pressured
+        // rejected owner, skipping any that also fail hard admission (a
+        // capacity-exhausted owner cannot take the request).
         let pinned = if queue_gate_rejected.is_empty() {
             None
         } else {
@@ -304,10 +244,7 @@ pub fn resolve_cache_candidates(
                 }
                 // Ranked over its own lookup, not `loads`: `loads` covers the
                 // gate-ADMITTED set, which is empty precisely when the pin
-                // fires. An empty lookup reports no engine coverage, so every
-                // comparison would fall back to router-local load — tie at
-                // zero for every owner, decided by worker id. The pin ranks
-                // the rejected owners, so it must see the rejected owners.
+                // fires.
                 let pin_loads = FreshLoadLookup::new(
                     Some(snapshot),
                     queue_gate_rejected
@@ -444,13 +381,8 @@ pub fn resolve_prefill_admitted(
         .as_ref()
         .filter(|worker| contains_worker(range, worker))
         .cloned();
-    // The queue gate demotes an admitted primary or backup exactly as it
-    // demotes a cache candidate: a worker already making requests wait must
-    // not win on proposal position alone, or the fallback the gate diverted
-    // to hands the request straight back to it. Demotion is not rejection —
-    // `range_fallback` below is two-tier, and its second tier returns the
-    // least-pressured admitted worker (the demoted one included) when every
-    // admitted worker is queueing, so an all-queueing fleet still routes.
+    // The queue gate demotes an admitted primary or backup exactly as it demotes a cache candidate: a worker already making requests wait must not win on proposal position alone, or the fallback the gate
+    // diverted to hands the request straight back to it.
     let primary_admitted = is_proposal_worker_eligible(proposal, &proposal.primary)
         && is_prefill_admitted(range, &proposal.primary, request_input_tokens, snapshot)
         && queue_gate_admits(snapshot, &proposal.primary, queue_limit);
@@ -810,7 +742,7 @@ impl<'a> FreshLoadLookup<'a> {
 
     /// Returns a queue depth consistent with admission for this request.
     ///
-    /// A fully covered candidate set uses `waiting + running`; otherwise the
+    /// A fully covered candidate set uses `waiting + running`.
     /// whole set uses Router-local active load. Dispatches after the snapshot
     /// are added to the reported value.
     pub(crate) fn score_load(&self, worker: &Arc<Worker>) -> usize {
@@ -872,18 +804,9 @@ fn range_fallback(
         .filter(|worker| is_prefill_admitted(range, worker, request_input_tokens, snapshot))
         .cloned()
         .collect::<Vec<_>>();
-    // Two-tier under the queue gate: least-pressured worker that is not
-    // queueing, and only when every admitted worker is queueing,
-    // least-pressured overall. Both tiers are load-bearing. Pressure ranks by
-    // queue tokens / depth while the gate reads queue length, and those
-    // disagree exactly where the gate earns its keep — a shallow worker with
-    // a backlog is the fleet minimum BY PRESSURE, so a single-tier fallback
-    // hands the request straight back to the cache home the gate just
-    // rejected. The second tier is what keeps an all-queueing fleet routable
-    // instead of failing every request.
+    // Both tiers are load-bearing.
     let pool = match queue_limit {
-        // Gate disabled: the tiers coincide, so filtering would only clone
-        // the vector.
+        // Gate disabled: the tiers coincide, so filtering would only clone the vector.
         None => admitted,
         Some(_) => {
             let unqueued = admitted
@@ -898,9 +821,7 @@ fn range_fallback(
             }
         }
     };
-    // Scoped to the pool actually ranked: an admitted-but-gated worker
-    // missing native monitor data would otherwise downgrade the comparison
-    // for the whole unqueued tier to router-local.
+    // Scoped to the pool ranked: an admitted-but-gated worker missing native monitor data would otherwise downgrade the comparison.
     let loads = FreshLoadLookup::new(Some(snapshot), pool.iter());
     loads
         .min_by_pressure_key(pool, FreshLoadLookup::compare_prefill_keys)
@@ -1311,14 +1232,12 @@ mod tests {
         let other = worker("other");
         let proposal = queue_gate_proposal(
             vec![
-                // The owner holds the deeper prefix and would always win
-                // without the gate.
+                // The owner holds the deeper prefix and would always win without the gate.
                 candidate(&owner, 10, 9),
                 candidate(&other, 60, 4),
             ],
             Some(4),
         );
-        // The owner is at the limit (4 waiting >= 4); the other is idle.
         let loads = snapshot(&[(&owner, 1, 4, 10, 10_000), (&other, 1, 0, 10, 10_000)]);
         let fleet = vec![Arc::clone(&owner), Arc::clone(&other)];
 
@@ -1385,8 +1304,7 @@ mod tests {
 
     #[test]
     fn queue_gate_exhausted_candidates_returns_no_decision_with_audit() {
-        // The only owner is queueing but a non-owner is idle, so diversion
-        // still buys something: the request must leave the prefix.
+        // The only owner is queueing but a non-owner is idle, so diversion still buys something.
         let owner = worker("owner");
         let idle_stranger = worker("idle_stranger");
         let proposal = queue_gate_proposal(vec![candidate(&owner, 10, 9)], Some(4));
@@ -1409,8 +1327,7 @@ mod tests {
 
     #[test]
     fn queue_gate_admits_one_below_the_limit() {
-        // Pins the admit side of the `<` boundary: `limit - 1` waiting must
-        // still win on affinity, or the gate fires a request early.
+        // Pins the admit side of the `<` boundary: `limit - 1` waiting must still win on affinity.
         let owner = worker("owner");
         let other = worker("other");
         let proposal = queue_gate_proposal(
@@ -1436,9 +1353,7 @@ mod tests {
 
     #[test]
     fn queue_gate_keeps_the_prefix_when_the_whole_fleet_is_queueing() {
-        // Every owner is over the limit AND so is every other worker, so a
-        // diversion could not dodge a wait. Discarding the prefix would be
-        // pure loss: the ungated tier re-admits the owners.
+        // Every owner is over the limit AND so is every other worker, so a diversion could not dodge a wait.
         let owner = worker("owner");
         let shallow_owner = worker("shallow_owner");
         let proposal = queue_gate_proposal(
@@ -1473,12 +1388,7 @@ mod tests {
 
     #[test]
     fn queue_gate_saturation_survives_a_capacity_exhausted_re_admission() {
-        // The audit tuple the decision label is read from, in the one case
-        // that used to lose the saturation signal: the fleet is queueing, the
-        // ungated tier re-admits the owners, and they then fail hard
-        // admission, so there is no winner. `fleet_all_queued` must still be
-        // set on the way out, because the label is keyed on the fleet being
-        // saturated and not on where the request finally landed.
+        // The audit tuple the decision label is read from, in the case.
         let owner = worker("owner");
         let shallow_owner = worker("shallow_owner");
         let proposal = queue_gate_proposal(
@@ -1509,8 +1419,7 @@ mod tests {
 
     #[test]
     fn queue_gate_fleet_saturation_needs_a_fresh_sample_everywhere() {
-        // A worker with no fresh sample has an unknown queue, not a proven
-        // full one, so the fleet is not saturated and the gate keeps diverting.
+        // A worker with no fresh sample has an unknown queue, not a proven full one.
         let owner = worker("owner");
         let silent = worker("silent");
         let proposal = queue_gate_proposal(vec![candidate(&owner, 10, 9)], Some(4));
@@ -1528,14 +1437,11 @@ mod tests {
     fn saturation_pin_keeps_affinity_with_the_least_pressured_owner() {
         let calm_owner = worker("calm_owner");
         let busy_owner = worker("busy_owner");
-        // A fleet worker that is NOT a cache candidate: the saturation check
-        // reads fleet-wide fresh samples, not just the candidate set. It is
-        // over the floor, so it does not break the saturation claim.
+        // A fleet worker that is NOT a cache candidate: the saturation check reads fleet-wide fresh samples.
         let fleet_only = worker("fleet_only");
         let proposal = saturation_proposal(
             vec![
-                // The busy owner holds the deeper prefix and would win
-                // without the gate; both owners are over the limit.
+                // The busy owner holds the deeper prefix and would win without the gate.
                 candidate(&busy_owner, 10, 9),
                 candidate(&calm_owner, 60, 4),
             ],
@@ -1585,10 +1491,7 @@ mod tests {
 
         let resolution = resolve_cache_candidates(&proposal, 100, &loads, &fleet);
 
-        // With no floor the queue gate's own second tier applies: every owner
-        // is over the limit and nowhere in the fleet is unqueued, so the
-        // prefix is kept rather than traded for a wait that cannot be dodged.
-        // The pin is what a floor buys; without one this is the behaviour.
+        // With no floor the queue gate's own second tier applies: every owner is over the limit and nowhere in the fleet is unqueued.
         assert!(resolution.queue_gate_fell_back);
         assert_eq!(
             resolution.decision.as_ref().map(|d| d.reason),
@@ -1602,8 +1505,7 @@ mod tests {
     #[test]
     fn saturation_pin_yields_to_a_provably_idle_fleet_worker() {
         let owner = worker("owner");
-        // Not a candidate — but a fresh reading below the floor anywhere in
-        // the fleet means diverting can pay, so the pin must not fire.
+        // Not a candidate — but a fresh reading below the floor anywhere in the fleet means diverting can pay.
         let idle_elsewhere = worker("idle_elsewhere");
         let proposal = saturation_proposal(vec![candidate(&owner, 10, 9)], Some(4), Some(2));
         let loads = snapshot(&[
@@ -1625,9 +1527,7 @@ mod tests {
         // In the fleet, routable, and never published a sample.
         let unsampled = worker("unsampled");
         let proposal = saturation_proposal(vec![candidate(&owner, 10, 9)], Some(4), Some(2));
-        // The snapshot holds only the over-limit owner. `unsampled` is a
-        // real destination whose queue is unknown, not proof of a better
-        // one — opposite of the gate's fail-open.
+        // The snapshot holds only the over-limit owner.
         let loads = snapshot(&[(&owner, 1, 9, 10, 10_000)]);
         let fleet = vec![Arc::clone(&owner), Arc::clone(&unsampled)];
 
@@ -1643,11 +1543,7 @@ mod tests {
     #[test]
     fn saturation_pin_ignores_idle_workers_outside_the_routable_fleet() {
         let owner = worker("owner");
-        // Present in the router-wide load table but not routable for this
-        // request: a PD decode peer, another model's worker, or a worker the
-        // registry no longer reports healthy. Decode peers idle near zero
-        // waiting, so scanning the whole table would veto the pin on every
-        // PD deployment.
+        // Present in the router-wide load table but not routable for this request: a PD decode peer, another model's worker.
         let off_fleet_idle = worker("off_fleet_idle");
         let proposal = saturation_proposal(vec![candidate(&owner, 10, 9)], Some(4), Some(2));
         let loads = snapshot(&[
@@ -1676,7 +1572,7 @@ mod tests {
         );
         // Both owners are over the queue limit, and `full` is the pressure
         // minimum — but it is also KV-exhausted (used + request exceeds
-        // capacity), so it cannot take the request even pinned.
+        // capacity).
         let loads = snapshot(&[
             (&full, 1, 5, 10_000, 10_000),
             (&admitted_owner, 1, 9, 10, 10_000),
@@ -1690,19 +1586,14 @@ mod tests {
             .expect("the capacity-admitted owner can be pinned");
         assert_eq!(decision.reason, DecisionReason::SaturationPin);
         assert_eq!(decision.selected.id, admitted_owner.id);
-        // `full` is booked under the gate, not capacity — the pin's own
-        // capacity filter must not pollute the audit counters.
+        // `full` is booked under the gate.
         assert_eq!(resolution.queue_gate_rejected_candidates, 2);
         assert_eq!(resolution.admission_rejected_candidates, 0);
     }
 
     #[test]
     fn range_fallback_prefers_an_unqueued_worker_over_a_shallower_queueing_one() {
-        // The primary fails KV-capacity admission so selection reaches the
-        // range fallback. The queueing worker is the fallback minimum BY
-        // PRESSURE (1 waiting uncached token), so a single-tier fallback
-        // would pick it — handing the request straight back to a worker the
-        // gate just rejected.
+        // The primary fails KV-capacity admission so selection reaches the range fallback.
         let primary = worker("primary");
         let shallow_queued = worker("shallow_queued");
         let busy_unqueued = worker("busy_unqueued");
@@ -1726,10 +1617,7 @@ mod tests {
                 captured_at: Instant::now(),
             }
         };
-        // Queue depth and pressure disagree by construction: shallow_queued
-        // waits 5 (over the limit) behind 1 uncached token, busy_unqueued
-        // waits 3 (under the limit) behind 1000 uncached tokens. The primary
-        // is KV-full, so it is not admitted at all.
+        // The primary is KV-full, so it is not admitted at all.
         let loads = EngineReportedLoadSnapshot::from_native_cache_workers(
             7,
             [
@@ -1761,11 +1649,7 @@ mod tests {
 
     #[test]
     fn queue_gate_demotes_a_queueing_primary_that_capacity_would_admit() {
-        // The whole point of the gate is that the cache-affinity fallback
-        // must not hand the request back to a queueing worker. The primary
-        // here has plenty of KV capacity, so without the gate the
-        // `(true, _, _)` arm returns it unconditionally and the gate is
-        // bypassed on the single most common path.
+        // The whole point of the gate is that the cache-affinity fallback must not hand the request back.
         let queued_primary = worker("queued_primary");
         let unqueued = worker("unqueued");
         let workers = vec![Arc::clone(&queued_primary), Arc::clone(&unqueued)];
@@ -1800,8 +1684,7 @@ mod tests {
 
     #[test]
     fn queue_gate_still_routes_when_the_only_admitted_worker_is_queueing() {
-        // Demotion must never become rejection: with every admitted worker
-        // over the limit, the second fallback tier keeps the request routable.
+        // Demotion must never become rejection: with every admitted worker over the limit.
         let only = worker("only");
         let workers = vec![Arc::clone(&only)];
         let proposal = SelectionProposal::primary(Arc::clone(&only));
@@ -1828,8 +1711,6 @@ mod tests {
         let workers = vec![Arc::clone(&primary), Arc::clone(&left), Arc::clone(&right)];
         let proposal = SelectionProposal::primary(Arc::clone(&primary));
         // The primary is KV-full; both fallback workers are over the limit.
-        // The second tier takes the least-pressured one instead of failing
-        // the request.
         let loads = snapshot(&[
             (&primary, 0, 0, 10_000, 10_000),
             (&left, 0, 9, 10, 10_000),

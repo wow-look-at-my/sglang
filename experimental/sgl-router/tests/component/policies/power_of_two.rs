@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use sgl_router::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
@@ -34,8 +34,6 @@ fn selects_lower_load() {
 
 #[test]
 fn distribution_skews_to_lower_load() {
-    // With 3 workers and one heavily loaded, the loaded one should win
-    // significantly less than 1/3 of selections.
     let workers = vec![worker("a"), worker("b"), worker("c")];
     workers[2].active_requests.store(100, Ordering::Relaxed); // c is loaded
 

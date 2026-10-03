@@ -1,11 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Kubernetes EndpointSlice discovery backend.
-//!
-//! Watches `EndpointSlice` resources by label selector in the configured
-//! namespace, diffing against in-memory state and emitting
-//! [`DiscoveryEvent`]s for the worker manager.
 
 use crate::config::{K8sDiscoveryConfig, K8sDiscoveryMode};
 use crate::discovery::{DiscoveryEvent, WorkerId, WorkerMode, WorkerSpec};
@@ -17,16 +13,9 @@ use std::collections::{BTreeMap, HashMap};
 use tokio::sync::mpsc;
 
 /// Decide which [`WorkerMode`] an `EndpointSlice` should be assigned, based
-/// on the configured discovery mode.
-///
-/// * `Plain` mode — every slice yields `Some(WorkerMode::Plain)`. The
+/// on the configured discovery mode. * `Plain` mode — every slice yields
+/// `Some(WorkerMode::Plain)`.
 ///   server-side label selector has already filtered to the right set.
-/// * `PD` mode — the slice's labels are matched against `prefill_selector`
-///   and `decode_selector` (in that order). Returns `Some(Prefill)` /
-///   `Some(Decode)` on the first match, `None` if neither matches.  The
-///   server-side watch in PD mode is unfiltered (label selectors for the
-///   two roles may not be mergeable into one Kubernetes selector), so this
-///   client-side classification is the gate that drops irrelevant slices.
 fn classify_mode(es: &EndpointSlice, mode: &K8sDiscoveryMode) -> Option<WorkerMode> {
     match mode {
         K8sDiscoveryMode::Plain { .. } => Some(WorkerMode::Plain),
@@ -51,7 +40,7 @@ fn classify_mode(es: &EndpointSlice, mode: &K8sDiscoveryMode) -> Option<WorkerMo
 ///
 /// Supports the equality-based subset of the K8s label-selector grammar:
 /// `key=value` (and the alias `key==value`). Set-based operators (`in`,
-/// `not in`, presence tests) are not supported — fall back to the
+/// `not in`.
 /// server-side selector in plain mode if you need them.
 fn labels_match_selector(labels: &BTreeMap<String, String>, selector: &str) -> bool {
     for term in selector.split(',') {
@@ -78,27 +67,15 @@ fn labels_match_selector(labels: &BTreeMap<String, String>, selector: &str) -> b
 
 /// Convert an `EndpointSlice` into a list of [`WorkerSpec`]s with the
 /// supplied [`WorkerMode`].
-///
-/// Skips endpoints whose `conditions.ready` is explicitly `Some(false)`.
-/// Per the EndpointSlice API spec, `conditions.ready = None` (absent) means
-/// the endpoint should be considered ready.
-///
-/// The worker URL is `http://<addr>:<port>` where port comes from
+/// explicitly `Some(false)`. Per the EndpointSlice API spec,
+/// `conditions.ready = None` (absent) means the endpoint should be considered
+/// ready.
 /// `EndpointSlice.ports[0].port`, defaulting to `30000` if absent.
-///
-/// The [`WorkerId`] is `{ns}/{uid}` where `uid` is the pod's K8s UID
-/// from `endpoint.target_ref.uid`. Pod UIDs are globally unique per
-/// pod incarnation, so when a pod dies and a new pod gets the same IP
-/// (kubelet IP reuse on a busy podCIDR), the router sees a fresh
-/// `WorkerId` and emits a clean Removed→Added cycle — old breaker /
-/// active-load state is shed instead of being mis-applied to the new
-/// pod. For manually-created EndpointSlices that lack `target_ref`
-/// (rare in real clusters but common in unit tests), falls back to
-/// `{ns}/{slice_name}/{addr}:{port}`.
-///
-/// `model_ids` is intentionally left empty — model membership is resolved
-/// by the worker manager via `/server_info` introspection after the
-/// `Added` event is emitted.
+/// `endpoint.target_ref.uid`. Pod UIDs are globally unique per pod
+/// incarnation, so when a pod dies and a new pod gets the same IP (kubelet IP
+/// reuse on a busy podCIDR).
+/// clean Removed→Added cycle — old breaker / active-load state is shed
+/// instead of being mis-applied to the new pod.
 fn extract_workers(es: &EndpointSlice, mode: WorkerMode) -> Vec<WorkerSpec> {
     let port = es
         .ports
@@ -128,15 +105,7 @@ fn extract_workers(es: &EndpointSlice, mode: WorkerMode) -> Vec<WorkerSpec> {
                 Some(uid) => WorkerId(format!("{ns}/{uid}")),
                 None => WorkerId(format!("{ns}/{slice_name}/{addr}:{port}")),
             };
-            // bootstrap_port stays `None` here on purpose. The final
-            // `WorkerMode` and the bootstrap port are both filled in by
-            // the worker manager from each worker's `/server_info`
-            // body (`disaggregation_mode` + `disaggregation_bootstrap_port`,
-            // both fields on SGLang's ServerArgs and already surfaced
-            // via `**asdict(server_args)` in the response). EndpointSlice
-            // carries neither, but doesn't need to — see
-            // `src/workers/introspect.rs` for the extraction and
-            // `register_one` in `src/workers/manager.rs` for the override.
+            // bootstrap_port stays `None` here on purpose.
             out.push(WorkerSpec {
                 id,
                 url,
@@ -149,22 +118,10 @@ fn extract_workers(es: &EndpointSlice, mode: WorkerMode) -> Vec<WorkerSpec> {
     out
 }
 
-/// Spawn the k8s discovery task.
-///
-/// Connects to the cluster via `KUBECONFIG` / in-cluster service account,
-/// then watches `EndpointSlice` resources in `cfg.namespace`. Diffs against
-/// in-memory state and emits [`DiscoveryEvent`]s to `tx`.
-///
-/// In plain mode the configured `label_selector` is pushed to the server
-/// side; in PD mode the watch is unfiltered and per-slice classification
-/// happens client-side via `classify_mode`.
-///
-/// Stable per-slice key.
-///
-/// Uses `metadata.uid` when present (the normal case in a real cluster), and
-/// falls back to `{ns}/{name}` for slices without a UID (rare: CR shims,
-/// tests, certain fake/in-memory backends).  The fallback is unique per slice
-/// because EndpointSlice names are unique within a namespace.
+/// Spawn the k8s discovery task. Connects to the cluster via `KUBECONFIG` /
+/// in-cluster service account.
+/// `cfg.namespace`. Diffs against in-memory state and emits
+/// [`DiscoveryEvent`]s to `tx`.
 fn slice_key(es: &EndpointSlice) -> String {
     if let Some(uid) = es.metadata.uid.as_deref() {
         if !uid.is_empty() {
@@ -179,8 +136,7 @@ fn slice_key(es: &EndpointSlice) -> String {
 /// Send all `Added` / `Removed` / `ModeChanged` events that bring the
 /// consumer from `prev_union` to the recomputed union of `per_slice`.
 ///
-/// Returns `Err` on the first send failure (consumer dropped); the caller is
-/// expected to exit the watcher loop.  Updates `prev_union` in place to the
+/// exit the watcher loop.
 /// new union on success.
 async fn emit_diff(
     tx: &mpsc::Sender<DiscoveryEvent>,
@@ -226,24 +182,14 @@ async fn emit_diff(
     Ok(())
 }
 
-/// Drive the event-processing loop for a stream of `watcher::Event`s.
-///
-/// Handles the full set of `kube` watcher events:
-/// * `Init` / `InitApply` / `InitDone` — full-LIST resync.  Objects are
+/// Drive the event-processing loop for a stream of `watcher::Event`s. Handles the full set of `kube` watcher events: * `Init` / `InitApply` / `InitDone` — full-LIST resync.
 ///   buffered until `InitDone`, then swapped in atomically.  Any slices that
 ///   were present before but not seen during the resync are diffed out as
 ///   `Removed`, which catches deletions that occurred while the watcher was
 ///   disconnected.
-/// * `Apply` — single-object upsert into `per_slice`.
-/// * `Delete` — single-object removal from `per_slice`; the diff emits
+/// * `Apply` — single-object upsert into `per_slice`. * `Delete` — single-object removal from `per_slice`; the diff emits
 ///   `Removed` for every worker that lived in that slice.
-///
-/// On any watcher error the kube-runtime watcher auto-restarts and emits a
-/// new `Init` cycle, so the resync logic above is what reconciles state
-/// after transient errors — no separate state reset is required.
-///
-/// The loop returns when the input stream ends (logged at WARN) or when the
-/// consumer drops the receiving end of `tx` (logged at INFO).
+/// On any watcher error the kube-runtime watcher auto-restarts and emits a new `Init` cycle, so the resync logic above is what reconciles state after transient errors — no separate state reset is required. The loop returns when the input stream ends (logged at WARN) or when the consumer drops the receiving end of `tx` (logged at INFO).
 async fn process_events<S>(mut stream: S, tx: mpsc::Sender<DiscoveryEvent>, mode: K8sDiscoveryMode)
 where
     S: Stream<Item = Result<watcher::Event<EndpointSlice>, watcher::Error>> + Unpin,
@@ -278,7 +224,7 @@ where
                     buf.insert(key, workers);
                     Ok(())
                 } else {
-                    // Defensive: InitApply outside an Init cycle.  Treat as Apply.
+                    // Defensive: InitApply outside an Init cycle. Treat as Apply.
                     per_slice.insert(key, workers);
                     emit_diff(&tx, &per_slice, &mut prev_union).await
                 }
@@ -320,10 +266,10 @@ where
 /// namespace, which is almost never what callers intend.
 ///
 /// State is tracked per-slice as `HashMap<SliceKey, HashMap<WorkerId,
-/// WorkerSpec>>`.  K8s auto-shards Services with >100 endpoints and CNIs
-/// often shard per AZ, so multiple `EndpointSlice` objects can exist per
+/// WorkerSpec>>`. K8s auto-shards Services with >100 endpoints and CNIs
+/// often shard per AZ.
 /// Service; a flat state map would let each slice's event silently drop all
-/// workers from sibling slices.  The global union is recomputed from all
+/// workers from sibling slices. The global union is recomputed from all
 /// submaps on every event and diffed against `prev_union` to produce
 /// `DiscoveryEvent`s.
 ///
@@ -333,8 +279,7 @@ pub async fn spawn(
     cfg: K8sDiscoveryConfig,
     tx: mpsc::Sender<DiscoveryEvent>,
 ) -> Result<tokio::task::JoinHandle<()>> {
-    // The mode was resolved + validated at construction (`resolve_mode` in
-    // `Cli::build_discovery`); just destructure it here.
+    // The mode was resolved + validated at construction (`resolve_mode` in `Cli::build_discovery`).
     let K8sDiscoveryConfig { namespace, mode } = cfg;
 
     let client = Client::try_default()
@@ -347,25 +292,15 @@ pub async fn spawn(
         Api::namespaced(client, &namespace)
     };
 
-    // Plain mode pushes the single selector to the server side so the LIST
-    // is already filtered.  PD mode leaves the server-side selector empty
-    // because the prefill/decode selectors may not be expressible as one
-    // K8s label-selector — classification happens client-side per slice
-    // via `classify_mode`.
+    // Plain mode pushes the selector to the server side so the LIST is
+    // already filtered.
     let server_side_selector = match &mode {
         K8sDiscoveryMode::Plain { label_selector } => label_selector.clone(),
         K8sDiscoveryMode::PdDisaggregation { .. } => String::new(),
     };
     let watcher_cfg = watcher::Config::default().labels(&server_side_selector);
 
-    // Log the resolved namespace + selector(s) at startup. We can't
-    // verify the namespace exists (the router's RBAC covers
-    // endpointslices/services/pods, not namespaces, and a correct
-    // namespace legitimately has zero matching workers until they come
-    // up), so a typo'd `--service-discovery-namespace` silently watches
-    // an empty namespace. Surfacing the watch target here lets an
-    // operator spot the typo in the first log lines instead of only
-    // discovering it via later `no workers available` request failures.
+    // Log the resolved namespace + selector(s) at startup.
     let namespace_display: &str = if namespace.is_empty() {
         "<all namespaces>"
     } else {
@@ -520,8 +455,7 @@ mod tests {
         );
         assert!(classify_mode(&s, &pd_mode()).is_none());
 
-        // No labels at all => still None in PD mode (every selector term
-        // requires a key/value).
+        // No labels at all => still None in PD mode (every selector term requires a key/value).
         let s = make_slice(&["10.0.0.1"], 30000, true);
         assert!(classify_mode(&s, &pd_mode()).is_none());
     }
@@ -561,8 +495,7 @@ mod tests {
         assert!(extract_workers(&s, WorkerMode::Plain).is_empty());
     }
 
-    /// `conditions.ready = None` must default to ready=true per EndpointSlice
-    /// API spec ("undefined → endpoint should be considered ready").
+    /// `conditions.ready = None` must default to ready=true per EndpointSlice API spec.
     #[test]
     fn is_ready_none_defaults_to_ready() {
         let mut s = make_slice(&["10.0.0.1"], 30000, false /* overridden below */);
@@ -575,8 +508,7 @@ mod tests {
         );
     }
 
-    /// WorkerId must include namespace + slice name to avoid cross-namespace
-    /// IP collisions on overlay networks.
+    /// WorkerId must include namespace + slice name to avoid cross-namespace IP collisions on overlay networks.
     #[test]
     fn worker_id_includes_namespace_and_slice_name() {
         let mut s = make_slice(&["10.0.0.1"], 30000, true);
@@ -586,8 +518,7 @@ mod tests {
         assert_eq!(ws[0].id.0, "prod/svc-abc-xyz/10.0.0.1:30000");
     }
 
-    /// A cluster-scoped slice (no namespace metadata) must still produce a
-    /// valid `WorkerId` — empty-namespace prefix yields a leading slash.
+    /// A cluster-scoped slice (no namespace metadata) must still produce a valid `WorkerId`.
     #[test]
     fn worker_id_handles_missing_namespace() {
         // make_slice_ns with empty ns leaves metadata.namespace = None.
@@ -604,8 +535,7 @@ mod tests {
         );
     }
 
-    /// Two slices with no `metadata.uid` must hash to distinct per-slice
-    /// keys; otherwise an event for slice B would overwrite slice A's state.
+    /// slices with no `metadata.uid` must hash to distinct per-slice keys.
     #[test]
     fn slice_key_falls_back_to_ns_and_name_when_uid_missing() {
         let a = make_slice_ns(&["10.0.0.1"], 30000, true, "ns1", "a");
@@ -626,8 +556,7 @@ mod tests {
         es
     }
 
-    /// Apply → Delete on the same slice removes its workers from the union
-    /// (the missing variant for `.applied_objects()` before the rewrite).
+    /// Apply → Delete on the same slice removes its workers from the union.
     #[tokio::test]
     async fn delete_event_emits_removed_for_workers_in_slice() {
         let s = with_uid(make_slice_ns(&["10.0.0.1"], 30000, true, "ns", "svc"), "u1");
@@ -647,9 +576,7 @@ mod tests {
         assert!(matches!(out[1], DiscoveryEvent::Removed { .. }));
     }
 
-    /// Init/InitDone replaces state atomically: any worker present before
-    /// the Init cycle but not seen during it is diffed out as Removed.  This
-    /// covers the "slice deleted while watcher was disconnected" case.
+    /// Init/InitDone replaces state atomically: any worker present before the Init cycle but not seen during it is diffed out.
     #[tokio::test]
     async fn init_cycle_diffs_out_unseen_slices() {
         let a = with_uid(make_slice_ns(&["10.0.0.1"], 30000, true, "ns", "a"), "u-a");
@@ -687,8 +614,7 @@ mod tests {
         );
     }
 
-    /// When the consumer drops the receiver, the watcher loop exits cleanly
-    /// rather than continuing to process events into the void.
+    /// When the consumer drops the receiver.
     #[tokio::test]
     async fn watcher_exits_when_consumer_drops_receiver() {
         use std::time::Duration;
@@ -706,8 +632,7 @@ mod tests {
             .expect("task should not panic");
     }
 
-    /// Watcher errors are logged but state is preserved; the next successful
-    /// event continues to diff against the pre-error union.
+    /// Watcher errors are logged but state is preserved.
     #[tokio::test]
     async fn watcher_error_preserves_state_and_diffs_against_pre_error_union() {
         let s = with_uid(make_slice_ns(&["10.0.0.1"], 30000, true, "ns", "a"), "u-a");
@@ -732,9 +657,7 @@ mod tests {
         assert_eq!(added, 1, "out={out:?}");
     }
 
-    /// In PD mode, only slices whose labels match one of the role selectors
-    /// produce workers; unrelated slices in the same namespace are dropped
-    /// without registration.
+    /// In PD mode, only slices whose labels match one of the role selectors produce workers.
     #[tokio::test]
     async fn pd_mode_drops_slices_whose_labels_match_no_role_selector() {
         let prefill_slice = with_uid(
@@ -785,24 +708,7 @@ mod tests {
         assert_eq!(added[0].id.0, "ns/p/10.0.0.1:30000");
     }
 
-    /// End-to-end K8s + PD integration: synthesize EndpointSlice events
-    /// for two prefill pods and two decode pods (each backed by a real
-    /// HTTP listener mounting `/server_info`), pipe them through
-    /// `process_events` → DiscoveryEvent channel → manager, and assert
-    /// the resulting registry has:
-    ///   * two `Prefill` workers, each with `bootstrap_port` matching
-    ///     what its own `/server_info` advertised (so per-worker
-    ///     plumbing is verified, not just "some prefill registered"),
-    ///   * two `Decode` workers with `bootstrap_port = None`.
-    ///
-    /// This is the load-bearing integration covering the seam this PR
-    /// just opened: the K8s backend emits `bootstrap_port: None`, the
-    /// PD-disaggregation classification comes from slice labels, and
-    /// `WorkerMode` + `bootstrap_port` are re-resolved by the manager
-    /// from each worker's `/server_info`. A regression at *any* of
-    /// those three layers (k8s extract → process_events label
-    /// classification → manager introspect-and-override) fails this
-    /// test.
+    /// End-to-end K8s + PD integration: synthesize EndpointSlice events for prefill pods and decode pods.
     #[tokio::test]
     async fn k8s_pd_pipeline_registers_workers_with_per_pod_bootstrap_port() {
         use crate::workers::introspect::WorkerIntrospector;
@@ -815,8 +721,6 @@ mod tests {
         use tokio::net::TcpListener;
         use tokio::sync::oneshot;
 
-        /// Bind axum on an OS-assigned 127.0.0.1 port, mount a
-        /// `/server_info` returning `body`, return the port + shutdown
         /// channel so the test can join cleanly.
         async fn spawn_fake_server_info(body: Value) -> (u16, oneshot::Sender<()>) {
             let body = Arc::new(body);
@@ -840,8 +744,8 @@ mod tests {
             (port, tx)
         }
 
-        // Four fake SGLang workers — two prefill (each with a distinct
-        // bootstrap_port to verify per-pod plumbing) and two decode.
+        // Fake SGLang workers — prefill (each with a distinct
+        // bootstrap_port to verify per-pod plumbing) and decode.
         let (port_p1, _shut_p1) = spawn_fake_server_info(json!({
             "served_model_name": "m",
             "disaggregation_mode": "prefill",
@@ -865,10 +769,7 @@ mod tests {
         }))
         .await;
 
-        // One EndpointSlice per worker (one address each, so the slice
-        // port matches the worker's axum listener port exactly).
-        // Labels match the PD selectors so `classify_mode` sends each
-        // slice to the right pool.
+        // One EndpointSlice per worker.
         let prefill_labels = &[("app", "sglang"), ("role", "prefill")];
         let decode_labels = &[("app", "sglang"), ("role", "decode")];
         let p1 = with_uid(
@@ -929,8 +830,8 @@ mod tests {
             introspector,
         ));
 
-        // Drive process_events with the four slice Apply events, then
-        // drop dtx so the manager loop exits cleanly once it has drained.
+        // Drive process_events with those slice Apply events, then drop
+        // dtx so the manager loop exits cleanly once it has drained.
         let events = vec![
             Ok(watcher::Event::Apply(p1)),
             Ok(watcher::Event::Apply(p2)),
@@ -942,10 +843,7 @@ mod tests {
             process_events(stream, dtx, pd_mode()).await;
         });
 
-        // Poll the registry until all four workers are present with
-        // their resolved mode + bootstrap_port — order isn't deterministic
-        // because each worker's `/server_info` round-trip happens in a
-        // separate manager task.
+        // Poll the registry until all workers are present with their resolved mode + bootstrap_port — order isn't deterministic.
         let expected_p1_id = WorkerId(format!("ns/prefill-1/127.0.0.1:{port_p1}"));
         let expected_p2_id = WorkerId(format!("ns/prefill-2/127.0.0.1:{port_p2}"));
         let expected_d1_id = WorkerId(format!("ns/decode-1/127.0.0.1:{port_d1}"));
@@ -993,8 +891,7 @@ mod tests {
                 .map(|w| (w.mode(), w.bootstrap_port())),
         );
 
-        // Producer should exit when the iter stream ends; manager exits
-        // when the producer drops dtx. Both should finish quickly.
+        // Producer should exit when the iter stream ends; manager exits when the producer drops dtx.
         let _ = tokio::time::timeout(Duration::from_secs(1), producer).await;
         let _ = tokio::time::timeout(Duration::from_secs(1), manager_handle).await;
     }
@@ -1035,11 +932,7 @@ mod tests {
         }
     }
 
-    /// Pod is replaced (same IP, different UID) — router must see this as
-    /// a Removed+Added cycle so the new pod gets fresh CB/router_inflight_load
-    /// state. Without UID-keyed WorkerIds, two consecutive
-    /// `process_events` snapshots would dedup by `addr:port` and the
-    /// new pod would inherit the dead pod's state.
+    /// Pod is replaced (same IP, different UID) — router must see this as a Removed+Added cycle.
     #[tokio::test]
     async fn pod_replace_with_same_ip_emits_remove_then_add() {
         let s_old = with_uid(
@@ -1065,8 +958,6 @@ mod tests {
             events.push(e);
         }
         // Expect: Added(uid-old) → Removed(uid-old) + Added(uid-new).
-        // The order of Removed/Added within the second apply depends on
-        // emit_diff's iteration; assert by counting each variant.
         assert_eq!(events.len(), 3, "got {events:?}");
         let added: Vec<&WorkerSpec> = events
             .iter()
@@ -1100,14 +991,7 @@ mod tests {
         assert_eq!(added[0].url, added[1].url);
     }
 
-    /// End-to-end reconcile: an EndpointSlice flips `ready=true` while the
-    /// engine's `/server_info` is still failing (503) — the production
-    /// race where K8s readiness (cheap `/health`) leads the
-    /// scheduler-backed `/server_info`. The worker registers with empty
-    /// `model_ids` (invisible to routing), and discovery emits no further
-    /// event. The manager's reconcile loop must re-introspect it and move
-    /// it into the model pool once `/server_info` recovers — driven
-    /// through the real `process_events` → manager path.
+    /// End-to-end reconcile: an EndpointSlice flips `ready=true` while the engine's `/server_info` is still failing ().
     #[tokio::test]
     async fn k8s_reconcile_recovers_worker_whose_server_info_was_initially_failing() {
         use crate::discovery::ModelId;
@@ -1123,8 +1007,6 @@ mod tests {
         use std::time::Duration;
         use tokio::net::TcpListener;
 
-        // Fake engine: 503 on /server_info until `ready` flips true, then
-        // serves a valid body advertising model "m".
         let ready = Arc::new(AtomicBool::new(false));
         let ready_handler = ready.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1151,8 +1033,6 @@ mod tests {
                 .await;
         });
 
-        // EndpointSlice already marked ready=true (kubelet's /health probe
-        // passed) pointing at the engine whose /server_info is still 503.
         let slice = with_uid(
             make_slice_full(&["127.0.0.1"], port as i32, true, "ns", "engine-1", &[]),
             "u-e1",
@@ -1160,9 +1040,7 @@ mod tests {
 
         let registry = Arc::new(WorkerRegistry::default());
         let (dtx, drx) = mpsc::channel::<DiscoveryEvent>(16);
-        // Hold a second sender so the channel stays open after the
-        // producer's single-event stream ends — otherwise the manager
-        // loop would exit before any reconcile tick fires.
+        // Hold a second sender so the channel stays open after the producer's single-event stream ends — otherwise the manager loop would exit.
         let dtx_keepalive = dtx.clone();
         let introspector = Arc::new(WorkerIntrospector::new(Duration::from_millis(300)));
         let manager_handle = tokio::spawn(run_with_introspector_and_reconcile(
@@ -1185,8 +1063,6 @@ mod tests {
         let id = WorkerId(format!("ns/engine-1/127.0.0.1:{port}"));
         let model = ModelId("m".into());
 
-        // Phase 1: worker is registered but absent from the model pool
-        // while /server_info keeps failing.
         let stuck = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if let Some(w) = registry.get(&id) {
@@ -1206,8 +1082,6 @@ mod tests {
         // Engine finishes coming up.
         ready.store(true, Ordering::SeqCst);
 
-        // Phase 2: reconcile re-introspects and the worker joins the pool,
-        // with no further discovery event.
         let recovered = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 if !registry.workers_for(&model).is_empty() {

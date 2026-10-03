@@ -221,8 +221,6 @@ impl TreeComponent<Vec<i64>> for CountingComponentForTest {
 }
 
 // Swa-flavored stub driver: any dispatched call panics as unimplemented.
-// A Mamba-slot double with internal priority 0; its release panics so a
-// test can pin that dec_swa_lock_only dispatches lower-priority releases.
 struct LowPriorityComponentForTest;
 
 impl TreeComponent<Vec<i64>> for LowPriorityComponentForTest {
@@ -376,7 +374,7 @@ impl TreeComponent<Vec<i64>> for SwaComponentForTest {
 }
 
 // Swa-flavored driver with working eviction hooks: evict_component frees the
-// Swa slot and records the call; eviction priorities are configurable.
+// Swa slot and records the call.
 struct SwaEvictionComponentForTest {
     leaf_priority: i64,
     internal_priority: i64,
@@ -688,8 +686,7 @@ fn dec_swa_lock_only_returns_device_frees_in_the_device_dict() {
         &mut host_frees,
     )
     .expect("live test node");
-    // The fully unlocked D-leaf's SWA value is device-evicted on release;
-    // the freed span is reported as the node's Full indices.
+    // The fully unlocked D-leaf's SWA value is device-evicted on release.
     assert!(!tc.arena.has_device_value(a, SWA));
     assert_eq!(device_frees[&SWA].len(), 1);
     assert!(device_frees[&SWA][0].equal(&Tensor::from_slice(&[9i64])));
@@ -1208,7 +1205,6 @@ fn match_params_in_namespace<'a>(
     }
 }
 
-// root -> a (key [1,2], kv [10,11]) -> b (key [3], kv [12]).
 fn matched_chain(tc: &mut UnifiedTreeCore<Vec<i64>>) -> (NodeIdx_, NodeIdx_) {
     let root = tc.arena.root();
     let a = tc.add_new_node_(
@@ -1274,7 +1270,6 @@ fn match_prefix_splits_on_a_partial_match() {
     let mut tc = core();
     let (a, _b) = matched_chain(&mut tc);
     let result = tc.match_prefix(&match_params(&vec![1, 9]));
-    // The walk split a at 1: the new prefix node holds [10] and anchors the result.
     let prefix_node = result.best_match_node_id;
     assert_ne!(prefix_node, tc.arena.node(a).id);
     assert!(result.device_indices.equal(&Tensor::from_slice(&[10i64])));
@@ -1407,8 +1402,7 @@ fn match_prefix_empty_query_anchors_at_the_root() {
 
 #[test]
 fn match_prefix_skips_host_only_nodes_without_hicache() {
-    // Chain a(valued) -> b(evicted but backuped): the walk passes b but the
-    // device-only validator keeps the boundary at a.
+    // Chain a(valued) -> b(evicted but backuped).
     let mut tc = core();
     let (a, b) = matched_chain(&mut tc);
     let taken = tc.arena.take_device_value(b, FULL);
@@ -1425,8 +1419,7 @@ fn match_prefix_skips_host_only_nodes_without_hicache() {
 
 #[test]
 fn match_prefix_with_hicache_advances_best_match_onto_host_nodes() {
-    // Chain a(valued) -> b(evicted but backuped): the device anchor stays at
-    // a while the hicache validators carry the best match onto b.
+    // Chain a(valued) -> b(evicted but backuped).
     let mut tc = core();
     tc.set_hicache_enabled();
     let (a, b) = matched_chain(&mut tc);
@@ -1447,8 +1440,7 @@ fn match_prefix_with_hicache_advances_best_match_onto_host_nodes() {
 
 #[test]
 fn match_prefix_with_hicache_restamps_the_host_best_match() {
-    // Chain a(valued) -> b(host-only): the restamp walk anchors at the
-    // consensus best match b, not the shallower device anchor a.
+    // Chain a(valued) -> b(host-only): the restamp walk anchors at the consensus best match b.
     let mut tc = core();
     tc.set_hicache_enabled();
     let (a, b) = matched_chain(&mut tc);
@@ -1492,8 +1484,7 @@ fn match_prefix_with_hicache_sums_the_host_span_length() {
 
 #[test]
 fn match_walk_runs_every_validator_at_a_host_only_node() {
-    // Chain a(valued) -> b(host-only): Full's device-only validator is
-    // false at b, yet the aux validator must still observe b.
+    // Chain a(valued) -> b(host-only): Full's device-only validator is false at b.
     let mut tc = core();
     let counter = Arc::new(CountingComponentForTest::default());
     tc.register_component_(counter.clone());
@@ -1506,8 +1497,7 @@ fn match_walk_runs_every_validator_at_a_host_only_node() {
 
 #[test]
 fn match_walk_runs_every_device_validator_under_hicache() {
-    // Both hicache folds observe both nodes: Full's device validator is
-    // false at the host-only b, yet the aux device validator still runs there.
+    // Both hicache folds observe both nodes: Full's device validator is false at the host-only b.
     let mut tc = core();
     tc.set_hicache_enabled();
     let counter = Arc::new(CountingComponentForTest::default());
@@ -1521,8 +1511,7 @@ fn match_walk_runs_every_device_validator_under_hicache() {
 
 #[test]
 fn match_end_refresh_anchors_at_the_consensus_best_match() {
-    // Chain a(valued) -> b(host-only): the device anchor stays at a while
-    // the MatchEnd refresh dispatches on the consensus best match b.
+    // Chain a(valued) -> b(host-only): the device anchor stays at a while the MatchEnd refresh dispatches.
     let mut tc = core();
     tc.set_hicache_enabled();
     let recorder = Arc::new(RecordingComponentForTest::default());
@@ -1541,7 +1530,6 @@ fn match_end_refresh_anchors_at_the_consensus_best_match() {
     );
 }
 
-// A [Full, Swa] core with the given sliding window (page size 1).
 fn swa_match_core(window: usize) -> UnifiedTreeCore<Vec<i64>> {
     UnifiedTreeCore::new(
         CacheInitParams {
@@ -1561,9 +1549,7 @@ fn set_swa_device_and_list(tc: &mut UnifiedTreeCore<Vec<i64>>, node: NodeIdx_) {
 
 #[test]
 fn match_walk_swa_state_resets_at_a_full_rejected_node() {
-    // Chain a(SWA on) -> b(Full host-only, SWA tombstone) -> c(SWA on,
-    // below the window): Full's validator rejects b, but the SWA validator
-    // must still observe b so its window run restarts before c.
+    // Chain a(SWA on) -> b(Full host-only, SWA tombstone) -> c(SWA on, below the window): Full's validator rejects b.
     let mut tc = swa_match_core(/* window = */ 2);
     let root = tc.arena.root();
     let a = tc.add_new_node_(
@@ -1603,8 +1589,6 @@ fn match_walk_swa_state_resets_at_a_full_rejected_node() {
 
 #[test]
 fn match_prefix_swa_tombstone_holds_the_best_match_below_the_window() {
-    // a(SWA on) -> t(Full on, SWA tombstone) -> c(SWA on, span 1 < window):
-    // the best match stays at a even though Full accepts the deeper nodes.
     let mut tc = swa_match_core(/* window = */ 2);
     let root = tc.arena.root();
     let a = tc.add_new_node_(
@@ -1641,8 +1625,7 @@ fn match_prefix_swa_tombstone_holds_the_best_match_below_the_window() {
 
 #[test]
 fn match_prefix_swa_best_match_advances_at_the_window() {
-    // Same shape, but c spans the whole window: c revalidates and takes
-    // the best match past the SWA tombstone.
+    // Same shape, but c spans the whole window: c revalidates and takes the best match past the SWA tombstone.
     let mut tc = swa_match_core(/* window = */ 2);
     let root = tc.arena.root();
     let a = tc.add_new_node_(
@@ -1714,16 +1697,13 @@ fn match_end_refresh_moves_the_swa_window_run() {
     }
     let result = tc.match_prefix(&match_params(&vec![1, 2, 3, 4]));
     assert_eq!(result.best_match_node_id, tc.arena.node(c).id);
-    // The walk window is sliding_window_size + page_size = 3: c, b, and
-    // the straddling a become the MRU run; the sentinel s stays behind.
     let order: Vec<NodeIdx_> = tc.device_lru_list(SWA).iter().collect();
     assert_eq!(order, vec![c, b, a, s]);
 }
 
 #[test]
 fn match_prefix_with_hicache_reports_swa_host_hits() {
-    // a(SWA device) -> b(Full host-only, SWA host-only): the best match
-    // advances onto b and finalize reports b's SWA host span.
+    // a(SWA device) -> b(Full host-only, SWA host-only).
     let mut tc = swa_match_core(/* window = */ 4);
     tc.set_hicache_enabled();
     let root = tc.arena.root();
@@ -1775,8 +1755,7 @@ fn touch_node_walkdown_keeps_the_swa_lru_order() {
     );
     set_swa_device_and_list(&mut tc, a);
     set_swa_device_and_list(&mut tc, b);
-    // The SWA walk-down refresh is a no-op: touching the LRU-tail node
-    // must not move it (window-bounded refresh runs at match/insert end).
+    // The SWA walk-down refresh is a no-op.
     tc.touch_node_(a);
     let order: Vec<NodeIdx_> = tc.device_lru_list(SWA).iter().collect();
     assert_eq!(order, vec![b, a]);
@@ -2028,8 +2007,6 @@ fn insert_prev_prefix_len_spans_a_multi_node_walk() {
     let mut tc = core();
     tc.insert(&insert_params(&vec![1, 2, 3], &[10, 11, 12]));
     tc.insert(&insert_params(&vec![1, 2, 3, 4, 5], &[20, 21, 22, 13, 14]));
-    // The request already matched [1,2,3]: only the second node's overlap
-    // is duplicate.
     let result = tc.insert(&InsertParams {
         prev_prefix_len: 3,
         ..insert_params(&vec![1, 2, 3, 4, 5], &[30, 31, 32, 33, 34])
@@ -2050,7 +2027,7 @@ fn insert_prev_prefix_len_narrows_mid_node_on_a_multi_node_walk() {
     let mut tc = core();
     tc.insert(&insert_params(&vec![1, 2, 3], &[10, 11, 12]));
     tc.insert(&insert_params(&vec![1, 2, 3, 4, 5], &[20, 21, 22, 13, 14]));
-    // prev_prefix_len 4 lands mid second node: only its last token is duplicate.
+    // prev_prefix_len lands mid second node: only its last token is duplicate.
     let result = tc.insert(&InsertParams {
         prev_prefix_len: 4,
         ..insert_params(&vec![1, 2, 3, 4, 5], &[30, 31, 32, 33, 34])
@@ -3261,8 +3238,7 @@ fn drop_subtree_emits_removals_for_host_descendants_then_the_leaf() {
     let _ = tc.take_events();
     let (dropped, _step) = tc.drop_subtree_no_host(leaf).expect("live test node");
     assert!(dropped);
-    // The leaf hashed lazily at its insert store event; the host-only
-    // child hashes lazily at removal, chaining from the leaf.
+    // The leaf hashed lazily at its insert store event.
     let leaf_hashes = crate::node::get_hash_str::<Vec<i64>>(&[1, 2], None, 1);
     let child_hashes =
         crate::node::get_hash_str::<Vec<i64>>(&[3, 4], leaf_hashes.last().map(String::as_str), 1);
@@ -3317,7 +3293,7 @@ fn split_insert_stores_only_the_new_block_chained_to_the_split_parent() {
             session_id: None,
         }]
     );
-    // The split divided the page hashes between the two fragments.
+    // The split divided the page hashes between both fragments.
     let parent = tc
         .match_prefix(&match_params(&vec![1, 2]))
         .best_match_node_id;
@@ -3439,7 +3415,7 @@ fn prefetch_anchor_info_maps_the_namespace() {
         tc.prefetch_anchor_info(salted).expect("live test node"),
         (Some("chat".to_string()), Some("tenant-a".to_string()))
     );
-    // A root anchor carries no namespace: the single root serves them all.
+    // A root anchor carries no namespace: the root serves them all.
     let root = tc.arena.root();
     assert_eq!(
         tc.prefetch_anchor_info(tc.arena.node(root).id)
@@ -3903,7 +3879,6 @@ fn insert_host_hash_slices_by_pages_not_atoms() {
             .resolve(result.inserted_host_node.unwrap())
             .expect("live test node"),
     );
-    // Two matched atoms are ONE page: only g0 is consumed.
     assert_eq!(new_node.hash_value, Some(vec!["g1".to_string()]));
     assert!(
         new_node
@@ -3956,9 +3931,7 @@ fn insert_host_full_match_reports_only_a_backuped_node() {
 #[ignore]
 #[should_panic(expected = "insert_host: parent")]
 fn insert_host_panics_on_a_colliding_page() {
-    // TODO: unconstructible today — the insert_host walk (like the python one)
-    // follows any child on the suffix page instead of breaking at a dead node,
-    // so the add path never sees an occupied page; the assert is defensive-only.
+    // TODO: unconstructible today — the insert_host walk (like the python one) follows any child on the suffix page instead of breaking.
     let mut tc = core();
     tc.set_hicache_enabled();
     tc.insert(&insert_params(&vec![1, 2], &[10, 11]));
@@ -4068,7 +4041,6 @@ fn commit_backup_preserves_full_kv_when_host_indices_are_empty() {
     );
 }
 
-// Two backuped device nodes [1,2] -> [3,4]; returns (parent, child) ids.
 fn backuped_chain(tc: &mut UnifiedTreeCore<Vec<i64>>) -> (NodeIdx_, NodeIdx_) {
     tc.insert(&insert_params(&vec![1, 2], &[10, 11]));
     tc.insert(&insert_params(&vec![1, 2, 3, 4], &[10, 11, 12, 13]));
@@ -4149,8 +4121,7 @@ fn commit_load_back_reattaches_device_slices_and_restores_the_match() {
     let (parent, child) = backuped_chain(&mut tc);
     demote_node(&mut tc, child);
     demote_node(&mut tc, parent);
-    // Coexistence tracking is intentionally lazy and may retain stale entries
-    // after demotion. Remove them so this test observes the ack-time refresh.
+    // Coexistence tracking is intentionally lazy and may retain stale entries after demotion.
     tc.full_coexisting_host_nodes.discard(parent);
     tc.full_coexisting_host_nodes.discard(child);
     let (kv_xfer, comp_xfers) = tc
@@ -4175,15 +4146,13 @@ fn commit_load_back_reattaches_device_slices_and_restores_the_match() {
             .device_value(child, FULL)
             .equal(&Tensor::from_slice(&[52i64, 53]))
     );
-    // Write-through does not need an in-flight Full host pin. Duplicate
-    // tracking is refreshed only when the orchestrator acknowledges the load.
+    // Write-through does not need an in-flight Full host pin.
     assert!(!tc.arena.node(parent).is_load_back_pending());
     assert!(!tc.arena.node(child).is_load_back_pending());
     assert!(!tc.full_coexisting_host_nodes.contains(parent));
     assert!(!tc.full_coexisting_host_nodes.contains(child));
     assert_eq!(tc.full_evictable_size(), 4);
-    // The orchestrator re-locks the loaded path right after commit; that lock walk
-    // also re-evaluates the parent's transient D-leaf membership.
+    // The orchestrator re-locks the loaded path right after commit.
     tc.inc_lock_ref(tc.arena.node(child).id, ComponentSet::EMPTY)
         .expect("live test node");
     tc.dec_lock_ref(
@@ -4470,8 +4439,8 @@ fn mixed_backup_evict_insert_keeps_the_leaf_sets_disjoint() {
     tc.insert(&insert_params(&vec![201, 202], &[30, 31]));
     tc.insert(&insert_params(&vec![301, 302], &[40, 41]));
     tc.insert(&insert_params(&vec![401, 402], &[50, 51]));
-    // Backing up (and thereby re-stamping) the first three chains leaves the
-    // two unbacked chains as the oldest eviction victims.
+    // Backing up (and thereby re-stamping) the first chains leaves both
+    // unbacked chains as the oldest eviction victims.
     let first = tc
         .match_prefix(&match_params(&vec![1, 2]))
         .best_match_node_id;
@@ -4536,7 +4505,6 @@ fn write_back_core() -> UnifiedTreeCore<Vec<i64>> {
     )
 }
 
-// A device-on unbacked leaf [1,2] with a host-only child [3,4] under it.
 fn unbacked_leaf_with_host_child(tc: &mut UnifiedTreeCore<Vec<i64>>) -> (NodeIdx_, NodeIdx_) {
     tc.insert(&insert_params(&vec![1, 2], &[10, 11]));
     let leaf = tc
@@ -4569,8 +4537,7 @@ fn drop_subtree_no_host_frees_the_leaf_and_its_host_descendants() {
         .expect("live test node");
     accumulate_step(step, &mut tracker, &mut df, &mut hf);
     assert!(dropped);
-    // Under EvictLayer::All only device tokens enter the tracker; host
-    // frees ride the host_frees tensors.
+    // Under EvictLayer::All only device tokens enter the tracker; host frees ride the host_frees tensors.
     assert_eq!(tracker[&FULL], 2);
     assert_eq!(df[&FULL].len(), 1);
     assert!(df[&FULL][0].equal(&Tensor::from_slice(&[10i64, 11])));
@@ -4672,8 +4639,7 @@ fn drop_subtree_no_host_panics_on_a_backuped_leaf() {
 
 #[test]
 fn write_back_eviction_frees_the_device_value_exactly_once() {
-    // The backup pass must not free the device value the DMA still reads;
-    // the post-ack pass demotes and frees it exactly once.
+    // The backup pass must not free the device value the DMA still reads.
     let mut tc = write_back_core();
     tc.insert(&insert_params(&vec![1], &[10]));
     let leaf = tc.match_prefix(&match_params(&vec![1])).best_match_node_id;
@@ -4726,7 +4692,7 @@ fn root_node_handle_is_namespace_independent() {
     let mut tc = core();
     let root_handle = tc.arena.node(tc.arena.root()).id;
     assert_eq!(tc.root_node_handle(None), root_handle);
-    // The single root serves every namespace, seen or not.
+    // The root serves every namespace, seen or not.
     assert_eq!(tc.root_node_handle(Some("ghost")), root_handle);
     assert!(!tc.arena.namespace_exists(Some("ghost")));
     tc.insert(&InsertParams {
@@ -4884,7 +4850,6 @@ fn insert_page_size_two_drops_the_unaligned_tail() {
 fn insert_page_size_two_splits_mid_page_divergence_at_the_page_boundary() {
     let mut tc = page2_core();
     tc.insert(&insert_params(&vec![1, 2, 3, 4], &[10, 11, 12, 13]));
-    // The keys share 3 atoms but pages quantize the overlap down to 2.
     let result = tc.insert(&insert_params(&vec![1, 2, 3, 9], &[20, 21, 22, 29]));
     assert_eq!(result.prefix_len, 2);
     let [CacheAction::FreeDeviceKV(freed)] = result.cache_actions.as_slice() else {
@@ -4923,7 +4888,6 @@ fn insert_page_size_two_splits_mid_page_divergence_at_the_page_boundary() {
 fn match_prefix_page_size_two_splits_at_a_page_boundary() {
     let mut tc = page2_core();
     tc.insert(&insert_params(&vec![1, 2, 3, 4], &[10, 11, 12, 13]));
-    // The query shares 3 atoms; pages quantize the split down to 2.
     let result = tc.match_prefix(&match_params(&vec![1, 2, 3, 9]));
     assert!(
         result
@@ -5268,8 +5232,7 @@ fn tombstone_walk_sweeps_orphaned_aux_host_data() {
 
 #[test]
 fn cascade_tombstones_full_after_the_component_sweep() {
-    // Full's device value is cleared by the cascade, not by evict_component
-    // (aux components read it while freeing); Full-only trees sweep nothing.
+    // Full's device value is cleared by the cascade, not by evict_component (aux components read it while freeing).
     let mut tc = core();
     let root = tc.arena.root();
     let a = tc.add_new_node_(
@@ -5392,7 +5355,7 @@ fn cascade_aux_setup(tc: &mut UnifiedTreeCore<Vec<i64>>) -> NodeIdx_ {
 
 #[test]
 fn cascade_sweeps_an_equal_priority_aux_component() {
-    // Swa leaf priority 0 equals Full's trigger priority: swept, not spared.
+    // Swa leaf priority multiple equals Full's trigger priority: swept, not spared.
     let mut tc = core();
     let recorder = Arc::new(SwaEvictionComponentForTest::new(
         /* leaf_priority = */ 0, /* internal_priority = */ 2,
@@ -5446,7 +5409,6 @@ fn cascade_sweeps_a_lower_priority_aux_component() {
 
 #[test]
 fn cascade_spares_a_higher_priority_aux_component() {
-    // Swa leaf priority 1 outranks Full's trigger priority 0: kept intact.
     let mut tc = core();
     let recorder = Arc::new(SwaEvictionComponentForTest::new(
         /* leaf_priority = */ 1, /* internal_priority = */ 2,
@@ -5471,8 +5433,7 @@ fn cascade_spares_a_higher_priority_aux_component() {
 
 #[test]
 fn cascade_spares_a_locked_component_of_equal_internal_priority() {
-    // The Swa lock is a legit pin: leaf-collapse flattened priorities, but
-    // its true internal priority matches the trigger's.
+    // The Swa lock is a legit pin: leaf-collapse flattened priorities.
     let mut tc = core();
     let recorder = Arc::new(SwaEvictionComponentForTest::new(
         /* leaf_priority = */ 0, /* internal_priority = */ 2,
@@ -5535,8 +5496,7 @@ fn cascade_host_aux_setup(tc: &mut UnifiedTreeCore<Vec<i64>>) -> NodeIdx_ {
 
 #[test]
 fn cascade_host_spares_a_locked_component_of_equal_internal_priority() {
-    // The Swa host lock is a legit pin: its true internal priority matches
-    // the trigger's, so the host cascade skips it and keeps the host value.
+    // The Swa host lock is a legit pin: its true internal priority matches the trigger's.
     let mut tc = core();
     let recorder = Arc::new(SwaEvictionComponentForTest::new(
         /* leaf_priority = */ 0, /* internal_priority = */ 2,
@@ -5587,8 +5547,7 @@ fn cascade_host_panics_on_a_locked_lower_internal_priority_component() {
 
 #[test]
 fn evict_walk_and_driver_empty_the_tree_end_to_end() {
-    // The full eviction loop: insert three leaves, walk them in LRU
-    // order, evict each through the driver, and end with a bare root.
+    // The full eviction loop: insert leaves, walk them in LRU order, evict each through the driver.
     let mut tc = core();
     tc.insert(&insert_params(&vec![1, 2], &[10, 11]));
     tc.insert(&insert_params(&vec![3], &[12]));
@@ -5619,8 +5578,6 @@ fn evict_walk_and_driver_empty_the_tree_end_to_end() {
 
 #[test]
 fn evict_driver_readmits_the_parent_into_the_walk() {
-    // A two-level chain evicts leaf-first: the child's eviction turns the
-    // prefix node into the next walkable D-leaf.
     let mut tc = core();
     tc.insert(&insert_params(&vec![1, 2, 3], &[10, 11, 12]));
     tc.insert(&insert_params(&vec![1, 2, 9], &[10, 11, 29]));
@@ -5637,7 +5594,7 @@ fn evict_driver_readmits_the_parent_into_the_walk() {
         evicted += 1;
     }
     tc.evict_device_end(FULL);
-    // Two suffix leaves plus the readmitted split-prefix node.
+    // Suffix leaves plus the readmitted split-prefix node.
     assert_eq!(evicted, 3);
     assert_eq!(tracker[&FULL], 4);
     assert_eq!(tc.arena.len(), 1);
@@ -5947,7 +5904,6 @@ fn inc_hit_count_bumps_and_stays_quiet_without_hicache() {
         .set_device_value(a, FULL, Tensor::from_slice(&[0i64]));
     assert!(!tc.inc_hit_count_and_check_(a, /* chunked = */ false));
     assert_eq!(tc.arena.node(a).hit_count, 1);
-    // The tree defaults keep the host tier off and the threshold at 256.
     assert!(!tc.enable_hicache);
     assert_eq!(tc.write_through_threshold, 256);
 }
@@ -6210,7 +6166,7 @@ fn device_leaf_excludes_node_locked_by_another_component() {
         .unwrap();
     tc.arena
         .set_device_value(n1, FULL, Tensor::from_slice(&[10i64]));
-    // The lock check spans every component, not just Full.
+    // The lock check spans every component, not Full.
     tc.arena.node_mut(n1).values[SWA.idx()].lock_ref = 1;
     tc.update_evictable_leaf_sets_(n1);
     assert!(!tc.evictable_device_leaves.contains(n1));
@@ -6402,7 +6358,7 @@ fn host_leaf_excludes_node_host_locked_by_another_component() {
         .unwrap();
     tc.arena
         .set_host_value(n1, FULL, Tensor::from_slice(&[10i64]));
-    // The host-lock check spans every component, not just Full.
+    // The host-lock check spans every component, not Full.
     tc.arena
         .node_mut(n1)
         .state_mut_(ValueSlotIdx::host(SWA))
@@ -7243,8 +7199,7 @@ fn sanity_check_detects_an_evicted_parent_prefix() {
 
 #[test]
 fn sanity_check_accepts_a_locked_tombstone() {
-    // Segment locks count evicted nodes, so a device-locked tombstone is a
-    // legal state the checker must not flag.
+    // Segment locks count evicted nodes, so a device-locked tombstone is a legal state the checker must not flag.
     let mut tc = sane_tree();
     // write_back spares the tombstone's ancestors the backup-chain rule.
     tc.is_write_back = true;
@@ -7660,7 +7615,6 @@ fn refresh_dispatches_fire_per_walk_phase_in_a_namespace() {
         namespace: KeyNamespaceRef::new(Some("chat"), None),
         ..insert_params(&vec![7, 8], &[40, 41])
     });
-    // The deeper insert walks down through the existing [7,8] node.
     tc.insert(&InsertParams {
         namespace: KeyNamespaceRef::new(Some("chat"), None),
         ..insert_params(&vec![7, 8, 9], &[40, 41, 42])
@@ -7785,7 +7739,6 @@ fn sanity_check_detects_an_unaligned_key() {
     tc.sanity_check(&[], &[]);
 }
 
-// Corrupt the [1,2,9] leaf's child map to point back at its own parent.
 fn cyclic_child_map_tree() -> UnifiedTreeCore<Vec<i64>> {
     let mut tc = sane_tree();
     let leaf = tc

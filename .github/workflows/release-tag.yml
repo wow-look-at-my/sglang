@@ -1,6 +1,5 @@
 name: Release Tag
-# Creates a git tag to trigger release workflows (PyPI, Docker)
-# Use this after testing on a release branch is complete
+# Creates a git tag to trigger release workflows (PyPI, Docker) Use this after testing on a release branch is complete
 on:
   workflow_dispatch:
     inputs:

@@ -576,8 +576,7 @@ mod tests {
                         "action_id": "a-1",
                         "action_type": "kv.example",
                         "action_version": "1.0",
-                        // An integral number stays an integer: the Python side
-                        // decodes payloads into typed fields.
+                        // An integral number stays an integer: the Python side decodes payloads into typed fields.
                         "payload": {
                             "endpoint": "tcp://10.0.0.2:7000",
                             "block_hashes": [7],

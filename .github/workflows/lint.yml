@@ -15,12 +15,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Fail-fast gate: docs_new/ was renamed to docs/ (#32123). git's rename
-      # detection silently re-adds NEW files under docs_new/ on merge without a
-      # conflict, which would resurrect the directory. We check the checked-out
-      # tree directly (git ls-files) rather than diffing against the base ref —
-      # a presence check needs no merge-base and sidesteps the shallow-checkout
-      # / silent-diff failures that plagued the old legacy-docs/ gate.
+      # Fail-fast gate: docs_new/ was renamed to docs/ (#32123). git's rename detection silently re-adds NEW files under docs_new/ on merge without a conflict, which would resurrect the directory. We check the checked-out tree directly (git ls-files) rather than diffing against the base ref — a presence check needs no merge-base and sidesteps the shallow-checkout / silent-diff failures that plagued the old legacy-docs/ gate.
       - name: Forbid docs_new/ (renamed to docs/)
         run: |
           set -euo pipefail
@@ -49,8 +44,7 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
-      # The clippy-rust-workspace pre-commit hook compiles the rust/ workspace
-      # (debug profile); cache cargo registry + target across runs.
+      # The clippy-rust-workspace pre-commit hook compiles the rust/ workspace (debug profile); cache cargo registry + target across runs.
       - name: Rust cache (rust/ workspace)
         uses: Swatinem/rust-cache@v2
         with:
@@ -65,9 +59,7 @@ jobs:
         with:
           args: --config .github/linters/lychee.toml README.md
 
-      # docs/ (Mintlify) internal-link check. Runs only in CI — contributors
-      # are NOT required to install `mint` for local pre-commit. External links
-      # are covered separately by the nightly lychee job (no --check-external here).
+      # docs/ (Mintlify) internal-link check. Runs only in CI — contributors are NOT required to install `mint` for local pre-commit. External links are covered separately by the nightly lychee job (no --check-external here).
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -85,9 +77,7 @@ jobs:
           path: ~/.mint-cli
           key: mint-${{ runner.os }}-${{ env.MINT_VERSION }}
 
-      # Hard gate: docs internal links/anchors/redirects must resolve.
-      # mint is pinned for reproducibility (its heading-slug rules are
-      # version-sensitive); bump deliberately after re-verifying locally.
+      # Hard gate: docs internal links/anchors/redirects must resolve. mint is pinned for reproducibility (its heading-slug rules are version-sensitive); bump deliberately after re-verifying locally.
       - name: Check docs links (Mintlify broken-links)
         run: |
           if [ ! -x "$HOME/.mint-cli/node_modules/.bin/mint" ]; then

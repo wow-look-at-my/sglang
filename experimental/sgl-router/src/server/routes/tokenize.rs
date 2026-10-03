@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::server::app_context::AppContext;
@@ -48,12 +48,8 @@ pub async fn tokenize(
         .tokenizers
         .get(&req.model)
         .ok_or_else(|| ApiError::ModelNotFound(req.model.clone()))?;
-    // Structured log on failure so an operator can correlate
-    // "every encode for model X errors" against the route, model id, and
-    // prompt size. The generic anyhow-chain log in ApiError::Internal still
-    // fires from IntoResponse — duplication is intentional: the route-level
-    // line carries `model` / `prompt_len`, the IntoResponse line carries
-    // the full anyhow chain.
+    // Structured log on failure so an operator can correlate "every encode
+    // for model X errors" against the route, model id, and prompt size.
     let ids = adapter::encode(&tok, &req.prompt).map_err(|e| {
         tracing::error!(
             route = "/v1/tokenize",
@@ -200,9 +196,8 @@ mod tests {
 
     #[tokio::test]
     async fn tokenize_request_does_not_advertise_add_special_tokens() {
-        // Regression: TokenizeRequest must not have an `add_special_tokens` field.
-        // Background: dynamo-tokenizers cannot honor it. Silently ignoring it
-        // would be a footgun for clients that set it.
+        // Regression: TokenizeRequest must not have an `add_special_tokens`
+        // field. Background: dynamo-tokenizers cannot honor it.
         let req: TokenizeRequest =
             serde_json::from_str(r#"{"model": "tiny", "prompt": "hi"}"#).unwrap();
         let _ = req; // compiles → schema is correct minus that field
@@ -217,11 +212,7 @@ mod tests {
         );
     }
 
-    /// Ported from SMG tests/api/parser_endpoints_test.rs (parse_function_call_missing_fields):
-    /// DetokenizeRequest has `deny_unknown_fields`; an extra field must yield 422
-    /// Unprocessable Entity from axum's JSON extractor, not 200 with the field silently ignored.
-    /// Gap: the existing `tokenize_request_does_not_advertise_add_special_tokens` test only
-    /// exercises serde deserialization directly; this test exercises the HTTP layer.
+    /// .rs (parse_function_call_missing_fields): DetokenizeRequest has `deny_unknown_fields`.
     #[tokio::test]
     async fn detokenize_rejects_unknown_field() {
         let app = crate::server::app::build_router(ctx_with_tiny());
@@ -251,8 +242,6 @@ mod tests {
     }
 
     /// Gap: `tokenize_round_trip` tests only `skip_special_tokens: true`.
-    /// When omitted, `#[serde(default)]` gives `false` — a different decode code-path.
-    /// This covers the default (omitted) and explicit-false routes end-to-end via HTTP.
     #[tokio::test]
     async fn detokenize_skip_special_tokens_false_default() {
         let app = crate::server::app::build_router(ctx_with_tiny());
@@ -282,7 +271,6 @@ mod tests {
         let det_body_omitted = serde_json::to_vec(&serde_json::json!({
             "model": "tiny",
             "tokens": r.tokens
-            // skip_special_tokens intentionally absent — must default to false
         }))
         .unwrap();
         let det_res_omitted = app

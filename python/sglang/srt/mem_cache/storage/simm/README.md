@@ -12,7 +12,7 @@ For more details about SiMM, please refer to [SiMM project](https://github.com/s
 
 SiMM serves as a high-performance L3 storage backend for SGLang HiCache, enabling distributed KV cache storage across multiple servers with RDMA-baed transport. This integration addresses the capacity limitations of traditional GPU-only or GPU+CPU caching by providing virtually unlimited cache storage through a distributed memory pool.
 
-When a cache miss occurs in L1 and L2, HiCache automatically fetches the required KV cache from SiMM's distributed memory pool. The system uses intelligent prefetching strategies to minimize latency, and utilize RDMA technology and zero-copy technique to ensure high-bandwidth, low-latency data transfer between SGLang instances and SiMM data servers.
+When a cache miss occurs in L1 and L2, HiCache automatically fetches the required KV cache from SiMM's distributed memory pool. The system uses intelligent prefetching strategies to minimize latency, and utilize RDMA technology and zero-copy technique to ensure high-bandwidth. Low-latency data transfer between SGLang instances. SiMM data servers.
 
 ## Install SiMM
 
@@ -43,13 +43,13 @@ For more details, please refer to [SiMM official installation guide](https://git
 
 **SiMM**
 
-Before launch `SGLang server` with SiMM, you should launch SiMM `cluster manager service` and `data server service`.
+Before launch `SGLang server` with SiMM, you must launch SiMM `cluster manager service` and `data server service`.
 
 You can visit [SiMM official deploy guide](https://github.com/scitix/SiMM/blob/main/docs/deploy_guide.md) and deploy SiMM on your K8S cluster with RDMA network.
 
 **Start the `SGLang server` with SiMM enabled:**
 
-There are three ways to configure SiMM:
+There are ways to configure SiMM:
 
 1. Via extra configuration passed through sglang parameters
 2. Using JSON configuration files

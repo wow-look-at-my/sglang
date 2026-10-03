@@ -22,9 +22,9 @@ void fused_experts_int8_kernel_impl(
     const int8_t* __restrict__ x,          // [M, K], row major
     const int8_t* __restrict__ w13,        // [E, K, 2N], per expert [K, N], column major, w1 before w3
     const int8_t* __restrict__ w2,         // [E, N, K], per expert [N, K], column major
-    const float* __restrict__ x_scale,     // [M, 1]
-    const float* __restrict__ w13_scale,   // [E, 1, 2N], per expert [1, N], w1 before w3
-    const float* __restrict__ w2_scale,    // [E, 1, K], per expert [1, K]
+    const float* __restrict__ x_scale,
+    const float* __restrict__ w13_scale,
+    const float* __restrict__ w2_scale,
     const expert_to_rows_t& x_per_expert,  // expert id -> related x rows and weights
     int64_t M,
     int64_t N,
@@ -55,8 +55,7 @@ void fused_experts_int8_kernel_impl<at::BFloat16>(
     max_agg_rows = std::max<int64_t>(max_agg_rows, rows.size());
   }
 
-  // x_scale_agg[max_agg_rows] + up_scale[max_agg_rows] +
-  // gate[max_agg_rows,N] + up[max_agg_rows,N] + down[max_agg_rows,K]
+  // x_scale_agg[max_agg_rows] + up_scale[max_agg_rows] + gate[max_agg_rows,N] + up[max_agg_rows,N] +.
   auto f32_buffer = at::empty({max_agg_rows, 1 + 1 + N + N + K}, at::kFloat);
   float* x_scale_agg = f32_buffer.data_ptr<float>();
   float* up_scale = x_scale_agg + max_agg_rows;
@@ -88,9 +87,7 @@ void fused_experts_int8_kernel_impl<at::BFloat16>(
       }
     }
 
-    // gate = x_agg @ w1
-    // up = x_agg @ w3
-    // up *= silu(gate)
+    // gate = x_agg @ w1 up = x_agg @ w3 up *= silu(gate)
     {
       // expert specific tensors
       const int8_t* w1e = w13 + eid * 2 * N * K;
@@ -98,15 +95,6 @@ void fused_experts_int8_kernel_impl<at::BFloat16>(
       const float* w1e_scale = w13_scale + eid * 2 * N;
       const float* w3e_scale = w1e_scale + N;
 
-      // tensor shapes
-      // - x_agg:         [n_agg, K], int8, row major
-      // - x_scale_agg:   [n_agg, 1], float
-      // - w{1,3}e:       [K, N], int8, col major
-      // - w{1,3}e_scale: [1, N], float
-      // - gate:          [n_agg, N], float, row major
-      // - up:            [n_agg, N], float, row major
-      // - up_q8:         [n_agg, N], int8, row major
-      // - up_scale:      [n_agg, 1], float
 
       const int slice_size = (n_agg * K * sizeof(int8_t)) > kL2Size ? 64 : 8;
       const int num_slices = (N + slice_size - 1) / slice_size;
@@ -157,13 +145,6 @@ void fused_experts_int8_kernel_impl<at::BFloat16>(
       const int8_t* w2e = w2 + eid * K * N;
       const float* w2e_scale = w2_scale + eid * K;
 
-      // tensor shapes
-      // - up_q8:       [n_agg, N], int8, row major
-      // - up_scale:    [n_agg, 1], float
-      // - w2e:         [N, K], int8, col major
-      // - w2e_scale:   [1, K], float
-      // - down:        [n_agg, K], float, row major
-      // - out:         [M, K], float, row major
 
       const int slice_size = (n_agg * N * sizeof(int8_t)) > kL2Size ? 64 : 8;
       const int num_slices = (K + slice_size - 1) / slice_size;
@@ -204,9 +185,7 @@ void fused_experts_int8_kernel_impl<at::BFloat16>(
 
   // copy output: float -> bf16
   {
-    // tensor shapes
-    // - out:    [M, K], float, row major
-    // - y:      [M, K], bf16, row major
+    // tensor shapes - out: [M, K], float, row major - y: [M, K], bf16, row major
     const int64_t grain = kL1Size / (K * sizeof(float));
     at::parallel_for(0, M, grain, [&](int64_t begin, int64_t end) {
       const float* out_ptr = out + begin * K;
@@ -218,13 +197,8 @@ void fused_experts_int8_kernel_impl<at::BFloat16>(
 
 }  // anonymous namespace
 
-// hidden_states: [M, K]
-// w13: [E, 2N, K]
-// w2: [E, K, N]
-// topk_weights: [M, topk]
-// topk_ids: [M, topk] (int32_t)
-// w13_scale: [E, 2N]
-// w2_scale: [E, K]
+// hidden_states: [M, K] w13: [E, 2N, K] w2: [E, K, N] topk_weights: [M, topk]
+// topk_ids: [M, topk] (int32_t) w13_scale: [E, 2N] w2_scale: [E, K]
 at::Tensor fused_experts_cpu(
     at::Tensor& hidden_states,
     at::Tensor& w13,

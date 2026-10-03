@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Integration tests for the process-local in-memory backend.
@@ -165,8 +165,7 @@ itest!(duplicate_report_is_idempotent, b, {
 });
 
 itest!(identical_batch_replay_is_idempotent, b, {
-    // Stores, removes, then stores the same hash again; the net state is
-    // "stored". Re-delivering the identical batch must not change it.
+    // Stores, removes, then stores the same hash again; the net state is "stored".
     let batch = apply_req(
         "w1",
         "a",
@@ -186,8 +185,7 @@ itest!(identical_batch_replay_is_idempotent, b, {
 });
 
 itest!(recomputed_full_node_restores_hbm_placement, b, {
-    // HiRadixCache lifecycle for an exact-match recomputation:
-    // BlockStored(GPU) -> BlockRemoved(GPU) -> BlockStored(GPU).
+    // HiRadixCache lifecycle for an exact-match recomputation: BlockStored(GPU) -> BlockRemoved(GPU).
     b.apply_external_kv_batch(apply_req(
         "w1",
         "a",
@@ -220,8 +218,7 @@ itest!(recomputed_full_node_restores_hbm_placement, b, {
 });
 
 itest!(recomputed_split_reports_only_materialized_hashes, b, {
-    // An evicted [prefix -> old suffix] is partially recomputed as
-    // [prefix -> new suffix]. The old suffix must remain absent.
+    // An evicted [prefix -> old suffix] is partially recomputed as [prefix -> new suffix].
     b.apply_external_kv_batch(apply_req(
         "w1",
         "a",
@@ -260,8 +257,7 @@ itest!(recomputed_split_reports_only_materialized_hashes, b, {
 });
 
 itest!(recomputed_batch_replay_keeps_cpu_copy, b, {
-    // Re-materializing on GPU must not revoke the existing host backup, and
-    // re-delivering the same batch must leave both tiers unchanged.
+    // Re-materializing on GPU must not revoke the existing host backup.
     b.apply_external_kv_batch(apply_req(
         "w1",
         "a",
@@ -420,9 +416,7 @@ itest!(
 );
 
 itest!(full_revoke_drops_hit_key, b, {
-    // Report a block, count a hit (creates the co-located :h key), then fully
-    // revoke it. The hit key must go with the placement, or a
-    // matched-then-evicted block leaks its counter forever.
+    // Report a block, count a hit (creates the co-located :h key), then fully revoke it.
     b.apply_external_kv_batch(apply_req(
         "w1",
         "a",
@@ -432,7 +426,6 @@ itest!(full_revoke_drops_hit_key, b, {
     .await
     .unwrap();
 
-    // Counting match creates the hit key with c=1.
     b.match_external_kv(match_req(&[1], true)).await.unwrap();
     let counts = b
         .get_external_kv_hit_counts(GetExternalKvHitCountsRequest { hashes: vec![1] })
@@ -467,8 +460,7 @@ itest!(full_revoke_drops_hit_key, b, {
 });
 
 itest!(partial_revoke_keeps_hit_key, b, {
-    // Block present at two tiers; count a hit, then revoke only one tier. Placement
-    // is still non-empty, so the hit key must survive (guard against over-deletion).
+    // Block present at tiers; count a hit, then revoke only one tier.
     b.apply_external_kv_batch(apply_req(
         "w1",
         "a",
@@ -532,16 +524,9 @@ itest!(batch_action_order_is_preserved, b, {
     assert!(tiers_for(&resp, "w1", 6).is_empty());
 });
 
-// --- prefix query: backend override vs. the trait's default implementation ---
-//
-// The trait default is the written semantics and the backend override is a read
-// optimization, so they must agree field-for-field on the parts that ARE the
-// contract (per-worker prefix set and best_prefix_blocks). `blocks_read` is
-// observability and legitimately differs, so it is not compared.
+// --- prefix query: backend override vs. the trait's default implementation --- The trait default is the written semantics.
 
-/// Delegates every RPC to an in-memory backend EXCEPT `match_external_kv_prefix`,
-/// which it leaves to the trait default — giving a reference answer computed from
-/// the same state the optimized path reads.
+/// Delegates every RPC to an in-memory backend EXCEPT `match_external_kv_prefix`, which it leaves to the trait default.
 struct DefaultViaMemory(Arc<InMemoryKvIndexerBackend>);
 
 #[tonic::async_trait]
@@ -622,8 +607,6 @@ async fn prefix_fast_path_matches_default_impl() {
     fast.apply_external_kv_batch(report("w-short", "10.0.0.2:1", 1, &[1, 2]))
         .await
         .unwrap();
-    // w-hole first learns the same chain, then loses block 2 while descendants
-    // remain placed: strict prefix must be 1.
     fast.apply_external_kv_batch(report("w-hole", "10.0.0.3:1", 1, &[1, 2, 3, 4]))
         .await
         .unwrap();
@@ -680,8 +663,6 @@ async fn prefix_fast_path_returns_worker_depths_with_uncached_suffix() {
         .await
         .unwrap();
 
-    // Blocks 4 and 5 are the newly appended turn and are not cached anywhere.
-    // They must cap the maximum prefix without disabling the known-prefix path.
     let query = [1, 2, 3, 4, 5];
     let fast_response = fast
         .match_external_kv_prefix(prefix_req(&query))
@@ -708,7 +689,6 @@ async fn prefix_fast_path_falls_back_on_existing_parent_conflict() {
     fast.apply_external_kv_batch(report("w1", "10.0.0.1:1", 1, &[1, 2]))
         .await
         .unwrap();
-    // Hash 9 is an independent root, not a child of hash 1.
     fast.apply_external_kv_batch(report("w1", "10.0.0.1:1", 2, &[9]))
         .await
         .unwrap();
@@ -757,7 +737,6 @@ async fn prefix_max_blocks_caps_the_scan() {
         })
         .await
         .unwrap();
-    // Capped at 2 even though the worker holds all four.
     assert_eq!(resp.best_prefix_blocks, 2);
     assert_eq!(resp.blocks_read, 2);
     assert_eq!(resp.matches.len(), 1);
@@ -945,8 +924,6 @@ fn apply_with_spec(
 async fn component_prefix_matches_default_impl() {
     let (fast, reference) = shared_state_pair();
 
-    // Four full blocks (50 tokens each); swa present on all but the 4th, so the
-    // largest boundary with an unbroken 100-token swa window is 3.
     let report = component_report(
         hbm(),
         &[1, 2, 3, 4],
@@ -1005,7 +982,6 @@ async fn partial_eviction_replace_shrinks_component_set() {
     ))
     .await
     .unwrap();
-    // Both blocks reusable (window 100 met by 2x80 tokens; head rule also holds).
     let before = b
         .match_external_kv_prefix(prefix_req(&[1, 2]))
         .await
@@ -1028,8 +1004,6 @@ async fn partial_eviction_replace_shrinks_component_set() {
     ))
     .await
     .unwrap();
-    // That block has no swa now, and its trailing window (only 80 < 100) is not
-    // headed, so the largest valid boundary drops to 1.
     let after = b
         .match_external_kv_prefix(prefix_req(&[1, 2]))
         .await
@@ -1092,9 +1066,7 @@ async fn duplicate_hash_in_one_report_keeps_last_snapshot() {
     ))
     .await
     .unwrap();
-    // The hash ends as full-only (last snapshot); with swa required and a lone 80-token
-    // block that is not a full head window, the boundary requiring swa fails,
-    // so no reusable prefix.
+    // The hash ends as full-only (last snapshot); with swa required and a lone 80-token block that is not a full head window.
     let resp = b.match_external_kv_prefix(prefix_req(&[1])).await.unwrap();
     assert_eq!(resp.best_prefix_blocks, 0);
 }
@@ -1125,9 +1097,8 @@ async fn absent_spec_batch_clears_stored_spec() {
         1
     );
 
-    // A later batch with NO spec (worker reverted to legacy) must clear the old
-    // spec. The still-component-aware placement can then no longer be interpreted
-    // (component data but no spec) -> fail closed, never scored on stale rules.
+    // A later batch with NO spec (worker reverted to legacy) must clear the
+    // spec.
     b.apply_external_kv_batch(apply_req(
         "w1",
         "10.0.0.1:1",

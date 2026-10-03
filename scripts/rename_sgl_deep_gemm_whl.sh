@@ -1,15 +1,5 @@
 #!/usr/bin/env bash
-# Rename a freshly-built sgl-deep-gemm wheel so its filename, METADATA Version,
-# and WHEEL platform tag carry the +cuXXX local version and manylinux2014_<arch>
-# tag expected by the sgl-whl index and PyPI upload step.
-#
-# Input:  dist/sgl_deep_gemm-<VERSION>-py3-none-any.whl
-# Output: dist/sgl_deep_gemm-<VERSION>+<CU_TAG>-py3-none-manylinux2014_<ARCH>.whl
-#
-# Usage: rename_wheels.sh <WHEEL_DIR> <CU_TAG> <ARCH>
-#   WHEEL_DIR: directory containing the *.whl file (e.g. DeepGEMM/dist)
-#   CU_TAG:    cu130
-#   ARCH:      x86_64 | aarch64
+# Rename a freshly-built sgl-deep-gemm wheel so its filename, METADATA Version.
 set -ex
 
 if [ $# -lt 3 ]; then

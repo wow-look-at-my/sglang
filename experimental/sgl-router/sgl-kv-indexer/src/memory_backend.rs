@@ -1,11 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Process-local storage backend for the KV Indexer.
-//!
-//! The complete placement view lives behind one [`RwLock`], making an apply batch
-//! atomic and every query a consistent snapshot. The state is soft: not shared
-//! with another server, and lost when the process exits.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -32,16 +28,14 @@ enum ParentLink {
 
 #[derive(Debug, Default)]
 struct BlockRecord {
-    /// Chain relationship reported by the worker. Prefix-derived state is valid
-    /// only along links rooted at `Root`.
+    /// Chain relationship reported by the worker. Prefix-derived state is valid only along links rooted at `Root`.
     parent: ParentLink,
     children: HashSet<i64>,
     /// Shared block token count. A zero value means legacy/unspecified.
     token_count: u32,
     /// Resident component snapshot for each `(worker, tier)`.
     placements: HashMap<(String, i32), u32>,
-    /// Workers for which the root-to-this-block prefix is complete and this
-    /// boundary is servable by the Legacy/FULL-only fast path.
+    /// Workers for which the root-to-this-block prefix is complete and this boundary is servable.
     prefix_complete_workers: HashSet<String>,
 }
 
@@ -51,8 +45,7 @@ struct WorkerRecord {
     spec: Option<WorkerCacheSpec>,
     /// Reverse index used by CLEAR_ALL_AT_TIER.
     holdings: HashMap<i32, HashSet<i64>>,
-    /// Number of non-legacy component placements. A spec-less worker can use
-    /// the derived fast path only while this is zero.
+    /// Number of non-legacy component placements.
     component_placement_count: usize,
 }
 
@@ -130,7 +123,6 @@ impl InMemoryKvIndexerBackend {
         let mut reported_chains = Vec::new();
         let mut revoked_hashes = Vec::new();
         // Only a fast-path worker identity change requires a full recompute.
-        // REPORT, REVOKE, and CLEAR enqueue their affected hashes directly.
         let mut recompute_from_graph_roots = false;
         for action in req.actions {
             match ExternalKvActionType::try_from(action.r#type) {
@@ -163,7 +155,7 @@ impl InMemoryKvIndexerBackend {
                             old_mask,
                             Some(mask),
                         );
-                        // A legacy report carries no size, so 0 means
+                        // A legacy report carries no size, so means
                         // "unknown" and must not erase a known count.
                         if token_count > 0 {
                             state.blocks.entry(hash).or_default().token_count = token_count;
@@ -278,8 +270,7 @@ impl InMemoryKvIndexerBackend {
         hashes: &[i64],
         with_blocks: bool,
     ) -> (Vec<WorkerView>, Vec<i64>) {
-        // Keyed by a borrow of the stored worker id, so it is copied once per
-        // worker in the result rather than once per scanned placement.
+        // Keyed by a borrow of the stored worker id.
         let mut worker_order: Vec<&str> = Vec::new();
         let mut by_worker: HashMap<&str, WorkerView> = HashMap::new();
         let mut matched_hashes = Vec::new();
@@ -356,10 +347,7 @@ impl InMemoryKvIndexerBackend {
             return Ok(MatchExternalKvPrefixResponse::default());
         }
 
-        // Only workers holding block zero can own a non-empty prefix, so the
-        // candidate set is fixed up front and each candidate reuses one scanner and
-        // one block view. Allocation is O(first-block holders) whatever the request
-        // length, which is why there is no scan cap: length costs time, not memory.
+        // Only workers holding block zero can own a non-empty prefix.
         let state = self.read_state()?;
         let Some(first) = state
             .blocks
@@ -517,9 +505,7 @@ fn tier_in_mask(mask: u32, tier: i32) -> bool {
 
 fn block_servable(state: &State, hash: i64, worker_id: &str, kind: FastPathKind) -> bool {
     match kind {
-        // A globally component-free legacy worker only needs membership, which
-        // its reverse holdings index answers without scanning every other
-        // worker placed on this popular block.
+        // A globally component-free legacy worker only needs membership.
         FastPathKind::Legacy => state.workers.get(worker_id).is_some_and(|worker| {
             worker
                 .holdings

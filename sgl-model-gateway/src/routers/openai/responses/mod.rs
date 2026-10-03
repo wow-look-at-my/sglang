@@ -1,11 +1,4 @@
-//! OpenAI-compatible responses handling module
-//!
-//! This module provides comprehensive support for OpenAI Responses API with:
-//! - Streaming and non-streaming response handling
-//! - MCP (Model Context Protocol) tool interception and execution
-//! - SSE (Server-Sent Events) parsing and forwarding
-//! - Response accumulation for persistence
-//! - Tool call detection and output index remapping
+//! OpenAI-compatible responses handling.
 
 mod accumulator;
 mod common;

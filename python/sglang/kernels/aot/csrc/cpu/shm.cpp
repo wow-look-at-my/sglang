@@ -21,8 +21,7 @@ enum coll_state {
   coll_begin = 0,
   coll_allreduce_naive__copy_in_done,
   coll_allreduce_naive__reduce_done,
-  // alternative state when allreduce is working on alternative buffer
-  // of the double buffer.
+  // alternative state when allreduce is working on alternative buffer of the double buffer.
   coll_alt1_allreduce_naive__copy_in_done,
   coll_alt2_allreduce_naive__copy_in_done,
   coll_alt1_allreduce_naive__reduce_done,
@@ -53,8 +52,7 @@ void shared_open(SharedData* data, const char* name, size_t nbytes) {
     data->nbytes = nbytes;
   } else {
     if (errno != ENOENT) {
-      // don't print if shm can not be found because we want to loop over from
-      // caller again until the other ranks created the shm
+      // don't print if shm can not be found because we want to loop over from caller again.
       printf("shared_open %s failed, errno=%d\n", name, errno);
     }
     data->descriptor = -1;
@@ -75,22 +73,14 @@ void shared_create(SharedData* data, const char* name, void* bytes, size_t nbyte
 
 static int world_size;
 
-// SHM based allreduce helper functions
-// buffer that holds shm name
+// SHM based allreduce helper functions buffer that holds shm name
 #define NAME_BUF_SIZE 1000
 #define MAX_BUF_SIZE 1048576 * 32
 #define NAIVE_ALLREDUCE_THRESHOLD 1048576
 #define SHM_BUFFER_NAME "deepspeed_allreduce_buffer"
 struct allreduce_workspace {
   enum coll_state states[5];  // idx=0 -- state for symmetric_naive_all_reduce
-                              // idx=1 -- state for distributed_naive_all_reduce
-                              // idx=2 -- state for all_gather
-                              // idx=3 -- state for all_gather_into_tensor
-                              // idx=4 -- state for reduce_scatter
-  // double buffer to avoid syncing between rounds
-  // offset=0 -- 2*NAIVE_ALLREDUCE_THRESHOLD : buffer for
-  // symmetric_naive_all_reduce after that : buffer for
-  // distributed_naive_all_reduce
+                              // idx=1 -- state for distributed_naive_all_reduce idx=2 -- state for all_gather idx=3 -- state for all_gather_into_tensor idx=4 -- state.
   char buffer
       [2 * NAIVE_ALLREDUCE_THRESHOLD +  // symmetric allreduce
        2 * MAX_BUF_SIZE +               // distributed naive reduce
@@ -251,7 +241,6 @@ void symmetric_naive_all_reduce(char* data_ptr, c10::ScalarType scalar_type, siz
   static int current_buffer = 0;
   static int state_idx = 0;
 
-  // init states to case 0 to get rid of "maybe-uninitialized" warning.
   enum coll_state copy_current = coll_allreduce_naive__copy_in_done;
   enum coll_state copy_next = coll_alt1_allreduce_naive__copy_in_done;
 
@@ -284,8 +273,7 @@ void symmetric_naive_all_reduce(char* data_ptr, c10::ScalarType scalar_type, siz
     }
   }
 
-  // each rank reduce the buffer independently so therre is no need for
-  // synchronization afterward
+  // each rank reduce the buffer independently so therre is no need for synchronization afterward
   reduce_all_buffers(0, chunk_el, scalar_type, world_rank, data_ptr, symmetric_buffer[current_buffer]);
 
   // switch buffer
@@ -298,13 +286,12 @@ void distributed_naive_reduce(char* data_ptr, c10::ScalarType scalar_type, size_
   static int current_buffer = 0;
   static int state_idx = 0;
 
-  // init states to case 0 to get rid of "maybe-uninitialized" warning.
   enum coll_state copy_current = coll_allreduce_naive__copy_in_done;
   enum coll_state reduce_current = coll_allreduce_naive__reduce_done;
   enum coll_state copy_next = coll_alt1_allreduce_naive__copy_in_done;
 
-  // similar to symmetric_naive_allreduce, but here we only need two sets of
-  // states, because distributed naive reduce has two barriers in the algorithm
+  // similar to symmetric_naive_allreduce, but here we only need sets of
+  // states, because distributed naive reduce has barriers in the algorithm
   switch (state_idx) {
     case 0:
       copy_current = coll_allreduce_naive__copy_in_done;
@@ -387,7 +374,6 @@ void naive_all_gather(char* result_ptr, char* data_ptr, size_t res_stride, size_
         "Unsupported STATE_GROUP");
   }
 
-  // init states to case 0 to get rid of "maybe-uninitialized" warning.
   enum coll_state copy_current = coll_allgather_naive__copy_in_done;
   enum coll_state copy_next = coll_alt1_allgather_naive__copy_in_done;
 
@@ -482,17 +468,14 @@ void naive_reduce_scatter(
   }
   state_idx = (state_idx + 1) % 3;
 
-  // Step 1: copy local data to shared buffer
   parallel_memcpy(reduce_scatter_buffer[current_buffer][world_rank], data_ptr, chunk_size);
   std::atomic_thread_fence(std::memory_order_release);
   workspace[world_rank]->states[state_group] = copy_current;
 
-  // Step 2: wait for all ranks to copy in
   for (int i = 0; i < world_size; i++) {
     if (i != world_rank) wait_buffer_state_until_2(i, copy_current, copy_next, state_group);
   }
 
-  // // Step 3: do local reduce on this rank’s slice only
   int start_el = slice_el_start(chunk_el, world_rank);
   // each rank reduce its slice of buffer independently so therre is no need for
   // synchronization afterward

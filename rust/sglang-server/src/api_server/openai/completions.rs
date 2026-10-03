@@ -55,8 +55,7 @@ pub(super) struct SubmittedChoice {
 #[derive(Debug, Default)]
 pub(super) struct ChoiceExtensions {
     matched_stop: Option<serde_json::Value>,
-    /// Dynamo's enum covers the standard values. Python additionally exposes
-    /// `abort`; unrecognized scheduler finish types are preserved as well.
+    /// Dynamo's enum covers the standard values.
     finish_reason_override: Option<String>,
 }
 
@@ -235,10 +234,7 @@ async fn completions(
     }
 }
 
-/// Decode a token-id prompt back to text for `echo=true`, via a
-/// `RequestKind::Detokenize` request through the regular submit path — the
-/// detok stage answers it with a single `Data` payload (the raw UTF-8 text),
-/// or an `Error` (e.g. out-of-range ids → `Validation` → 400).
+/// Decode a token-id prompt back to text for `echo=true`.
 async fn decode_prompt_echo(state: &AppState, token_ids: TokenIds) -> Result<String, Response> {
     let Ok((_rid, mut rx)) = submit(state, RequestKind::Detokenize { token_ids }, false).await
     else {
@@ -345,8 +341,7 @@ fn completion_sampling_params(request: &CreateCompletionRequest) -> Result<Sampl
         top_p: request.top_p.unwrap_or(1.0) as f64,
         frequency_penalty: request.frequency_penalty.unwrap_or(0.0) as f64,
         presence_penalty: request.presence_penalty.unwrap_or(0.0) as f64,
-        // OpenAI `n` is implemented by fan-out: every native request has one
-        // output, avoiding the native path's intentional `n > 1` rejection.
+        // OpenAI `n` is implemented by fan-out: every native request has one output.
         n: 1,
         logit_bias: (!logit_bias.is_empty()).then_some(logit_bias),
         sampling_seed: request.seed,
@@ -363,9 +358,7 @@ pub(super) async fn unary_completion(
     echo: bool,
     want_logprobs: bool,
 ) -> Response {
-    // Every request is already submitted, so draining in choice order does not
-    // serialize generation. The non-streaming native path sends one terminal
-    // result, and the accumulator also tolerates intermediate frames.
+    // Every request is already submitted, so draining in choice order does not serialize generation.
     let mut choices = Vec::with_capacity(submitted.len());
     let mut extensions = Vec::with_capacity(submitted.len());
     let mut prompt_tokens = BTreeMap::<usize, u32>::new();
@@ -444,8 +437,7 @@ fn completion_choice(
         .map(|matched| match matched {
             Matched::Token(id) => serde_json::json!(id),
             Matched::Str(value) => serde_json::json!(value),
-            // Python's OpenAI schema supports an integer or string here, not a
-            // multi-token list. Preserve the original token IDs.
+            // Python's OpenAI schema supports an integer or string here, not a multi-token list.
             Matched::Tokens(ids) => serde_json::json!(ids),
         });
     (
@@ -692,8 +684,7 @@ fn append_selected_logprobs(result: &mut Logprobs, values: &[f32], ids: &[i32], 
         result
             .token_logprobs
             .push((!value.is_nan()).then_some(value));
-        // Dynamo's field is `u32`; Python's `-1` sentinel is applied once at
-        // final wire shaping in `completion_response_value`.
+        // Dynamo's field is `u32`; Python's `-1` sentinel is applied once at final wire shaping.
         result.text_offset.push(0);
     }
 }

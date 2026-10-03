@@ -1,14 +1,12 @@
 # OCR Accuracy Benchmark
 
-Evaluates `deepseek-ai/DeepSeek-OCR-2` (and any compatible OCR VLM) on
-**olmOCR-bench** (AllenAI), the benchmark explicitly used in DeepSeek-OCR-2
-official evaluations.
+Evaluates `deepseek-ai/DeepSeek-OCR-2` (and any compatible OCR VLM) on **olmOCR-bench** (AllenAI), the benchmark explicitly used in DeepSeek-OCR-2 official evaluations.
 
 Targets **olmOCR-bench** because:
 - Public HuggingFace dataset with 7,010 deterministic unit tests
 - Explicitly cited by DeepSeek-OCR-2 authors
 - Clear pass/fail semantics — no heavy CDM/TEDS/LaTeXML dependencies
-- Covers 7 challenging document types across 1,403 PDF pages
+- Covers challenging document types across 1,403 PDF pages
 
 ---
 
@@ -119,7 +117,7 @@ python -m benchmark.ocr.bench_sglang --port 30000 --split multi_column --save-ra
 
 ## Reference Scores
 
-Column order matches the [olmOCR README](https://github.com/allenai/olmocr): AR = arxiv_math, OSM = old_scans_math, TA = table_tests, OS = old_scans, HF = headers_footers, MC = multi_column, LTT = long_tiny_text, Base = baseline.
+Column order matches the [olmOCR README](https://github.com/allenai/olmocr). AR = arxiv_math, OSM = old_scans_math, TA = table_tests, OS = old_scans, HF = headers_footers, MC = multi_column, LTT = long_tiny_text, Base = baseline.
 
 | Model | AR | OSM | TA | OS | HF | MC | LTT | Base | **Overall** |
 |-------|:--:|:---:|:--:|:--:|:--:|:--:|:---:|:----:|:-----------:|
@@ -133,7 +131,7 @@ Column order matches the [olmOCR README](https://github.com/allenai/olmocr): AR 
 
 \* = scores reported by model authors, not reproduced by olmOCR team.
 
-DeepSeek-OCR-2 per-split scores for OS/HF/MC/LTT are not officially reported; only the three highlighted splits and overall appear on the [HuggingFace model card](https://huggingface.co/deepseek-ai/DeepSeek-OCR-2).
+DeepSeek-OCR-2 per-split scores for OS/HF/MC/LTT are not officially reported. Only the highlighted splits and overall appear on the [HuggingFace model card](https://huggingface.co/deepseek-ai/DeepSeek-OCR-2).
 
 > **Note on math scores**: This benchmark uses token-overlap matching (≥70% threshold) rather than the official KaTeX rendering + Playwright bounding-box comparison. Scores on `arxiv_math` and `old_scans_math` will therefore differ from the official leaderboard.
 

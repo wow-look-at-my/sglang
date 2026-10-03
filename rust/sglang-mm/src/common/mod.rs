@@ -7,12 +7,7 @@ pub mod transforms;
 #[cfg(feature = "parallel")]
 use std::sync::OnceLock;
 
-/// CPU pool: decode, resize, patchify, hash. Sized to cores (capped at 8)
-/// because the work is compute-bound — never run blocking I/O on it, or one
-/// request's remote fetches stall every other request's preprocessing.
-///
-/// Only exists under the `parallel` feature; reach it through [`par`], never
-/// directly, so the rayon-less build stays compiling.
+/// CPU pool: decode, resize, patchify, hash.
 #[cfg(feature = "parallel")]
 pub fn pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
@@ -30,10 +25,8 @@ pub fn pool() -> &'static rayon::ThreadPool {
     })
 }
 
-/// Content hash for cache/dedup identity: blake3 truncated to its first 8
-/// bytes, big-endian. Deliberately *not* Python's `mm_utils.data_hash` (which
-/// is SHA-256 truncated the same way) — hashes are consistent within a path,
-/// never comparable across the Rust and Python paths.
+/// Content hash for cache/dedup identity: blake3 truncated to its first
+/// several bytes, big-endian.
 pub fn content_hash_u64(data: &[u8]) -> u64 {
     let digest = blake3::hash(data);
     u64::from_be_bytes(digest.as_bytes()[..8].try_into().unwrap())
@@ -43,8 +36,7 @@ pub fn decode_rgb(data: &[u8]) -> Result<(Vec<u8>, usize, usize), String> {
     use image::ColorType;
 
     let img = image::load_from_memory(data).map_err(|e| format!("image decode: {e}"))?;
-    // >8-bit samples: PIL clips to 255 where `to_rgb8` would rescale. Refuse
-    // rather than silently diverge from the Python (PIL) pipeline.
+    // Refuse rather than silently diverge from the Python (PIL) pipeline.
     if !matches!(
         img.color(),
         ColorType::L8 | ColorType::La8 | ColorType::Rgb8 | ColorType::Rgba8
@@ -80,9 +72,7 @@ mod python {
 
     use super::{decode_rgb, resize};
 
-    /// `resample` names the implementation to reproduce: `"pil_lanczos"` (the
-    /// inkling default), `"pil_bicubic"`, or `"aten_u8"` (torchvision's uint8
-    /// antialias bicubic). Exposed so the bit-exactness tests can cover each.
+    /// `resample` names the implementation to reproduce: `"pil_lanczos"` (the inkling default), `"pil_bicubic"`.
     #[pyfunction]
     #[pyo3(signature = (arr, out_w, out_h, resample="pil_lanczos"))]
     pub fn resize_rgb<'py>(
@@ -143,8 +133,7 @@ mod python {
         Ok((h, w, rgb.into_pyarray(py)))
     }
 
-    /// Named `content_hash`, not `data_hash`, so it is not mistaken for
-    /// `sglang.srt.managers.mm_utils.data_hash` (SHA-256); this is blake3.
+    /// Named `content_hash`, not `data_hash`, so it is not mistaken for `sglang.srt.managers.mm_utils.data_hash` (SHA-256).
     #[pyfunction]
     pub fn content_hash(py: Python<'_>, data: Vec<u8>) -> u64 {
         py.detach(move || super::content_hash_u64(&data))
@@ -214,7 +203,7 @@ mod tests {
         }
     }
 
-    /// Samples deeper than 8 bits stay rejected (PIL clips; we refuse).
+    /// Samples deeper than bits stay rejected (PIL clips; we refuse).
     #[test]
     fn deep_png_rejected() {
         let img = image::DynamicImage::ImageRgb16(image::ImageBuffer::from_pixel(

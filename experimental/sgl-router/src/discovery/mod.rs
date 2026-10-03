@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod k8s;
@@ -10,15 +10,13 @@ use crate::config::{Config, DiscoveryBackend};
 use anyhow::Result;
 use tokio::sync::mpsc;
 
-/// Channel capacity for discovery → registry events.  Bounded to 128 —
-/// pod-add/remove is infrequent, but a bound prevents unbounded memory
-/// growth under any pathological burst.
+/// Channel capacity for discovery → registry events.
 pub const DISCOVERY_CHANNEL_CAP: usize = 128;
 
 /// Spawn the configured discovery backend.
 ///
 /// Returns the consumer end of the event channel and a [`tokio::task::JoinHandle`]
-/// for the producer task.  The static_urls backend's task exits once the
+/// for the producer task.
 /// initial fan-out completes; the k8s backend's task runs for the lifetime
 /// of the watch.
 pub async fn spawn_discovery(

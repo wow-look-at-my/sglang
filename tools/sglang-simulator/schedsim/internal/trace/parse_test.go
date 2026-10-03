@@ -52,9 +52,9 @@ func TestParseKeepsPrefillAndDecodeApart(t *testing.T) {
 	}
 }
 
-// The log must really contain the ~426K-token pending prefill the collapse was
-// reported against, and the cold stretch must be the isolated one the operator
-// described: full chunks, no cache reuse, nothing else on the GPU.
+// The log must contain the ~426K-token pending prefill the collapse was
+// reported against, and the cold stretch must be the isolated one the
+// operator described: full chunks, no cache reuse, nothing else on the GPU.
 func TestColdPrefillIsTheReportedOne(t *testing.T) {
 	steps := mustParse(t)
 	m := Summarize(steps, 4096)
@@ -130,8 +130,6 @@ func TestDecodeLineIntervalBoundsTheWindow(t *testing.T) {
 	if normal <= bound {
 		t.Fatalf("normal decode over the window (%.0f steps) should far exceed the no-line bound (%v)", normal, bound)
 	}
-	// The claimed 8-20 tok/s band must be shown impossible from these lines,
-	// which is the honest reason it is not reproduced.
 	if lo := m.GenRateForSteps(MaxDecodeStepsInColdWindow()); lo >= 8 {
 		t.Fatalf("log permits %.1f tok/s in the window, which would reach the reported 8-20 band", lo)
 	}

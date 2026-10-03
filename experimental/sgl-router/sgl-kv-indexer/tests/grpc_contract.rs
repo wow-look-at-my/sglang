@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! gRPC contract tests: exercise all four RPCs of the `KVIndexer` service
-//! over the wire (real tonic server + client), not just the backend trait.
+//! gRPC contract tests: exercise all RPCs of the `KVIndexer` service over the wire (real tonic server + client).
 
 #[path = "common/id.rs"]
 mod test_id;
@@ -434,7 +433,6 @@ async fn match_prefix_over_grpc() {
 
     assert_eq!(resp.best_prefix_blocks, 3);
     assert_eq!(resp.blocks_read, 3);
-    // Descending by prefix length: long (3) before short (1).
     assert_eq!(resp.matches.len(), 2);
     assert_eq!(resp.matches[0].worker_id, w_long);
     assert_eq!(resp.matches[0].matched_prefix_blocks, 3);
@@ -512,9 +510,7 @@ async fn packed_signed_hash_query_can_exceed_tonics_default_receive_limit() {
     assert_eq!(response.best_prefix_blocks, 1);
 }
 
-/// Past the configured ceiling the server must answer OUT_OF_RANGE, because that
-/// is the code the router maps to a degraded (cache-affinity-free) route rather
-/// than to a failed request. A different code there would fail the request.
+/// Past the configured ceiling the server must answer OUT_OF_RANGE.
 #[tokio::test]
 async fn query_past_the_configured_limit_is_refused_as_out_of_range() {
     let hash_count = MAX_GRPC_DECODING_MESSAGE_SIZE / std::mem::size_of::<i64>() + 1_024;
@@ -577,8 +573,7 @@ async fn start_recording_deadlines(
     (index, seen)
 }
 
-/// The router-facing client must publish its deadline on the wire: that header is
-/// the only thing letting the indexer shed a query whose caller gave up.
+/// The router-facing client must publish its deadline on the wire.
 #[tokio::test]
 async fn router_client_publishes_its_deadline_on_the_wire() {
     let (index, seen) = start_recording_deadlines(Duration::from_secs(2)).await;
@@ -595,9 +590,7 @@ async fn router_client_publishes_its_deadline_on_the_wire() {
         "exactly one query reached the server: {seen:?}"
     );
     let raw = &seen[0];
-    // Asserted structurally, not byte-for-byte: the wire spec lets the sender
-    // pick any unit that fits, so pinning tonic's choice would fail on a
-    // change that is still correct.
+    // Asserted structurally, not byte-for-byte: the wire spec lets the sender pick any unit that fits.
     let (digits, unit) = raw.split_at(raw.len() - 1);
     assert!(
         matches!(unit, "H" | "M" | "S" | "m" | "u" | "n"),

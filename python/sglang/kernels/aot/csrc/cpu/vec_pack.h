@@ -45,7 +45,6 @@ inline void mm512_load_vec(
   dst = (__m512i)_mm512_cvtne2ps_pbh(_mm512_mul_ps(f_hi, s), _mm512_mul_ps(f_lo, s));
 }
 
-// key: from [N, 32] to [32/2, N, 2]
 template <typename scalar_t, typename packed_t, typename index_t>
 inline void pack_vnni_Nx32(
     scalar_t* __restrict__ dst,
@@ -108,7 +107,6 @@ inline void pack_vnni_N_remainder(
   }
 }
 
-// value: from [K, 32] to [K/2, 32, 2]
 template <typename scalar_t, typename packed_t, typename index_t>
 inline void pack_vnni_Kx32(
     scalar_t* __restrict__ dst,
@@ -168,7 +166,6 @@ inline void pack_vnni_K_remainder(
     const __mmask16 vmask2 = (1 << N) - 1;
     _mm512_mask_storeu_epi32(dst + 0 * ld_dst * 2, vmask2, d0);
   } else {
-    // 2(N-16) * 16bits: (N-16) * 32bits
     const __mmask16 vmask2 = (1 << (N - 16)) - 1;
     _mm512_storeu_epi32(dst + 0 * ld_dst * 2, d0);
     _mm512_mask_storeu_epi32(dst + 0 * ld_dst * 2 + 32, vmask2, d1);
@@ -176,8 +173,6 @@ inline void pack_vnni_K_remainder(
 }
 #endif
 
-// convert to vnni format
-// from [N, K/2, 2] to [K/2, N, 2] for bfloat16 and float16
 template <typename scalar_t, typename packed_t, typename index_t, bool is_indexed>
 void pack_vnni(
     scalar_t* __restrict__ dst,
@@ -263,7 +258,7 @@ void pack_vnni(
 }
 
 // convert to vnni format
-// from [K/2, 2, N] to [K/2, N, 2] for bfloat16 and float16
+// from [K/2,, N] to [K/2, N, ] for bfloat16 and float16
 template <typename scalar_t, typename packed_t, typename index_t, bool is_indexed>
 void pack_vnni2(
     scalar_t* __restrict__ dst,

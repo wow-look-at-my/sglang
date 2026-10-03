@@ -7,8 +7,7 @@ export const config = {
   modelName: "Inkling",
 
   // Full platform list. Verified end-to-end: B200, B300, GB300, H200, and AMD
-  // (MI350X / MI355X). The remaining cells (GB200, B200 BF16 multi-node) are
-  // same-arch extrapolations and stay unverified until re-checked.
+  // (MI350X / MI355X).
   supportedHardware: [
     "h200", "b200", "b300", "gb200", "gb300",
     "mi350x", "mi355x",
@@ -35,9 +34,7 @@ export const config = {
   ],
 
   // Eval set rendered in the benchmark card, keyed to per-cell `accuracy` in
-  // inkling-benchmarks.jsx. All measured at reasoning_effort `max` (0.99).
-  // AIME25 = pass@1 averaged over 8 repeats; NIAH = single-needle retrieval at
-  // that context length; HLE = self-judged on the text-only subset.
+  // inkling-benchmarks.jsx.
   accuracyLabels: [
     ["bfcl_pct",      "BFCL (EXACT)",    "%"],
     ["mmau_pct",      "MMAU",            "%"],
@@ -72,9 +69,6 @@ export const config = {
 -H 'Content-Type: application/json' \\
 -d '{ "model": "{{MODEL_NAME}}", "messages": [{"role":"user","content":"Hello"}] }'`,
 
-  // NVIDIA: two multi-arch CUDA builds (dev-inkling-dspark for CUDA 13,
-  // dev-cu12-inkling-dspark for CUDA 12, a final build since that lane is
-  // retired) — pick by your CUDA version, not by GPU.
   // Panel defaults to cu13. AMD: dev-rocm720-mi35x-inkling-dspark (sglang-rocm repo).
   // All tiers ship from the same images, DSpark included.
   dockerImages: {
@@ -139,7 +133,8 @@ export const config = {
       ],
     },
 
-    // ----- Card: "Speculative Decoding" -----  Inkling ships an MTP draft head.
+    // ----- Card: "Speculative Decoding" ----- Inkling ships an MTP draft
+    // head.
     speculative: {
       options: [
         { id: "current", label: "Inherited from base" },
@@ -151,7 +146,8 @@ export const config = {
       ],
     },
 
-    // ----- Card: "PD Disaggregation" -----  NVIDIA only; Mooncake MNNVL env gated to GB200/GB300.
+    // ----- Card: "PD Disaggregation" ----- NVIDIA only; Mooncake MNNVL env
+    // gated to GB200/GB300.
     pdDisagg: {
       modes: [
         { id: "off",     label: "Off" },
@@ -168,7 +164,6 @@ export const config = {
           ],
           envWhen: { hw: ["gb200", "gb300"] } },
       ],
-      // Router fronting both roles; 8998 = prefill bootstrap port (default).
       router: {
         port: 30080,
         command:
@@ -182,7 +177,8 @@ export const config = {
       },
     },
 
-    // ----- Card: "Hierarchical KV Cache" -----  Native HiCache over the unified radix tree.
+    // ----- Card: "Hierarchical KV Cache" ----- Native HiCache over the
+    // unified radix tree.
     hicache: {
       backends: [
         { id: null,       label: "Auto" },
@@ -331,9 +327,8 @@ export const config = {
         "--port {{PORT}}",
       ],
     },
-    // AMD ROCm (MI350X / MI355X) + BF16 — verified, TP=8. `--moe-runner-backend`
-    // sits right after `--tp` so the Playground AITER override (re-inserted at
-    // that anchor) reproduces this command exactly.
+    // `--moe-runner-backend` sits right after `--tp` so the Playground AITER
+    // override (re-inserted at that anchor) reproduces this command exactly.
     {
       match: { hw: "mi350x", variant: "default", quant: "bf16", strategy: "balanced", nodes: "single" },
       verified: true,
@@ -658,10 +653,8 @@ export const config = {
     },
     // ====================================================================
     // DSpark (speculative decoding) — separate draft checkpoint
-    // (RadixArk/Inkling-DSpark-Preview, served unquantized) instead of Inkling's
-    // own MTP head. The draft weights sit outside the FP4 target, hence
-    // mem-fraction 0.68.
-    // B200 verified end-to-end.
+    // (RadixArk/Inkling-DSpark-Preview, served unquantized) instead of
+    // Inkling's own MTP head. B200 verified end-to-end.
     // ====================================================================
     {
       match: { hw: "b200", variant: "default", quant: "nvfp4", strategy: "dspark", nodes: "single" },
@@ -697,11 +690,9 @@ export const config = {
       ],
     },
 
-    // ====================================================================
-    // GB300 BF16 — 2x GB300 nodes (4 GPUs each) over MNNVL. The NCCL_MNNVL /
-    // NVLS / CUMEM envs are required: 2-node NCCL init hangs without them.
-    // MTP on BF16 requires the v3 MTP checkpoint + an SGLang revision with
-    // v3 MTP support.
+    // The NCCL_MNNVL / NVLS / CUMEM envs are required: 2-node NCCL init hangs
+    // without them. MTP on BF16 requires the v3 MTP checkpoint + an SGLang
+    // revision with v3 MTP support.
     // ====================================================================
     {
       match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "balanced", nodes: "multi-2" },
@@ -780,8 +771,6 @@ export const config = {
         "--moe-runner-backend flashinfer_trtllm_routed",
         "--enable-torch-symm-mem",
         "--mamba-radix-cache-strategy extra_buffer",
-        // BF16 weights are large on B300 — 0.85 caps the token pool near ~315k
-        // and rejects longer requests; 0.93 fits the full 1M context.
         "--mem-fraction-static 0.93",
         "--swa-full-tokens-ratio 0.1",
         "--mamba-full-memory-ratio 0.1",
@@ -805,8 +794,6 @@ export const config = {
         "--moe-runner-backend flashinfer_trtllm_routed",
         "--enable-torch-symm-mem",
         "--mamba-radix-cache-strategy extra_buffer",
-        // BF16 + MTP is tight on B300: 0.87 boots but caps the token pool near
-        // ~185k; 0.93 fits the full 1M context (matches the Balanced cell).
         "--mem-fraction-static 0.93",
         "--swa-full-tokens-ratio 0.1",
         "--mamba-full-memory-ratio 0.1",
@@ -874,10 +861,9 @@ export const config = {
       ],
     },
     // ====================================================================
-    // LoRA serving. Prefill CUDA graphs auto-disable under --enable-lora.
-    // Set MAX_LORAS to the number of distinct adapters served (1 is fastest
-    // for single-adapter serving). All cells except GB200 verified end-to-end
-    // (coherence + trainer-logprob parity + throughput).
+    // LoRA serving. Prefill CUDA graphs auto-disable under --enable-lora. All
+    // cells except GB200 verified end-to-end (coherence + trainer-logprob
+    // parity + throughput).
     // ====================================================================
     {
       match: { hw: "b200", variant: "lora", quant: "nvfp4", strategy: "balanced", nodes: "single" },

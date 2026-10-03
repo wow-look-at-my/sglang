@@ -28,11 +28,7 @@ use tracing_subscriber::{
 
 use super::events::get_module_path as events_module_path;
 
-/// Whether OpenTelemetry tracing is enabled.
-///
-/// This flag guards access to TRACER and PROVIDER. We use Release/Acquire
-/// ordering to ensure proper synchronization: writes to TRACER/PROVIDER
-/// happen-before the Release store, and Acquire loads happen-before reads.
+/// Whether OpenTelemetry tracing is enabled. This flag guards access to TRACER and PROVIDER.
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static TRACER: OnceLock<SdkTracer> = OnceLock::new();
 static PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
@@ -140,8 +136,7 @@ pub fn otel_tracing_init(enable: bool, otlp_endpoint: Option<&str>) -> Result<()
 
     global::set_tracer_provider(provider);
 
-    // Use Release ordering: all writes to TRACER/PROVIDER happen-before this store,
-    // so any thread that loads ENABLED with Acquire will see the initialized state.
+    // Use Release ordering: all writes to TRACER/PROVIDER happen-before this store.
     ENABLED.store(true, Ordering::Release);
 
     eprintln!("[tracing] OpenTelemetry initialized successfully");
@@ -170,9 +165,6 @@ where
 }
 
 /// Check if OpenTelemetry tracing is enabled.
-///
-/// Uses Acquire ordering to synchronize with the Release store in `otel_tracing_init`,
-/// ensuring that if this returns true, TRACER and PROVIDER are fully initialized.
 #[inline]
 pub fn is_otel_enabled() -> bool {
     ENABLED.load(Ordering::Acquire)
@@ -265,9 +257,6 @@ pub fn inject_trace_context_grpc(metadata: &mut MetadataMap) {
 }
 
 /// OpenTelemetry trace injector implementing the `smg_grpc_client::TraceInjector` trait.
-///
-/// This bridges sglang's OTel integration with the `smg-grpc-client` crate's
-/// trace injection interface, enabling distributed tracing across gRPC calls.
 #[derive(Clone, Default)]
 pub struct OtelTraceInjector;
 

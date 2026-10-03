@@ -1,17 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! End-to-end at the HTTP layer: the router tokenizes the prompt once at
-//! ingress and forwards the ids to the engine as `input_ids` (so the engine
-//! skips re-tokenizing the same prompt). Asserts the gating contract through
-//! the real chat handler + a MockWorker backend:
-//!
-//! * A plain text chat request on the engine-equivalent chat-formatter path →
-//!   the forwarded body carries `input_ids` AND retains `messages`.
-//! * A request carrying `tools` → `input_ids` omitted (the router's encoder
-//!   doesn't render tool schemas, so its ids would diverge from the engine).
-//! * A request with multimodal (array) content → `input_ids` omitted (a text
-//!   tokenizer can't represent image content).
+//! End-to-end at the HTTP layer: the router tokenizes the prompt once at ingress and forwards the ids to the engine as `input_ids`.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -125,9 +115,7 @@ async fn tool_request_omits_input_ids() {
 
 #[tokio::test]
 async fn thinking_request_omits_input_ids() {
-    // `chat_template_kwargs` steers engine-side thinking mode, which the
-    // router's encoder renders in the default mode only — forwarding ids would
-    // silently run the wrong mode, so the handler must omit them.
+    // `chat_template_kwargs` steers engine-side thinking mode, which the router's encoder renders in the default mode only.
     let mock = MockWorker::start(vec![]).await;
     let ctx = build_ctx(mock.url.clone());
     let status = send(
@@ -169,9 +157,7 @@ async fn multimodal_request_omits_input_ids() {
     );
 }
 
-/// Caller-supplied `input_ids` are never re-rendered or replaced: a flat u32
-/// array (empty included) drives routing, anything else yields no routing
-/// tokens, and the body reaches the engine byte-for-byte for validation.
+/// Caller-supplied `input_ids` are never re-rendered or replaced.
 #[tokio::test]
 async fn caller_input_ids_are_used_for_routing_and_preserved() {
     let mock = MockWorker::start(vec![]).await;

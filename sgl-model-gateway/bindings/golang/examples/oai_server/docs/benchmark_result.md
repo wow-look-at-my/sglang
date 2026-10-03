@@ -1,8 +1,4 @@
-/tmp/ShareGPT_V3_unfiltered_cleaned_split.json: 100%|████████████████████| 642M/642M [10:02<00:00, 1.12MB/s]
-#Input tokens: 50561
-#Output tokens: 25883
-Starting warmup with 5 sequences...
-Warmup completed with 5 sequences. Starting main benchmark run...
+/tmp/ShareGPT_V3_unfiltered_cleaned_split.json: 100%|████████████████████| 642M/642M [10:02<00:00, 1.12MB/s] #Input tokens: 50561 #Output tokens: 25883 Starting warmup with multiple sequences... Warmup completed with multiple sequences. Starting main benchmark run...
 
 ============ Serving Benchmark Result ============
 Backend:                                 sglang-oai-chat
@@ -80,10 +76,7 @@ Max ITL (ms):                            201.08
 
 
 ## golang
-#Input tokens: 50561
-#Output tokens: 25883
-Starting warmup with 5 sequences...
-Warmup completed with 5 sequences. Starting main benchmark run...
+#Input tokens: 50561 #Output tokens: 25883 Starting warmup with multiple sequences... Warmup completed with multiple sequences. Starting main benchmark run...
 
 ============ Serving Benchmark Result ============
 Backend:                                 sglang-oai-chat

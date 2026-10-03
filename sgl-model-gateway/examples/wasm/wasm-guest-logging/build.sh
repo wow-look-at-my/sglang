@@ -1,6 +1,5 @@
 #!/bin/bash
-# Build script for WASM guest logging example
-# This script simplifies the build process for the WASM middleware component
+# Build script for WASM guest logging example This script simplifies the build process for the WASM middleware component
 
 set -e
 

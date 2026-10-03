@@ -1,15 +1,15 @@
-// Single `export const popularModels` literal — no spreads/calls/IIFE (Mintlify
-// re-evals at hydration).
+// Single `export const popularModels` literal — no spreads/calls/IIFE
+// (Mintlify re-evals at hydration).
 //
-// Rotated by <PopularModels> (/src/snippets/_popular_models.jsx) on the docs home
-// (`variant="hero"`, uses each entry's `hero` block) and the Cookbook home
-// (compact strip, uses `name` / `badge` / `tags`). Both walk this list in order,
-// so an entry added here becomes a slide on both; an entry with no `hero` block
-// still rotates on the home page, just without a blurb.
+// Rotated by <PopularModels> (/src/snippets/_popular_models.jsx) on the docs
+// home (`variant="hero"`, uses each entry's `hero` block) and the Cookbook
+// home (compact strip, uses `name` / `badge` / `tags`). Both walk this list
+// in order, so an entry added here becomes a slide on both; an entry with no
+// `hero` block still rotates on the home page, without a blurb.
 //
-// Keep the copy to claims that hold on the linked page: platform counts from that
-// model's config `supportedHardware`, precisions from its `quantizations`, blurbs
-// paraphrasing that page's own opening.
+// Keep the copy to claims that hold on the linked page: platform counts from
+// that model's config `supportedHardware`, precisions from its
+// `quantizations`, blurbs paraphrasing that page's own opening.
 
 export const popularModels = [
   {

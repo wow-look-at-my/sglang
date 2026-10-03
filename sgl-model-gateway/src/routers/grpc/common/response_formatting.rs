@@ -1,8 +1,4 @@
-//! Shared response formatting logic
-//!
-//! This module contains common logic for formatting responses, including:
-//! - Usage calculation from gRPC responses
-//! - ChatCompletionResponse construction
+//! Shared response formatting logic This module contains common logic for formatting responses, including.
 
 use crate::{protocols::common::Usage, routers::grpc::proto_wrapper::ProtoGenerateComplete};
 

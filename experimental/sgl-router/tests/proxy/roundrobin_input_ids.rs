@@ -1,11 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `input_ids` forwarding is policy-independent: a load-only **round-robin**
-//! policy on a chat-formatter model still forwards `input_ids` to the engine
-//! (the engine-tokenization offload), even though it picks workers round-robin
-//! and ignores the tokens for routing. Tokenization is gated on the model's
-//! chat formatter at ingress, not on the policy.
+//! `input_ids` forwarding is policy-independent.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -28,8 +24,7 @@ use tower::ServiceExt;
 
 use crate::common::mock_worker::MockWorker;
 
-// deepseek-v4 id → the tokenizer registry auto-attaches the built-in V4 chat
-// encoder, so the model has an engine-equivalent encode path.
+// deepseek-v4 id → the tokenizer registry auto-attaches the built-in V4 chat encoder.
 const MODEL: &str = "deepseek-v4-tiny";
 
 fn config() -> Config {
@@ -68,8 +63,7 @@ fn build_ctx(url: String) -> Arc<AppContext> {
 }
 
 fn build_ctx_with_config(url: String, cfg: Config) -> Arc<AppContext> {
-    // The handler tokenizes via the AppContext's registry (which carries the V4
-    // encoder); the RoundRobin policy itself needs no tokenizer.
+    // The handler tokenizes via the AppContext's registry (which carries the V4 encoder).
     let tokenizers = Arc::new(TokenizerRegistry::load_from_config(&cfg).unwrap());
     assert!(tokenizers.has_chat_formatter(MODEL));
     let registry = Arc::new(WorkerRegistry::default());
@@ -151,8 +145,7 @@ fn captured(mock: &MockWorker) -> Value {
     serde_json::from_slice(&b).expect("captured body is valid JSON")
 }
 
-/// A round-robin (load-only) policy still forwards `input_ids` on a
-/// chat-formatter model — the offload is decoupled from routing.
+/// A round-robin (load-only) policy still forwards `input_ids` on a chat-formatter model — the offload is decoupled.
 #[tokio::test]
 async fn round_robin_plain_chat_forwards_input_ids() {
     let mock = MockWorker::start(vec![]).await;
@@ -271,8 +264,7 @@ async fn disabled_forwarding_does_not_count_routing_render_failures_as_offload_e
     assert_forwarded_unchanged(&ctx, &mock, &request).await;
 }
 
-/// Even under round-robin, a tool request omits `input_ids` (the safe predicate
-/// is policy-independent too).
+/// Even under round-robin, a tool request omits `input_ids` (the safe predicate is policy-independent too).
 #[tokio::test]
 async fn round_robin_tool_request_omits_input_ids() {
     let mock = MockWorker::start(vec![]).await;
@@ -331,12 +323,7 @@ async fn input_ids_forwarding_metric_books_outcome_per_request() {
     }
 }
 
-/// A successful plain-chat forward on a chat-formatter model must NOT emit
-/// `sgl_router_ingress_tokenize_errors_total` — that counter fires only when the
-/// offload was expected but the encoder failed. A tool request on the same model
-/// is an *expected* omission (its ids are still engine-equivalent; the
-/// safe-predicate withholds forwarding for other reasons), so it must not emit
-/// the error counter either.
+/// A successful plain-chat forward on a chat-formatter model must NOT emit `sgl_router_ingress_tokenize_errors_total` —.
 #[tokio::test]
 async fn successful_forward_does_not_emit_ingress_tokenize_error() {
     let mock = MockWorker::start(vec![]).await;

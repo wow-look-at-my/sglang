@@ -1,6 +1,4 @@
-//! Harmony response parser
-//!
-//! Adapter for openai_harmony::StreamableParser that handles channel-based parsing.
+//! Harmony response.
 
 use openai_harmony::{chat::Role, HarmonyEncoding, StreamableParser};
 use uuid::Uuid;
@@ -16,10 +14,8 @@ fn get_harmony_encoding() -> &'static HarmonyEncoding {
     get_harmony_encoding()
 }
 
-/// Harmony parser adapter
-///
-/// Wraps openai_harmony::StreamableParser and provides methods for parsing
-/// complete responses and streaming chunks.
+/// Harmony parser adapter Wraps openai_harmony::StreamableParser and provides
+/// methods for parsing complete responses.
 pub(crate) struct HarmonyParserAdapter {
     parser: StreamableParser,
     prev_recipient: Option<String>,
@@ -40,17 +36,9 @@ impl HarmonyParserAdapter {
         })
     }
 
-    /// Extract text from message content (private helper)
-    ///
-    /// Filters text content from a message's content array and joins them into a single string.
-    ///
-    /// # Arguments
-    ///
-    /// * `content` - The content array from a Harmony message
-    ///
-    /// # Returns
-    ///
-    /// Joined text string from all text content items
+    /// Extract text from message content (private helper) Filters text
+    /// content from a message's content array and joins them into a single
+    /// string. # Arguments * `content`.
     fn extract_text_from_content(content: &[openai_harmony::chat::Content]) -> String {
         content
             .iter()
@@ -155,8 +143,7 @@ impl HarmonyParserAdapter {
                     || recipient_str.starts_with("browser")
                     || recipient_str.starts_with("container")
                 {
-                    // Built-in tools → treat as reasoning
-                    // For Chat API, we add to analysis content
+                    // Built-in tools → treat as reasoning For Chat API, we add to analysis content
                     let text = Self::extract_text_from_content(&msg.content);
 
                     if !text.is_empty() {
@@ -177,8 +164,7 @@ impl HarmonyParserAdapter {
             // Now process by channel (only if not already handled by recipient)
             match channel {
                 "analysis" => {
-                    // Process each content item
-                    // For Chat API, we join them into a single reasoning_content
+                    // Process each content item For Chat API, we join them into a single reasoning_content
                     let text = Self::extract_text_from_content(&msg.content);
 
                     if !text.is_empty() {
@@ -186,9 +172,7 @@ impl HarmonyParserAdapter {
                     }
                 }
                 "commentary" => {
-                    // If we reach here, recipient was not "functions.*" or built-in tools
-                    // Commentary channel should always have a recipient
-                    // This is likely a model bug - log warning and treat as reasoning
+                    // If we reach here.
                     tracing::warn!(
                         channel = "commentary",
                         recipient = ?recipient,
@@ -236,7 +220,7 @@ impl HarmonyParserAdapter {
     ///
     /// # Returns
     ///
-    /// Complete HarmonyChannelOutput with all three channels parsed
+    /// Complete HarmonyChannelOutput with all channels parsed
     pub fn parse_complete(
         &mut self,
         output_ids: &[u32],
@@ -285,10 +269,8 @@ impl HarmonyParserAdapter {
         })
     }
 
-    /// Get all messages from the parser
-    ///
-    /// Returns the raw messages extracted by the Harmony parser.
-    /// Used for validation checks.
+    /// Get all messages from the parser Returns the raw messages extracted by
+    /// the Harmony parser. Used for validation checks.
     pub fn get_messages(&self) -> Vec<openai_harmony::chat::Message> {
         self.parser.messages().to_vec()
     }
@@ -382,7 +364,6 @@ impl HarmonyParserAdapter {
             if let Ok(Some(delta_text)) = self.parser.last_content_delta() {
                 has_delta = true;
 
-                // Determine which channel this delta belongs to
                 let channel = self.parser.current_channel();
                 match channel.as_deref() {
                     Some("analysis") => {
@@ -514,9 +495,7 @@ impl HarmonyParserAdapter {
         })
     }
 
-    /// Reset parser state
-    ///
-    /// Resets the parser to initial state for reuse
+    /// Reset parser state Resets the parser to initial state for reuse
     #[allow(dead_code)]
     pub fn reset(&mut self) -> Result<(), String> {
         // Create a new parser instance (StreamableParser doesn't have a reset method)

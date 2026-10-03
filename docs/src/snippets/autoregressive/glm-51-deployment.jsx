@@ -170,15 +170,12 @@ export const GLM51Deployment = () => {
     }
     if (values.reasoning === 'enabled') cmd += ' \\\n  --reasoning-parser glm45';
     if (values.toolcall  === 'enabled') cmd += ' \\\n  --tool-call-parser glm47';
-    // EAGLE MTP speculative decoding: emitted by default (recommended) on all
-    // hardware. Verified on NVIDIA and on AMD MI300X/MI325X (gfx942) and
-    // MI355X (gfx950).
+    // EAGLE MTP speculative decoding: emitted by default (recommended) on all hardware.
     cmd += ' \\\n  --speculative-algorithm EAGLE';
     cmd += ' \\\n  --speculative-num-steps 3';
     cmd += ' \\\n  --speculative-eagle-topk 1';
     cmd += ' \\\n  --speculative-num-draft-tokens 4';
-    // On AMD GPUs the aiter custom all-reduce kernel deadlocks during EAGLE
-    // verify at high concurrency, so disable it to avoid server hangs.
+    // On AMD GPUs the aiter custom all-reduce kernel deadlocks during EAGLE verify at high concurrency.
     if (isAMD) cmd += ' \\\n  --disable-custom-all-reduce';
 
     cmd += ` \\\n  --mem-fraction-static ${memFraction}`;

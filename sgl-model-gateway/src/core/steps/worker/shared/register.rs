@@ -10,11 +10,7 @@ use wfaas::{
 
 use crate::{core::steps::workflow_data::WorkerRegistrationData, observability::metrics::Metrics};
 
-/// Unified step to register workers in the registry.
-///
-/// Works with both single workers and batches. Always expects `workers` key
-/// in context containing `Vec<Arc<dyn Worker>>`.
-/// Works with any workflow data type that implements `WorkerRegistrationData`.
+/// Unified step to register workers in the registry. Works with both single workers and batches.
 pub struct RegisterWorkersStep;
 
 #[async_trait]
@@ -57,7 +53,6 @@ impl<D: WorkerRegistrationData + WorkflowData> StepExecutor<D> for RegisterWorke
             })
             .collect();
 
-        // Update Layer 3 worker pool size metrics per unique type/connection/model
         for (worker_type, connection_mode, model_id) in unique_configs {
             // Get labels before moving values into get_workers_filtered
             let worker_type_label = worker_type.as_metric_label();

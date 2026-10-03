@@ -1,8 +1,4 @@
 //! OpenAI-compatible generation endpoints.
-//!
-//! The HTTP adapter stays deliberately thin: Dynamo owns the standard OpenAI
-//! request and response primitives. Scheduler [`ChunkEvent`] values remain the one
-//! backend output type for both unary and streaming responses.
 
 use axum::{Router, http::StatusCode, response::Response};
 use futures::StreamExt;
@@ -111,8 +107,6 @@ pub(super) fn error_payload(code: StatusCode, message: impl Into<String>) -> ser
     })
 }
 
-/// Form an OpenAI error response: unary → `code` plus the JSON `body`,
-/// streaming → 200 with one SSE error frame + `[DONE]`.
 pub(super) fn openai_error(code: StatusCode, message: impl Into<String>, stream: bool) -> Response {
     error_response(code, error_payload(code, message), stream)
 }
@@ -173,9 +167,6 @@ async fn submit_generation(
             guard.arm(rid);
             Ok(rx)
         }
-        // Same `error_response` rule: a committed stream gets 200 plus an
-        // SSE error frame + `[DONE]`, not a unary 503 — but with the OpenAI
-        // error shape, since this is the OpenAI frontend.
         Err(_) => Err(openai_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "service unavailable",

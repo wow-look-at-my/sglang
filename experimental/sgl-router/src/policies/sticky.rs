@@ -1,37 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Sticky-session routing policy.
-//!
-//! Pins a request's routing key — read from a configurable header into
-//! [`SelectionContext::routing_key`] by the chat handler — to a consistent
-//! worker via an in-memory map, so stateful sessions land on the same
-//! backend. Unlike consistent hashing, this policy never redistributes
-//! existing keys when a worker is *added*; a key is only remapped when its
-//! assigned worker leaves the healthy candidate set.
-//!
-//! # Behavior
-//! - **No routing key** → delegate to the configured `fallback` policy (no
-//!   pinning). This lets clients that don't send the header still be served.
-//! - **Known key, worker healthy** → return the pinned worker.
-//! - **New key, or pinned worker unhealthy** → pick a worker via `fallback`
-//!   and record the assignment.
-//!
-//! Worker identity is the worker ID supplied by discovery.
-//!
-//! # Eviction
-//! A background sweeper (shared engine with the active-load janitor, see
-//! [`crate::state::load_monitor::router_inflight_load::spawn_sweeper`]) removes assignments idle longer
-//! than `idle`, bounding the map against unbounded routing-key cardinality.
-//! The sweeper is spawned only when constructed inside a Tokio runtime;
-//! unit tests use [`StickyPolicy::with_clock`] and drive eviction
-//! deterministically via a `MockClock` + direct `sweep_expired`.
-//!
-//! # HA
-//! This map is per-router-instance state, so it is NOT consistent across
-//! multiple router replicas or across a failover. HA sticky routing needs
-//! a stateless deterministic scheme (rendezvous / consistent hashing) and
-//! is intentionally out of scope here.
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -233,8 +203,7 @@ mod tests {
         let ctx_b = SelectionContext::with_routing_key(&model, None, Some("b"));
         let a = p.select(&workers, &ctx_a).unwrap();
         let b = p.select(&workers, &ctx_b).unwrap();
-        // Two keys are tracked independently (two map entries), and the
-        // round-robin fallback hands the two fresh keys distinct workers.
+        // Keys are tracked independently (map entries).
         assert_ne!(a.id, b.id);
         assert_eq!(p.assignment_count(), 2);
         // The core property: each key independently stays on its own pin.
@@ -323,7 +292,7 @@ mod tests {
         let ctx = SelectionContext::with_routing_key(&model, None, Some("u1"));
 
         p.select(&workers, &ctx).unwrap();
-        // Keep referencing the key just under the idle window each step.
+        // Keep referencing the key under the idle window each step.
         for _ in 0..5 {
             clock.advance(Duration::from_secs(8));
             p.select(&workers, &ctx).unwrap(); // hit → refreshes last_seen
@@ -336,11 +305,7 @@ mod tests {
         assert_eq!(p.assignment_count(), 1);
     }
 
-    /// Exercises the production path: `new` (not `with_clock`) spawns the
-    /// real background sweeper because we are inside a Tokio runtime. Uses
-    /// sub-second idle + interval so the sweep fires within the test's
-    /// wall-time, proving `StickyPolicy::new` correctly wires `sweep_expired`
-    /// into the runtime sweeper.
+    /// Exercises the production path.
     #[tokio::test]
     async fn background_sweeper_evicts_idle_entry_in_runtime() {
         let model = ModelId("tiny".into());
@@ -363,9 +328,7 @@ mod tests {
         );
     }
 
-    /// Many concurrent first-touch requests for the SAME fresh key converge:
-    /// the map ends with exactly one pin and every subsequent select agrees
-    /// on it (the documented self-heal after the benign assign race).
+    /// Many concurrent first-touch requests for the SAME fresh key converge: the map ends with exactly one pin.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_first_touch_converges_to_one_pin() {
         let p = Arc::new(StickyPolicy::new(

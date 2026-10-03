@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Static buckets define candidate domains and fallback order. Worker scoring,
-//! admission, and guards remain the responsibility of the P/D policies.
+//! Static buckets define candidate domains and fallback order.
 
 use sgl_router::config::{BucketConfig, BucketSpec, BucketStage, SloBucketPolicy};
 use sgl_router::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};

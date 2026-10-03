@@ -1,6 +1,6 @@
-/* Copyright 2025 SGLang Team. All Rights Reserved.
+/* Copyright SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
+Licensed under the Apache License, Version.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -725,7 +725,7 @@ std::vector<at::Tensor> get_mla_decoding_metadata(
 
 std::vector<at::Tensor> fwd_kvcache_mla(
     at::Tensor& q,             // batch_size x seqlen_q x num_heads x head_size
-    const at::Tensor& kcache,  // num_blocks x page_block_size x num_heads_k x head_size (when is_fp8 is False) or
+    const at::Tensor& kcache,
                                // num_blocks x num_heads_k x (page_block_size*656) (when is_fp8 is True)
     const int64_t head_size_v,
     const at::Tensor& seqlens_k,    // batch_size
@@ -733,7 +733,7 @@ std::vector<at::Tensor> fwd_kvcache_mla(
     const double softmax_scale,
     bool is_causal,
     const at::Tensor& tile_scheduler_metadata,  // num_sm_parts x TileSchedulerMetaDataSize
-    const at::Tensor& num_splits,               // batch_size + 1
+    const at::Tensor& num_splits,
     const bool& is_fp8,
     const std::optional<at::Tensor>& indices,  // None, or batch_size x seqlen_q x topk
     const std::optional<at::Tensor>& attn_sink,
@@ -768,7 +768,7 @@ std::vector<at::Tensor> sparse_prefill_fwd(
 
 std::vector<at::Tensor> fwd_kvcache_mla_fp8(
     at::Tensor& q,             // batch_size x seqlen_q x num_heads x head_size
-    const at::Tensor& kcache,  // num_blocks x page_block_size x num_heads_k x head_size (when is_fp8 is False) or
+    const at::Tensor& kcache,
                                // num_blocks x num_heads_k x (page_block_size*656) (when is_fp8 is True)
     const int64_t head_size_v,
     const at::Tensor& seqlens_k,    // batch_size
@@ -776,7 +776,7 @@ std::vector<at::Tensor> fwd_kvcache_mla_fp8(
     const double softmax_scale,
     bool is_causal,
     const at::Tensor& tile_scheduler_metadata,   // num_sm_parts x TileSchedulerMetaDataSize
-    const at::Tensor& num_splits,                // batch_size + 1
+    const at::Tensor& num_splits,
     const std::optional<at::Tensor>& descale_q,  // None or batch_size
     const std::optional<at::Tensor>& descale_k   // None or batch_size
 );

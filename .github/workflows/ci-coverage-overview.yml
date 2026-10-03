@@ -83,20 +83,14 @@ jobs:
     if: github.repository == 'sgl-project/sglang'
     name: Unit Test Code Coverage
     runs-on: 1-gpu-h100
-    # ~6 min install + ~22 min of tests, and the suite keeps growing
-    # (7.7k collected items in Aug, 11k now).
+    # ~6 min install + ~22 min of tests, and the suite keeps growing (7.7k collected items in Aug, 11k now).
     timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain + protoc
-        # Editable install of sglang triggers `build_rust` for the bundled
-        # native gRPC extension (rust/sglang-grpc). The 1-gpu-h100 runner
-        # image has no Rust toolchain by default, which is why this job has
-        # been failing on every scheduled run. Use the same helper that
-        # ci_install_dependency.sh uses so the install path matches the
-        # rest of CI.
+        # Editable install of sglang triggers `build_rust` for the bundled native gRPC extension (rust/sglang-grpc). The 1-gpu-h100 runner image has no Rust toolchain by default, which is why this job has been failing on every scheduled run. Use the same helper that ci_install_dependency.sh uses so the install path matches the rest of CI.
         run: |
           bash scripts/ci/utils/install_rust_protoc.sh
           echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH
@@ -107,10 +101,7 @@ jobs:
           pip install -e "python/[test]"
 
       - name: Run unit tests with coverage
-        # Non-gating on purpose: running the whole tree in one process
-        # cross-contaminates tests that CI proper runs one file per
-        # process. `| tee` used to hide that by accident; pipefail plus an
-        # explicit `|| echo` makes it deliberate and reports the counts.
+        # Non-gating on purpose: running the whole tree in one process cross-contaminates tests that CI proper runs one file per process. `| tee` used to hide that by accident; pipefail plus an explicit `|| echo` makes it deliberate and reports the counts.
         timeout-minutes: 45
         run: |
           set -o pipefail

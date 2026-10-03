@@ -1,15 +1,9 @@
 //! Shared multimodal request driver for the server (pure-Rust) pipeline.
-//!
-//! Owns the request control flow — parallel fan-out, layout application,
-//! failure semantics — while every model decision lives behind
-//! [`MmFamilyProcessor`] (see `pipeline.rs`). Families produce data; they
-//! cannot alter orchestration.
 
 use crate::common::{self, fetch, par, token_layout};
 use crate::pipeline::{DecodedMedia, MmFamilyProcessor, PositionOutput, ProcessedItem};
 
-/// Per-request bounds. Every source consumes the aggregate budget;
-/// [`fetch::MAX_FETCH_BYTES`] additionally caps each remote I/O stream.
+/// Per-request bounds.
 pub const MAX_ITEMS_PER_REQUEST: usize = 64;
 pub const MAX_REQUEST_BYTES: u64 = 1280 << 20;
 
@@ -22,8 +16,7 @@ pub enum ImageSource {
     Bytes(Vec<u8>),
 }
 
-/// Typed multimodal request input. The server's message layer owns the wire
-/// format and parses its payload into this before calling [`process`].
+/// Typed multimodal request input.
 pub struct MmInput {
     pub text: Option<String>,
     pub input_ids: Option<Vec<i32>>,
@@ -34,10 +27,7 @@ pub struct MmInput {
 pub struct OutputItem {
     pub feature: crate::pipeline::Tensor,
     pub aux: crate::pipeline::NamedTensors,
-    /// [`common::content_hash_u64`] of the raw encoded source bytes — the same
-    /// identity role as the Python path's `hash_feature`, but a different
-    /// algorithm, so hashes are consistent within the server pipeline and
-    /// never comparable across the two paths.
+    /// [`common::content_hash_u64`] of the raw encoded source bytes — the same identity role as the Python path's `hash_feature`.
     pub hash: u64,
 }
 
@@ -71,7 +61,7 @@ fn add_media_bytes(total: u64, next: usize) -> Result<u64, String> {
 
 /// Run one request through the pipeline. Any `Err` rejects the request back
 /// to the client — including inputs merely outside the pipeline's scope
-/// (video/audio, precomputed features, undecodable images), since there is
+/// (video/audio, precomputed features, undecodable images).
 /// no Python fallback path.
 pub fn process(
     family: &dyn MmFamilyProcessor,
@@ -86,11 +76,6 @@ pub fn process(
             "multimodal request exceeds {MAX_ITEMS_PER_REQUEST} media items"
         ));
     }
-    // Stage 1 (fetch) is blocking I/O and runs inline, sequentially — never on
-    // the CPU pool, where a slow URL or file read would starve decode/resize
-    // for other requests. Contract: callers on a fixed worker pool (the
-    // server) must resolve I/O-backed string sources — URLs and file paths —
-    // on their own I/O layer and pass `Bytes`.
     let mut fetched: Vec<std::borrow::Cow<'_, [u8]>> = Vec::with_capacity(input.images.len());
     let mut total: u64 = 0;
     for source in &input.images {
@@ -101,8 +86,7 @@ pub fn process(
     let processed: Vec<(ProcessedItem, u64)> =
         par::try_map(&fetched, |bytes| -> Result<(ProcessedItem, u64), String> {
             let hash = common::content_hash_u64(bytes);
-            // Inputs PIL accepts but decode_rgb refuses (e.g. 16-bit PNG)
-            // error here and reject the request.
+            // Inputs PIL accepts but decode_rgb refuses (e.g. 16-bit PNG) error here and reject the request.
             let (rgb, height, width) = common::decode_rgb(bytes)?;
             let item = family.process_item(&DecodedMedia::Image { rgb, height, width })?;
             Ok((item, hash))
@@ -166,7 +150,6 @@ mod tests {
             images: vec![ImageSource::Bytes(png(8, 8))],
         };
         let out = process(family.as_ref(), input, |_| Err("no tokenizer".into())).unwrap();
-        // 8x8, factor 4 → grid [1, 4, 4] → 16 patches / merge² = 4 tokens.
         assert_eq!(out.input_ids, vec![7, 1, 1, 1, 1, 8]);
         assert_eq!(out.offsets, vec![(1, 4)]);
         let item = &out.items[0];
@@ -178,8 +161,7 @@ mod tests {
         assert_eq!(positions.len(), 3 * out.input_ids.len());
     }
 
-    /// String sources — HTTP URL, `file://`, and bare path — all resolve to
-    /// the same bytes and flow through the full pipeline.
+    /// String sources — HTTP URL, `file://`, and bare path — all resolve to the same bytes.
     #[test]
     fn fetches_url_and_file_sources() {
         let png = png(8, 8);
@@ -227,7 +209,7 @@ mod tests {
         // Identical source bytes → identical content hashes.
         assert_eq!(out.items[0].hash, out.items[1].hash);
         assert_eq!(out.items[1].hash, out.items[2].hash);
-        assert_eq!(out.input_ids.len(), 5 + 3 * 3); // each placeholder → 4 tokens
+        assert_eq!(out.input_ids.len(), 5 + 3 * 3); // each placeholder → tokens
     }
 
     #[test]

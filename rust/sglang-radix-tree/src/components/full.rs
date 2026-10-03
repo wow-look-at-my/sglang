@@ -1,5 +1,4 @@
-//! FULL attention component driver: overrides the methods FULL customizes and inherits
-//! the rest from the `TreeComponent` defaults.
+//! FULL attention component driver: overrides the methods FULL customizes and inherits the rest.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -55,8 +54,7 @@ impl<K: ChildKeyType> TreeComponent<K> for FullComponent {
         value_chunks: &[Tensor],
         best_value_len: usize,
     ) -> MatchResult {
-        // Compute Full KV host hit length: walk from last_host_node up to
-        // last_device_node, summing host_value lengths of evicted nodes.
+        // Compute Full KV host hit length: walk from last_host_node up to last_device_node.
         let mut kv_host_hit = 0;
         let mut node_idx = best_match_node_idx;
         while node_idx != last_device_node_idx {
@@ -112,8 +110,6 @@ impl<K: ChildKeyType> TreeComponent<K> for FullComponent {
                 .entry(FULL)
                 .or_default()
                 .push(value.shallow_clone());
-            // NOTE: cd.value = None is deferred to _cascade_evict (Full as trigger)
-            // because SWA's free_swa still needs to read Full.value.
         }
         if target.contains(EvictLayer::Host) && node.has_host_value(FULL) {
             host_freed = node.host_value_len(FULL);
@@ -157,9 +153,9 @@ impl<K: ChildKeyType> TreeComponent<K> for FullComponent {
             tree_core.component_state(FULL).is_evict_device_ongoing,
             "Full device eviction not started"
         );
-        // Re-admit the previously returned leaf's parent once it became a
-        // D-leaf; the parent id was captured at return time because the leaf
-        // itself may have been freed by the eviction in between.
+        // Re-admit the returned leaf's parent once it became a D-leaf; the
+        // parent id was captured at return time because the leaf itself may
+        // have been freed by the eviction in between.
         if let Some(last_node_parent) = tree_core.component_state(FULL).evict_device_cursor
             && tree_core.evictable_device_leaves.contains(last_node_parent)
         {
@@ -289,9 +285,7 @@ impl<K: ChildKeyType> TreeComponent<K> for FullComponent {
             return result;
         }
 
-        // The bottom device-evicted segment is locked too (no ledger move —
-        // nothing is on device); a load-back that materializes a value under
-        // lock credits protected directly.
+        // The bottom device-evicted segment is locked too (no ledger move — nothing is on device).
         let mut cur = node_id;
         loop {
             let node = tree_core.arena.node_mut(cur);
@@ -395,13 +389,10 @@ impl<K: ChildKeyType> TreeComponent<K> for FullComponent {
         _last_hash: Option<&str>,
     ) -> Result<Option<Vec<PoolTransfer>>, TreeCoreRuntimeError> {
         Ok(match phase {
-            // Full KV backup is handled by the main flow
-            // (cache_controller.write on host_value directly).
-            // No extra PoolTransfer needed.
+            // Full KV backup is handled by the main flow (cache_controller.write on host_value directly).
             CacheTransferPhase::BackupHost => None,
             CacheTransferPhase::LoadBack => {
-                // `node` is best_match_node. FULL device evict only from leaves,
-                // so once we hit a device-on node, everything above is also device-on.
+                // `node` is best_match_node.
                 let mut backed_up: Vec<Tensor> = Vec::new();
                 let mut nodes_to_load: Vec<NodeId> = Vec::new();
                 let mut cur = tree_core.arena.node(node_id);

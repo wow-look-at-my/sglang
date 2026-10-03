@@ -219,7 +219,6 @@ async fn fetch_models(url: &str, api_key: Option<&str>) -> Result<Vec<ModelCard>
     Ok(model_cards)
 }
 
-/// Step 1: Discover models from external /v1/models endpoint.
 pub struct DiscoverModelsStep;
 
 #[async_trait]

@@ -1,9 +1,4 @@
-//! Tokenize module for tokenization and detokenization operations
-//!
-//! This module provides HTTP handlers for:
-//! - Tokenizing text into token IDs
-//! - Detokenizing token IDs back to text
-//! - Managing tokenizers (add, list, get, remove)
+//! Tokenize module for tokenization.
 
 mod handlers;
 

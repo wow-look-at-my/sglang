@@ -32,8 +32,7 @@ concurrency:
 
 env:
   NCCL_NVLS_ENABLE: "0"
-  # Must match TORCH_VER in docker/sgl-deep-gemm.Dockerfile — the wheel's
-  # pre-compiled _C.so links against this torch ABI.
+  # Must match TORCH_VER in docker/sgl-deep-gemm.Dockerfile — the wheel's pre-compiled _C.so links against this torch ABI.
   TORCH_VER: "2.13.0"
 
 jobs:
@@ -111,10 +110,7 @@ jobs:
             runner: 8-gpu-b200
             wheel_arch: x86_64
             timeout: 60
-          # The sm120 tests require a runner with RTX 6000. It causes OOM on 5090 runners.
-          # - arch_label: sm120
-          #   runner: 1-gpu-5090
-          #   wheel_arch: x86_64
+          # The sm120 tests require a runner with RTX 6000. It causes OOM on 5090 runners. - arch_label: sm120 runner: 1-gpu-5090 wheel_arch: x86_64
           - arch_label: sm100-aarch64
             runner: 4-gpu-gb300
             wheel_arch: aarch64
@@ -175,13 +171,11 @@ jobs:
           PY
 
       - name: Install Compute Sanitizer 2025.4.1
-        env:
-          WHEEL_ARCH: ${{ matrix.wheel_arch }}
         run: |
           set -euo pipefail
           # CUDA 13.1.1's standalone sanitizer fixes Python tensor retention in
           # host backtraces. Keep the wheel and runtime on CUDA 13.0.
-          case "${WHEEL_ARCH}" in
+          case "${{ matrix.wheel_arch }}" in
             x86_64)
               sanitizer_arch=linux-x86_64
               sanitizer_sha256=b9637777a31cd0f0ffe1e965523e8b0d382019b8496855fd688c886988583cf4
@@ -190,10 +184,10 @@ jobs:
               sanitizer_arch=linux-sbsa
               sanitizer_sha256=1dc68ccb146032bcdc9d932569c865d68e3966ecf136940ca38fd7d5abfda4ac
               ;;
-            *) echo "Unsupported sanitizer architecture: ${WHEEL_ARCH}" >&2; exit 1 ;;
+            *) echo "Unsupported sanitizer architecture: ${{ matrix.wheel_arch }}" >&2; exit 1 ;;
           esac
           archive="cuda_sanitizer_api-${sanitizer_arch}-13.1.118-archive"
-          install_dir="${RUNNER_TEMP}/deepgemm-compute-sanitizer"
+          install_dir="${{ runner.temp }}/deepgemm-compute-sanitizer"
           mkdir -p "${install_dir}"
           curl -fsSL --retry 3 \
             "https://developer.download.nvidia.com/compute/cuda/redist/cuda_sanitizer_api/${sanitizer_arch}/${archive}.tar.xz" \

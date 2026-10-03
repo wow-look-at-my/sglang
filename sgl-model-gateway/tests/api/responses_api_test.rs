@@ -505,12 +505,6 @@ fn test_json_serialization() {
 
 #[tokio::test]
 async fn test_multi_turn_loop_with_mcp() {
-    // This test verifies the multi-turn loop functionality:
-    // 1. Initial request with MCP tools
-    // 2. Mock worker returns function_call
-    // 3. Router executes MCP tool and resumes
-    // 4. Mock worker returns final answer
-    // 5. Verify the complete flow worked
 
     // Start mock MCP server
     let mut mcp = MockMCPServer::start().await.expect("start mcp");
@@ -615,7 +609,7 @@ async fn test_multi_turn_loop_with_mcp() {
     // Verify the response structure
     assert_eq!(response_json["object"], "response");
     assert_eq!(response_json["status"], "completed");
-    // Note: mock worker generates its own ID, so we just verify it exists
+    // Note: mock worker generates its own ID, so we verify it exists
     assert!(
         response_json["id"].is_string(),
         "Response should have an id"
@@ -665,9 +659,7 @@ async fn test_multi_turn_loop_with_mcp() {
 
 #[tokio::test]
 async fn test_max_tool_calls_limit() {
-    // This test verifies that max_tool_calls is respected
-    // Note: The mock worker returns a final answer after one tool call,
-    // so with max_tool_calls=1, it completes normally (doesn't exceed the limit)
+    // This test verifies that max_tool_calls is respected Note.
 
     let mut mcp = MockMCPServer::start().await.expect("start mcp");
     let mcp_yaml = format!(
@@ -711,7 +703,7 @@ async fn test_max_tool_calls_limit() {
         input: ResponseInput::Text("test max calls".to_string()),
         instructions: None,
         max_output_tokens: Some(128),
-        max_tool_calls: Some(1), // Limit to 1 call
+        max_tool_calls: Some(1),
         metadata: None,
         model: "mock-model".to_string(),
         parallel_tool_calls: Some(true),
@@ -757,8 +749,6 @@ async fn test_max_tool_calls_limit() {
         serde_json::to_string_pretty(&response_json).unwrap()
     );
 
-    // With max_tool_calls=1, the mock returns a final answer after 1 call
-    // So it completes normally without exceeding the limit
     assert_eq!(response_json["status"], "completed");
 
     // Verify the basic response structure
@@ -772,8 +762,7 @@ async fn test_max_tool_calls_limit() {
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0]["type"], "mcp");
 
-    // Note: To test actual limit exceeding, we would need a mock that keeps
-    // calling tools indefinitely, which would hit max_iterations (safety limit)
+    // Note: To test actual limit exceeding, we would need a mock that keeps calling tools indefinitely.
 
     std::env::remove_var("SGLANG_MCP_CONFIG");
     worker.stop().await;
@@ -865,13 +854,6 @@ fn parse_sse_events(body: &str) -> Vec<(Option<String>, serde_json::Value)> {
 
 #[tokio::test]
 async fn test_streaming_with_mcp_tool_calls() {
-    // This test verifies that streaming works with MCP tool calls:
-    // 1. Initial streaming request with MCP tools
-    // 2. Mock worker streams text, then function_call deltas
-    // 3. Router buffers function call, executes MCP tool
-    // 4. Router resumes streaming with tool results
-    // 5. Mock worker streams final answer
-    // 6. Verify SSE events are properly formatted
 
     let (mut mcp, mut worker, router, _dir) = setup_streaming_mcp_test().await;
 
@@ -1363,7 +1345,6 @@ async fn test_conversation_items_delete() {
     let items_json: serde_json::Value = serde_json::from_slice(&items_bytes).unwrap();
     let item_id = items_json["data"][0]["id"].as_str().unwrap();
 
-    // List items (should have 1)
     let list_resp = conversations::list_conversation_items(
         &ctx.conversation_storage,
         &ctx.conversation_item_storage,
@@ -1389,7 +1370,6 @@ async fn test_conversation_items_delete() {
     .await;
     assert_eq!(del_resp.status(), StatusCode::OK);
 
-    // List items again (should have 0)
     let list_resp2 = conversations::list_conversation_items(
         &ctx.conversation_storage,
         &ctx.conversation_item_storage,
@@ -1447,7 +1427,7 @@ async fn test_conversation_items_max_limit() {
     let conv_json: serde_json::Value = serde_json::from_slice(&conv_bytes).unwrap();
     let conv_id = conv_json["id"].as_str().unwrap();
 
-    // Try to create 21 items (over limit)
+    // Try to create items (over limit)
     let mut items = Vec::new();
     for i in 0..21 {
         items.push(serde_json::json!({
@@ -1550,7 +1530,7 @@ async fn test_conversation_items_multi_conversation_sharing() {
     let ctx = crate::common::create_test_context(router_cfg).await;
     let _router = RouterFactory::create_router(&ctx).await.expect("router");
 
-    // Create two conversations
+    // Create conversations
     let conv_a_resp =
         conversations::create_conversation(&ctx.conversation_storage, serde_json::json!({})).await;
     let conv_a_bytes = axum::body::to_bytes(conv_a_resp.into_body(), usize::MAX)
@@ -1567,7 +1547,6 @@ async fn test_conversation_items_multi_conversation_sharing() {
     let conv_b_json: serde_json::Value = serde_json::from_slice(&conv_b_bytes).unwrap();
     let conv_b_id = conv_b_json["id"].as_str().unwrap();
 
-    // Create item in conversation A
     let create_items = serde_json::json!({
         "items": [
             {
@@ -1641,7 +1620,6 @@ async fn test_conversation_items_multi_conversation_sharing() {
     let list_b_json: serde_json::Value = serde_json::from_slice(&list_b_bytes).unwrap();
     assert_eq!(list_b_json["data"].as_array().unwrap().len(), 1);
 
-    // Delete from conversation A
     conversations::delete_conversation_item(
         &ctx.conversation_storage,
         &ctx.conversation_item_storage,
@@ -1650,7 +1628,6 @@ async fn test_conversation_items_multi_conversation_sharing() {
     )
     .await;
 
-    // Should be removed from A
     let list_a2 = conversations::list_conversation_items(
         &ctx.conversation_storage,
         &ctx.conversation_item_storage,

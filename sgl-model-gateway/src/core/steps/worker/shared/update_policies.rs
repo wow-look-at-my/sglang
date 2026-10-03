@@ -11,9 +11,6 @@ use wfaas::{
 use crate::core::{steps::workflow_data::WorkerRegistrationData, Worker};
 
 /// Unified step to update policy registry for registered workers.
-///
-/// Handles both local workers (same model, possibly DP-aware) and
-/// external workers (different models per worker).
 pub struct UpdatePoliciesStep;
 
 impl UpdatePoliciesStep {
@@ -101,7 +98,6 @@ impl<D: WorkerRegistrationData + WorkflowData> StepExecutor<D> for UpdatePolicie
 
         let policy_hint = labels.get("policy").map(|s| s.as_str());
 
-        // Track unique model IDs we've updated policies for
         let mut updated_models = Vec::new();
 
         for worker in workers.iter() {
@@ -141,10 +137,7 @@ impl<D: WorkerRegistrationData + WorkflowData> StepExecutor<D> for UpdatePolicie
             }
         }
 
-        // Initialize cache-aware policies for PD mode (prefill_policy / decode_policy
-        // are separate instances from model_policies and are not touched by the
-        // per-model loop above). `init_workers` is idempotent so re-running on each
-        // registration is safe.
+        // Initialize cache-aware policies for PD mode.
         let decode_workers = app_context.worker_registry.get_decode_workers();
         let prefill_is_cache_aware =
             app_context.policy_registry.get_prefill_policy().name() == "cache_aware";

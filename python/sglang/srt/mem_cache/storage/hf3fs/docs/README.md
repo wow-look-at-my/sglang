@@ -1,7 +1,6 @@
 # Using HF3FS as L3 Global KV Cache
 
-This document provides step-by-step instructions for setting up a k8s + 3FS + SGLang runtime environment from scratch, describing how to utilize deepseek-hf3fs as the L3 KV cache for SGLang.
-The process consists of five main steps:
+This document provides step-by-step instructions for setting up a k8s + 3FS + SGLang runtime environment from scratch. This is describing how to utilize deepseek-hf3fs as the L3 KV cache for SGLang. The process consists of multiple main steps:
 
 ## Step 1: Install deepseek-3fs via 3fs-Operator
 Refer to the [3fs-operator documentation](https://github.com/aliyun/kvc-3fs-operator/blob/main/README_en.md) to deploy 3FS components in your Kubernetes environment using the Operator with one-click deployment.

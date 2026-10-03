@@ -37,7 +37,6 @@ pub struct TlsMockWorkerConfig {
     pub require_client_cert: bool,
     /// Response delay in milliseconds
     pub response_delay_ms: u64,
-    /// Fail rate (0.0 - 1.0)
     pub fail_rate: f32,
 }
 
@@ -87,7 +86,6 @@ impl TlsMockWorker {
         let port = config.read().await.port;
         let require_client_cert = config.read().await.require_client_cert;
 
-        // If port is 0, find an available port
         let port = if port == 0 {
             let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
             let port = listener.local_addr()?.port();
@@ -133,7 +131,6 @@ impl TlsMockWorker {
                     }
                 }
                 _ = &mut shutdown_rx => {
-                    // Graceful shutdown
                 }
             }
         });

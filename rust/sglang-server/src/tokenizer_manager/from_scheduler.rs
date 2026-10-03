@@ -1,5 +1,4 @@
-//! TokenizerManager dispatcher thread — drains the from_scheduler channel and
-//! routes each message to the detok shard that owns its `Rid::shard`.
+//! TokenizerManager dispatcher thread — drains the from_scheduler channel and routes each message to the detok shard.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,9 +15,6 @@ use crate::tokenizer_manager::channel::FromSchedulerRx;
 use crate::tokenizer_manager::wiring::{Senders, recv};
 
 /// A monotonic counter bumped once per from_scheduler frame the dispatcher drains.
-/// Equivalent to the Python `TokenizerManager`'s
-/// `last_receive_tstamp`: `/health_generate` watches it advance to confirm the
-/// scheduler → detok path is alive (the value itself is meaningless).
 pub type ActivityCounter = Arc<AtomicU64>;
 
 /// Dispatcher dispatcher stage. Owns the from_scheduler consumer + the detok-shard
@@ -64,8 +60,7 @@ impl Runnable for Dispatcher {
                         b.clear();
                     }
                     let decoded = for_each_chunk(body, |ev| {
-                        // The rid picks the shard; a hash collision only co-locates two
-                        // requests now, it no longer merges them.
+                        // The rid picks the shard.
                         buckets[ev.rid.shard(shards)].push(ev);
                     });
                     // Routing only fills the buckets; nothing is delivered until the
@@ -75,19 +70,12 @@ impl Runnable for Dispatcher {
                     // logprobs — the corruption the decoder's bounds checks exist to
                     // prevent. Better a lost frame than a silently wrong one.
                     if !decoded.ok {
-                        // Dropping the frame keeps wrong data off the wire, but a
-                        // request whose chunk was in it would otherwise wait forever:
-                        // mid-stream it gets a hole, and if its FINAL chunk was here
-                        // it never sees `Done` and the connection hangs — there is no
-                        // server-side timeout. Fail from the HEADER's rids, not the
-                        // buckets: a frame that fails at request 0 buckets nothing,
-                        // so bucket-driven cleanup would leave every request in it
-                        // hanging.
-                        // Distinguish "failed N requests" from "named nobody": a
-                        // frame whose header would not decode at all yields no rids,
-                        // so nothing downstream fails and every request in it waits
-                        // forever. That is the case worth paging on, and it used to
-                        // log the same line as the recoverable one.
+                        // Dropping the frame keeps wrong data off the wire,
+                        // but a request whose chunk was in it would otherwise
+                        // wait forever: mid-stream it gets a hole, and if its
+                        // FINAL chunk was here it never sees `Done` and the
+                        // connection hangs — there is no server-side
+                        // timeout.
                         if decoded.rids.is_empty() {
                             tracing::error!(
                                 "from_scheduler: bad batch frame named NO rids; any request in \
@@ -103,8 +91,6 @@ impl Runnable for Dispatcher {
                             b.clear();
                         }
                         for rid in decoded.rids {
-                            // 500, not 400: the client's request was fine — the
-                            // scheduler's own output frame was not.
                             let shard = rid.shard(shards);
                             let _ = self.senders.detokenizer_tx[shard].send(DetokMsg::Fail {
                                 rid,
@@ -142,8 +128,7 @@ impl Runnable for Dispatcher {
 }
 
 impl Dispatcher {
-    /// Route one message to the shard owning `rid`. HOL ceiling: a slow shard stalls
-    /// this thread; the fix is a per-shard from_scheduler channel.
+    /// Route one message to the shard owning `rid`.
     #[inline]
     fn route(&self, rid: &Rid, msg: DetokMsg) {
         if self.senders.detok_for(rid).send(msg).is_err() {
@@ -169,7 +154,6 @@ fn decode_result(body: &[u8]) -> Option<(Rid, DetokMsg)> {
     Some((rid.clone(), DetokMsg::Result { rid, payload }))
 }
 
-/// Per-request failure: `[rid, message]` → terminal `Error` to the sink (→ 400).
 fn decode_error(body: &[u8]) -> Option<(Rid, DetokMsg)> {
     let val = rmpv::decode::read_value(&mut &body[..]).ok()?;
     let rmpv::Value::Array(arr) = val else {
@@ -190,8 +174,7 @@ mod tests {
     use crate::message::detok::DetokMsg;
     use crate::message::response::frame_error;
 
-    /// A framed error round-trips: `frame_error` → tag stripped →
-    /// `decode_error` yields the rid + a `Fail` carrying the message.
+    /// A framed error round-trips: `frame_error` → tag stripped → `decode_error` yields the rid + a `Fail` carrying.
     #[test]
     fn error_frame_roundtrips_to_fail() {
         let framed = frame_error("42", "invalid request: bad field");

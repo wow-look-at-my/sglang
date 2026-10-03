@@ -13,8 +13,7 @@ Related documentation:
 
 ## About MemCache
 
-MemCache is a distributed cache system from Ascend, built on MemFabric underneath, and can provide a high-performance distributed memory pool.
-In SGLang HiCache, MemCache can be used as the L3 KV Cache backend to store and reuse KV cache.
+MemCache is a distributed cache system from Ascend, built on MemFabric underneath, and can provide a high-performance distributed memory pool. In SGLang HiCache, MemCache can be used as the L3 KV Cache backend to store and reuse KV cache.
 
 
 ## Install Ascend MemCache

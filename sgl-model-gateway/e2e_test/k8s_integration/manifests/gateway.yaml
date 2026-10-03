@@ -40,9 +40,6 @@ spec:
               name: http
             - containerPort: 29000
               name: metrics
-          # Use /liveness instead of /readiness for the K8s readiness probe
-          # because /readiness returns 503 when no healthy workers are registered,
-          # and with service discovery the gateway starts with 0 workers.
           readinessProbe:
             httpGet:
               path: /liveness

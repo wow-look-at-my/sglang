@@ -172,23 +172,20 @@ jobs:
         id: cherry_pick
         env:
           TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
-          FULL_SHA: ${{ steps.resolve.outputs.full_sha }}
-          SHORT_SHA: ${{ steps.resolve.outputs.short_sha }}
-          IS_MERGE_COMMIT: ${{ steps.resolve.outputs.is_merge_commit }}
         run: |
           RANDOM_SUFFIX=$(head -c 4 /dev/urandom | xxd -p)
-          NEW_BRANCH="cherry-pick/${SHORT_SHA}-to-${TARGET_BRANCH#release/}-${RANDOM_SUFFIX}"
+          NEW_BRANCH="cherry-pick/${{ steps.resolve.outputs.short_sha }}-to-${TARGET_BRANCH#release/}-${RANDOM_SUFFIX}"
           git checkout -b "$NEW_BRANCH" "origin/$TARGET_BRANCH"
           echo "new_branch=$NEW_BRANCH" >> $GITHUB_OUTPUT
 
           CP_ARGS=()
-          if [[ "$IS_MERGE_COMMIT" == "true" ]]; then
+          if [[ "${{ steps.resolve.outputs.is_merge_commit }}" == "true" ]]; then
             CP_ARGS+=(-m 1)
           fi
-          if git cherry-pick "${CP_ARGS[@]}" "$FULL_SHA"; then
+          if git cherry-pick "${CP_ARGS[@]}" "${{ steps.resolve.outputs.full_sha }}"; then
             echo "cherry_pick_success=true" >> $GITHUB_OUTPUT
           else
-            echo "::error::Cherry-pick of ${FULL_SHA} onto ${TARGET_BRANCH} failed due to conflicts. Resolve locally: 'git checkout ${TARGET_BRANCH} && git cherry-pick ${FULL_SHA}', fix conflicts, push a branch, and open the PR by hand."
+            echo "::error::Cherry-pick of ${{ steps.resolve.outputs.full_sha }} onto ${TARGET_BRANCH} failed due to conflicts. Resolve locally: 'git checkout ${TARGET_BRANCH} && git cherry-pick ${{ steps.resolve.outputs.full_sha }}', fix conflicts, push a branch, and open the PR by hand."
             git cherry-pick --abort || echo "::warning::git cherry-pick --abort returned non-zero; ignoring since the job is exiting."
             echo "cherry_pick_success=false" >> $GITHUB_OUTPUT
             exit 1
@@ -196,10 +193,8 @@ jobs:
 
       - name: Push branch
         if: steps.cherry_pick.outputs.cherry_pick_success == 'true'
-        env:
-          NEW_BRANCH: ${{ steps.cherry_pick.outputs.new_branch }}
         run: |
-          git push origin "$NEW_BRANCH"
+          git push origin "${{ steps.cherry_pick.outputs.new_branch }}"
 
       - name: Create Pull Request
         id: create_pr
@@ -207,32 +202,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT_FOR_CHERRY_PICK }}
           TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
-          SHORT_SHA: ${{ steps.resolve.outputs.short_sha }}
-          FULL_SHA: ${{ steps.resolve.outputs.full_sha }}
-          PR_TITLE: ${{ steps.resolve.outputs.pr_title }}
-          SOURCE_PR: ${{ steps.resolve.outputs.source_pr }}
-          PR_URL: ${{ steps.resolve.outputs.pr_url }}
-          NEW_BRANCH: ${{ steps.cherry_pick.outputs.new_branch }}
         run: |
-          if [[ -n "$SOURCE_PR" ]]; then
-            CHERRY_PICK_TITLE="[Cherry-pick to ${TARGET_BRANCH}] ${PR_TITLE} (${SOURCE_PR})"
+          if [[ -n "${{ steps.resolve.outputs.source_pr }}" ]]; then
+            CHERRY_PICK_TITLE="[Cherry-pick to ${TARGET_BRANCH}] ${{ steps.resolve.outputs.pr_title }} (${{ steps.resolve.outputs.source_pr }})"
           else
-            CHERRY_PICK_TITLE="[Cherry-pick to ${TARGET_BRANCH}] ${PR_TITLE} (${SHORT_SHA})"
+            CHERRY_PICK_TITLE="[Cherry-pick to ${TARGET_BRANCH}] ${{ steps.resolve.outputs.pr_title }} (${{ steps.resolve.outputs.short_sha }})"
           fi
 
-          BODY="Cherry-pick of commit \`${FULL_SHA}\` to \`${TARGET_BRANCH}\`."$'\n\n'
-          if [[ -n "$SOURCE_PR" ]]; then
-            BODY+="**Source PR:** ${SOURCE_PR} (${PR_URL})"$'\n'
+          BODY="Cherry-pick of commit \`${{ steps.resolve.outputs.full_sha }}\` to \`${TARGET_BRANCH}\`."$'\n\n'
+          if [[ -n "${{ steps.resolve.outputs.source_pr }}" ]]; then
+            BODY+="**Source PR:** ${{ steps.resolve.outputs.source_pr }} (${{ steps.resolve.outputs.pr_url }})"$'\n'
           fi
-          BODY+="**Source commit:** \`${FULL_SHA}\`"$'\n'
-          BODY+="**Original title:** ${PR_TITLE}"$'\n\n'
+          BODY+="**Source commit:** \`${{ steps.resolve.outputs.full_sha }}\`"$'\n'
+          BODY+="**Original title:** ${{ steps.resolve.outputs.pr_title }}"$'\n\n'
           BODY+="---"$'\n'
           BODY+="*This PR was automatically created by the cherry-pick workflow.*"
 
           CREATED_PR_URL=$(printf '%s' "$BODY" | gh pr create \
             --title "$CHERRY_PICK_TITLE" \
             --base "$TARGET_BRANCH" \
-            --head "$NEW_BRANCH" \
+            --head "${{ steps.cherry_pick.outputs.new_branch }}" \
             --label "cherry-pick" \
             --body-file -)
           CREATED_PR_NUMBER="${CREATED_PR_URL##*/}"
@@ -243,30 +232,22 @@ jobs:
       - name: Summary
         if: always()
         env:
-          FULL_SHA: ${{ steps.resolve.outputs.full_sha }}
-          PR_TITLE: ${{ steps.resolve.outputs.pr_title }}
-          SOURCE_PR: ${{ steps.resolve.outputs.source_pr }}
           TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
-          CHERRY_PICK_SUCCESS: ${{ steps.cherry_pick.outputs.cherry_pick_success }}
-          NEW_BRANCH: ${{ steps.cherry_pick.outputs.new_branch }}
-          CREATED_PR_NUMBER: ${{ steps.create_pr.outputs.created_pr_number }}
-          CREATED_PR_URL: ${{ steps.create_pr.outputs.created_pr_url }}
-          ACTOR: ${{ github.actor }}
         run: |
           echo "## Cherry-Pick Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Triggered by:** @${ACTOR}" >> $GITHUB_STEP_SUMMARY
-          if [[ -n "$SOURCE_PR" ]]; then
-            echo "- **Source PR:** ${SOURCE_PR}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          if [[ -n "${{ steps.resolve.outputs.source_pr }}" ]]; then
+            echo "- **Source PR:** ${{ steps.resolve.outputs.source_pr }}" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "- **Source commit:** ${FULL_SHA}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Title:** ${PR_TITLE}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source commit:** ${{ steps.resolve.outputs.full_sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Title:** ${{ steps.resolve.outputs.pr_title }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Target Branch:** ${TARGET_BRANCH}" >> $GITHUB_STEP_SUMMARY
-          if [[ "$CHERRY_PICK_SUCCESS" == "true" ]]; then
+          if [[ "${{ steps.cherry_pick.outputs.cherry_pick_success }}" == "true" ]]; then
             echo "- **Status:** Success" >> $GITHUB_STEP_SUMMARY
-            echo "- **PR Branch:** ${NEW_BRANCH}" >> $GITHUB_STEP_SUMMARY
-            if [[ -n "$CREATED_PR_NUMBER" ]]; then
-              echo "- **Cherry-pick PR:** [#${CREATED_PR_NUMBER}](${CREATED_PR_URL})" >> $GITHUB_STEP_SUMMARY
+            echo "- **PR Branch:** ${{ steps.cherry_pick.outputs.new_branch }}" >> $GITHUB_STEP_SUMMARY
+            if [[ -n "${{ steps.create_pr.outputs.created_pr_number }}" ]]; then
+              echo "- **Cherry-pick PR:** [#${{ steps.create_pr.outputs.created_pr_number }}](${{ steps.create_pr.outputs.created_pr_url }})" >> $GITHUB_STEP_SUMMARY
             fi
           else
             echo "- **Status:** Failed" >> $GITHUB_STEP_SUMMARY

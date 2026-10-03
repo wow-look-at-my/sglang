@@ -20,11 +20,7 @@ on:
 
 jobs:
   pr-gate:
-    # 1. for commits on main: no gating needed
-    # 2. for workflow_dispatch: this can only be triggered by users with write access
-    # 3. for pull_request and pull_request_target: apply the checks below.
-    #    This job only reads PR metadata through the API and never checks out
-    #    or executes PR code, so it is safe for pull_request_target callers.
+    # 1. for commits on main: no gating needed 2. for workflow_dispatch: this can only be triggered by users with write access 3. for pull_request and pull_request_target: apply the checks below. This job only reads PR metadata through the API and never checks out or executes PR code, so it is safe for pull_request_target callers.
     runs-on: ubuntu-latest
     env:
       # The label and rate-limit checks ration upstream's self-hosted runners; forks have none to ration.
@@ -75,11 +71,7 @@ jobs:
             exit 1
           fi
 
-      # Live-fetch label gate for pr-test-extra.yml. Workflow-level `if`
-      # checks would read the frozen event payload, which doesn't update on
-      # rerun — so /tag-and-rerun-ci extra (slash handler adds the label
-      # then reruns) could never un-skip. A runtime step using gh-api-fetched
-      # labels lets reruns pick up the new label set.
+      # Live-fetch label gate for pr-test-extra.yml. Workflow-level `if` checks would read the frozen event payload, which doesn't update on rerun — so /tag-and-rerun-ci extra (slash handler adds the label then reruns) could never un-skip. A runtime step using gh-api-fetched labels lets reruns pick up the new label set.
       - name: Require run-ci-extra label (optional)
         if: env.IS_PR_EVENT == 'true' && inputs.require-run-ci-extra == true
         run: |
@@ -88,9 +80,7 @@ jobs:
             exit 1
           fi
 
-      # Generic opt-in label gate (same live-fetch semantics as run-ci-extra).
-      # Lets a workflow require its own label on top of run-ci without adding
-      # a dedicated input per label.
+      # Generic opt-in label gate (same live-fetch semantics as run-ci-extra). Lets a workflow require its own label on top of run-ci without adding a dedicated input per label.
       - name: Require additional label (optional)
         if: env.IS_PR_EVENT == 'true' && inputs.require-label != ''
         env:

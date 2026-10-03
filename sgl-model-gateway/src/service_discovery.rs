@@ -508,7 +508,6 @@ async fn handle_pod_event(
                     Ok(_) => {
                         debug!("Worker addition job submitted for: {}", worker_url);
 
-                        // Layer 4: Record successful registration from K8s discovery
                         Metrics::record_discovery_registration(
                             metrics_labels::DISCOVERY_KUBERNETES,
                             metrics_labels::REGISTRATION_SUCCESS,
@@ -526,7 +525,6 @@ async fn handle_pod_event(
                             worker_url, e
                         );
 
-                        // Layer 4: Record failed registration
                         Metrics::record_discovery_registration(
                             metrics_labels::DISCOVERY_KUBERNETES,
                             metrics_labels::REGISTRATION_FAILED,
@@ -593,7 +591,6 @@ async fn handle_pod_deletion(
             } else {
                 debug!("Submitted worker removal job for {}", worker_url);
 
-                // Layer 4: Record deregistration from K8s pod deletion
                 Metrics::record_discovery_deregistration(
                     metrics_labels::DISCOVERY_KUBERNETES,
                     metrics_labels::DEREGISTRATION_POD_DELETED,
@@ -1313,12 +1310,9 @@ mod tests {
         )
         .await;
 
-        // With fully async control plane, pod is tracked and job is queued
-        // Worker registration and validation happen in background job
+        // With fully async control plane, pod is tracked and job is queued Worker registration and validation happen.
         assert!(tracked_pods.lock().unwrap().contains(&pod_info));
 
-        // Note: In tests with uninitialized queue, background jobs don't process
-        // Worker won't appear in registry until background job runs (in production)
     }
 
     #[tokio::test]
@@ -1346,12 +1340,9 @@ mod tests {
         )
         .await;
 
-        // With fully async control plane, pod is tracked and job is queued
-        // Worker registration and validation happen in background job
+        // With fully async control plane, pod is tracked and job is queued Worker registration and validation happen.
         assert!(tracked_pods.lock().unwrap().contains(&pod_info));
 
-        // Note: In tests with uninitialized queue, background jobs don't process
-        // Worker won't appear in registry until background job runs (in production)
     }
 
     #[tokio::test]
@@ -1444,13 +1435,9 @@ mod tests {
         )
         .await;
 
-        // With fully async control plane, pod is tracked and job is queued
-        // In regular mode (pd_mode=false), worker_type defaults to Regular
-        // Worker registration and validation happen in background job
+        // With fully async control plane, pod is tracked.
         assert!(tracked_pods.lock().unwrap().contains(&pod_info));
 
-        // Note: In tests with uninitialized queue, background jobs don't process
-        // Worker won't appear in registry until background job runs (in production)
     }
 
     #[tokio::test]
@@ -1478,12 +1465,9 @@ mod tests {
         )
         .await;
 
-        // With fully async control plane, pod is tracked and job is queued
-        // Worker registration and validation happen in background job
+        // With fully async control plane, pod is tracked and job is queued Worker registration and validation happen.
         assert!(tracked_pods.lock().unwrap().contains(&pod_info));
 
-        // Note: In tests with uninitialized queue, background jobs don't process
-        // Worker won't appear in registry until background job runs (in production)
     }
 
     #[tokio::test]

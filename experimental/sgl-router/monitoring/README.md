@@ -5,19 +5,15 @@ SPDX-License-Identifier: Apache-2.0
 
 # sgl-router (experimental) monitoring
 
-Grafana dashboard for the experimental router's Prometheus metrics, exposed
-on `/metrics` (text/plain, version 0.0.4) on the router's serving port
-(default `30000`).
+Grafana dashboard for the experimental router's Prometheus metrics, exposed on `/metrics` (text/plain, version 0.0.4) on the router's serving port (default `30000`).
 
 ## Files
 
-- `grafana-dashboard.json` — importable Grafana dashboard, **SGLang Router
-  (experimental)** (uid `sgl-router-experimental`).
+- `grafana-dashboard.json` — importable Grafana dashboard, **SGLang Router (experimental)** (uid `sgl-router-experimental`).
 
 ## Metrics covered
 
-Families the router emits. The dashboard graphs all of them except the
-`sgl_router_kv_*` series, whose panels ship separately:
+Families the router emits. The dashboard graphs all of them except the `sgl_router_kv_*` series, whose panels ship separately:
 
 | Metric | Type | What it shows |
 |---|---|---|
@@ -43,36 +39,15 @@ Families the router emits. The dashboard graphs all of them except the
 | `sgl_router_kv_tree_accounting_errors_total` | Counter | Occupancy-bookkeeping contradictions, by `reason`. Always 0 on a correct tree |
 | `sgl_router_kv_tree_maintained` | Gauge | 1 when this router maintains its own KV tree, 0 under an external Indexer |
 
-The legacy `sgl_router_overlap_blocks` metric was removed with the
-`cache_aware_zmq` policy and has no direct replacement. Remove queries, alerts,
-and dashboard panels that depend on this metric before upgrading.
+The legacy `sgl_router_overlap_blocks` metric was removed with the `cache_aware_zmq` policy and has no direct replacement. Remove queries, alerts, and dashboard panels that depend on this metric before upgrading.
 
-The `sgl_router_workers` / `sgl_router_worker_*` gauges are sampled from the
-live worker registry on every scrape, so a removed worker stops emitting
-series immediately rather than leaving a stale value. The `sgl_router_kv_*`
-series are pulled from the KV-event index the same way.
+The `sgl_router_workers` / `sgl_router_worker_*` gauges are sampled from the live worker registry on every scrape. As a result, a removed worker stops emitting series immediately rather than leaving a stale value. The `sgl_router_kv_*` series are pulled from the KV-event index the same way.
 
-`sgl_router_kv_tree_blocks * sgl_router_kv_block_size` for one worker and
-tier, divided by that pod's own occupancy of the tier (device:
-`sglang_kv_used_tokens + sglang_kv_evictable_tokens`; host:
-`sglang_hicache_host_used_tokens`; `tp_rank="0"`), is the tree's coverage of
-that tier. Scope both sides to the same deployment before dividing — block
-size and fleet membership both vary between them, and an unscoped ratio
-divides one fleet's tree by another's occupancy.
+`sgl_router_kv_tree_blocks * sgl_router_kv_block_size` for one worker and tier, divided by that pod's own occupancy of the tier (device: `sglang_kv_used_tokens + sglang_kv_evictable_tokens`. Host: `sglang_hicache_host_used_tokens`. `tp_rank="0"`), is the tree's coverage of that tier. Scope both sides to the same deployment before dividing — block size and fleet membership both vary between them. An unscoped ratio divides one fleet's tree by another's occupancy.
 
-Read it as: about 1, the tree mirrors the engine; about 0, the engine holds a
-tier routing cannot see; **above 1, the tree holds tiers a worker has already
-released** — check `sgl_router_kv_event_batches_lost_total`, because a tagged
-removal clears only its own tier and a lost batch strands the rest.
+Read it as: about 1, the tree mirrors the engine. About 0, the engine holds a tier routing cannot see. **above 1, the tree holds tiers a worker has already released** — check `sgl_router_kv_event_batches_lost_total`. This is because a tagged removal clears only its own tier and a lost batch strands the rest.
 
-`sgl_router_kv_events_total` renders every `(event, medium)` cell including
-zeros, so a `CPU_PINNED` row pinned at 0 on a hierarchical-cache fleet is
-visible rather than absent. A nonzero `block_stored/unknown` row is the
-upgrade signal: the engine is publishing a storage tier this build cannot
-rank, so the tree drops those stores rather than filing them under a guess. Comparing `sgl_router_kv_event_blocks_total` for
-`block_stored/CPU_PINNED` against the engine's `sglang_hicache_backup_tokens_total`
-needs `sum without(pool)` on the engine side, and the two are not equal
-anyway: the engine also evicts device blocks it never backed up.
+`sgl_router_kv_events_total` renders every `(event, medium)` cell including zeros, so a `CPU_PINNED` row pinned at 0 on a hierarchical-cache fleet is visible rather than absent. A nonzero `block_stored/unknown` row is the upgrade signal. The engine is publishing a storage tier this build cannot rank, so the tree drops those stores rather than filing them under a guess. Comparing `sgl_router_kv_event_blocks_total` for `block_stored/CPU_PINNED` against the engine's `sglang_hicache_backup_tokens_total` needs `sum without(pool)` on the engine side. The two are not equal anyway: the engine also evicts device blocks it never backed up.
 
 ## Prometheus scrape config
 
@@ -91,25 +66,17 @@ scrape_configs:
 
 1. **Dashboards → New → Import**.
 2. Upload `grafana-dashboard.json` (or paste its contents).
-3. When prompted, select your Prometheus data source for the `Datasource`
-   variable. The dashboard uses a templated data source, so it imports into
-   any Grafana without editing the JSON.
+3. When prompted, select your Prometheus data source for the `Datasource` variable. The dashboard uses a templated data source, so it imports into any Grafana without editing the JSON.
 
-The top bar exposes `model_id` and `worker_url` template variables (both
-default to *All*) to scope the panels.
+The top bar exposes `model_id` and `worker_url` template variables (both default to *All*) to scope the panels.
 
 ## Regenerating
 
-The JSON is generated programmatically to keep the ~20 panels consistent. If
-the metric surface changes, update the generator and overwrite the JSON
-rather than hand-editing — hand-edits drift from the panel conventions.
+The JSON is generated programmatically to keep the panels consistent. If the metric surface changes, update the generator and overwrite the JSON rather than hand-editing — hand-edits drift from the panel conventions.
 
 ## Dispatch outcomes
 
-`sgl_router_worker_requests_total{outcome}` is derived from the status the
-client saw, not from whether the router's internal dispatch returned `Ok` — a
-worker error the router forwards is a successful *proxy* operation and a failed
-*request*.
+`sgl_router_worker_requests_total{outcome}` is derived from the status the client saw, not from whether the router's internal dispatch returned `Ok`. A worker error the router forwards is a successful *proxy* operation and a failed *request*.
 
 | `outcome` | Source | Counts as a worker fault? |
 |---|---|---|
@@ -119,27 +86,12 @@ worker error the router forwards is a successful *proxy* operation and a failed
 | `error` | 5xx except 503, plus transport failures, timeouts and incomplete bodies | **yes** |
 | `cancelled` | the router's own stale-request deadline | no |
 
-`error` is the only bucket that means *this worker failed*, which is why the
-Error-ratio panel uses it alone. The split matters during an incident: a
-saturated fleet answering with its own queue-full 503s registers as
-`backpressure`, and the circuit breaker likewise declines to open on those
-statuses — so the two agree, and the error ratio keeps pointing at genuine
-faults instead of pegging at 100% exactly when it is being read.
+`error` is the only bucket that means *this worker failed*, which is why the Error-ratio panel uses it alone. The split matters during an incident: a saturated fleet answering with its own queue-full 503s registers as `backpressure`. The circuit breaker likewise declines to open on those statuses — so the two agree. The error ratio keeps pointing at genuine faults instead of pegging at 100% exactly when it is being read.
 
-A hung worker surfaces as `error` (the router's upstream timeout), *not* as
-`cancelled`. Only the stale-request deadline produces `cancelled`;
-`sgl_router_stale_requests_total{outcome="expired"}` counts the same events.
+A hung worker surfaces as `error` (the router's upstream timeout), *not* as `cancelled`. Only the stale-request deadline produces `cancelled`. `sgl_router_stale_requests_total{outcome="expired"}` counts the same events.
 
 ## Access log
 
-The router emits one `http_request` event per request from a single middleware,
-so requests that never reach a handler (a body-limit 413, an unrouted 404, a
-panic-500) are logged too. Fields: `pod_id`, `request_id`, `method`, `path`,
-`status`, `outcome`, `worker`, `model`, `stream`, `latency_ms`.
+The router emits one `http_request` event per request from a single middleware, so requests that never reach a handler (a body-limit 413, an unrouted 404, a panic-500) are logged too. Fields: `pod_id`, `request_id`, `method`, `path`, `status`, `outcome`, `worker`, `model`, `stream`, `latency_ms`.
 
-`worker` and `model` are empty when the request was rejected before dispatch or
-hit a route that does not dispatch — that is normal, not a gap. Successful infra
-polls (`/healthz`, `/readyz`, `/metrics`) log at DEBUG so they do not bury real
-traffic; a *failing* probe keeps the INFO line. For a stream the line is written
-when the response head is ready, so `status=200` there does not mean the stream
-finished — `sgl_router_stream_outcome_total` carries that.
+`worker` and `model` are empty when the request was rejected before dispatch or hit a route that does not dispatch — that is normal. This is not a gap. Successful infra polls (`/healthz`, `/readyz`, `/metrics`) log at DEBUG so they do not bury real traffic. A *failing* probe keeps the INFO line. For a stream the line is written when the response head is ready, so `status=200` there does not mean the stream finished — `sgl_router_stream_outcome_total` carries that.

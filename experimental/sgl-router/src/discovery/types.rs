@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use serde::{Deserialize, Serialize};
 
-/// Opaque worker identifier. Wraps a string so callsites can't confuse it
-/// with other string types (e.g. `ModelId`).
+/// Opaque worker identifier. Wraps a string so callsites can't confuse it with other string types (e.g. `ModelId`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WorkerId(pub String);
 
@@ -24,9 +23,7 @@ impl std::fmt::Display for ModelId {
     }
 }
 
-/// Prefill/Decode/Plain role of a worker.
-///
-/// Serialises as `"plain"`, `"prefill"`, `"decode"` (snake_case).
+/// Prefill/Decode/Plain role of a worker. Serialises as `"plain"`, `"prefill"`, `"decode"` (snake_case).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerMode {
@@ -36,20 +33,6 @@ pub enum WorkerMode {
 }
 
 /// Immutable worker description emitted by a discovery backend.
-///
-/// Backends emit [`DiscoveryEvent::Added`] carrying a `WorkerSpec` when a
-/// new worker becomes available, and [`DiscoveryEvent::Removed`] when it
-/// leaves.
-///
-/// `bootstrap_port` is the SGLang disagg bootstrap server port for
-/// prefill workers (set via `--disaggregation-bootstrap-port` at worker
-/// startup). Resolved from each worker's `/server_info` response (see
-/// [`crate::workers::introspect`]); discovery backends seed it as
-/// `None`. `None` for decode and plain workers — they don't own a
-/// bootstrap server. The router copies the selected prefill worker's
-/// `bootstrap_host`/`bootstrap_port` plus a random `bootstrap_room`
-/// u64 onto every PD-disagg request body so the prefill engine can
-/// match incoming KV-transfer requests from the decode peer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerSpec {
     pub id: WorkerId,
@@ -61,16 +44,6 @@ pub struct WorkerSpec {
 }
 
 /// Event produced by a discovery backend and consumed by `WorkerManager`.
-///
-/// Tagged with `"event"` for JSON clarity:
-/// ```json
-/// {"event":"added","id":"w1","url":"http://…","mode":"plain","model_ids":["m"]}
-/// {"event":"removed","id":"w1"}
-/// {"event":"mode_changed","id":"w1","mode":"decode"}
-/// ```
-///
-/// The `Added` variant wraps the full [`WorkerSpec`]; the others carry only
-/// what changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum DiscoveryEvent {
@@ -120,9 +93,7 @@ mod tests {
 
     #[test]
     fn worker_spec_deserializes_with_missing_bootstrap_port() {
-        // Older configs / hand-written JSON without the field should
-        // still parse — bootstrap_port defaults to None for non-PD
-        // deployments.
+        // Older configs / hand-written JSON without the field should still parse — bootstrap_port defaults to None.
         let json = r#"{"id":"w","url":"http://x","mode":"plain","model_ids":["m"]}"#;
         let w: WorkerSpec = serde_json::from_str(json).unwrap();
         assert_eq!(w.bootstrap_port, None);

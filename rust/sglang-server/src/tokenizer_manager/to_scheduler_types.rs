@@ -6,15 +6,11 @@ use crate::message::request::MmRequest;
 /// Dispatches multimodal requests onto the MM worker channel.
 #[derive(Clone)]
 pub struct MmDispatch {
-    /// Whether the model is multimodal. When false, mm fields are silently
-    /// ignored, as the Python `TokenizerManager` does with `mm_processor is
-    /// None`.
+    /// Whether the model is multimodal.
     pub enabled: bool,
     /// → MM worker pool (spawned via `Server.start_mm_workers`).
     pub tx: flume::Sender<MmRequest>,
-    /// Parked results. Purged here when a late result arrives for a request
-    /// that is no longer parked; otherwise it would leak, since only the
-    /// scheduler drain pops entries.
+    /// Parked results.
     pub results: crate::multi_modality::result_store::MmResultStore,
 }
 
@@ -23,8 +19,7 @@ pub struct MmDispatch {
 pub struct Limits {
     /// Token-ids-in mode: a generate request must arrive already tokenized.
     pub skip_tokenizer_init: bool,
-    /// `model_config.vocab_size`; bounds client-supplied token ids. A required
-    /// field of the `ServerArgs` schema, so intake can check unconditionally.
+    /// `model_config.vocab_size`; bounds client-supplied token ids.
     pub vocab_size: u64,
     /// `model_config.context_len`, the ceiling for input + `max_new_tokens`.
     pub context_len: u64,

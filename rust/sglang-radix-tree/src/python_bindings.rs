@@ -22,8 +22,6 @@ use crate::unified_tree_core::{
     UnifiedTreeCore,
 };
 
-/// Parse a torch-style device string (e.g. "cpu", "cuda", "cuda:1"); a bare
-/// "cuda" means index 0, so callers must resolve the index themselves.
 fn parse_device(device: &str) -> PyResult<Device> {
     let device = device.to_lowercase();
     if device == "cpu" {
@@ -90,8 +88,7 @@ fn component_type_to_u8(component_type: ComponentType) -> u8 {
     component_type as u8
 }
 
-/// Newtype bridging `tch::Tensor` and Python `torch.Tensor` over raw THPVariable
-/// pointers (inlined from pyo3-tch, MIT/Apache-2.0, by Laurent Mazare).
+/// Newtype bridging `tch::Tensor` and Python `torch.Tensor` over raw THPVariable pointers.
 pub struct PyTensor(pub Tensor);
 
 impl<'a, 'py> FromPyObject<'a, 'py> for PyTensor {
@@ -142,9 +139,8 @@ fn tensor_to_py(py: Python<'_>, tensor: Tensor) -> PyResult<Py<PyAny>> {
 
 /// Convert a Python int64 sequence to an owned `Vec<i64>`.
 fn py_array_to_vec_i64(py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Vec<i64>> {
-    // Special handling for empty keys, as empty pyarray might use
-    // a random address to represent empty buffer which
-    // non-deterministically violates alignment check
+    // Special handling for empty keys, as empty pyarray might use a random
+    // address to represent empty buffer.
     if key.len().map(|n| n == 0).unwrap_or(false) {
         return Ok(Vec::new());
     }
@@ -310,8 +306,6 @@ type TransferArgs = (
 );
 
 /// Strongly typed, attribute-based input view of a Python MatchResult.
-/// Cache actions are intentionally omitted: component finalizers only update
-/// match metadata, while the test adapter preserves the original actions.
 #[cfg(feature = "inspection")]
 #[derive(FromPyObject)]
 struct InspectionMatchResultInput {
@@ -533,8 +527,7 @@ impl MatchParamsBinding {
     }
 }
 
-/// Python-visible insert params; converts into InsertParams. The value tensor
-/// stays a Python-held reference until the insert call unwraps it.
+/// Python-visible insert params; converts into InsertParams.
 #[pyclass(get_all, set_all)]
 pub struct InsertParamsBinding {
     pub key: Vec<i64>,
@@ -636,8 +629,7 @@ pub struct InsertResultBinding {
     cache_actions: Py<PyList>,
 }
 
-/// One step of the resumable insert: the actions to apply at this barrier
-/// and the final result once the walk completes.
+/// One step of the resumable insert: the actions to apply at this barrier and the final result once the walk completes.
 #[pyclass(get_all)]
 pub struct InsertStepResultBinding {
     actions: Py<PyList>,
@@ -724,8 +716,7 @@ impl DecLockRefParamsBinding {
     }
 }
 
-/// Python-visible inc_lock_ref result; the receipt (anchor node, boundary
-/// uuids, skipped components) is handed back to the matching dec_lock_ref.
+/// Python-visible inc_lock_ref result; the receipt (anchor node, boundary uuids, skipped components) is handed back.
 #[pyclass(get_all)]
 pub struct IncLockRefResultBinding {
     delta: Option<usize>,
@@ -775,9 +766,7 @@ fn tracker_to_py(tracker: HashMap<ComponentType, usize>) -> HashMap<u8, usize> {
         .collect()
 }
 
-/// Next-eviction-node step result: the node to evict, whether the walk made
-/// progress, this step's per-component evicted counts, and this step's newly
-/// freed tensors.
+/// Next-eviction-node step result: the node to evict, whether the walk made progress, this step's per-component evicted counts.
 #[pyclass(get_all)]
 pub struct EvictDeviceNextNodeResultBinding {
     node_id: Option<NodeId>,
@@ -787,9 +776,7 @@ pub struct EvictDeviceNextNodeResultBinding {
     new_host_frees: Py<PyDict>,
 }
 
-/// Leaf-eviction step result: the backup action for an unbacked
-/// write-back leaf (else None), this step's per-component evicted counts,
-/// and this step's newly freed tensors.
+/// Leaf-eviction step result: the backup action for an unbacked write-back leaf (else None), this step's per-component evicted counts.
 #[pyclass(get_all)]
 pub struct EvictDeviceLeafResultBinding {
     backup_kv: Option<Py<PyAny>>,
@@ -798,8 +785,7 @@ pub struct EvictDeviceLeafResultBinding {
     new_host_frees: Py<PyDict>,
 }
 
-/// Drop-subtree result: whether the drop happened, this step's
-/// per-component evicted counts, and the subtree's newly freed tensors.
+/// Drop-subtree result: whether the drop happened, this step's per-component evicted counts.
 #[pyclass(get_all)]
 pub struct DropSubtreeResultBinding {
     dropped: bool,
@@ -808,8 +794,7 @@ pub struct DropSubtreeResultBinding {
     new_host_frees: Py<PyDict>,
 }
 
-/// Demote result: this step's per-component evicted counts and the
-/// demoted node's newly freed tensors.
+/// Demote result: this step's per-component evicted counts and the demoted node's newly freed tensors.
 #[pyclass(get_all)]
 pub struct DemoteResultBinding {
     tracker: HashMap<u8, usize>,
@@ -880,8 +865,7 @@ impl From<BufferBackupState> for BufferBackupStateBinding {
     }
 }
 
-/// Python-visible KV-canary walk rows: parallel int64 tensors of slots,
-/// positions, and preceding slots.
+/// Python-visible KV-canary walk rows: parallel int64 tensors of slots, positions, and preceding slots.
 #[pyclass(get_all)]
 pub struct KvCanaryWalkResultBinding {
     slot_indices: Py<PyAny>,
@@ -889,8 +873,7 @@ pub struct KvCanaryWalkResultBinding {
     prev_slot_indices: Py<PyAny>,
 }
 
-/// Host-eviction drive result: this step's per-component evicted counts
-/// and the drive's newly freed tensors.
+/// Host-eviction drive result: this step's per-component evicted counts and the drive's newly freed tensors.
 #[pyclass(get_all)]
 pub struct HostEvictionResultBinding {
     tracker: HashMap<u8, usize>,
@@ -908,8 +891,8 @@ impl HostEvictionResultBinding {
     }
 }
 
-/// The generic UnifiedTreeCore adapter the per-key-type pyclasses delegate to;
-/// the Mutex makes the Send-only core satisfy pyclass's Sync bound.
+/// The generic UnifiedTreeCore adapter the per-key-type pyclasses delegate
+/// to.
 struct TreeCoreBinding<K: ChildKeyType> {
     core: Mutex<UnifiedTreeCore<K>>,
     /// The core's construction device, kept outside the Mutex for pre-lock validation.
@@ -1054,7 +1037,6 @@ impl<K: ChildKeyType + Send + Sync> TreeCoreBinding<K> {
         let key = K::key_from(Cow::Borrowed(&params.key));
         let key = key.as_ref();
         let value: PyTensor = params.value.bind(py).extract()?;
-        // The value covers key atoms (bigram: raw len - 1), so validate the converted key.
         self.validate_insert_value(&value.0, key.atom_len())?;
         let mamba_value = match &params.mamba_value {
             Some(mamba_value) => Some(mamba_value.bind(py).extract::<PyTensor>()?.0),
@@ -1091,7 +1073,6 @@ impl<K: ChildKeyType + Send + Sync> TreeCoreBinding<K> {
         let key = K::key_from(Cow::Borrowed(&params.key));
         let key = key.as_ref();
         let value: PyTensor = params.value.bind(py).extract()?;
-        // The value covers key atoms (bigram: raw len - 1), so validate the converted key.
         self.validate_insert_value(&value.0, key.atom_len())?;
         let mamba_value = match &params.mamba_value {
             Some(mamba_value) => Some(mamba_value.bind(py).extract::<PyTensor>()?.0),
@@ -1400,13 +1381,11 @@ impl<K: ChildKeyType + Send + Sync> TreeCoreBinding<K> {
         py.detach(|| self.core().full_protected_size())
     }
 
-    /// Evictable token count for one component (0 if the component is absent).
     fn component_evictable_size(&self, py: Python<'_>, component_type: u8) -> PyResult<usize> {
         let ct = parse_component_type(component_type)?;
         Ok(py.detach(|| self.core().component_evictable_size(ct)))
     }
 
-    /// Protected token count for one component (0 if the component is absent).
     fn component_protected_size(&self, py: Python<'_>, component_type: u8) -> PyResult<usize> {
         let ct = parse_component_type(component_type)?;
         Ok(py.detach(|| self.core().component_protected_size(ct)))
@@ -2454,8 +2433,7 @@ macro_rules! tree_core_binding {
 
         #[pymethods]
         impl $name {
-            /// Build a tree core for the given component types from the cache's
-            /// init params.
+            /// Build a tree core for the given component types from the cache's init params.
             #[new]
             fn new(init_params: &TreeCoreInitParamsBinding, component_types: Vec<u8>) -> PyResult<Self> {
                 Ok($name {
@@ -2545,8 +2523,7 @@ macro_rules! tree_core_binding {
                 self.inner.dec_full_pin(py, node_id)
             }
 
-            /// Decrease the reference count on a node's component locks. The
-            /// receipt is required: a release must replay its acquire's evidence.
+            /// Decrease the reference count on a node's component locks.
             #[pyo3(signature = (node_id, params, skip_swa = false))]
             fn dec_lock_ref(
                 &self,
@@ -2558,8 +2535,7 @@ macro_rules! tree_core_binding {
                 self.inner.dec_lock_ref(py, node_id, params, skip_swa)
             }
 
-            /// Early-release the SWA portion of a request's tree lock; returns this
-            /// release's per-component (device_frees, host_frees).
+            /// Early-release the SWA portion of a request's tree lock.
             #[pyo3(signature = (node_id, params))]
             fn dec_swa_lock_only(
                 &self,
@@ -2604,9 +2580,7 @@ macro_rules! tree_core_binding {
                     .evict_device_start(py, component_type, request_cnt)
             }
 
-            /// The next device leaf to evict, or None when the walk is done; the
-            /// passed running tracker gates the budget, and the result carries
-            /// this step's deltas.
+            /// The next device leaf to evict, or None when the walk is done.
             fn evict_device_next_node(
                 &self,
                 py: Python<'_>,
@@ -2617,8 +2591,7 @@ macro_rules! tree_core_binding {
                     .evict_device_next_node(py, component_type, tracker)
             }
 
-            /// Evict one device leaf; an unbacked write-back leaf returns its backup
-            /// action for the caller to execute before demoting.
+            /// Evict one device leaf; an unbacked write-back leaf returns its backup action for the caller to execute.
             fn evict_device_leaf(
                 &self,
                 py: Python<'_>,
@@ -2632,8 +2605,7 @@ macro_rules! tree_core_binding {
                 self.inner.evict_device_end(py, component_type)
             }
 
-            /// Verify tree-structure, leaf-set, LRU, size, and ongoing-op invariants;
-            /// ongoing_* args are (id, node_id) pairs.
+            /// Verify tree-structure, leaf-set, LRU, size, and ongoing-op invariants; ongoing_* args are (id, node_id).
             fn sanity_check(
                 &self,
                 py: Python<'_>,
@@ -2696,12 +2668,10 @@ macro_rules! tree_core_binding {
                 self.inner.full_protected_size(py)
             }
 
-            /// Evictable token count for one component (0 if the component is absent).
             fn component_evictable_size(&self, py: Python<'_>, component_type: u8) -> PyResult<usize> {
                 self.inner.component_evictable_size(py, component_type)
             }
 
-            /// Protected token count for one component (0 if the component is absent).
             fn component_protected_size(&self, py: Python<'_>, component_type: u8) -> PyResult<usize> {
                 self.inner.component_protected_size(py, component_type)
             }
@@ -2968,8 +2938,7 @@ macro_rules! tree_core_binding {
                 self.inner.drive_host_eviction(py, component_type, num_tokens)
             }
 
-            /// Evict shallow Mamba device checkpoints beyond the per-path cap
-            /// on the tail's root path.
+            /// Evict shallow Mamba device checkpoints beyond the per-path cap on the tail's root path.
             fn evict_excess_path_states(
                 &self,
                 py: Python<'_>,
@@ -2988,7 +2957,6 @@ macro_rules! tree_core_binding {
             }
 
             /// Decrease the reference count on a node's host-side component locks.
-            /// The receipt is required, as for dec_lock_ref.
             fn dec_host_lock_ref(
                 &self,
                 py: Python<'_>,
@@ -3052,8 +3020,7 @@ macro_rules! tree_core_binding {
                 self.inner.take_events(py)
             }
 
-            /// Drop the subtree rooted at an unbacked D-leaf; not dropped when a lock
-            /// blocks it.
+            /// Drop the subtree rooted at an unbacked D-leaf; not dropped when a lock blocks it.
             fn drop_subtree_no_host(
                 &self,
                 py: Python<'_>,
@@ -3534,8 +3501,7 @@ tree_core_binding!(
 );
 
 tree_core_binding!(
-    /// The UnifiedTreeCore Python adapter over bigram (EAGLE) child keys; keys
-    /// cross the boundary as raw token ids and pair up rust-side.
+    /// The UnifiedTreeCore Python adapter over bigram (EAGLE) child keys.
     RustBigramUnifiedTreeCoreBinding,
     Vec<(i64, i64)>
 );

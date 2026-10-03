@@ -258,9 +258,7 @@ mod pd_responses_routing_tests {
         Stream(&'static str),
     }
 
-    /// Regression test: `/v1/responses` must be routed through the PD
-    /// dual-dispatch path instead of falling back to the `RouterTrait`
-    /// default `501 NOT_IMPLEMENTED` implementation.
+    /// Regression test: `/v1/responses` must be routed through the PD dual-dispatch path instead of falling back.
     #[tokio::test]
     async fn test_pd_mode_responses_routing() {
         let config = RouterConfig::builder()
@@ -387,10 +385,7 @@ mod pd_responses_routing_tests {
         serde_json::from_value(payload).expect("valid responses request")
     }
 
-    /// PDRouter must inject the PD bootstrap metadata into both worker
-    /// requests, forward `disagg_prefill_dp_rank` to decode for a DP-aware
-    /// prefill worker, target `/v1/responses` on both workers, and return the
-    /// decode response.
+    /// PDRouter must inject the PD bootstrap metadata into both worker requests.
     #[tokio::test]
     async fn test_pd_responses_default_buffered_request_injects_bootstrap_metadata() {
         let prefill_bodies = Arc::new(Mutex::new(Vec::new()));
@@ -446,9 +441,7 @@ mod pd_responses_routing_tests {
         decode_task.abort();
     }
 
-    /// Streaming Responses requests must flow through the PD dual-dispatch
-    /// path and return the decode SSE stream unchanged, with bootstrap
-    /// metadata still injected into both worker requests.
+    /// Streaming Responses requests must flow through the PD dual-dispatch path and return the decode SSE stream unchanged.
     #[tokio::test]
     async fn test_pd_responses_streaming_passthrough() {
         let prefill_bodies = Arc::new(Mutex::new(Vec::new()));
@@ -554,10 +547,7 @@ mod pd_responses_routing_tests {
         serde_json::from_slice(&body).unwrap()
     }
 
-    /// Model #39122's pre-generation admission error without depending on its
-    /// serving implementation. Prefill waits until decode has received the
-    /// request, then rejects it without producing KV. Decode sends no headers
-    /// or KV-timeout response: only a router disconnect can finish its task.
+    /// Model # 's pre-generation admission error without depending on its serving implementation.
     #[tokio::test]
     async fn test_pd_responses_stateful_400_cancels_pending_decode() {
         for (param, value, stream) in [
@@ -683,10 +673,7 @@ mod pd_responses_routing_tests {
         }
     }
 
-    /// Detached background responses (`background=true, stream=false`) are
-    /// retrieved through the /v1/responses/{id} endpoints, which the PD router
-    /// does not implement. They must be rejected deterministically instead of
-    /// dual-dispatched.
+    /// Detached background responses (`background=true, stream=false`) are retrieved through the /v1/responses/{id} endpoints.
     #[tokio::test]
     async fn test_pd_responses_detached_background_rejected() {
         let router = make_pd_router();

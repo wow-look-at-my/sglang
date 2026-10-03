@@ -1,11 +1,4 @@
-//! Preprocessing FFI functions for chat requests
-//!
-//! This module provides C-compatible functions for preprocessing chat completion requests:
-//! - Apply chat_template to messages
-//! - Tokenize the processed text
-//! - Generate tool constraints
-//!
-//! These functions are designed to be called once per request, reducing FFI overhead.
+//! Preprocessing FFI functions.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_uint;
@@ -21,35 +14,12 @@ use smg::protocols::chat::ChatCompletionRequest;
 use smg::tokenizer::create_tokenizer_from_file;
 
 /// Tool constraint in the shape the Go caller unmarshals: an object keyed by
-/// constraint type, the key naming a `SamplingParams.constraint` oneof field of
-/// the SGLang gRPC proto (`regex`, `json_schema`, `ebnf_grammar`, `structural_tag`).
+/// constraint type.
 fn constraint_json(constraint_type: &str, constraint_value: &str) -> Value {
     serde_json::json!({ constraint_type: constraint_value })
 }
 
-/// Preprocess a chat completion request
-///
-/// This function:
-/// 1. Applies chat_template to messages
-/// 2. Tokenizes the processed text
-/// 3. Generates tool constraints (if tools are present)
-///
-/// # Arguments
-/// * `request_json` - OpenAI ChatCompletionRequest as JSON string
-/// * `tokenizer_path` - Path to tokenizer directory
-/// * `prompt_text_out` - Pointer to receive prompt text (C string, must be freed with sgl_free_string)
-/// * `token_ids_out` - Pointer to receive token IDs array (must be freed with sgl_free_token_ids)
-/// * `token_ids_len_out` - Pointer to receive token IDs array length
-/// * `tool_constraints_json_out` - Optional pointer to receive tool constraints JSON (must be freed with sgl_free_string)
-/// * `prompt_tokens_out` - Pointer to receive prompt token count
-/// * `error_out` - Optional pointer to receive error message
-///
-/// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `request_json` and `tokenizer_path` must be NUL-terminated UTF-8; the
-/// non-optional out pointers must be writable.
+/// Preprocess a chat completion request This function:. Applies chat_template to messages.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_preprocess_chat_request(
     request_json: *const c_char,
@@ -196,28 +166,7 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request(
     SglErrorCode::Success
 }
 
-/// Preprocess a chat completion request using an existing tokenizer handle
-///
-/// This function is similar to sgl_preprocess_chat_request, but accepts a TokenizerHandle
-/// instead of creating a new tokenizer. This allows reusing a cached tokenizer instance,
-/// significantly reducing initialization overhead in concurrent scenarios.
-///
-/// # Arguments
-/// * `request_json` - OpenAI ChatCompletionRequest as JSON string
-/// * `tokenizer_handle` - Existing tokenizer handle (must be valid)
-/// * `prompt_text_out` - Pointer to receive prompt text (C string, must be freed with sgl_free_string)
-/// * `token_ids_out` - Pointer to receive token IDs array (must be freed with sgl_free_token_ids)
-/// * `token_ids_len_out` - Pointer to receive token IDs array length
-/// * `tool_constraints_json_out` - Optional pointer to receive tool constraints JSON (must be freed with sgl_free_string)
-/// * `prompt_tokens_out` - Pointer to receive prompt token count
-/// * `error_out` - Optional pointer to receive error message
-///
-/// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `request_json` must be NUL-terminated UTF-8; `tokenizer_handle` must be
-/// live; the non-optional out pointers must be writable.
+/// Preprocess a chat completion request using an existing tokenizer handle This function is similar to sgl_preprocess_chat_request.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_preprocess_chat_request_with_tokenizer(
     request_json: *const c_char,
@@ -351,14 +300,7 @@ pub unsafe extern "C" fn sgl_preprocess_chat_request_with_tokenizer(
     SglErrorCode::Success
 }
 
-/// Free a preprocessed request handle (cleanup function)
-///
-/// This function frees the memory allocated by sgl_preprocess_chat_request.
-/// It should be called after the preprocessed data is no longer needed.
-///
-/// # Safety
-/// Each pointer must be null or a buffer handed out by the preprocess
-/// functions, and `token_ids_len` must be the length reported for `token_ids`.
+/// Free a preprocessed request handle (cleanup function) This function frees the memory allocated.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_preprocessed_request_free(
     prompt_text: *mut c_char,
@@ -384,10 +326,7 @@ mod tests {
     use super::constraint_json;
     use std::collections::HashMap;
 
-    /// `internal/grpc/client_grpc.go` decodes this as `map[string]string` and
-    /// reads the constraint type back out as the map key, so any other shape --
-    /// a two-element array, a `{"type":..,"value":..}` object -- decodes to
-    /// nothing and the constraint is dropped before it reaches the wire.
+    /// `internal/grpc/client_grpc.go` decodes this as `map[string]string` and reads the constraint type back out as the map key.
     #[test]
     fn constraint_decodes_as_a_map_keyed_by_constraint_type() {
         let schema = r#"{"type":"object","properties":{"city":{"type":"string"}}}"#;

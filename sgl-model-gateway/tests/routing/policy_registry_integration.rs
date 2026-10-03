@@ -46,8 +46,7 @@ async fn test_policy_registry_with_router_manager() {
         dp_aware: false,
     };
 
-    // This would normally connect to a real worker, but for testing we'll just verify the structure
-    // In a real test, we'd need to mock the worker or use a test server
+    // This would normally connect to a real worker, but for testing we'll verify the structure In a real test.
 
     let _llama_policy = policy_registry.get_policy("llama-3");
     // After first worker is added, llama-3 should have a policy

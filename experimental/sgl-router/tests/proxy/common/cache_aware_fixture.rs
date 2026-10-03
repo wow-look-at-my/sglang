@@ -1,10 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Shared router config for the cache-aware proxy tests.
-//!
-//! The model id contains `deepseek-v4` so the tokenizer registry auto-attaches the
-//! built-in V4 chat formatter — the engine-equivalent path — with no template fixture.
 
 use sgl_router::config::{
     CacheAwareConfig, Config, DiscoveryBackend, InflightLoadConfig, ModelConfig,

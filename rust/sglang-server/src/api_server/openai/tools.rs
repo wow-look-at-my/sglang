@@ -1,27 +1,4 @@
 //! Tool-choice constraints and unary tool-call parsing.
-//!
-//! Two complementary mechanisms, mirroring the Python frontend
-//! (`serving_chat.py` + dynamo-parsers):
-//!
-//! - [`apply_tool_constraint`] turns `tool_choice` into a sampling constraint
-//!   *before* submission: a `structural_tag` when the parser supports one (or
-//!   when strict tools need the llama3 triggered-tag format), otherwise a
-//!   `json_schema` array restricting the output to tool calls. It validates
-//!   `tool_choice`/`tools` agreement first.
-//! - [`parse_chat_tool_calls`] strips the model's tool-call markers out of a
-//!   finished response. Streaming responses use Dynamo's
-//!   `apply_tool_calling_jail` directly in `chat.rs`.
-//!
-//! [`dynamo_parser_name`] canonicalizes the SGLang CLI parser names onto the
-//! dynamo-parsers registry keys, [`chat_delta`] builds the stream deltas these
-//! paths emit, and [`chat_finish_reason`] maps the scheduler's finish reason
-//! onto the OpenAI wire values.
-//!
-//! # Test coverage
-//!
-//! The tests cover parser-name canonicalization, every `tool_choice` branch of
-//! [`apply_tool_constraint`], Dynamo's streaming jail integration, unary
-//! parsing, and finish-reason mapping.
 
 use dynamo_parsers::parsers::get_tool_parser_map;
 use dynamo_parsers::{
@@ -39,10 +16,8 @@ use dynamo_protocols::types::{
 use crate::message::response::ChunkEvent;
 use crate::message::sampling::SamplingParams;
 
-/// Canonicalize a tool-call parser name onto the dynamo-parsers registry keys.
-///
-/// SGLang canonicalizes these legacy CLI names in the opposite direction from
-/// the current Dynamo parser registry.
+/// Canonicalize a tool-call parser name onto the dynamo-parsers registry
+/// keys.
 pub(super) fn dynamo_parser_name(parser: &str) -> &str {
     match parser {
         "llama3" => "llama3_json",
@@ -77,7 +52,7 @@ pub(super) fn dynamo_tool_choice(
 /// or — for llama3 with strict tools under `auto` — a triggered-tag builder
 /// so the model emits calls in the exact `<|python_tag|>` format. Otherwise
 /// `required`/`named` choices fall back to a JSON-schema array constraining
-/// the output to `{"name", "parameters"}` objects (`maxItems: 1` when
+/// the output to `{"name", "parameters"}` objects (`maxItems.
 /// `parallel_tool_calls` is false).
 pub(super) fn apply_tool_constraint(
     sampling: &mut SamplingParams,
@@ -181,9 +156,6 @@ pub(super) fn apply_tool_constraint(
 }
 
 /// Build a chat-streaming delta carrying any of the optional columns.
-///
-/// The deprecated `function_call` field stays `None` — tool calls go through
-/// the `tool_calls` array.
 #[allow(deprecated)]
 pub(super) fn chat_delta(
     content: Option<String>,
@@ -507,8 +479,7 @@ mod tests {
         assert!(error.contains("missing"));
     }
 
-    /// Validation runs even without a parser (the handler calls this in every
-    /// mode), so an invalid choice is rejected before submission there too.
+    /// Validation runs even without a parser (the handler calls this in every mode).
     #[test]
     fn missing_parser_still_validates_the_tool_choice() {
         let mut sampling = SamplingParams::default();
@@ -670,8 +641,7 @@ mod tests {
             "llama3_json",
         )
         .await;
-        // The safe prefix streams immediately; the held marker suffix joins
-        // the next chunk, which parses into a tool call.
+        // The safe prefix streams immediately.
         assert_eq!(delta_text(&items[0]), "Before ");
         let tool_call = choice(&items[1]);
         assert!(matches!(

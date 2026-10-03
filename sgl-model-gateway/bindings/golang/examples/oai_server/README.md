@@ -1,6 +1,6 @@
 # Go SGLang Router - OpenAI Compatible API Server
 
-Go SGLang Router is a high-performance OpenAI-compatible API server that communicates with the SGLang backend via gRPC and performs efficient preprocessing and postprocessing through Rust FFI.
+Go SGLang Router is a high-performance OpenAI-compatible API server that communicates with the SGLang backend via gRPC and performs efficient preprocessing and postprocessing. This is through Rust FFI.
 
 ## Features
 
@@ -227,7 +227,7 @@ type Timeouts struct {
 3. **Lazy Parsing**: JSON parsing deferred until needed
 4. **Direct JSON Passing**: `RecvJSON()` avoids parse/serialize overhead
 5. **Immediate Batching**: batchSize=1, no delay
-6. **Async Processing**: `readLoop` processes in background, doesn't block request handling
+6. **Async Processing**: `readLoop` processes in background, does not block request handling
 7. **Configurable Buffers**: Adjust channel sizes based on concurrency needs
 
 ## File Structure

@@ -1,15 +1,4 @@
-//! Tokenizer pool — CPU-bound, runs on pinned OS threads (off the async
-//! executor). Each worker pulls a `Request` from the shared `flume` receiver,
-//! fills `input_ids`, and moves the request back to the TokenizerManager inbox.
-//!
-//! The text→ids step is behind [`TextTokenizer`], implemented by
-//! [`DynamoTokenizer`] (dynamo-tokenizers: HuggingFace / tiktoken / fastokens).
-//! A non-skip server requires a real tokenizer (enforced at startup); under
-//! `skip_tokenizer_init` the pool isn't spawned at all.
-//!
-//! Mirrors the Python `_tokenize_one_request` text path: when the request
-//! already carries `input_ids` it skips tokenization (handled upstream in the
-//! TokenizerManager `classify`); otherwise the prompt text is encoded here.
+//! Tokenizer pool — CPU-bound, runs on pinned OS threads (off the async executor).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -26,8 +15,7 @@ pub trait TextTokenizer: Send + Sync {
     fn encode(&self, text: &str) -> Result<TokenIds, Error>;
 
     /// The special tokens this tokenizer auto-prepends on every `encode` —
-    /// Python's `encode("")` probe (`serving_chat._tokenizer_auto_adds_specials`).
-    /// Empty when it adds none (tiktoken backends, no BOS/EOS post-processor).
+    /// Python's `encode("")` probe.
     fn auto_specials(&self) -> Vec<i32> {
         Vec::new()
     }
@@ -86,8 +74,7 @@ fn resolve_from_hub_cache(repo_id: &str, revision: Option<&str>, filename: &str)
 
     // Python resolves the cache dir as HF_HUB_CACHE > HUGGINGFACE_HUB_CACHE >
     // HF_HOME/hub > ~/.cache/huggingface/hub; the hf-hub crate only knows
-    // HF_HOME. Honor the explicit cache-dir overrides first, or the Rust
-    // server misses models the Python scheduler already downloaded.
+    // HF_HOME.
     let cache = ["HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"]
         .iter()
         .find_map(|var| std::env::var(var).ok())
@@ -119,8 +106,6 @@ impl DynamoTokenizer {
 impl TextTokenizer for DynamoTokenizer {
     fn encode(&self, text: &str) -> Result<TokenIds, Error> {
         if text.is_empty() {
-            // Match Python sglang: reject an empty prompt as a 400 (`Validation`),
-            // not the misleading 500 a tokenize error would give.
             return Err(Error::Validation("prompt cannot be empty".into()));
         }
         let encoding = self
@@ -142,9 +127,7 @@ impl TextTokenizer for DynamoTokenizer {
 }
 
 /// Remove one leading run of auto-added specials — exactly what an
-/// `add_special_tokens=false` encode would have produced, without a second
-/// tokenizer instance (the post-processor always prepends the same prefix, so
-/// a template-rendered copy of those tokens is preserved).
+/// `add_special_tokens=false` encode would have produced.
 fn strip_auto_specials(mut ids: Vec<i32>, auto_specials: &[i32]) -> Vec<i32> {
     if ids.starts_with(auto_specials) {
         ids.drain(..auto_specials.len());
@@ -154,11 +137,6 @@ fn strip_auto_specials(mut ids: Vec<i32>, auto_specials: &[i32]) -> Vec<i32> {
 
 /// One tokenizer worker: pulls a `Request` off the shared inbox, fills
 /// `input_ids`, returns it to the TokenizerManager. Pinned; backend shared.
-///
-/// The `auto_specials` prefix (probed once at construction, Python's
-/// `encode("")` probe) is stripped from template-rendered prompts —
-/// [`GenerateRequest`]'s `skip_special_tokens` — so chat prompts gain no
-/// extra BOS/EOS while plain text keeps the post-processor specials.
 pub struct TokenizerWorker {
     rx: flume::Receiver<Request>,
     tm: flume::Sender<TmEvent>,
@@ -198,9 +176,7 @@ impl Runnable for TokenizerWorker {
                     .sampling_params
                     .stop_strs
                     .iter()
-                    // A stop that won't encode falls back to its byte length rather
-                    // than failing the request: still an over-estimate, never an
-                    // under-estimate, so the scheduler cannot miss that stop.
+                    // A stop that won't encode falls back to its byte length rather than failing the request: still an over-estimate, never an under-estimate.
                     .map(|s| self.tokenizer.encode(s).map_or(s.len(), |ids| ids.len()))
                     .max();
                 if let Some(n) = stop_tokens {
@@ -236,8 +212,7 @@ mod tests {
     use crate::utils::fsm::RequestState;
     use tokio::sync::mpsc;
 
-    /// One token per whitespace-separated word, so a stop's token count differs
-    /// from its byte count and the two units cannot be confused.
+    /// One token per whitespace-separated word, so a stop's token count differs from its byte count.
     struct WordTokenizer;
     impl TextTokenizer for WordTokenizer {
         fn encode(&self, text: &str) -> Result<TokenIds, Error> {
@@ -245,19 +220,12 @@ mod tests {
         }
     }
 
-    /// The scheduler's stop-match window must reach the wire as a TOKEN count, as
-    /// Python's `normalize(tokenizer)` produces.
-    ///
-    /// `Normalizing` leaves a UTF-8 BYTE count there — a safe over-estimate, but it
-    /// makes the scheduler decode a longer tail on EVERY decode step of EVERY
-    /// request (14 tokens vs 6 for a typical stop set). This stage owns the
-    /// tokenizer, so it is where the exact count is resolved.
+    /// The scheduler's stop-match window must reach the wire as a TOKEN count.
     #[test]
     fn tokenizing_replaces_the_byte_window_with_a_token_count() {
         let (req_tx, req_rx) = flume::unbounded::<Request>();
         let (tm_tx, tm_rx) = flume::unbounded::<TmEvent>();
 
-        // 8 bytes vs 3 "tokens" under WordTokenizer — units are distinguishable.
         let sp = SamplingParams {
             stop_strs: vec!["a bb ccc".to_string(), "dd".to_string()],
             stop_str_max_len: 8, // what `normalize_stops` left: max BYTE length
@@ -293,9 +261,7 @@ mod tests {
         );
     }
 
-    /// The strip reproduces `add_special_tokens=false`: one leading run of
-    /// auto-added specials is removed, a template-rendered copy is kept, and
-    /// tokenizers with no auto specials (empty probe) are untouched.
+    /// The strip reproduces `add_special_tokens=false`: one leading run of auto-added specials is removed, a template-rendered copy is kept.
     #[test]
     fn strip_auto_specials_matches_add_special_tokens_false() {
         assert_eq!(strip_auto_specials(vec![0, 0, 1, 2], &[0]), vec![0, 1, 2]);
@@ -304,8 +270,6 @@ mod tests {
         assert_eq!(strip_auto_specials(vec![0], &[0, 9]), vec![0]);
     }
 
-    /// Word tokens plus a prepended BOS marker (id 0) — like an HF tokenizer
-    /// whose post-processor adds specials.
     struct MarkedTokenizer;
     impl TextTokenizer for MarkedTokenizer {
         fn encode(&self, text: &str) -> Result<TokenIds, Error> {
@@ -316,9 +280,7 @@ mod tests {
         }
     }
 
-    /// `skip_special_tokens` strips the probed prefix: template-rendered
-    /// prompts (chat) must not gain a BOS the template didn't render — Python's
-    /// `add_special_tokens=False` at the chat-template encode site.
+    /// `skip_special_tokens` strips the probed prefix: template-rendered prompts (chat) must not gain a BOS the template didn't render.
     #[test]
     fn skip_special_tokens_strips_the_auto_added_specials() {
         let run = |skip_special_tokens: bool| {

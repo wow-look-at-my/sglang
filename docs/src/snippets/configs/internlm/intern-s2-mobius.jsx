@@ -64,16 +64,8 @@ sgl-eval run gpqa \\
     numPromptsByConc: { 1: 8, 16: 32, 64: 128, 256: 512, 1024: 1024 },
   },
 
-  // Per-variant accuracy applied to every cell; per-cell `accuracy` overrides.
-  // Measured on 2xH200 with the low-latency (EAGLE NEXTN 3-1-4) recipe, with no
-  // server-side sampling override, so the checkpoint's generation_config.json
-  // defaults apply throughout (temp=1.0, top_p=0.95, top_k=20). NOTE: the model
-  // card separately recommends temp=0.8 / top_p=1.0 / top_k=50 / min_p=0.0 —
-  // those are NOT what generation_config.json ships, so they only apply when the
-  // client sends them explicitly.
-  // gsm8k : full 1319-example test split.
-  // gpqa  : Diamond, 198 problems × 8 repeats, pass@1 avg-of-8 = 79.23% ± 1.49,
-  //         pass@8 = 88.38 %, majority@8 = 80.56 %, stop_rate = 100 %.
+  // Per-variant accuracy applied to every cell; per-cell `accuracy`
+  // overrides.
   defaultAccuracy: {
     default: { gsm8k_pct: 96.66, gpqa_pct: 79.23 },
   },
@@ -101,12 +93,7 @@ sgl-eval run gpqa \\
       ],
     },
 
-    // No "MoE Parallelism" card. The routed experts do not live per-layer: all 40
-    // layers query 4 globally shared expert banks (`meta_mlp`, config `num_blocks: 4`
-    // — models/interns2_mobius.py), so EP has nothing to shard. The runtime enforces
-    // that: server_args._handle_model_specific_adjustments raises for this arch on
-    // `--ep-size != 1` (and `--pp-size != 1`), so an EP chip would emit a command
-    // that cannot start. `--moe-a2a-backend deepep` is out for the same reason.
+    // No "MoE Parallelism" card.
 
     // ----- Card: "Parsers" -----
     parsers: {
@@ -116,7 +103,8 @@ sgl-eval run gpqa \\
       ],
     },
 
-    // ----- Card: "Speculative Decoding" -----  MTP (NEXTN) is the cook-worthy preset.
+    // ----- Card: "Speculative Decoding" ----- MTP (NEXTN) is the cook-worthy
+    // preset.
     speculative: {
       options: [
         { id: "current", label: "Inherited from base" },
@@ -132,10 +120,6 @@ sgl-eval run gpqa \\
   },
 
   cells: [
-    // ==== H200, 2 GPUs, BF16, low-latency (MTP NEXTN on) — VERIFIED ====
-    // GSM8K 1319 leg: 96.66 % acc / 100 % stop. Bench 8K-in / 1K-out (see
-    // intern-s2-mobius-benchmarks.jsx for the full 1/16/64 sweep; per conc=16
-    // spec reaches 18029 total tok/s vs 9358 no-spec).
     {
       match: { hw: "h200", variant: "default", quant: "bf16", strategy: "low-latency", nodes: "single" },
       verified: true,
@@ -155,10 +139,7 @@ sgl-eval run gpqa \\
         "--port {{PORT}}",
       ],
     },
-    // ==== H200, 2 GPUs, BF16, high-throughput (no speculative) — VERIFIED ====
-    // GSM8K 1319 leg: 96.82 % acc / 100 % stop. Bench 8K-in / 1K-out — the
-    // spec-off recipe scales cleanly to conc=256 (34786 tok/s total at
-    // saturation), >1.3× the spec-on peak at conc=64. See benchmarks.jsx.
+    // See benchmarks.jsx.
     {
       match: { hw: "h200", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" },
       verified: true,
@@ -214,7 +195,6 @@ sgl-eval run gpqa \\
         "--port {{PORT}}",
       ],
     },
-    // ==== B200, 2 GPUs, BF16, low-latency (MTP NEXTN on) — INFERRED from H200 ====
     {
       match: { hw: "b200", variant: "default", quant: "bf16", strategy: "low-latency", nodes: "single" },
       verified: false,
@@ -234,7 +214,6 @@ sgl-eval run gpqa \\
         "--port {{PORT}}",
       ],
     },
-    // ==== B200, 1 GPU, BF16, high-throughput — INFERRED (single 192 GB HBM fits 73 GB weights + KV) ====
     {
       match: { hw: "b200", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" },
       verified: false,

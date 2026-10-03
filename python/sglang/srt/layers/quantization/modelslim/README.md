@@ -1,6 +1,6 @@
 Quantization [ModelSlim](https://gitcode.com/Ascend/msit) module.
 
-`--quantization modelslim` flag introduced. To load already quantized models, simply load the model weights. For models quantized with ModelSlim, there's no need to add `--quantization modelslim` argument when starting the engine. The quantization method will be automatically parsed from the downloaded `quant_model_description.json` config.
+`--quantization modelslim` flag introduced. To load already quantized models, simply load the model weights. For models quantized with ModelSlim, there is no need to add `--quantization modelslim` argument when starting the engine. The quantization method will be automatically parsed from the downloaded `quant_model_description.json` config.
 
 ModelSlim was developed in the format of compressed_tensors and includes support for various quantization schemes, such as:
 - [x] W4A4 dynamic linear

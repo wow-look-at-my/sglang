@@ -1,23 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Binds protocol *resolution* to protocol *use*, across the PD split.
-//!
-//! Everywhere else the two halves are tested apart: the manager tests assert
-//! what lands on the registry, and `h2c_forward.rs` passes a `WireProtocol` to
-//! the proxy by hand. Nothing asserts that the protocol a worker resolved to is
-//! the one its own forward actually uses — and in the PD arm of
-//! `chat_completions` that join is three separate expressions, a
-//! `prefill_protocol` captured before a `tokio::spawn` plus two live
-//! `decode_worker.protocol()` reads. Passing the wrong one of those compiles,
-//! and every other test in the suite stays green.
-//!
-//! So make the two workers disagree and let the wire enforce it: the prefill
-//! mock speaks **HTTP/2 only**, the decode mock speaks **HTTP/1.1 only**, and
-//! each is registered with the matching protocol. Any mix-up sends a client at
-//! a server that cannot answer it. This is also why neither mock can be the
-//! shared `MockWorker` — that one runs on `axum::serve`, which answers both
-//! protocols and would pass no matter which was selected.
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -45,7 +29,6 @@ use sgl_router::workers::{WireProtocol, WorkerRegistry};
 use tokio::net::TcpListener;
 use tower::ServiceExt;
 
-/// A chat-completions response shaped enough for the handler to return 200.
 fn chat_completion_json() -> Bytes {
     Bytes::from(
         serde_json::json!({
@@ -162,7 +145,7 @@ fn build_ctx(prefill_url: String, decode_url: String) -> Arc<AppContext> {
 
     let prefill_id = WorkerId("p1".into());
     let decode_id = WorkerId("d1".into());
-    // The two disagree on purpose. This is the state a mixed fleet reaches
+    // Both disagree on purpose. This is the state a mixed fleet reaches
     // when only some engines run with --enable-http2.
     registry
         .add_with_cb(
@@ -213,10 +196,6 @@ fn chat_request() -> Request<Body> {
 }
 
 /// Each PD leg must forward over the protocol *its own* worker resolved.
-///
-/// The decode leg is awaited, so a protocol mix-up there fails the response
-/// outright. The prefill leg is detached, so its mix-up shows up as a body that
-/// never arrives — poll for it rather than reading once.
 #[tokio::test]
 async fn pd_legs_each_use_their_own_workers_protocol() {
     let prefill_hits = Arc::new(Mutex::new(0usize));
@@ -227,8 +206,8 @@ async fn pd_legs_each_use_their_own_workers_protocol() {
     let app = build_router(build_ctx(prefill_url, decode_url));
     let res = app.oneshot(chat_request()).await.unwrap();
 
-    // Decode answered, so the decode leg used HTTP/1.1 — had it been handed the
-    // prefill worker's H2c, this HTTP/1.1-only server could not have replied.
+    // Decode answered, so the decode leg used HTTP/1.1 — had it been handed
+    // the prefill worker's H2c.
     assert_eq!(
         res.status(),
         StatusCode::OK,

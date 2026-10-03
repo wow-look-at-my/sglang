@@ -4,21 +4,13 @@
 // effective config the Playground broadcasts (base cell + Deploy overlays +
 // Playground overrides), and the computed --mamba-full-memory-ratio is
 // broadcast back for the Deploy panel to pin into its command.
-//
-// Geometry constants are validated against boot logs on RTX PRO 6000
-// (state 153.9 MB/slot at fp32, KV 32.8 KB/token at fp8). Byte-exact against
-// the boot log once the pool's +1 padding slot is counted: the log's
-// "ssm_state size: 27.00GB" at max_mamba_cache_size 191 is 192 slots x
-// 150,994,944 B = 27.0000 GiB — divide by 191 and you get the wrong 154.7.
 
 export const Qwen38MambaRatioCalculator = () => {
   const [isDark, setIsDark] = useState(false);
   const [requestLength, setRequestLength] = useState("5120");
   const [targetConcurrency, setTargetConcurrency] = useState("64");
   const [copied, setCopied] = useState(false);
-  // Effective serving config; empty until the Playground's first broadcast
-  // (the parse below then falls back to the stock defaults: fp32 state,
-  // extra_buffer, no spec).
+  // Effective serving config.
   const [cfg, setCfg] = useState({ flags: [], env: [], baseFlags: [], baseEnv: [] });
 
   useEffect(() => {
@@ -51,11 +43,7 @@ export const Qwen38MambaRatioCalculator = () => {
     return () => window.removeEventListener("sglang-k3-effective-config", onCfg);
   }, []);
 
-  // The Deploy panel's live selection. Needed because the effective-config
-  // broadcast carries the RAW cell flags — `--model-path` is still the
-  // unresolved `{{MODEL_NAME}}` there — so the checkpoint precision, which
-  // decides what `--kv-cache-dtype auto` resolves to, is only knowable from the
-  // selection's quant.
+  // The Deploy panel's live selection.
   const [quant, setQuant] = useState("nvfp4-bf16-head");
   useEffect(() => {
     const onSel = (e) => {
@@ -72,7 +60,6 @@ export const Qwen38MambaRatioCalculator = () => {
   // formula, written as a per-request cost ratio:
   //
   //   r = (S + D) x state_bytes / (L x kv_bytes_per_token)
-  //
   const derive = (flags, env) => {
     const flagArg = (name) => {
       for (const f of flags) {
@@ -83,18 +70,10 @@ export const Qwen38MambaRatioCalculator = () => {
     };
     const hasFlag = (name) => flags.some((f) => f.split(/[\s=]/)[0] === name);
 
-    // Read both spellings: the cookbook convention is --tp, but some configs
-    // still emit --tp-size. The geometry below is TP1-only (this is a
-    // single-GPU page and no cell carries a TP flag), so anything else is
-    // reported as out of range rather than silently mis-computed.
+    // Read both spellings: the cookbook convention is --tp, but some configs still emit --tp-size.
     const tp = Number(flagArg("--tp")) || Number(flagArg("--tp-size")) || 1;
 
-    // The two RadixArk NVFP4 exports declare kv_cache_quant_algo: FP8, so the
-    // default --kv-cache-dtype auto lands on fp8_e4m3 there with no flag
-    // present. The BF16 / FP8 checkpoints keep a bf16 KV pool under the same
-    // default, and so does NVIDIA's NVFP4 export — it is the same W4A4 body,
-    // but it ships no kv_cache_scheme, so this cannot key off the `nvfp4`
-    // prefix. An explicit flag always wins over the checkpoint's declaration.
+    // Both RadixArk NVFP4 exports declare kv_cache_quant_algo.
     const kvFlag = flagArg("--kv-cache-dtype");
     const kvDtype =
       kvFlag === "fp8_e4m3"
@@ -117,12 +96,6 @@ export const Qwen38MambaRatioCalculator = () => {
         ? strategyFlag
         : "extra_buffer";
 
-    // S mirrors kv_cache_configurator._calculate_mamba_ratio: base 3, minus 1
-    // when SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1, plus the ping-pong track
-    // buffer (2 under the overlap scheduler, 1 for extra_buffer_lazy or with
-    // overlap off). no_buffer has no track buffer and no decode lock, so it
-    // stays 3; with the radix cache disabled S is 1. At the stock defaults:
-    // extra_buffer=5, extra_buffer_lazy=4, no_buffer=3, radix off=1.
     const skipLock = env.some((e) =>
       e.startsWith("SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1"));
     const overlapOff =
@@ -136,17 +109,10 @@ export const Qwen38MambaRatioCalculator = () => {
           (skipLock ? 1 : 0) +
           (overlapOff || strategy === "extra_buffer_lazy" ? 1 : 2);
 
-    // D: verify intermediate states under speculative decoding, 0 with spec
-    // off.
     const specOn = hasFlag("--speculative-algorithm");
     const algo = (flagArg("--speculative-algorithm") || "").toUpperCase();
-    // ReplaySSM spec-verify keeps the verify intermediates on a fixed ring
-    // rather than per-request state slots, so D is 0 even with spec on.
+    // ReplaySSM spec-verify keeps the verify intermediates on a fixed ring rather than per-request state slots.
     const replaySpec = hasFlag("--enable-linear-replayssm-spec");
-    // DSPARK takes no --speculative-num-draft-tokens: its verify window is
-    // --speculative-dspark-block-size (gamma) + 1, and gamma is read from the
-    // draft checkpoint when the flag is omitted — block_size 7 for
-    // RadixArk/Qwen3.8-27B-DSpark, so D = 8.
     const dsparkBlock = Number(flagArg("--speculative-dspark-block-size")) || 7;
     const drafts = !specOn || replaySpec
       ? 0
@@ -154,10 +120,6 @@ export const Qwen38MambaRatioCalculator = () => {
         ? dsparkBlock + 1
         : Number(flagArg("--speculative-num-draft-tokens")) || 4;
 
-    // Fixed Qwen3.8-27B geometry (TP1):
-    // GDN: 48 layers, 48 value heads x 128 x 128 SSM state (--mamba-ssm-dtype),
-    //      conv state 10240 x 3 always bf16.
-    // Full attention: 16 layers, GQA 4 kv heads x head_dim 256, K+V.
     const ssmBytes = ssmDtype === "float32" ? 4 : 2;
     const kvBytes = kvDtype === "fp8_e4m3" ? 1 : 2;
     const stateBytesPerSlot = 48 * (48 * 128 * 128 * ssmBytes + 10240 * 3 * 2);
@@ -168,13 +130,11 @@ export const Qwen38MambaRatioCalculator = () => {
              drafts, stateBytesPerSlot, kvBytesPerToken };
   };
 
-  // Two evaluations: `eff` matches the Playground's composed command, `bs`
-  // matches the Deploy command (cell + overlays only).
+  // Evaluations: `eff` matches the Playground's composed command.
   const eff = derive(cfg.flags, cfg.env);
   const bs = derive(
     cfg.baseFlags.length ? cfg.baseFlags : cfg.flags,
-    // The env rides with the command it belongs to: a base command with an
-    // empty env must not inherit the Playground's overlay env.
+    // The env rides with the command it belongs to: a base command.
     cfg.baseFlags.length ? cfg.baseEnv : cfg.env,
   );
   const { ratio, tp, kvDtype, ssmDtype, radixOff, strategy, slots, specOn,
@@ -182,10 +142,7 @@ export const Qwen38MambaRatioCalculator = () => {
 
   const valid = Number.isFinite(ratio) && ratio > 0 && L > 0 && tp === 1;
   const baseValid = Number.isFinite(bs.ratio) && bs.ratio > 0 && L > 0 && bs.tp === 1;
-  // The engine divides the state pool by S alone (kv_cache_configurator.py:
-  // mamba_cap = max_mamba_cache_size // _calculate_mamba_ratio()) and sizes
-  // the speculative verify buffer separately from D, so the pin is C x S,
-  // not C x (S + D).
+  // The engine divides the state pool by S alone.
   const pin = Math.ceil(C * slots);
   const pinValid = valid && Number.isFinite(pin) && pin > 0 && C > 0;
 

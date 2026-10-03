@@ -96,7 +96,6 @@ impl ConfigValidator {
                 if !worker_urls.is_empty() {
                     Self::validate_urls(worker_urls)?;
                 }
-                // Allow empty URLs without service discovery to match legacy behavior
             }
             RoutingMode::PrefillDecode {
                 prefill_urls,
@@ -287,7 +286,6 @@ impl ConfigValidator {
         }
 
         if let Some(tokens_per_second) = config.rate_limit_tokens_per_second {
-            // Allow 0 for pure concurrency limiting (semaphore behavior)
             if tokens_per_second < 0 {
                 return Err(ConfigError::InvalidValue {
                     field: "rate_limit_tokens_per_second".to_string(),
@@ -424,7 +422,6 @@ impl ConfigValidator {
             });
         }
 
-        // check port: must be 1~65535
         match port_str.parse::<u16>() {
             Ok(p) if p > 0 => (), // valid port
             _ => {
@@ -724,7 +721,7 @@ mod tests {
                 ],
             },
             PolicyConfig::CacheAware {
-                cache_threshold: 1.5, // Invalid: > 1.0
+                cache_threshold: 1.5,
                 balance_abs_threshold: 32,
                 balance_rel_threshold: 1.1,
                 eviction_interval_secs: 60,
@@ -862,14 +859,14 @@ mod tests {
     fn test_validate_pd_mode_power_of_two_insufficient_workers() {
         let config = RouterConfig::new(
             RoutingMode::PrefillDecode {
-                prefill_urls: vec![("http://prefill1:8000".to_string(), None)], // Only 1 prefill
+                prefill_urls: vec![("http://prefill1:8000".to_string(), None)],
                 decode_urls: vec![
                     "http://decode1:8000".to_string(),
                     "http://decode2:8000".to_string(),
                 ],
                 prefill_policy: Some(PolicyConfig::PowerOfTwo {
                     load_check_interval_secs: 60,
-                }), // Requires 2+ workers
+                }),
                 decode_policy: None,
             },
             PolicyConfig::Random,

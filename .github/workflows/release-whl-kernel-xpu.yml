@@ -24,8 +24,7 @@ jobs:
       matrix:
         python-version: ["3.10"]
     steps:
-      # Self-hosted build nodes retain the workspace across jobs. Prior builds
-      # can leave root-owned artifacts that actions/checkout cannot remove.
+      # Self-hosted build nodes retain the workspace across jobs. Prior builds can leave root-owned artifacts that actions/checkout cannot remove.
       - name: Clean workspace (remove root-owned files from prior runs)
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" alpine:3 \

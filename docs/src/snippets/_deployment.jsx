@@ -2,113 +2,14 @@
 // per-model `config` prop (no model-specific code here). Full field semantics
 // (resolution rules, key layering) live in the cookbook-add-model skill:
 // .claude/skills/cookbook-add-model/references/authoring-reference.md.
-//
-// Config fields the engine reads:
-//   modelName          display label
-//   supportedHardware  hw ids shown in the catalog (subset of HARDWARE_CATALOG ∪ config.hardware)
-//   hardware           optional — per-model GPUs the shared HARDWARE_CATALOG lacks:
-//                      {id, label, vram, vendor}[] merged into the catalog at render
-//                      (so a model-specific GPU never needs an engine-catalog edit);
-//                      vendor picks the selector group: blackwell | hopper | amd | npu.
-//                      `multiNodeDockerFlags: string[]` (either source) adds
-//                      `docker run` flags the platform's fabric needs
-//   groupHardware      optional — set false to show one flat hardware row
-//   variants/quantizations/strategies/nodesOptions  LEGACY 4-dim option lists,
-//                      used when `matchDims` is absent (nodesOptions id is
-//                      `single` or `multi-N` → --nnodes N)
-//   matchDims          optional — replaces the legacy four. {id, title, options}[]
-//                      where each option is {id, label, showWhen?(sel), disabled?,
-//                      disableReason?, soft?, softReason?}. `hw` is always the
-//                      implicit first dim. Cells are then keyed on (hw × <these
-//                      ids>). `disabled` is for combinations that cannot work;
-//                      an option that runs but sits outside the verified matrix
-//                      should declare `soft` instead — it stays selectable and
-//                      announces itself as unverified (tooltip + in-cell note).
-//                      Blocked options flash their disableReason under the row
-//                      when tapped, so the reason also reaches touch readers.
-//   overlayDims        optional — rows that do NOT participate in cell lookup; the
-//                      picked option layers onto the matched cell, so an orthogonal
-//                      knob does not multiply the cell count. Same option shape plus
-//                      `flags` / `env` / `hints` (each a literal array or a function
-//                      of the whole selection), and a row-level `default` / `showWhen`.
-//                      `hints` render as `# ...` lines above the command.
-//                      Builder-aware dimensions may additionally declare
-//                      `scope: "base" | "serve" | "request"`, `description`,
-//                      `quality`, `verifiedWhen`, and `learnMore`. Legacy configs
-//                      omit these fields and keep the original renderer.
-//   commandBuilder     optional — opts this config into the responsive diffusion
-//                      builder while reusing this engine's overlay composition and
-//                      command rendering. Shape:
-//                      {defaultSelection, resource: {limits, verifiedRecipes,
-//                      autoTopology(sel), validateTopology(sel)},
-//                      resolveDeployment(sel)}. The resolver returns a cell plus
-//                      `builder` metadata (topologySummary, errors, warnings,
-//                      verification, resolvedSettings). UI-only scope/expand and
-//                      local head-address/rank state never enter the URL hash.
-//   cells              {match, verified?, verificationStatus?, nnodes?, warn?, redirect?,
-//                      env, flags}[] — one per
-//                      (hw × match dims); env/flags are flat literals, only
-//                      {{PLACEHOLDER}} subst applied. `nnodes` supplies the node
-//                      count for configs with no `nodes` dim (default 1). `warn`
-//                      renders as a ⚠️ banner under the cell's command; it may
-//                      embed [label](#anchor) links. `redirect: true` renders the
-//                      banner ALONE — no command, header, or copy buttons — for
-//                      cells that only point somewhere else.
-//                      `verified` is the boolean badge baseline.
-//                      `verificationStatus` overrides it with a third state —
-//                      "verified" | "in-progress" | "unverified" — for a recipe
-//                      whose verification round is open rather than absent. It
-//                      may also be a function of the selection, for a cell whose
-//                      verification depends on an overlay pick (e.g. one
-//                      speculative option still being validated).
-//   modelNames         HF slug lookup, `hw|variant|quant`, `variant|quant`,
-//                      `hw|quant`, `quant`, `hw`, then `default`
-//   placeholders       {{KEY}} → {target: 'command'|'curl', label, default?}
-//   curl               cURL template (uses {{MODEL_NAME}} + placeholders), or
-//                      `(selection, cell) => template` when the request payload
-//                      depends on a custom match/overlay dimension
-//   benchmarkCommands  optional — powers the "⚡ Reproduce" modal (speed +
-//                      per-eval accuracy templates)
-//   defaultAccuracy    optional — per-variant accuracy merged under cell.accuracy
-//   accuracyLabels     [key, label, unit][] — the eval set shown in the
-//                      benchmark card + "⚡ Reproduce". NO engine default:
-//                      required whenever benchmarks carry accuracy data
-//   latencyPercentile  optional, TEMPORARY — "Mean" | "P50" (default "P50"); the
-//                      percentile the TTFT/TPOT values are, shown as "TTFT (<pct>)".
-//                      A benchmarks entry may carry its own latencyPercentile to
-//                      override the page value per cell (entry → config → "P50").
-//                      Legacy "Mean" data is being re-measured to P50; drop once done
-//   multiNodeHints     optional — {[hwId]: string[]} prepended as `# ...` lines
-//   dockerImages       optional — `docker run` image, keyed by
-//                      `hw|variant|quant` then `variant|quant` then
-//                      `hw|quant|strategy` then `hw|quant` then `hw`;
-//                      falls back to `lmsysorg/sglang:dev`
-//   dockerHostNetworkWhen optional — `(selection, {flags, env}) => boolean`
-//   dockerMounts       optional — additional `-v` mount specs
-//   dockerRunCommand   optional — command placed after the image and before
-//                      generated server flags; string or `(selection) => string`
-//   runModes           optional — command output tabs to show (`python` and/or
-//                      `docker`), as an array or `(selection) => array`;
-//                      defaults to both, in that order
-//   showPlaygroundLink optional — false hides the "Open the Playground" footer
-//                      for cookbooks that only expose the deployment matrix
-//   github             optional — "Submit verified cell" issue-template overrides
-//   playgroundFeatures optional — consumed by _playground.jsx (see its header)
-//
-// Mintlify caveats this file routes around:
-//   - Module-level statements are stripped — everything lives inside the
-//     wrapper function body.
-//   - Capitalized JSX tags get rebound by _provideComponents() — lowercase
-//     HTML tags only; factor into helper functions, not sub-components.
-//   - Import plain-data config from the MDX file, pass through as a prop.
 
 export const Deployment = ({ config, benchmarks }) => {
   if (!config) {
     return <div style={{padding: 12, color: "#b91c1c"}}>Deployment: missing <code>config</code> prop</div>;
   }
 
-  // ==== 1. Hardware catalog (shared across cookbooks) ====
-  // VRAM is per-GPU on-chip memory, not per-module.
+  // Hardware catalog (shared across cookbooks) ==== VRAM is
+  // per-GPU on-chip memory, not per-module.
   const AMD_RDMA_DOCKER_FLAGS = [
     "--device /dev/infiniband", "--cap-add IPC_LOCK",
     "--ulimit memlock=-1", "--ulimit stack=67108864",
@@ -120,7 +21,6 @@ export const Deployment = ({ config, benchmarks }) => {
       { id: "gb300", label: "GB300", vram: "288GB" },
       { id: "b200",  label: "B200",  vram: "192GB" },
       { id: "gb200", label: "GB200", vram: "192GB" },
-      // GB10 Grace Blackwell — 128 GB coherent unified system memory (not discrete VRAM).
       // Multi-node runs over ConnectX-7 RDMA (pinned memory + IB passthrough).
       { id: "dgx-spark", label: "DGX Spark", vram: "128GB",
         multiNodeDockerFlags: [
@@ -147,18 +47,14 @@ export const Deployment = ({ config, benchmarks }) => {
       { id: "mi355x", label: "MI355X", vram: "288GB",
         multiNodeDockerFlags: [...AMD_RDMA_DOCKER_FLAGS] },
     ],
-    // Ascend device layout: one /dev/davinciN per core. An A3 Series card is
-    // the exception — 2 dies per card, so an 8-card node exposes 16 devices
-    // and --tp-size is twice the card count. A 950PR/DT Series card is a
-    // single core, so the device count and --tp-size follow the cards. Both
-    // counts feed the docker `--device` list (`npuDevices`).
+    // Ascend device layout: one /dev/davinciN per core.
     npu: [
       { id: "a3", label: "A3 Series",        vram: "64GB/die", npuDevices: 16 },
       { id: "a5", label: "950PR/DT Series",  vram: "128GB",    npuDevices: 8  },
     ],
   };
 
-  // ==== 2. Style helper (dark-mode-aware) ====
+  // Style helper (dark-mode-aware) ====
   const makeStyles = (isDark) => ({
     container: { maxWidth: "900px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "3px" },
     card: {
@@ -187,8 +83,7 @@ export const Deployment = ({ config, benchmarks }) => {
       width: "68px", flexShrink: 0, textTransform: "uppercase", letterSpacing: "0.04em",
     },
     // auto-fit + a real min width: columns wrap on narrow screens instead of
-    // shrinking below their label (the old minmax(0,1fr) let buttons overlap on
-    // mobile). `cols` no longer needed — auto-fit never exceeds the item count.
+    // shrinking below their label.
     itemsGrid: () => ({
       display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))",
       gap: "4px", flex: 1,
@@ -229,8 +124,6 @@ export const Deployment = ({ config, benchmarks }) => {
       color: isDark ? "#e5e7eb" : "#374151",
       whiteSpace: "pre-wrap", overflowX: "auto", margin: 0,
     },
-    // Amber callout under the command when speculative decoding (MTP, DSpark, ...)
-    // is on but --max-running-requests isn't set (SGLang then caps it at 48).
     mtpWarn: {
       margin: "8px 0 0", padding: "8px 12px", borderRadius: "8px",
       fontSize: "12px", lineHeight: "1.45",
@@ -238,8 +131,6 @@ export const Deployment = ({ config, benchmarks }) => {
       color: isDark ? "#fde68a" : "#92400e",
       border: `1px solid ${isDark ? "#92400e" : "#fcd34d"}`,
     },
-    // Takes either a boolean (legacy `cell.verified`) or a status id — see
-    // VERIFY_LABEL / verifyStatusOf in section 3.
     badge: (status) => ({
       display: "inline-flex", alignItems: "center", gap: "6px",
       padding: "2px 8px", borderRadius: "10px",
@@ -253,8 +144,7 @@ export const Deployment = ({ config, benchmarks }) => {
         "in-progress": isDark ? "#bfdbfe" : "#1e40af",
         unverified:    isDark ? "#fde68a" : "#92400e",
       }[verifyStatusOf(status)],
-      // The in-progress label is long; keep the pill on one line and let the
-      // header row wrap around it instead of breaking the text mid-badge.
+      // The in-progress label is long; keep the pill on one line and let the header row wrap around it instead.
       fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap",
     }),
     badgeDot: (status) => ({
@@ -427,32 +317,18 @@ export const Deployment = ({ config, benchmarks }) => {
 
     // grid (not <table>) — Mintlify wraps <table> with scroll wrappers.
     // gridTemplateColumns set inline (depends on measurements.length).
-    // Horizontal-scroll box for a table wider than the card. The class is
-    // what opts it out of the site-wide scrollbar suppression at the top of
-    // custom.css: without it the box scrolls but paints NO scrollbar, so the
-    // off-card columns look like they do not exist.
-    // marginTop lives here rather than on benchTable because overflow makes
-    // this box a BFC — a margin inside it would stop collapsing with the
-    // preceding sibling's margin-bottom and silently add 4px.
     benchTableScroll: {
       overflowX: "auto",
-      // Pin the block axis: a lone overflow-x would compute overflow-y to
-      // `auto` and clip anything painting outside the box.
+      // Pin the block axis.
       overflowY: "hidden",
       marginTop: "4px",
     },
     benchTable: {
       display: "grid",
-      // columnGap 0 so cells' bottom borders form one continuous line.
       columnGap: 0,
       rowGap: "3px",
       alignItems: "baseline",
-      // Without this the grid box stays at the scroll container's width while
-      // the tracks overflow past it, and the sticky label column — which can
-      // only stick inside its containing block — slides away after that
-      // width. Growing the box to the tracks makes the whole scroll range its
-      // containing block. Inert when the table fits: max-content is then
-      // narrower than the card and `width: auto` still wins.
+      // Without this the grid box stays at the scroll container's width while the tracks overflow past it.
       minWidth: "max-content",
     },
     benchTableHead: {
@@ -465,15 +341,12 @@ export const Deployment = ({ config, benchmarks }) => {
     },
     benchTableCornerHead: {
       paddingBottom: "4px",
-      // Pinned with the label column below it; background must match
-      // benchBlock's so scrolled-under values do not show through.
+      // Pinned with the label column below it.
       position: "sticky",
       left: 0,
       background: isDark ? "#111827" : "#fafafa",
       zIndex: 1,
-      // This cell is empty, and the grid aligns items to the baseline, so it
-      // would otherwise be only as tall as its padding (4px vs the header
-      // row's 23px) and the scrolled-under header would show above it.
+      // This cell is empty, and the grid aligns items to the baseline.
       alignSelf: "stretch",
     },
     // Header underline — one div spanning all columns (continuous line).
@@ -487,9 +360,7 @@ export const Deployment = ({ config, benchmarks }) => {
       textAlign: "left", fontSize: "12px",
       color: isDark ? "#9ca3af" : "#6b7280",
       whiteSpace: "nowrap",
-      // The table scrolls horizontally, so this column has to stay put:
-      // scrolled to the right end the rows are otherwise four unlabeled
-      // numbers in four different units. Inert when nothing overflows.
+      // The table scrolls horizontally, so this column has to stay put.
       position: "sticky",
       left: 0,
       background: isDark ? "#111827" : "#fafafa",
@@ -508,19 +379,14 @@ export const Deployment = ({ config, benchmarks }) => {
     },
   });
 
-  // ==== 3. Pure helpers (no React state) ====
-  // Verification badge state. A cell's boolean `verified` is the baseline;
-  // `cell.verificationStatus` overrides it, which is how a recipe whose
-  // verification round is open reports that instead of collapsing into the flat
-  // Verified / Not Verified pair.
+  // Pure helpers (no React state) ==== Verification badge state.
   const VERIFY_LABEL = {
     verified: "Verified",
     "in-progress": "Final Verification In Progress",
     unverified: "Not Verified",
   };
   // Booleans keep their historical meaning; an unrecognized status id falls
-  // back to "unverified" rather than to truthiness (a typo must never read as
-  // a green Verified badge).
+  // back to "unverified" rather than to truthiness.
   const verifyStatusOf = (v) =>
     typeof v === "string"
       ? (VERIFY_LABEL[v] ? v : "unverified")
@@ -534,13 +400,8 @@ export const Deployment = ({ config, benchmarks }) => {
     return verifyStatusOf(v ?? c.verified);
   };
 
-  // Two kinds of selector row:
-  //   match dims    participate in cell lookup (cell.match[dim] === sel[dim])
-  //   overlay dims  never touch cell lookup; the picked option contributes flags
-  //                 on top of the matched cell (so an orthogonal knob like
-  //                 speculative decoding does not multiply the cell count)
-  // A config that declares neither keeps the legacy fixed 5-dim shape, so model
-  // pages written before this existed render unchanged.
+  // Kinds of selector row: match dims participate in cell lookup
+  // (cell.match[dim] === sel[dim]) overlay dims never touch cell lookup.
   const LEGACY_MATCH_DIMS = [
     { id: "variant",  title: "Model Variant", optionsKey: "variants" },
     { id: "quant",    title: "Quantization",  optionsKey: "quantizations" },
@@ -554,18 +415,11 @@ export const Deployment = ({ config, benchmarks }) => {
   }));
   const overlayDimSpecs = config.overlayDims || [];
   const commandBuilder = config.commandBuilder || null;
-  // DIMENSIONS is ordered by priority — higher-index dims adapt to lower-index
-  // picks, never the reverse. Drives the grey-out/snap logic below.
+  // DIMENSIONS is ordered by priority — higher-index dims adapt to lower-index picks, never the reverse.
   const DIMENSIONS = ["hw", ...matchDimSpecs.map((d) => d.id)];
 
-  // An option is visible when it declares no `showWhen`, or its predicate accepts
-  // the current selection. Hidden options are excluded from snapping and from the
-  // grey-out scan, so a stale pick can never survive a dependent-row switch.
-  // ==== MIRROR in _playground.jsx — keep the two copies identical ====
-  // Snippets cannot import each other, so the overlay-resolution rule is written
-  // twice. A divergence makes the Deploy command and the playground base disagree,
-  // which shows up as phantom +/- lines in the diff and no error anywhere.
-  // Guarded by docs/scripts/check_cookbook_configs.mjs.
+  // An option is visible when it declares no `showWhen`, or its predicate
+  // accepts the current selection.
   const optionVisible = (opt, sel) =>
     typeof opt.showWhen !== "function" || opt.showWhen(sel);
   const optionDisabled = (opt, sel) =>
@@ -624,10 +478,8 @@ export const Deployment = ({ config, benchmarks }) => {
     add.forEach((f, i) => { if (!used.has(i)) out.push(f); });
     return out;
   };
-  // ==== end MIRROR ====
-  // `soft` marks an option that is plausible but outside the verified matrix:
-  // it stays selectable (the status badge reports verification separately),
-  // where `disabled` is reserved for combinations that cannot work at all.
+  // ==== end MIRROR ==== `soft` marks an option that is plausible but outside
+  // the verified matrix.
   const optionSoft = (opt, sel) =>
     typeof opt.soft === "function" ? opt.soft(sel) : !!opt.soft;
   const findCell = (cells, sel) =>
@@ -648,9 +500,8 @@ export const Deployment = ({ config, benchmarks }) => {
     return Array.isArray(speed) ? speed : [speed];
   };
 
-  // Variant default accuracy merged UNDER per-cell measured accuracy — but ONLY when
-  // a benchmark entry exists for the cell. A cell with no entry was never measured, so
-  // it shows the empty/"pending" state instead of borrowing the variant's accuracy.
+  // Variant default accuracy merged UNDER per-cell measured accuracy — but
+  // ONLY when a benchmark entry exists for the cell.
   const effectiveAccuracy = (entry, sel) =>
     entry
       ? {
@@ -749,11 +600,9 @@ export const Deployment = ({ config, benchmarks }) => {
     return valid;
   };
 
-  // Lookup walks most-specific to least so a config that drops the variant/quant
-  // dims can key its HF slug on `hw` alone, or on the single "default" entry.
-  // The `hw|quant` and bare `quant` rungs cover a `matchDims` config that declares
-  // no variant dim at all — there `sel.variant` is undefined, so the two leading
-  // keys can never hit.
+  // Lookup walks most-specific to least so a config that drops the
+  // variant/quant dims can key its HF slug on `hw` alone, or on the single
+  // "default" entry.
   const resolveModelName = (sel) => {
     const keys = [
       `${sel.hw}|${sel.variant}|${sel.quant}`,
@@ -787,14 +636,10 @@ export const Deployment = ({ config, benchmarks }) => {
   const cellNnodes = (cell, sel) =>
     sel.nodes !== undefined ? parseNnodes(sel.nodes) : (cell.nnodes || 1);
 
-  // Role-specific serving ports for PD deployments — keep in sync with PD_PORTS
-  // in _playground.jsx, which the generated router command targets. Each role
-  // derives 5 ZMQ/dist ports from its --port, so the serve ports are spaced 100
-  // apart to keep those ranges from overlapping on a same-host deployment.
+  // Role-specific serving ports for PD deployments — keep in sync with PD_PORTS in _playground.jsx.
   const PD_SERVE_PORTS = { prefill: 30000, decode: 30100 };
 
-  // `flags` / `env` / `hints` may each be a function of the whole selection, so an
-  // "Auto" option can resolve against another row (draft tokens per strategy).
+  // `flags` / `env` / `hints` may each be a function of the whole selection.
   const overlayEnv = (sel) => overlayPart(sel, "env");
   const overlayHints = (sel) => overlayPart(sel, "hints");
 
@@ -835,11 +680,7 @@ export const Deployment = ({ config, benchmarks }) => {
 
     let cmd;
     if (mode === "docker") {
-      // Image keyed by `hw|variant|quant` (most specific), then `variant|quant`,
-      // then `hw|quant|strategy`, `hw|quant`, `hw`; `:dev` if unmapped. The
-      // variant keys cover a checkpoint that needs its own build (e.g. a
-      // new-variant preview image); the strategy key covers a tier that needs
-      // one (e.g. a spec-decoding preview image).
+      // Image keyed by `hw|variant|quant` (most specific), then `variant|quant`, then `hw|quant|strategy`, `hw|quant`, `hw`; `:dev`.
       const di = config.dockerImages || {};
       const image = di[`${sel.hw}|${sel.variant}|${sel.quant}`]
         || di[`${sel.variant}|${sel.quant}`]
@@ -871,10 +712,6 @@ export const Deployment = ({ config, benchmarks }) => {
       };
       const fabricFlagsOf = (hwId) =>
         (catalogEntryOf(hwId) || {}).multiNodeDockerFlags || [];
-      // NPU cards are reached with --device, one per /dev/davinciN core;
-      // `npuDevices` carries the per-product-line count (16 on an A3 Series
-      // node, 8 on a 950PR/DT Series node), four devices per line as the host
-      // docs show.
       const davinciLines = (devices) => {
         const lines = [];
         for (let i = 0; i < devices; i += 4) {
@@ -896,8 +733,7 @@ export const Deployment = ({ config, benchmarks }) => {
           ]
         : vendorOf(sel.hw) === "npu"
         ? [
-            // NPU: --privileged grants the davinci devices; the host CANN
-            // driver/firmware/state must be mounted in.
+            // NPU: --privileged grants the davinci devices; the host CANN driver/firmware/state must be mounted in.
             "docker run --privileged --shm-size=16g",
             ...davinciLines((catalogEntryOf(sel.hw) || {}).npuDevices || 16),
             "  --device=/dev/davinci_manager",
@@ -915,9 +751,7 @@ export const Deployment = ({ config, benchmarks }) => {
           ];
       const dockerLines = [
         ...gpuAccessLines,
-        // Multi-node needs host networking so the cross-node rendezvous port
-        // (--dist-init-addr) and NCCL/GLOO traffic are reachable; single-node
-        // just maps the serve port.
+        // Multi-node needs host networking so the cross-node rendezvous port (--dist-init-addr) and NCCL/GLOO traffic are reachable.
         hostNetwork ? "  --network host" : `  -p ${servePort}:${servePort}`,
         ...(multinode ? fabricFlagsOf(sel.hw).map((f) => "  " + f) : []),
         // The NPU device block already mounts ~/.cache/.
@@ -962,22 +796,16 @@ export const Deployment = ({ config, benchmarks }) => {
     return cmd;
   };
 
-  // Accuracy labels: [field-key, display-label, unit]. Declared per model via
-  // `config.accuracyLabels` — the engine ships NO default eval set. A config
-  // without it renders no accuracy rows (and no Accuracy section in the
-  // "⚡ Reproduce" modal). Keys must match the `accuracy` fields in the
-  // benchmarks file + `benchmarkCommands.accuracy`.
+  // Accuracy labels: [field-key, display-label, unit].
   const ACCURACY_LABELS = config.accuracyLabels || [];
 
   const renderBenchmarkCard = (entry) => {
-    // [key, label, unit, compute?]. Optional compute(measurement) supplies
-    // derived metrics (preferred over measurement[key] when present).
+    // [key, label, unit, compute?].
     const pct = (entry && entry.latencyPercentile) || config.latencyPercentile || "P50";
     const SPEED_LABELS = [
       ["ttft_ms",                `TTFT (${pct})`,      "ms"],
       ["tpot_ms",                `TPOT (${pct})`,      "ms"],
-      // throughput per gpu = total(input+output)/elapsed/GPU;
-      // stored directly in the benchmarks file (= output tok/s/GPU × (isl+osl)/osl).
+      // throughput per gpu = total(input+output)/elapsed/GPU.
       ["tokens_per_sec_per_gpu", "throughput per gpu", "tok/s"],
       ["interactivity",          "interactivity",   "tokens/s/user",
         (m) => (m.tpot_ms != null && m.tpot_ms !== 0)
@@ -1008,14 +836,9 @@ export const Deployment = ({ config, benchmarks }) => {
       return parts.join(", ");
     };
 
-    // Split workload fields into shared (uniform → context line) vs differing
-    // (→ per-column header). max_concurrency is always per-column.
+    // Split workload fields into shared (uniform → context line) vs differing.
     const ALWAYS_PER_COLUMN = new Set(["max_concurrency"]);
-    // isl and osl print as one `in/out=I/O` token, so they have to be
-    // classified together. Classified apart — isl varying, osl uniform — the
-    // shared context line rendered the FIRST measurement's isl as if it held
-    // for every column: the GLM-5.3-Flash FP8 + TRT-LLM cell says
-    // "in/out=1000/1000" above a table that is half 8000/1000.
+    // isl and osl print as one `in/out=I/O` token, so they have to be classified together.
     const ATOMIC_WORKLOAD_GROUPS = [["isl", "osl"]];
     const partitionWorkload = (measurements) => {
       const shared = new Set();
@@ -1050,7 +873,7 @@ export const Deployment = ({ config, benchmarks }) => {
             <div style={s.benchWorkload}>{sharedText}</div>
           )}
           {/* tabIndex + role: a scroll box with no focusable child is
-              unreachable without a pointer (WCAG 2.1.1). A lone value column
+              unreachable without a pointer (WCAG.1.1). A lone value column
               is `max-content` + `1fr` and so can never exceed the card — no
               scrolling, hence no tab stop. */}
           <div
@@ -1103,8 +926,8 @@ export const Deployment = ({ config, benchmarks }) => {
       );
     };
 
-    // All four metric rows always render (unmeasured cells show "—") so the
-    // table shape is identical across every cell.
+    // All of them metric rows always render (unmeasured cells show "—") so
+    // the table shape is identical across every cell.
     const buildSpeedTable = (measurements) => {
       if (measurements.length === 0) return null;
       const { shared, differing } = partitionWorkload(measurements);
@@ -1187,8 +1010,7 @@ export const Deployment = ({ config, benchmarks }) => {
     const bc = config.benchmarkCommands;
     if (!bc) return null;
 
-    // One entry per eval with a value AND a template. A template is a string,
-    // or a {[variant]: string} object resolved by sel.variant.
+    // One entry per eval with a value AND a template.
     const acc = effectiveAccuracy(entry, sel);
     const accuracy = [];
     if (bc.accuracy) {
@@ -1213,8 +1035,6 @@ export const Deployment = ({ config, benchmarks }) => {
           template: bc.speed,
           concurrencies,
           workload: ms[0].workload,
-          // {{NUM_PROMPTS}} priority: per-row override → numPromptsByConc[c]
-          // → max(c*2, 200).
           numPromptsOf: (c) => {
             const m = ms.find((x) => x.workload.max_concurrency === c);
             if (m && m.workload.num_prompts != null) return m.workload.num_prompts;
@@ -1232,9 +1052,7 @@ export const Deployment = ({ config, benchmarks }) => {
 
   const buildHardwareGroups = () => {
     const supported = new Set(config.supportedHardware);
-    // Effective catalog = shared common GPUs + the model's own `config.hardware`
-    // (model-specific / desktop / future GPUs the shared catalog doesn't carry).
-    // A model-specific GPU is therefore pure config data — no engine-catalog edit.
+    // Effective catalog = shared common GPUs + the model's own `config.hardware`.
     const catalog = {};
     for (const [vendor, list] of Object.entries(HARDWARE_CATALOG)) catalog[vendor] = [...list];
     for (const hw of (config.hardware || [])) {
@@ -1318,7 +1136,7 @@ export const Deployment = ({ config, benchmarks }) => {
     return out;
   };
 
-  // ==== 4. React state + effects ====
+  // React state + effects ====
   const [isDark, setIsDark] = useState(false);
   useEffect(() => {
     const check = () => {
@@ -1370,8 +1188,7 @@ export const Deployment = ({ config, benchmarks }) => {
         if (key in parsed) { parsed[key] = value; touched = true; }
       });
       if (!touched) return;
-      // Cell configs snap to a real recipe; builders normalize their semantic
-      // resource state without forcing a custom-but-valid topology to a preset.
+      // Cell configs snap to a real recipe.
       setSel(
         commandBuilder
           ? normalizeBuilderSelection(parsed)
@@ -1383,8 +1200,7 @@ export const Deployment = ({ config, benchmarks }) => {
         typeof historyState === "object" &&
         historyState[INTERNAL_HASH_STATE_KEY] === `#${raw}`;
       if (isInternalHash) return;
-      // External selection hashes land on the interactive configurator. Hashes
-      // written internally while initializing or changing chips do not scroll.
+      // External selection hashes land on the interactive configurator.
       const el = document.getElementById(DEPLOYMENT_COMPONENT_ID);
       if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     };
@@ -1429,7 +1245,6 @@ export const Deployment = ({ config, benchmarks }) => {
   const [curlCopied, setCurlCopied] = useState(false);
   const [envDraft, setEnvDraft] = useState(env);
   // "⚡ Reproduce" modal: chip-selected concurrency / eval / last-copied block.
-  // null falls back to the first option in the render.
   const [benchConc, setBenchConc] = useState(null);
   const [benchAcc, setBenchAcc] = useState(null);
   const [benchCopied, setBenchCopied] = useState(null);
@@ -1445,9 +1260,7 @@ export const Deployment = ({ config, benchmarks }) => {
   const [requestExpanded, setRequestExpanded] = useState(false);
   const [builderHeadAddress, setBuilderHeadAddress] = useState("<head-node-ip>");
   const [builderNodeRank, setBuilderNodeRank] = useState(0);
-  // Tapping a disabled option surfaces its reason under the row — hover-only
-  // tooltips never reach touch readers. {dim, reason}; each note clears only
-  // itself, so a newer note is never cut short by an older timer.
+  // Tapping a disabled option surfaces its reason under the row — hover-only tooltips never reach touch readers. {dim, reason}.
   const [blockedNote, setBlockedNote] = useState(null);
   const flashBlockedNote = (dim, reason) => {
     const note = { dim, reason };
@@ -1465,9 +1278,7 @@ export const Deployment = ({ config, benchmarks }) => {
   }, [hasRunMode, fallbackRunMode]);
   useEffect(() => { if (modal === "env") setEnvDraft(env); }, [modal, env]);
 
-  // Live --mamba-full-memory-ratio from the ratio calculator (K3 pages):
-  // pool sizing is consolidated into this one flag, computed from the
-  // calculator's request length plus the current panel selection.
+  // Live --mamba-full-memory-ratio from the ratio calculator (K3 pages): pool sizing is consolidated into this flag.
   const [mambaRatio, setMambaRatio] = useState(null);
   useEffect(() => {
     // Deploy shows base flags only, so it takes the base-config ratio (the
@@ -1478,7 +1289,7 @@ export const Deployment = ({ config, benchmarks }) => {
     return () => window.removeEventListener("sglang-k3-mamba-ratio", onRatio);
   }, []);
 
-  // ==== 5. Derived values ====
+  // Derived values ====
   const s = makeStyles(isDark);
   const cell = commandBuilder
     ? commandBuilder.resolveDeployment(sel)
@@ -1507,27 +1318,21 @@ export const Deployment = ({ config, benchmarks }) => {
       }
     : env;
   const command = renderCommand(cellWithRatio, sel, commandEnv, activeRunMode);
-  // Speculative-decoding hint on the EFFECTIVE flags — speculation can arrive via
-  // the Spec Decode overlay as well as the cell. SGLang resets
-  // --max-running-requests to 48 when spec is on and it's unset; verified for both
-  // EAGLE/MTP and DSPARK (server_args reports max_running_requests=48 either way).
+  // Speculative-decoding hint on the EFFECTIVE flags — speculation can arrive via the Spec Decode overlay as well.
   const effFlags = cell ? overlayCompose(cell.flags, sel) : [];
   const specAlgoFlag = effFlags.find(
     (f) => f.split(/[\s=]/)[0] === "--speculative-algorithm");
   const specMrrFlag = effFlags.find(
     (f) => f.split(/[\s=]/)[0] === "--max-running-requests");
-  // Two cases, both worth surfacing when speculation is on:
-  //   mtpHint       — the flag is MISSING, so SGLang silently caps at 48 (a hazard)
-  //   specPinnedHint— the recipe PINS it, which is safe but is a fixed number the
-  //                   reader still has to match to their own concurrency
+  // Cases, both worth surfacing when speculation is on: mtpHint — the flag is MISSING.
   const mtpHint = !!specAlgoFlag && !specMrrFlag;
   const specPinnedHint = !!specAlgoFlag && !!specMrrFlag;
   const specMrrValue = specMrrFlag
     ? (specMrrFlag.split(/[\s=]/).filter(Boolean)[1] || "")
     : "";
-  // Name the algorithm in the banner rather than hardcoding "MTP" — the same reset
-  // applies to DSpark and friends, and a DSpark user reading "(MTP)" would be
-  // misled. The cookbook calls the EAGLE-based path MTP, so keep that mapping.
+  // Name the algorithm in the banner rather than hardcoding "MTP" — the
+  // same reset applies to DSpark and friends, and a DSpark user reading
+  // "(MTP)" would be misled.
   const SPEC_ALGO_LABEL = {
     EAGLE: "MTP", EAGLE3: "MTP", FROZEN_KV_MTP: "MTP",
     DSPARK: "DSpark", DFLASH: "DFlash", NGRAM: "N-gram",
@@ -1581,8 +1386,7 @@ export const Deployment = ({ config, benchmarks }) => {
   const hwGroups = buildHardwareGroups();
   const benchEntry = benchmarks ? findBenchmark(benchmarks, sel) : null;
 
-  // Overlay dims have no cells to constrain them, so an option is selectable
-  // unless it says otherwise; only match dims get the grey-out scan.
+  // Overlay dims have no cells to constrain them.
   const isOverlayDim = (dim) => overlayDimSpecs.some((d) => d.id === dim);
   const findOption = (dim, value) => {
     const spec = [...matchDimSpecs, ...overlayDimSpecs].find((d) => d.id === dim);
@@ -1595,9 +1399,9 @@ export const Deployment = ({ config, benchmarks }) => {
     return isOverlayDim(dim) || isOptionAvailable(config.cells || [], sel, dim, value);
   };
 
-  // Switching a match dim can hide the option a dependent row currently holds
-  // (Strategy's option set differs per PD mode). Re-seat any overlay/match pick
-  // that just became invisible onto the first visible option of its row.
+  // Switching a match dim can hide the option a dependent row holds
+  // (Strategy's option set differs per PD mode). Re-seat any overlay/match
+  // pick that became invisible onto the first visible option of its row.
   const reseatHiddenPicks = (next) => {
     let out = next;
     for (const spec of [...matchDimSpecs, ...overlayDimSpecs]) {
@@ -1644,10 +1448,8 @@ export const Deployment = ({ config, benchmarks }) => {
             ring_degree: resourcesFollowPlatformDefault
               ? (nextRecipe?.ring_degree ?? 1)
               : next.ring_degree,
-            // Placement and encoder are per-hardware recipe facts just like
-            // the resource shape: keeping the previous card's picks produces
-            // a command the new card cannot run (e.g. a resident 61.7 GB DiT
-            // on a single consumer GPU) shown as "unverified".
+            // Placement and encoder are per-hardware recipe facts like the
+            // resource shape.
             placement: resourcesFollowPlatformDefault
               ? (nextRecipe?.placement || "auto")
               : next.placement,
@@ -1759,7 +1561,7 @@ export const Deployment = ({ config, benchmarks }) => {
     return out;
   })();
 
-  // ==== 6. JSX render ====
+  // JSX render ====
   const renderButton = (item, dim, selectedId) => {
     const checked = selectedId === item.id;
     const disabled = !isEnabled(dim, item.id);
@@ -1835,8 +1637,7 @@ export const Deployment = ({ config, benchmarks }) => {
     const verification = builderMeta.verification || {};
     const scopeIsVerified = (scope) => scopedDims(scope).every((dim) => {
       const option = (dim.options || []).find((entry) => entry.id === sel[dim.id]);
-      // A pick whose `soft` predicate is active is by definition outside the
-      // verified matrix — the scope badge must not keep reading Verified.
+      // A pick whose `soft` predicate is active is by definition outside the verified matrix.
       if (option && optionSoft(option, sel)) return false;
       const predicate = option?.verifiedWhen ?? dim.verifiedWhen;
       return typeof predicate === "function" ? !!predicate(sel) : predicate !== false;
@@ -1982,8 +1783,8 @@ export const Deployment = ({ config, benchmarks }) => {
           <section className="sgd-builder-recipe">
             <div>
               {/* This is the verified operating point, not sizing advice — a
-                  hardware whose validation ran on 8 GPUs is not "recommending"
-                  8 over a smaller deployment. */}
+                  hardware whose validation ran on GPUs is not "recommending"
+                  over a smaller deployment. */}
               <span>{recommendedRecipe.unverified ? "Derived recipe" : "Verified recipe"} · {sel.hw.toUpperCase()}</span>
               <strong>
                 {[
@@ -2027,7 +1828,7 @@ export const Deployment = ({ config, benchmarks }) => {
         </section>
 
         {/* Topology lives with Resources: its summary is the heading's detail
-            line, so the two rows that used to repeat each other are one
+            line, so the rows that used to repeat each other are one
             section. The advanced editor and its messages stay here too. */}
         <section className="sgd-builder-section">
           <div className="sgd-builder-section-heading">
@@ -2386,7 +2187,7 @@ export const Deployment = ({ config, benchmarks }) => {
       style={{ ...s.container, scrollMarginTop: "104px" }}
       className="not-prose sg-command-visualizer"
     >
-      {/* Hardware section (2 vendor rows in one card, equal-width grid) */}
+      {/* Hardware section ( vendor rows in one card, equal-width grid) */}
       <div style={s.cardColumn}>
         <div style={{ ...s.title, marginBottom: "2px" }}>Hardware Platform</div>
         {hwGroups.map((g) => (

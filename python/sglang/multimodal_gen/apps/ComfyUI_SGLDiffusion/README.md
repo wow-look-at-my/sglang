@@ -10,7 +10,7 @@ A ComfyUI plugin for integrating with SGLang Diffusion server, supporting image 
 
 ## Usage
 
-The plugin supports two modes of operation: **Server Mode** (via HTTP API) and **Integrated Mode** (tight integration with ComfyUI).
+The plugin supports modes of operation: **Server Mode** (via HTTP API) and **Integrated Mode** (tight integration with ComfyUI).
 
 ### Supported Models
 - **Z-Image**: High-speed image generation models (e.g., `Z-Image-Turbo`)
@@ -38,32 +38,19 @@ Leverage SGLang's high-performance sampling directly within ComfyUI while using 
 
 ## Adding a Model
 
-Pick the mode before writing code; the wrong one costs several hundred lines
-of weight mapping that buys nothing.
+Pick the mode before writing code. The wrong one costs several hundred lines of weight mapping that buys nothing.
 
-Take **Server Mode** when the model needs conditioning ComfyUI cannot supply
-(audio, reference materials, task routing), emits more than one modality, or
-has its own request contract. Reproducing that inside ComfyUI would duplicate
-stages the server already runs.
+Take **Server Mode** when the model needs conditioning ComfyUI cannot supply (audio, reference materials, task routing), emits more than one modality, or has its own request contract. Reproducing that inside ComfyUI will duplicate stages the server already runs.
 
-- If the request fits the existing `generate_image` / `generate_video` fields,
-  there is nothing to write — point the existing nodes at the server.
-- If the model has extra request fields, pass them via `extra_fields`. The
-  request schemas accept unknown keys, so `core/server_api.py` needs no
-  per-model change.
-- Add a node in `nodes.py` only to surface those inputs as ComfyUI widgets.
-  `SGLDiffusionGenerateH3` is the worked example.
+- If the request fits the existing `generate_image` / `generate_video` fields, there is nothing to write — point the existing nodes at the server.
+- If the model has extra request fields, pass them via `extra_fields`. The request schemas accept unknown keys, so `core/server_api.py` needs no per-model change.
+- Add a node in `nodes.py` only to surface those inputs as ComfyUI widgets. `SGLDiffusionGenerateH3` is the worked example.
 
-Take **Integrated Mode** only when the model denoises a single latent tensor
-that ComfyUI already knows how to build and decode, so its KSampler can drive
-the loop unchanged. Each model then needs:
+Take **Integrated Mode** only when the model denoises a single latent tensor that ComfyUI already knows how to build. Decode, so its KSampler can drive the loop unchanged. Each model then needs:
 
-- `runtime/pipelines/comfyui_<model>_pipeline.py` mapping ComfyUI's
-  single-file checkpoint layout onto the native module tree (350-690 lines in
-  the existing three)
+- `runtime/pipelines/comfyui_<model>_pipeline.py` mapping ComfyUI's single-file checkpoint layout onto the native module tree (350-690 lines in the existing three)
 - an executor in `executors/` adapting latent layout and conditioning to `Req`
-- entries in both `pipeline_class_dict` and `executor_class_dict` in
-  `core/generator.py`
+- entries in both `pipeline_class_dict` and `executor_class_dict` in `core/generator.py`
 
 ## Example Workflows
 

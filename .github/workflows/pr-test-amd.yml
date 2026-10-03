@@ -1,6 +1,5 @@
 name: PR Test (AMD)
-# Dynamic run-name for manual stage dispatches to enable URL lookup
-# Format: "[stage-name] sha" for fork PRs, "[stage-name]" for non-fork, default for normal runs
+# Dynamic run-name for manual stage dispatches to enable URL lookup. Format: "[stage-name] sha" for fork PRs, "[stage-name]" for non-fork, default for normal runs
 run-name: ${{ (inputs.target_stage || inputs.target_stage_select) && (inputs.pr_head_sha && format('[{0}] {1}', inputs.target_stage || inputs.target_stage_select, inputs.pr_head_sha) || format('[{0}]', inputs.target_stage || inputs.target_stage_select)) || '' }}
 
 on:
@@ -128,11 +127,7 @@ on:
         type: boolean
         default: false
 
-# Mirror pr-test.yml: the chained extra suite (call-pr-test-amd-extra ->
-# pr-test-amd-extra.yml) declares actions: write / issues: read /
-# pull-requests: read. A called reusable workflow can only use scopes the
-# caller already holds, so without this block the call fails workflow
-# validation ("requesting actions: write... but only allowed ...none").
+# Mirror pr-test.yml: the chained extra suite (call-pr-test-amd-extra -> pr-test-amd-extra.yml) declares actions: write / issues: read / pull-requests: read. A called reusable workflow can only use scopes the caller already holds, so without this block the call fails workflow validation ("requesting actions: write... but only allowed ...none").
 permissions:
   actions: write
   contents: read
@@ -146,8 +141,7 @@ env:
   DOCKERHUB_AMD_TOKEN: ${{ secrets.DOCKERHUB_AMD_TOKEN }}
 
 concurrency:
-  # Scheduled, run_all_tests, and manual dispatch runs get unique groups (never cancel each other).
-  # PR runs share a group per branch so new pushes cancel stale runs.
+  # Scheduled, run_all_tests, and manual dispatch runs get unique groups (never cancel each other). PR runs share a group per branch so new pushes cancel stale runs.
   group: pr-test-amd-${{ (inputs.run_all_tests || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && format('full-{0}', github.run_id) || inputs.pr_head_sha || inputs.ref || github.ref }}
   cancel-in-progress: ${{ !inputs.run_all_tests && github.event_name != 'workflow_call' && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' }}
 
@@ -166,9 +160,7 @@ jobs:
       jit_kernel: ${{ steps.filter.outputs.jit_kernel || steps.run-mode.outputs.run_all_tests }}
       multimodal_gen: ${{ steps.filter.outputs.multimodal_gen || steps.run-mode.outputs.run_all_tests }}
       continue_on_error: ${{ steps.set-continue-on-error.outputs.continue_on_error }}
-      # Keep rocm10 on the twice-daily cadence. The 17:30 UTC schedule runs
-      # rocm724 and rocm720 once daily. Dispatch/call inputs select one version
-      # or all three, while a pull_request falls through to the rocm10 default.
+      # Keep rocm10 on the twice-daily cadence. The 17:30 UTC schedule runs rocm724 and rocm720 once daily. Dispatch/call inputs select one version or all three, while a pull_request falls through to the rocm10 default.
       rocm_versions: ${{ inputs.rocm_version == 'all' && '["rocm10","rocm724","rocm720"]' || inputs.rocm_version && format('["{0}"]', inputs.rocm_version) || github.event.schedule == '30 17 * * *' && '["rocm724","rocm720"]' || '["rocm10"]' }}
     steps:
       - name: Checkout code
@@ -249,14 +241,7 @@ jobs:
               - "python/pyproject_rocm.toml"
               - "python/pyproject_other.toml"
 
-  # =============================================== extra (scheduled) ====================================================
-  # Chain the label-gated AMD extra tier into the scheduled run, mirroring
-  # pr-test.yml's `call-pr-test-extra`. On `schedule` (and run_all_tests
-  # dispatch) the extra suite runs on `main` without needing the
-  # `run-ci-extra` label (pr-gate.yml only enforces labels on pull_request
-  # events). Targeted stage dispatches (target_stage set) are excluded.
-  # Not added to `pr-test-amd-finish` so the base AMD gate never depends on
-  # the opt-in extra suite.
+  # =============================================== extra (scheduled) ==================================================== Chain the label-gated AMD extra tier into the scheduled run, mirroring pr-test.yml's `call-pr-test-extra`. On `schedule` (and run_all_tests dispatch) the extra suite runs on `main` without needing the `run-ci-extra` label (pr-gate.yml only enforces labels on pull_request events). Targeted stage dispatches (target_stage set) are excluded. Not added to `pr-test-amd-finish` so the base AMD gate never depends on the opt-in extra suite.
   call-pr-test-amd-extra:
     name: call-pr-test-amd-extra
     needs: [check-changes]
@@ -320,14 +305,12 @@ jobs:
 
       - name: Run test
         timeout-minutes: 30
-        env:
-          CONTINUE_ON_ERROR: ${{ needs.check-changes.outputs.continue_on_error }}
         run: |
           # In continue-on-error mode (schedule/full runs), keep running all pytest
           # files and aggregate the exit code. In PR mode, preserve fail-fast.
           failures=0
           run_pytest() {
-            if [[ "$CONTINUE_ON_ERROR" == "true" ]]; then
+            if [[ "${{ needs.check-changes.outputs.continue_on_error }}" == "true" ]]; then
               "$@" || failures=$((failures + 1))
             else
               "$@"
@@ -520,10 +503,7 @@ jobs:
         run: |
           bash scripts/ci/amd/amd_ci_exec.sh -w "/sglang-checkout/test" python3 run_suite.py --hw amd --suite jit-kernel-benchmark-test-amd ${{ needs.check-changes.outputs.continue_on_error == 'true' && '--continue-on-error' || '' }}
 
-  # =============================================== Wait Jobs for Sequential PR Execution ====================================================
-  # These jobs poll GitHub API to wait for previous stages to complete.
-  # For PR runs: wait jobs run and enforce sequential execution via polling.
-  # For scheduled runs: wait jobs are skipped, enabling parallel execution of all stages.
+  # =============================================== Wait Jobs for Sequential PR Execution ==================================================== These jobs poll GitHub API to wait for previous stages to complete. For PR runs: wait jobs run and enforce sequential execution via polling. For scheduled runs: wait jobs are skipped, enabling parallel execution of all stages.
 
   wait-for-stage-a-amd:
     name: wait-for-stage-a-amd
@@ -889,12 +869,7 @@ jobs:
           echo "=== Post-test System Memory Status ==="
           free -h
 
-      # The mm_gen `unit` suite is portable CPU-style tests that finish in a
-      # few minutes, which does not justify a job of its own: on mi300 the
-      # container pull plus dependency install costs ~2h before any test runs.
-      # Ride along on the shard that is already warm. Runs after the diffusion
-      # tests, and on failure too, so a diffusion regression cannot hide it.
-      # Skips the CUDA-only ltx2_vae_channels_last memory-format assertion.
+      # The mm_gen `unit` suite is portable CPU-style tests that finish in a few minutes, which does not justify a job of its own: on mi300 the container pull plus dependency install costs ~2h before any test runs. Ride along on the shard that is already warm. Runs after the diffusion tests, and on failure too, so a diffusion regression cannot hide it. Skips the CUDA-only ltx2_vae_channels_last memory-format assertion.
       - name: Run diffusion unit tests
         if: matrix.part == 0 && (success() || failure())
         timeout-minutes: 30
@@ -936,11 +911,7 @@ jobs:
       max-parallel: 1
       matrix:
         rocm_version: ${{ fromJson(needs.check-changes.outputs.rocm_versions) }}
-        # run_suite.py load-balances the suite's parametrized cases and
-        # standalone files over these partitions, so the count is free to
-        # choose. Two shards measured 45-65 min of case work each, inside the
-        # 180 min step timeout, and halve the ~2h per-job container pull plus
-        # dependency install.
+        # run_suite.py load-balances the suite's parametrized cases and standalone files over these partitions, so the count is free to choose. Two shards measured 45-65 min of case work each, inside the 180 min step timeout, and halve the ~2h per-job container pull plus dependency install.
         part: [0, 1]
     runs-on: ${{ format('linux-{0}-2gpu-sglang', inputs.runner_arch || 'mi300') }}
     steps:
@@ -1238,9 +1209,7 @@ jobs:
         run: |
           bash scripts/ci/amd/amd_ci_exec.sh -w "/sglang-checkout/test" python3 run_suite.py --hw amd --suite stage-c-test-large-8-gpu-amd-mi35x --auto-partition-id ${{ matrix.part }} --auto-partition-size 3 --timeout-per-file 3600 ${{ needs.check-changes.outputs.continue_on_error == 'true' && '--continue-on-error' || '' }}
 
-  # =============================================== DeepSeek-V4 (MI35x, 8-GPU) ====================================================
-  # GSM8K accuracy on the nightly dsv4 suites, ~20min each. Gated as stage-C so
-  # every PR that touches the main package covers DeepSeek-V4.
+  # =============================================== DeepSeek-V4 (MI35x, 8-GPU) ==================================================== GSM8K accuracy on the nightly dsv4 suites, ~20min each. Gated as stage-C so every PR that touches the main package covers DeepSeek-V4.
   stage-c-dsv4-flash-fp4-fp8-amd-mi35x:
     name: ${{ format('stage-c-dsv4-flash-fp4-fp8-amd-mi35x ({0}, {1})', matrix.rocm_version, matrix.runner) }}
     needs: [check-changes, call-gate, wait-for-stage-b-amd]

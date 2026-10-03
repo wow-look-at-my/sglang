@@ -1,9 +1,8 @@
 // Ling-3.0-flash per-cell benchmark numbers, keyed by the same `match` tuple as
 // ling-3.0-flash.jsx cells. See _deployment.jsx for the speed/accuracy schema.
 //
-// Accuracy uses sgl-eval full GSM8K (1319 questions). Speed uses 80 exact-length
-// random requests (ISL 8192 / OSL 1024, --random-range-ratio 1, --flush-cache).
-// TTFT/TPOT are P50; tokens_per_sec_per_gpu is total (input + output) tok/s/GPU.
+// Accuracy uses sgl-eval full GSM8K (questions). TTFT/TPOT are P50;
+// tokens_per_sec_per_gpu is total (input + output) tok/s/GPU.
 //
 // Cells with no entry (H20-3e / H800 / H100, both quantizations) had no matching
 // allocation and were never gated.
@@ -23,8 +22,6 @@ export const benchmarks = [
     notes: "Full GSM8K stop rate 99.62%; accept length ~4.5-5.1.",
   },
   {
-    // Rejected by the full GSM8K gate at request 1319: a no-EOS runaway generated
-    // >33k tokens. Recipe stays `verified: false` in ling-3.0-flash.jsx.
     match: { hw: "h200", variant: "default", quant: "bf16", strategy: "high-throughput", spec: "off", nodes: "single" },
     accuracy: { gsm8k_pct: null },
     notes: "Full GSM8K gate did not complete: one request ran away without emitting EOS (>33k generated tokens).",
@@ -86,9 +83,8 @@ export const benchmarks = [
     notes: "Full GSM8K stop rate 100%; default decode CUDA Graph captured 33 shapes through batch 227.",
   },
 
-  // ====================================================================
-  // H200 + HiCache (Mooncake tiered cache)
-  // ====================================================================
+  // ==================================================================== H200
+  // + HiCache (Mooncake tiered cache).
   {
     match: { hw: "h200", variant: "default", quant: "bf16", strategy: "hicache", spec: "nextn", nodes: "single" },
     sglang_version: "PR #33561 @ 51bcd89c",
@@ -193,20 +189,11 @@ export const benchmarks = [
     notes: "Full GSM8K stop rate 99.62%.",
   },
 
-  // ====================================================================
-  // GB300 + BF16 (TP4)
-  // ====================================================================
-  // TODO: both cells are `verified: true` (gated on the final head) but the GSM8K
-  // percentages were not recorded in the PR body or in the verifying commits —
-  // fill from the run logs.
+  // ==================================================================== GB300 + BF16 (TP4).
   { match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "low-latency", spec: "nextn", nodes: "single" } },
   { match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "high-throughput", spec: "off", nodes: "single" } },
 
-  // ====================================================================
-  // GB300 + FP8 (TP4 + EP4)
-  // ====================================================================
-  // TODO: both cells are `verified: true` on the final head; the 96.66% / 96.44%
-  // pair in the PR body predates the TP+EP change — fill with the re-measured values.
+  // ==================================================================== GB300 + FP8 (TP4 + EP4).
   { match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "low-latency", spec: "nextn", nodes: "single" } },
   { match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "high-throughput", spec: "off", nodes: "single" } },
 ];

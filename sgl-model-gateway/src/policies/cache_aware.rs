@@ -1,64 +1,4 @@
-/*
-    Cache-Aware Load Balancing Router
-
-    This router combines two strategies to optimize both cache utilization and request distribution:
-
-    1. Cache-Aware Routing (Approximate Tree)
-    2. Load Balancing (Shortest Queue with Balance Thresholds)
-
-    The router dynamically switches between these strategies based on load conditions:
-    - Uses load balancing when the system is imbalanced
-    - Uses cache-aware routing when the system is balanced
-
-    A system is considered imbalanced if both conditions are met:
-    1. (max - min) > abs_threshold
-    2. max > rel_threshold * min
-
-    Strategy Details:
-
-    1. Cache-Aware Routing (Approximate Tree)
-    -------------------------------------------
-    This strategy maintains an approximate radix tree for each worker based on request history,
-    eliminating the need for direct cache state queries. The tree stores raw text characters
-    instead of token IDs to avoid tokenization overhead.
-
-    Process:
-    a. For each request, find the worker with the highest prefix match
-    b. If match rate > cache_threshold:
-    Route to the worker with highest match (likely has relevant data cached)
-    c. If match rate ≤ cache_threshold:
-    Route to the worker with smallest tree size (most available cache capacity)
-    d. Background maintenance:
-    Periodically evict least recently used leaf nodes to prevent memory overflow
-
-    2. Load Balancing (Shortest Queue)
-    -------------------------------------------
-    This strategy tracks pending request counts per worker and routes new requests
-    to the least busy worker when the system is detected to be imbalanced. Ties
-    are randomly broken.
-
-    Configuration Parameters:
-    ------------------------
-    1. cache_threshold: (float, 0.0 to 1.0)
-    Minimum prefix match ratio to use highest-match routing.
-    Below this threshold, routes to worker with most available cache space.
-
-    2. balance_abs_threshold: (integer)
-    Absolute difference threshold for load imbalance detection.
-    System is potentially imbalanced if (max_load - min_load) > abs_threshold
-
-    3. balance_rel_threshold: (float)
-    Relative ratio threshold for load imbalance detection.
-    System is potentially imbalanced if max_load > min_load * rel_threshold
-    Used in conjunction with abs_threshold to determine final imbalance state.
-
-    4. eviction_interval_secs: (integer)
-    Interval between LRU eviction cycles for the approximate trees.
-
-    5. max_tree_size: (integer)
-    Maximum nodes per tree. When exceeded, LRU leaf nodes are evicted
-    during the next eviction cycle.
-*/
+/* Cache-Aware Load Balancing Router This router combines strategies to optimize both cache utilization and request distribution. */
 
 use std::sync::Arc;
 
@@ -74,13 +14,8 @@ use super::{
 };
 use crate::core::{Worker, WorkerType, UNKNOWN_MODEL_ID};
 
-/// Tag used to isolate prefill/decode/regular worker pools in the cache_aware tree key.
-///
-/// Trees are keyed by `pool::model` so that an alternating prefill→decode call sequence
-/// for the same model cannot evict each other's tenants. Without this isolation, the
-/// `tree.insert(text, url)` at the end of every `select_worker` call would overwrite
-/// the previous pool's tenant for the same prompt and collapse cache_aware into a
-/// flip-flop between pools.
+/// Tag used to isolate prefill/decode/regular worker pools in the cache_aware
+/// tree key.
 fn pool_tag(worker_type: &WorkerType) -> &'static str {
     match worker_type {
         WorkerType::Regular => "regular",
@@ -100,14 +35,7 @@ fn tree_key_for_worker(worker: &dyn Worker) -> String {
     )
 }
 
-/// Cache-aware routing policy
-///
-/// Routes requests based on cache affinity when load is balanced,
-/// switches to shortest-queue routing when load is imbalanced.
-/// Maintains separate trees per `(pool, model)` so that prefill, decode, and
-/// regular worker pools cannot evict each other's tenants.
-/// Supports mesh synchronization of tree operations across cluster nodes.
-/// When mesh is not enabled, the policy works independently without synchronization.
+/// Cache-aware routing policy Routes requests based on cache affinity when load is balanced.
 #[derive(Debug)]
 pub struct CacheAwarePolicy {
     config: CacheAwareConfig,
@@ -208,7 +136,6 @@ impl CacheAwarePolicy {
 
     /// Remove a worker by URL (removes from all model trees for backward compatibility)
     pub fn remove_worker_by_url(&self, url: &str) {
-        // Remove from all trees since we don't know which model it belongs to
         for tree_ref in self.trees.iter() {
             tree_ref.value().remove_tenant(url);
         }
@@ -218,10 +145,10 @@ impl CacheAwarePolicy {
     /// This is called during initialization to rebuild trees from synchronized state
     fn restore_tree_state_from_mesh(&self) {
         if let Some(ref mesh_sync) = self.mesh_sync {
-            // Get all tree states from mesh
-            // We need to iterate through all models that have tree states
-            // For now, we'll restore trees for models that are already in our trees map
-            // In a full implementation, we might want to query mesh for all tree states
+            // Get all tree states from mesh We need to iterate through all
+            // models that have tree states we'll restore trees for models
+            // that are already in our trees map In a full implementation, we
+            // might want to query mesh for all tree states
 
             for tree_ref in self.trees.iter() {
                 let tree_key = tree_ref.key();
@@ -249,9 +176,8 @@ impl CacheAwarePolicy {
         }
     }
 
-    /// Normalize a tree key for mesh synchronization, converting an accidentally
-    /// empty key to `UNKNOWN_MODEL_ID` for consistency. In current code the
-    /// composite `pool::model` key is never empty, so this is defensive.
+    /// Normalize a tree key for mesh synchronization, converting an
+    /// accidentally empty key to `UNKNOWN_MODEL_ID` for consistency.
     fn normalize_mesh_model_id(tree_key: &str) -> &str {
         if tree_key.is_empty() {
             UNKNOWN_MODEL_ID
@@ -262,9 +188,9 @@ impl CacheAwarePolicy {
 
     /// Apply remote tree operation from mesh.
     ///
-    /// `mesh_key` is the opaque key the operation was originally synced under;
+    /// `mesh_key` is the opaque key the operation was originally synced under.
     /// `select_worker` / `select_worker_min_load` send tree operations to mesh
-    /// keyed by the composite `pool::model`, and any future receive path is
+    /// keyed by the composite `pool::model`.
     /// expected to forward that same string back here unchanged. The argument
     /// is kept as `&str` so the mesh layer can stay key-agnostic.
     ///
@@ -326,10 +252,8 @@ impl CacheAwarePolicy {
             );
         }
 
-        // Use shortest queue when imbalanced. Tie break randomly.
-        // Snapshot load() (live atomic count of load). Without snapshot
-        // there could be no workers found matching min_load because of
-        // load update.
+        // Use shortest queue when imbalanced. Tie break randomly. Snapshot
+        // load() (live atomic count of load).
         let loads: Vec<(usize, usize)> = healthy_indices
             .iter()
             .map(|&idx| (idx, workers[idx].load()))
@@ -344,8 +268,7 @@ impl CacheAwarePolicy {
 
         // Even in imbalanced mode, update the tree to maintain cache state
         if let Some(text) = request_text {
-            // Get the tree reference without locking the entire HashMap
-            // DashMap only locks the specific shard containing this key
+            // Get the tree reference without locking the entire HashMap DashMap only locks the specific shard containing this.
             let tree = self.trees.get(tree_key).map(|entry| entry.value().clone());
 
             if let Some(tree) = tree {
@@ -396,8 +319,7 @@ impl LoadBalancingPolicy for CacheAwarePolicy {
             return None;
         }
 
-        // Determine the (pool, model) key for this set of workers — the router pre-filters
-        // so every healthy worker here belongs to the same pool and same model.
+        // Determine the (pool, model) key for this set of workers.
         let pivot = workers[healthy_indices[0]].as_ref();
         let tree_key = tree_key_for_worker(pivot);
 
@@ -426,13 +348,11 @@ impl LoadBalancingPolicy for CacheAwarePolicy {
         // Use cache-aware routing when balanced
         let text = request_text.unwrap_or("");
 
-        // Get the tree reference without locking the entire HashMap
-        // DashMap only locks the specific shard containing this key
+        // Get the tree reference without locking the entire HashMap DashMap only locks the specific shard containing this.
         let tree = self.trees.get(&tree_key).map(|entry| entry.value().clone());
 
         if let Some(tree) = tree {
-            // Now we work with the tree without holding the HashMap lock
-            // Use prefix_match_with_counts to avoid redundant chars().count() calls
+            // Now we work with the tree without holding the HashMap lock Use prefix_match_with_counts to avoid redundant chars().count().
             let result = tree.prefix_match_with_counts(text);
             let match_rate = if result.input_char_count == 0 {
                 0.0
@@ -449,10 +369,8 @@ impl LoadBalancingPolicy for CacheAwarePolicy {
                     .position(|w| w.url() == tenant_url)
                     .filter(|&idx| workers[idx].is_healthy())
             } else {
-                // Low cache match: use worker with minimum load. Tie break randomly.
-                // Snapshot load() (live atomic count of load). Without snapshot
-                // there could be no workers found matching min_load because of
-                // load update.
+                // Low cache match: use worker with minimum load. Tie break
+                // randomly. Snapshot load() (live atomic count of load).
                 let loads: Vec<(usize, usize)> = healthy_indices
                     .iter()
                     .map(|&idx| (idx, workers[idx].load()))
@@ -647,7 +565,6 @@ mod tests {
         for _ in 0..20 {
             worker1.increment_load();
         }
-        // worker2 has load 0
 
         let workers: Vec<Arc<dyn Worker>> = vec![Arc::new(worker1), Arc::new(worker2)];
         policy.init_workers(&workers);
@@ -663,8 +580,7 @@ mod tests {
         }
     }
 
-    // In imbalanced mode the overloaded worker must be avoided AND the remaining
-    // tied (min-load) workers must be spread across via random tie-breaking.
+    // In imbalanced mode the overloaded worker must be avoided AND the remaining tied (min-load) workers must be spread across.
     #[tokio::test]
     async fn test_cache_aware_imbalanced_random_tie_break() {
         let policy = CacheAwarePolicy::with_config(CacheAwareConfig {
@@ -685,14 +601,12 @@ mod tests {
             ));
         }
 
-        // Overload worker 0: max=50, min=0 => (50-0) > 5 AND 50 > 0*2.0 => imbalanced.
         for _ in 0..50 {
             workers[0].increment_load();
         }
         policy.init_workers(&workers);
 
-        // Reuse the SAME prompt: the imbalanced branch bypasses cache affinity,
-        // so even a guaranteed cache hit must not pin all traffic to one worker.
+        // Reuse the SAME prompt: the imbalanced branch bypasses cache affinity.
         let mut selection_counts = vec![0; num_workers];
         for _ in 0..100 {
             let info = SelectWorkerInfo {
@@ -721,10 +635,6 @@ mod tests {
     }
 
     // Verify random tie breaking for cache misses and low load situations.
-    // Important for when concurrency is lower than the number of workers.
-    // Without random tie breaking there will be multiple workers with 0 load
-    // and all requests will be sent to the same replica which doesn't utilize
-    // the available memory on all workers for the KV cache.
     #[tokio::test]
     async fn test_cache_aware_random_tie_break_cold_start() {
         let config = CacheAwareConfig {
@@ -733,7 +643,7 @@ mod tests {
         };
         let policy = CacheAwarePolicy::with_config(config);
 
-        // Create 5 workers
+        // Create multiple workers
         let num_workers = 5;
         let mut workers: Vec<Arc<dyn Worker>> = Vec::new();
         for j in 0..num_workers {
@@ -745,7 +655,6 @@ mod tests {
         }
         policy.init_workers(&workers);
 
-        // Send 100 requests with unique prompts to simulate 100 cache misses.
         let mut selection_counts = vec![0; num_workers];
         for i in 0..100 {
             let prompt = format!("{}_unique_request", i);
@@ -867,9 +776,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify tree operation was synced to mesh under the composite `pool::model`
-        // key — workers here are Regular and no model was specified, so the key is
-        // `regular::UNKNOWN_MODEL_ID`.
+        // Verify tree operation was synced to mesh under the composite `pool::model` key — workers here are Regular and no model was specified.
         let expected_key = format!("regular::{}", UNKNOWN_MODEL_ID);
         let tree_state = mesh_sync.get_tree_state(&expected_key);
         assert!(tree_state.is_some());
@@ -928,8 +835,7 @@ mod tests {
             .entry("model1".to_string())
             .or_insert_with(|| Arc::new(Tree::new()));
 
-        // Manually trigger restore (normally done in constructor)
-        // For testing, we'll verify the tree state exists in mesh
+        // Manually trigger restore (normally done in constructor) For testing, we'll verify the tree state exists.
         let tree_state = mesh_sync.get_tree_state("model1");
         assert!(tree_state.is_some());
         let state = tree_state.unwrap();
@@ -979,7 +885,7 @@ mod tests {
             tree_ops::{TreeInsertOp, TreeOperation},
         };
 
-        // Simulate two nodes
+        // Simulate nodes
         let stores1 = Arc::new(StateStores::with_self_name("node1".to_string()));
         let mesh_sync1 = Arc::new(MeshSyncManager::new(stores1.clone(), "node1".to_string()));
 
@@ -1007,9 +913,7 @@ mod tests {
 
         // Node2 should be able to get the tree state
         let tree_state = mesh_sync2.get_tree_state("model1");
-        // Note: In a real scenario, this would be synced via gossip protocol
-        // For unit test, we verify the sync mechanism works
-        // Tree state may or may not exist depending on sync timing
+        // Note: In a real scenario, this would be synced via gossip protocol For unit test.
         let _ = tree_state;
     }
 
@@ -1062,9 +966,7 @@ mod tests {
         )
     }
 
-    /// PD setup with two separate `CacheAwarePolicy` instances — the production
-    /// wiring. Each pool's tree is seeded only with its own workers. Across a
-    /// 4-turn growing prompt, each pool must stick to one worker.
+    /// PD setup with separate `CacheAwarePolicy` instances — the production wiring.
     #[tokio::test]
     async fn test_pd_pool_isolation_two_policies() {
         let config = CacheAwareConfig {
@@ -1125,11 +1027,7 @@ mod tests {
         }
     }
 
-    /// Regression: even if a single `CacheAwarePolicy` instance is incorrectly
-    /// wired to both pools, pool-aware tree keys must keep their state disjoint.
-    /// The pre-fix code shared one trie keyed by `model_id`, so alternating
-    /// prefill/decode `tree.insert` calls overwrote each other and the policy
-    /// degenerated into worker-flipping random selection.
+    /// Regression: even if a single `CacheAwarePolicy` instance is incorrectly wired to both pools.
     #[tokio::test]
     async fn test_pd_pool_isolation_shared_policy_regression() {
         let config = CacheAwareConfig {
@@ -1205,10 +1103,7 @@ mod tests {
         }
     }
 
-    /// Removing a PD worker via the composite-key `remove_worker(&dyn Worker)` path
-    /// must drop it from its own pool's tree without touching the other pool. This
-    /// covers `PolicyRegistry::remove_pd_worker_from_cache_aware`, which routes the
-    /// removal here based on `worker.worker_type()`.
+    /// Removing a PD worker via the composite-key `remove_worker(&dyn Worker)` path must drop it.
     #[tokio::test]
     async fn test_pd_pool_isolation_remove_worker() {
         let config = CacheAwareConfig {
@@ -1296,11 +1191,7 @@ mod tests {
         );
     }
 
-    /// Shared setup for `PolicyRegistry::remove_pd_worker_from_cache_aware` tests:
-    /// build a registry whose prefill and decode policies are separate
-    /// `CacheAwarePolicy` instances seeded with the matching pool's workers, then
-    /// return the registry, the per-pool policy handles (for tree inspection), and
-    /// representative workers from each pool.
+    /// Shared setup for `PolicyRegistry::remove_pd_worker_from_cache_aware` tests.
     #[allow(clippy::type_complexity)]
     fn pd_registry_with_cache_aware_pools() -> (
         Arc<crate::policies::PolicyRegistry>,
@@ -1338,7 +1229,7 @@ mod tests {
     }
 
     /// Seed both pool trees so each has a known tenant for `prompt`, then return
-    /// the (prefill_tenant, decode_tenant) snapshot to compare against after a
+    /// the (prefill_tenant.
     /// dispatched removal.
     async fn seed_pd_pools(
         prefill_ca: &CacheAwarePolicy,
@@ -1375,9 +1266,7 @@ mod tests {
         (prefill_tenant, decode_tenant)
     }
 
-    /// A `Prefill` worker passed to `remove_pd_worker_from_cache_aware` must hit
-    /// the registry's `prefill_policy` and leave `decode_policy` untouched.
-    /// Catches a dispatch swap like `Prefill => self.decode_policy.get()`.
+    /// A `Prefill` worker passed to `remove_pd_worker_from_cache_aware` must hit the registry's `prefill_policy`.
     #[tokio::test]
     async fn test_registry_remove_pd_worker_prefill_dispatches_to_prefill_policy() {
         let (registry, prefill_ca, decode_ca, prefill0, prefill1, decode0, decode1) =
@@ -1420,8 +1309,7 @@ mod tests {
         );
     }
 
-    /// Mirror of the prefill dispatch test for `Decode`. Catches a dispatch swap
-    /// in the other direction (`Decode => self.prefill_policy.get()`).
+    /// Mirror of the prefill dispatch test for `Decode`.
     #[tokio::test]
     async fn test_registry_remove_pd_worker_decode_dispatches_to_decode_policy() {
         let (registry, prefill_ca, decode_ca, prefill0, prefill1, decode0, decode1) =
@@ -1464,9 +1352,7 @@ mod tests {
         );
     }
 
-    /// `remove_pd_worker_from_cache_aware` must short-circuit on `Regular`
-    /// workers and silently ignore non-cache_aware policies (`name() != "cache_aware"`).
-    /// Both branches are no-ops: neither pool tree changes, and no downcast panic.
+    /// `remove_pd_worker_from_cache_aware` must short-circuit on `Regular` workers and silently ignore non-cache_aware policies.
     #[tokio::test]
     async fn test_registry_remove_pd_worker_regular_and_non_cache_aware_noop() {
         // (a) Regular worker: should early-return regardless of policy state.
@@ -1523,16 +1409,12 @@ mod tests {
             Arc::new(crate::policies::RoundRobinPolicy::new());
         registry.set_prefill_policy(rr_prefill);
         registry.set_decode_policy(rr_decode);
-        // No panic, no downcast — this would fault if the guard
-        // `policy.name() == "cache_aware"` were dropped.
+        // No panic, no downcast — this would fault if the guard `policy.name() == "cache_aware"` were dropped.
         registry.remove_pd_worker_from_cache_aware(prefill0.as_ref());
         registry.remove_pd_worker_from_cache_aware(decode0.as_ref());
     }
 
-    /// `init_pd_cache_aware_policies` must seed only the pool whose policy is
-    /// cache_aware AND whose worker list is non-empty. Covers all four corners:
-    /// both seeded, only-prefill-cache_aware, empty-worker short-circuit, and the
-    /// non-cache_aware side staying a no-op.
+    /// `init_pd_cache_aware_policies` must seed only the pool whose policy is cache_aware.
     #[tokio::test]
     async fn test_registry_init_pd_cache_aware_policies_gating() {
         let no_eviction = CacheAwareConfig {

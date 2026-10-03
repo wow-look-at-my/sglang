@@ -75,10 +75,7 @@ type PreprocessedRequest struct {
 
 // PreprocessChatRequest preprocesses a chat completion request
 //
-// This function:
-// 1. Applies chat_template to messages
-// 2. Tokenizes the processed text
-// 3. Generates tool constraints (if tools are present)
+// Generates tool constraints (if tools are present)
 //
 // Returns the preprocessed request data and any error.
 func PreprocessChatRequest(requestJSON, tokenizerPath string) (*PreprocessedRequest, error) {

@@ -11,7 +11,6 @@ echo '{"file_path_prefix": "/data/hf3fs-test-0", "file_size": 1099511627776, "nu
 ${SGLANG_HICACHE_HF3FS_CONFIG_PATH}
 python3 benchmark/hf3fs/bench_zerocopy.py
 
-####################################################################################################
 
 rm -rf nohup.out && \
 nohup python3 -m sglang.launch_server \
@@ -31,7 +30,6 @@ nohup python3 benchmark/hicache/bench_multiturn.py \
     --request-length 2048 --num-clients 512 --num-rounds 3 --max-parallel 8 \
     > bench_multiturn.out &
 
-####################################################################################################
 
 rm -rf nohup.out && \
 nohup python3 -m sglang.launch_server \
@@ -53,7 +51,6 @@ nohup python3 benchmark/hicache/bench_multiturn.py \
     --request-length 2048 --num-clients 1024 --num-rounds 3 --max-parallel 8 \
     > bench_multiturn.out &
 
-####################################################################################################
 
 ps aux | grep "sglang.launch_server" | grep -v grep | awk '{print $2}' | xargs kill -9
 ps aux | grep "bench_multiturn.py" | grep -v grep | awk '{print $2}' | xargs kill -9

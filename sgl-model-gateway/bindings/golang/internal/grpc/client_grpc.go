@@ -132,9 +132,7 @@ func (c *GrpcClient) CreateChatCompletionStream(ctx context.Context, reqJSON str
 		model = "default"
 	}
 
-	// Build GenerateRequest
-	// Generate unique request ID using timestamp + atomic counter to avoid collisions
-	// This matches Rust version's UUID-based approach for uniqueness
+	// Build GenerateRequest Generate unique request ID using timestamp + atomic counter.
 	counter := atomic.AddUint64(&c.requestCounter, 1)
 	requestID := fmt.Sprintf("chatcmpl-%d-%d", time.Now().UnixNano(), counter)
 	generateReq := &proto.GenerateRequest{
@@ -290,7 +288,7 @@ type GrpcChatCompletionStream struct {
 	processWg          sync.WaitGroup
 	closeTimeout       time.Duration
 	bufferSizes        ChannelBufferSizes
-	clientDisconnected int32 // Atomic flag: 1 if client disconnected, 0 otherwise
+	clientDisconnected int32
 }
 
 func (s *GrpcChatCompletionStream) readLoop() {
@@ -506,7 +504,6 @@ func (s *GrpcChatCompletionStream) RecvJSON() (string, error) {
 }
 
 // SetClientDisconnected marks that the client has disconnected.
-// When Close() is called, it will not call CloseSend() to avoid aborting the request on server side.
 func (s *GrpcChatCompletionStream) SetClientDisconnected() {
 	atomic.StoreInt32(&s.clientDisconnected, 1)
 }

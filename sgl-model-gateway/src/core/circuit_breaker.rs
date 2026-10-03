@@ -85,7 +85,6 @@ impl CircuitState {
 }
 
 /// Get current time as milliseconds since an arbitrary epoch.
-/// Uses Instant for monotonic time, converting to ms for atomic storage.
 #[inline]
 fn now_ms() -> u64 {
     // Use a static reference point for consistent timing
@@ -95,13 +94,8 @@ fn now_ms() -> u64 {
 }
 
 /// Circuit breaker implementation using lock-free atomics for hot paths.
-///
-/// This implementation avoids RwLock contention by using atomic operations
-/// for state checks (the most common operation). Only state transitions
-/// use compare-and-swap which is still lock-free.
 #[derive(Debug)]
 pub struct CircuitBreaker {
-    /// Circuit state stored as atomic u8 (0=Closed, 1=Open, 2=HalfOpen)
     state: AtomicU8,
     consecutive_failures: AtomicU32,
     consecutive_successes: AtomicU32,

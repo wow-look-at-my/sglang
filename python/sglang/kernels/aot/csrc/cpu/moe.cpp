@@ -19,12 +19,6 @@ namespace {
 //       output of silu_and_mul in sorted order, thus load_A for
 //       the 2nd gemm would be contiguous, therefore we can directly
 //       load A from intermediate_cache1.
-//
-//  TODO:
-//     1. tune BLOCK_M and BLOCK_N (BLOCK_N * K fit L2)
-//     2. add prefetch for load A which is indexed access
-//     3. abstract at::native::cpublas::brgemm with WoQ gemm (M = 1 & M != 1)
-//
 
 template <int BLOCK_M>
 int moe_align_block_size(
@@ -99,8 +93,7 @@ int moe_align_block_size(
     return BLOCK_M;
   };
 
-  // offsets holds starting offset for each valida M blocks
-  //   shape : [num_token_blocks + 1]
+  // offsets holds starting offset for each valida M blocks shape.
   offsets[0] = 0;
   const int num_token_blocks = num_tokens_post_pad / BLOCK_M;
   at::parallel_for(0, num_token_blocks, GRAIN_SIZE / BLOCK_M, [&](int begin, int end) {
@@ -108,7 +101,7 @@ int moe_align_block_size(
       offsets[mb + 1] = sorted_id_size(sorted_ids + mb * BLOCK_M);
     }
   });
-  // TODO: do we need to vecterize this ?
+  // TODO: do we need to vecterize this?
   for (int mb = 0; mb < num_token_blocks; ++mb) {
     offsets[mb + 1] += offsets[mb];
   }
@@ -167,7 +160,7 @@ struct tinygemm_kernel_nn2<at::BFloat16, BLOCK_M, BLOCK_N> {
 
     const int64_t K2 = K >> 1;
     const int64_t lda2 = lda >> 1;
-    const int64_t ldb2 = ldb;  // ldb * 2 >> 1;
+    const int64_t ldb2 = ldb;
     const float* a_ptr = reinterpret_cast<const float*>(A);
     const float* b0_ptr = reinterpret_cast<const float*>(B0);
     const float* b1_ptr = reinterpret_cast<const float*>(B1);
@@ -197,7 +190,6 @@ struct tinygemm_kernel_nn2<at::BFloat16, BLOCK_M, BLOCK_N> {
     auto storec = [&](auto i) {
       constexpr int row = i / COLS;
       constexpr int col = i % COLS;
-      // for COLS = 2, 4 use 512bit store
       if constexpr (col % 2 == 0) {
         __m512 x0 = vc0[row * COLS + col + 0];
         __m512 x1 = vc0[row * COLS + col + 1];
@@ -232,7 +224,6 @@ void tinygemm_kernel(
     int64_t lda,
     int64_t ldb,
     int64_t ldc) {
-  // pattern: 1-(2+2)-(8+8)
   constexpr int64_t BLOCK_M = 4;
   constexpr int64_t BLOCK_N = 32;
   const int64_t MB = div_up(M, BLOCK_M);
@@ -310,7 +301,7 @@ struct tinygemm_kernel_nn<at::BFloat16, BLOCK_M, BLOCK_N> {
 
     const int64_t K2 = K >> 1;
     const int64_t lda2 = lda >> 1;
-    const int64_t ldb2 = ldb;  // ldb * 2 >> 1;
+    const int64_t ldb2 = ldb;
     const float* a_ptr = reinterpret_cast<const float*>(A);
     const float* b_ptr = reinterpret_cast<const float*>(B);
 
@@ -358,7 +349,6 @@ void tinygemm_kernel(
     int64_t lda,
     int64_t ldb,
     int64_t ldc) {
-  // pattern: 1-2-8
   constexpr int64_t BLOCK_M = 4;
   constexpr int64_t BLOCK_N = 32;
   const int64_t MB = div_up(M, BLOCK_M);
@@ -420,11 +410,10 @@ void fused_experts_kernel_impl(
     float limit,
     CPUActMethod act_func,
     bool with_bias) {
-  // handle 2 tiles per block
+  // handle tiles per block
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
 
-  // stage 1: intermediate_cache1 = silu(hidden_states @ w1)
   const int64_t MB = div_up(num_tokens_post_pad, BLOCK_M);
   const int64_t NB = div_up(N, BLOCK_N);
 
@@ -460,7 +449,6 @@ void fused_experts_kernel_impl(
       int64_t m_size = offsets[mb + 1] - offsets[mb];
 
       if (nb_offset == 0) {
-        // 1.a load A
         const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
         for (int64_t m = 0; m < m_size; ++m) {
           int32_t index = A_ids[m] / topk;
@@ -564,8 +552,6 @@ void fused_experts_kernel_impl(
     }
   });
 
-  // stage 2: intermediate_cache2 = intermediate_cache1 @ w2
-  //   w2 : [E, K, N] as [E, OC, IC]
   const int64_t OC = K;  // rename K as OC
   const int64_t IC = N;  // rename N as IC
   const int64_t MB2 = MB;
@@ -584,8 +570,7 @@ void fused_experts_kernel_impl(
       int64_t m_size = offsets[mb + 1] - offsets[mb];
       int64_t n_size = std::min(OC - nb * BLOCK_N, BLOCK_N);
 
-      // A ptr from ic1 of [M * topk, N] in sorted order
-      // so as to avoid copy A to tmp buffer again
+      // A ptr from ic1 of [M * topk, N] in sorted order so as to avoid copy A to tmp buffer again
       const scalar_t* __restrict__ A = ic1 + offsets[mb] * N;
       const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
 
@@ -639,7 +624,6 @@ void fused_experts_kernel_impl(
     }
   });
 
-  // stage 3: out = intermediate_cache2.sum(dim=1)
   //   from [M, topk, K] to [M, K]
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
@@ -661,11 +645,10 @@ void shared_expert_kernel_impl(
     int64_t M,
     int64_t N,
     int64_t K) {
-  // handle 2 tiles per block
+  // handle tiles per block
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
 
-  // stage 1: intermediate_cache1 = silu(hidden_states @ w1)
   const int64_t MB = div_up(M, BLOCK_M);
   const int64_t NB = div_up(N, BLOCK_N);
 
@@ -748,8 +731,6 @@ void shared_expert_kernel_impl(
     }
   });
 
-  // stage 2: output = intermediate_cache1 @ w2
-  //   w2 : [K, N] as [OC, IC]
   const int64_t OC = K;  // rename K as OC
   const int64_t IC = N;  // rename N as IC
   const int64_t MB2 = MB;
@@ -864,12 +845,6 @@ static inline void check_moe_scales(
   TORCH_CHECK(w2s.size(DIM0) == div_up(K, block_size_N));     \
   TORCH_CHECK(w2s.size(DIM1) == div_up(N, block_size_K))
 
-// hidden_states: [M, K]
-// w1: [E, 2N, K] or [E, 2N, K / 2] for uint8
-// w2: [E, K, N] or [E, K, N / 2] for uint8
-// topk_weights: [M, topk]
-// topk_ids: [M, topk] (int32_t)
-//
 
 at::Tensor fused_experts_cpu(
     at::Tensor& hidden_states,
@@ -906,8 +881,7 @@ at::Tensor fused_experts_cpu(
   constexpr int64_t BLOCK_N = block_size_n();
 
   const auto st = hidden_states.scalar_type();
-  // TODO: fused_topk_torch_native (CPU fallback for models like MiniMax)
-  // returns int64 topk_ids; fused_experts_cpu requires int32. Remove the typecast after topk kernel is provided
+  // TODO: fused_topk_torch_native (CPU fallback for models like MiniMax) returns int64 topk_ids.
   auto topk_ids_ = topk_ids.scalar_type() == at::kInt ? topk_ids : topk_ids.to(at::kInt);
 
   CHECK_INPUT(hidden_states);
@@ -928,8 +902,6 @@ at::Tensor fused_experts_cpu(
   CHECK_EQ(topk_ids_.scalar_type(), at::kInt);
 
   // TODO: support topk_weights to be bf16 or fp16 in the kernel.
-  // The topk_weights of llama4 is computed via Llama4MoE:custom_routing_function and is bf16/fp16
-  // while the kernel currently only supports it to be float32
   auto topk_weights_ = topk_weights.to(at::kFloat);
   CHECK_EQ(topk_weights_.scalar_type(), at::kFloat);
 
@@ -956,13 +928,6 @@ at::Tensor fused_experts_cpu(
 
   at::Tensor out_hidden_states = inplace ? hidden_states : at::empty_like(hidden_states);
 
-  // NB: worst case is each expert holds a block with remainder of 1
-  //   1. sorted_ids : [M * topk + E * (BLOCK_M - 1)]
-  //   2. expert_ids : [max_num_blocks]
-  //   3. total_cnts : [T + 1, E]
-  //   4. cumsums    : [E + 1]
-  //   5. offsets    : [max_num_blocks + 1]
-  //
   int num_threads = at::get_num_threads();
   int64_t max_num_tokens_padded = M * topk + E * (BLOCK_M - 1);
   int64_t max_num_blocks = div_up(max_num_tokens_padded, BLOCK_M);
@@ -976,8 +941,7 @@ at::Tensor fused_experts_cpu(
   int32_t* __restrict__ cumsums = total_cnts + (num_threads + 1) * E;
   int32_t* __restrict__ offsets = cumsums + (E + 1);
 
-  // init sorted_ids with `numel` as the padding number
-  // init expert_ids with `num_experts`
+  // init sorted_ids with `numel` as the padding number init expert_ids with `num_experts`
   int64_t numel = M * topk;
   at::parallel_for(0, max_num_blocks, GRAIN_SIZE / BLOCK_M, [&](int64_t begin, int64_t end) {
     int64_t m_start = begin * BLOCK_M;
@@ -994,20 +958,7 @@ at::Tensor fused_experts_cpu(
   int64_t num_tokens_post_pad = moe_align_block_size<BLOCK_M>(
       sorted_ids, expert_ids, topk_ids_.data_ptr<int32_t>(), total_cnts, cumsums, offsets, E, numel, num_threads);
 
-  // unlike triton kernel, we fuse silu with gemm1 so only need 2 intermediate_caches:
-  //   1. intermediate_cache1 : [M * topk, N]
-  //   2. intermediate_cache2 : [M * topk, K]
-  //   3. A_tmp : [T, BLOCK_M * K]
-  //   4. C_tmp : [T, 2 * BLOCK_M * BLOCK_N]
-  //
-  // for int8 w8a8:
-  //   5. Aq_tmp : [M, K] or [M * topk, N]
-  //   6. As_tmp : [M * topk]
-  //
-  // for fp8 w8a16 and mxfp4:
-  //   7. intermediate_cache0 : [M * topk, 2N]
-  //   8. B_tmp : [T, MAX_CACHE_BLOCK_SIZE, BLOCK_N, std::max(K, N)]
-  //
+  // Aq_tmp.
   int64_t buffer_size_nbytes =
       M * topk * N * 2 + M * topk * K * 2 +
       num_threads * BLOCK_M * K *
@@ -1065,7 +1016,7 @@ at::Tensor fused_experts_cpu(
           topk,
           num_tokens_post_pad);
     } else if (moe_comp_method == CPUQuantMethod::FP8_W8A16) {
-      // here we just ignore C_tmp as it is not used
+      // here we ignore C_tmp as it is not used
       scalar_t* __restrict__ A_tmp = (scalar_t*)((void*)(intermediate_cache2 + M * topk * K));
       float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));
       scalar_t* __restrict__ intermediate_cache0 = (scalar_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
@@ -1111,7 +1062,6 @@ at::Tensor fused_experts_cpu(
       scalar_t* __restrict__ B_tmp = (scalar_t*)((void*)(intermediate_cache0 + M * topk * 2 * N));
       bool with_bias = w1_bias.has_value();
 
-      // mxfp4 supports only group size of 32 (2^5)
       constexpr int64_t group_size = 32;
       auto w1s = w1_scale.value();
       auto w2s = w2_scale.value();
@@ -1156,8 +1106,6 @@ at::Tensor fused_experts_cpu(
       float* __restrict__ As_tmp = (float*)((void*)(Aq_tmp + std::max(M * K, M * topk * N)));
       int8_t* __restrict__ dqB_tmp = (int8_t*)((void*)(As_tmp + M * topk));
 
-      // weight + compensation shape = [Nc, Kc, block_n * block_k / 2 + block_n*sizeof(int32_t)]
-      // scales/qzeros shape = [E, Nc, G, block_n]
       int64_t num_groups = w1_scale.value().size(2);
       const int group_size = K / num_groups;
       // TODO: check scales and zeros
@@ -1227,10 +1175,7 @@ at::Tensor fused_experts_cpu(
 
 // shared expert kernel
 //
-// hidden_states: [M, K]
-// w1: [2N, K]
-// w2: [K, N]
-// fused_experts_out
+// hidden_states: [M, K] w1: [2N, K] w2: [K, N] fused_experts_out
 at::Tensor shared_expert_cpu(
     at::Tensor& hidden_states,
     at::Tensor& w1,
@@ -1290,18 +1235,7 @@ at::Tensor shared_expert_cpu(
 
   at::Tensor out_hidden_states = inplace ? hidden_states : at::empty_like(hidden_states);
 
-  // unlike triton kernel, we fuse silu with gemm1 so only need 2 intermediate_caches:
-  //   1. intermediate_cache1 : [M, N]
-  //   2. C_tmp : [T, 2 * BLOCK_M * BLOCK_N]
-  //
-  // for int8 w8a8:
-  //   3. Aq_tmp : [M, K] or [M, N]
-  //   4. As_tmp : [M]
-  //
-  // for fp8 w8a16:
-  //   5. intermediate_cache0 : [M, 2N]
-  //   6. B_tmp: [T, MAX_CACHE_BLOCK_SIZE, BLOCK_M, max(K, N)]
-  //
+  // C_tmp.
   int num_threads = at::get_num_threads();
   int64_t buffer_size_nbytes = M * N * 2 + num_threads * 2 * BLOCK_M * BLOCK_N * sizeof(float);
 

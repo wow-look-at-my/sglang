@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use sgl_router::health::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
@@ -76,10 +76,7 @@ async fn half_open_failure_reopens() {
 
 #[tokio::test(start_paused = true)]
 async fn would_allow_is_non_mutating_past_cool_down() {
-    // `would_allow()` answers "would `allow()` return true right now?" without
-    // claiming a probe slot. Enumeration / filtering paths (e.g.
-    // `WorkerRegistry::healthy_workers_for`) call it to inspect breakers
-    // without disturbing state.
+    // `would_allow()` answers "would `allow()` return true right now?" without claiming a probe slot.
     let b = cb();
     b.record_failure();
     b.record_failure();
@@ -102,17 +99,14 @@ async fn would_allow_is_non_mutating_past_cool_down() {
 
 #[tokio::test(start_paused = true)]
 async fn enumeration_then_dispatch_preserves_probe() {
-    // Regression for the bug where `healthy_workers_for` filtered with
-    // mutating `allow()`. Once would_allow() is the filter, an enumeration
-    // pass over many workers must not steal the probe slot from the one
-    // worker that actually gets dispatched to.
+    // Regression for the bug where `healthy_workers_for` filtered with mutating `allow()`.
     let b = cb();
     b.record_failure();
     b.record_failure();
     b.record_failure();
     tokio::time::advance(Duration::from_millis(150)).await;
 
-    // Imagine 3 workers; enumeration filters each with would_allow().
+    // Imagine multiple workers; enumeration filters each with would_allow().
     for _ in 0..3 {
         assert!(b.would_allow(), "filter sees the worker as available");
     }
@@ -133,9 +127,8 @@ fn would_allow_in_closed_state_is_true_and_non_mutating() {
 
 #[tokio::test(start_paused = true)]
 async fn open_breaker_recovery_is_not_delayed_by_continued_failures() {
-    // Regression: previously, record_failure on an already-Open breaker
-    // refreshed opened_at, so a failure storm pinned the breaker open
-    // forever. Now the cool_down is measured from first-open.
+    // Regression: record_failure on an already-Open breaker refreshed
+    // opened_at, so a failure storm pinned the breaker open forever.
     let b = CircuitBreaker::with_config(CircuitBreakerConfig {
         threshold: std::num::NonZeroU32::new(3).unwrap(),
         cool_down: Duration::from_millis(100),
@@ -152,10 +145,10 @@ async fn open_breaker_recovery_is_not_delayed_by_continued_failures() {
     b.record_failure();
     b.record_failure();
 
-    // Advance just past the original cool_down.
+    // Advance past the cool_down.
     tokio::time::advance(Duration::from_millis(60)).await;
 
-    // We're past the original cool_down → HalfOpen.
+    // We're past the cool_down → HalfOpen.
     assert!(
         b.allow(),
         "breaker should be half-open after cool_down from first-open"

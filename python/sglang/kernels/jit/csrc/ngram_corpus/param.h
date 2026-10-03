@@ -38,7 +38,6 @@ struct Param {
   }
 
   std::vector<size_t> parse(const std::string& value) {
-    // 0-1|10,2-3|20,
     std::vector<size_t> result;
     if (value.empty()) {
       return result;

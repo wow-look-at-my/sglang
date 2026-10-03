@@ -1,6 +1,4 @@
-//! Error types for the SGLang router core
-//!
-//! This module defines error types used throughout the router for worker operations.
+//! Error types.
 
 /// Worker-related errors
 #[derive(Debug, thiserror::Error)]

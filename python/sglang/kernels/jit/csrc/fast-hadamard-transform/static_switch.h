@@ -1,20 +1,12 @@
 // Copied from https://github.com/sgl-project/fast-hadamard-transform
 
-// Inspired by https://github.com/NVIDIA/DALI/blob/main/include/dali/core/static_switch.h
-// and https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/Dispatch.h
+// Inspired by https://github.com/NVIDIA/DALI/blob/main/include/dali/core/static_switch.h.
 
 #pragma once
 
-/// @param COND       - a boolean expression to switch by
-/// @param CONST_NAME - a name given for the constexpr bool variable.
-/// @param ...       - code to execute for true and false
-///
-/// Usage:
-/// ```
-/// BOOL_SWITCH(flag, BoolConst, [&] {
-///     some_function<BoolConst>(...);
-/// });
-/// ```
+/// @param COND - a boolean expression to switch by @param CONST_NAME - a name
+/// given for the constexpr bool variable. @param ... - code to execute for
+/// true.
 #define BOOL_SWITCH(COND, CONST_NAME, ...)      \
   [&] {                                         \
     if (COND) {                                 \

@@ -1,6 +1,6 @@
-/* Copyright 2025 SGLang Team. All Rights Reserved.
+/* Copyright SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
+Licensed under the Apache License, Version.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -65,8 +65,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> mha_fwd(
     std::optional<at::Tensor> page_table_,      // (b_k, max_num_pages_per_seq)
     std::optional<at::Tensor> kv_batch_idx_,    // b. indices to index into the KV cache
     std::optional<at::Tensor> leftpad_k_,       // b
-    std::optional<at::Tensor> rotary_cos_,      // seqlen_ro x (rotary_dim / 2)
-    std::optional<at::Tensor> rotary_sin_,      // seqlen_ro x (rotary_dim / 2)
+    std::optional<at::Tensor> rotary_cos_,
+    std::optional<at::Tensor> rotary_sin_,
     std::optional<at::Tensor> seqlens_rotary_,  // b
     std::optional<at::Tensor> q_descale_,       // (b, h_k), not (b, h)
     std::optional<at::Tensor> k_descale_,       // (b, h_k)
@@ -77,8 +77,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> mha_fwd(
     int64_t window_size_right,
     int64_t attention_chunk,
     double softcap,
-    bool is_rotary_interleaved,  // if true, rotary combines indices 0 & 1, else indices 0 & rotary_dim / 2
-    std::optional<at::Tensor> scheduler_metadata_,  // (b + 1)
+    bool is_rotary_interleaved,
+    std::optional<at::Tensor> scheduler_metadata_,
     int64_t num_splits,
     std::optional<bool> pack_gqa_,
     int64_t sm_margin,

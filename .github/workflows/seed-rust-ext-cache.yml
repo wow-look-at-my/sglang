@@ -1,8 +1,6 @@
 name: Seed Rust Ext Cache
 
-# A cache entry only reaches every PR when it was written from the default branch's
-# ref, and pr-test.yml has no push trigger - so a merge that moves the key leaves
-# every PR compiling for itself until the next scheduled run, up to 12h later.
+# A cache entry only reaches every PR when it was written from the default branch's ref, and pr-test.yml has no push trigger - so a merge that moves the key leaves every PR compiling for itself until the next scheduled run, up to 12h later.
 
 on:
   push:
@@ -16,8 +14,7 @@ on:
       # The key's prefix lives in this file, so a bump there also moves the key.
       - '.github/workflows/_pr-test-rust-ext-build.yml'
       - 'scripts/ci/utils/stage_rust_ext_modules.sh'
-      # Not hashed into the key, but they carry the prefix each side uses: the one
-      # seeded per arch here, and the one consumers restore with there.
+      # Not hashed into the key, but they carry the prefix each side uses: the one seeded per arch here, and the one consumers restore with there.
       - '.github/workflows/seed-rust-ext-cache.yml'
       - '.github/actions/download-rust-ext/action.yml'
   workflow_dispatch:
@@ -27,8 +24,7 @@ concurrency:
   group: seed-rust-ext-cache
   cancel-in-progress: true
 
-# Declaring permissions at all drops everything not listed. issues: read for
-# check-maintenance; actions: read for the restore job's gh cache list.
+# Declaring permissions at all drops everything not listed. issues: read for check-maintenance; actions: read for the restore job's gh cache list.
 permissions:
   actions: read
   contents: read

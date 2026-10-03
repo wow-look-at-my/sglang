@@ -1,8 +1,4 @@
-//! Upstream request cancellation tests
-//!
-//! Verifies that when a client disconnects mid-stream, the gateway
-//! terminates the upstream request to the backend worker promptly
-//! (via the `tokio::select!` / `tx.closed()` mechanism in the router).
+//! Upstream request cancellation tests Verifies that when a client disconnects mid-stream.
 
 use std::{sync::Arc, time::Duration};
 
@@ -78,9 +74,7 @@ fn extract_response_id_from_sse(buf: &[u8]) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Safety timeout for `wait_for_stream_finish` — the worker notifies the
-/// instant its producer task exits, so a healthy run returns well before
-/// this. The 3s budget is just a guard against a hung test.
+/// Safety timeout for `wait_for_stream_finish` — the worker notifies the instant its producer task exits.
 const STREAM_FINISH_TIMEOUT: Duration = Duration::from_secs(3);
 
 async fn assert_cancelled_before_completion(port: u16) -> StreamTrackingState {
@@ -113,20 +107,7 @@ async fn assert_cancelled_before_completion(port: u16) -> StreamTrackingState {
 mod upstream_cancel_tests {
     use super::*;
 
-    /// Test that the gateway cancels the upstream stream when the client
-    /// disconnects before consuming all chunks.
-    ///
-    /// Setup:
-    ///   - Mock worker sends 20 chunks with 50ms delay between each (~1s total).
-    ///   - Client reads a few chunks then drops the response body.
-    ///
-    /// Expectation:
-    ///   - The mock worker stops producing once the gateway closes its
-    ///     upstream connection. We assert that by waiting on the worker's
-    ///     exit notifier (fired when its producer task drops, either via
-    ///     send-failure or natural completion) and snapshotting
-    ///     `chunks_sent` before/after the drop — proving the worker
-    ///     actually halted instead of just being slower than our fixed sleep.
+    /// Test that the gateway cancels the upstream stream when the client disconnects before consuming all chunks.
     #[tokio::test]
     async fn test_streaming_cancel_on_client_disconnect() {
         let worker_port = 20250;
@@ -163,10 +144,8 @@ mod upstream_cancel_tests {
             "Should have read at least one chunk before disconnecting"
         );
 
-        // Snapshot the worker counter the moment we drop, then wait for
-        // the producer task to fire its exit notifier. If cancel propagation
-        // is broken the producer keeps running until total_chunks and the
-        // counter ends up at `total_chunks`.
+        // Snapshot the worker counter the moment we drop, then wait for the
+        // producer task to fire its exit notifier.
         let snapshot = get_stream_tracking_state(worker_port)
             .map(|s| s.chunks_sent)
             .unwrap_or(0);
@@ -185,8 +164,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// Test that a fully consumed stream is NOT cancelled prematurely —
-    /// the worker sends all chunks and completes normally.
+    /// Test that a fully consumed stream is NOT cancelled prematurely — the worker sends all chunks.
     #[tokio::test]
     async fn test_streaming_completes_when_client_consumes_all() {
         let worker_port = 20251;
@@ -266,8 +244,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// Cancel before the worker emits any chunk. Catches a select! that
-    /// only wakes `tx.closed()` after the first `stream.next()` resolves.
+    /// Cancel before the worker emits any chunk.
     #[tokio::test]
     async fn test_streaming_cancel_before_first_chunk() {
         let worker_port = 20253;
@@ -278,8 +255,7 @@ mod upstream_cancel_tests {
 
         let config = TestRouterConfig::round_robin(4253);
         let ctx = AppTestContext::new_with_config(
-            // 200ms per-chunk delay; the very first chunk takes the
-            // full 200ms because the worker sleeps before emitting.
+            // 200ms per-chunk delay; the first chunk takes the full 200ms because the worker sleeps before emitting.
             config,
             vec![TestWorkerConfig::slow(worker_port, 200)],
         )
@@ -317,8 +293,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// Disconnecting *after* the stream completes naturally must be a
-    /// no-op — no panic, no spurious "cancel" log, completed=true stays.
+    /// Disconnecting *after* the stream completes naturally must be a no-op — no panic, no spurious "cancel" log.
     #[tokio::test]
     async fn test_streaming_cancel_after_done_is_noop() {
         let worker_port = 20254;
@@ -364,8 +339,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// Cancelling one client request must not affect a concurrent request
-    /// that's hitting a *different* upstream replica.
+    /// Cancelling one client request must not affect a concurrent request that's hitting a *different* upstream.
     #[tokio::test]
     async fn test_cancel_one_request_does_not_affect_concurrent() {
         let worker_a = 20255;
@@ -388,10 +362,7 @@ mod upstream_cancel_tests {
         )
         .await;
 
-        // Two parallel requests. Round-robin should send them to different
-        // workers. We don't strictly need to know which got which, but we
-        // assume the FIRST request lands on worker_a — that's the one we
-        // cancel — and we await the SECOND to completion.
+        // Parallel requests. Round-robin should send them to different workers.
         let app = ctx.create_app().await;
         let app2 = app.clone();
 
@@ -468,11 +439,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// Mid-stream worker error must surface as `Stream error: …` to the
-    /// client, must NOT be silently swallowed as cancel, and must trigger
-    /// the gateway's error log path. We assert (a) the client sees the
-    /// error frame and (b) `chunks_sent` reflects the partial output the
-    /// worker sent before erroring.
+    /// Mid-stream worker error must surface as `Stream error: …` to the client, must NOT be silently swallowed as cancel.
     #[tokio::test]
     async fn test_streaming_worker_error_propagates_not_cancel() {
         let worker_port = 20257;
@@ -504,9 +471,7 @@ mod upstream_cancel_tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // Collecting the body should yield a transport-level error AFTER
-        // the first few chunks. axum surfaces the upstream error as a
-        // failed body.collect(), so we just stitch frames manually.
+        // Collecting the body should yield a transport-level error AFTER the first few chunks. axum surfaces the upstream error.
         let mut body = resp.into_body();
         let mut combined = Vec::<u8>::new();
         let mut saw_transport_err = false;
@@ -552,10 +517,6 @@ mod upstream_cancel_tests {
     }
 
     /// PD-disagg streaming cancel: client disconnects mid-decode-stream.
-    /// The decode worker's slow-stream tracker is what proves cancel
-    /// actually reached the upstream — prefill is fully drained
-    /// synchronously by `process_prefill_response`, so it's expected
-    /// to complete regardless.
     #[tokio::test]
     async fn test_pd_streaming_cancel_on_client_disconnect() {
         let prefill_port = 20258;
@@ -632,8 +593,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// /v1/responses with no persistence (`store: false`, no conversation):
-    /// client disconnect must propagate to the upstream worker.
+    /// /v1/responses with no persistence (`store: false`, no conversation): client disconnect must propagate.
     #[tokio::test]
     async fn test_responses_streaming_cancel_no_persistence() {
         let worker_port = 20260;
@@ -677,8 +637,7 @@ mod upstream_cancel_tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let mut body = resp.into_body();
-        // First two events are response.created/response.in_progress, then
-        // chunks start. Read a few to ensure we're past the bootstrap.
+        // First events are response.created/response.in_progress, then chunks start.
         let chunks_read = read_n_chunks(&mut body, 3).await;
         assert!(chunks_read > 0);
 
@@ -700,10 +659,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// /v1/responses with persistence (`store: true`): the upstream is
-    /// intentionally NOT cancelled on client disconnect — the gateway
-    /// keeps consuming so the response can be persisted. We assert the
-    /// worker reaches `completed = true` after the client disconnects.
+    /// /v1/responses with persistence (`store: true`): the upstream is intentionally NOT cancelled on client disconnect.
     #[tokio::test]
     async fn test_responses_streaming_persistence_drains_after_disconnect() {
         let worker_port = 20261;
@@ -747,8 +703,7 @@ mod upstream_cancel_tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let mut body = resp.into_body();
-        // Read enough frames to capture the response.created event so we
-        // can later look up the stored response by its id.
+        // Read enough frames to capture the response.created event so we can later look up the stored response.
         let (_, captured) = read_n_chunks_with_bytes(&mut body, 3).await;
         let response_id =
             extract_response_id_from_sse(&captured).expect("response.created event with id");
@@ -767,10 +722,7 @@ mod upstream_cancel_tests {
         );
         assert_eq!(state.chunks_sent, state.total_chunks);
 
-        // Draining is necessary but not sufficient — also verify the
-        // gateway actually called persist_conversation_items and the
-        // response landed in storage. Poll briefly because persistence
-        // happens after the upstream loop exits.
+        // Draining is necessary but not sufficient — also verify the gateway called persist_conversation_items and the response landed.
         let storage = ctx.app_context.response_storage.clone();
         let stored = {
             use data_connector::ResponseId;
@@ -797,11 +749,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// Dual of `_drains_after_disconnect`: with `store=true` and a mid-stream
-    /// upstream error, the gateway must NOT persist a torn response. The
-    /// commit `714b62f24` warn-log on the persistence-skipped path is the
-    /// observable signal; here we assert the stronger property that no row
-    /// lands in storage.
+    /// Dual of `_drains_after_disconnect`: with `store=true` and a mid-stream upstream error.
     #[tokio::test]
     async fn test_responses_simple_streaming_error_skips_persistence() {
         let worker_port = 20266;
@@ -850,9 +798,7 @@ mod upstream_cancel_tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // Drain the body so the response.created event lands in `captured`
-        // and the upstream error is observed (no client disconnect — the
-        // skip is driven by the error, not by a cancel).
+        // Drain the body so the response.created event lands in `captured` and the upstream error is observed.
         let mut body = resp.into_body();
         let mut captured: Vec<u8> = Vec::new();
         while let Some(Ok(frame)) = body.frame().await {
@@ -866,13 +812,10 @@ mod upstream_cancel_tests {
         let response_id =
             extract_response_id_from_sse(&captured).expect("response.created event with id");
 
-        // Wait for the gateway-side producer task to exit so persistence
-        // (or its skip) and breaker tick have run.
+        // Wait for the gateway-side producer task to exit so persistence (or its skip) and breaker tick have run.
         let _ = wait_for_stream_finish(worker_port, STREAM_FINISH_TIMEOUT).await;
 
-        // Co-assert that the breaker tick fired. Without this, a regression
-        // that silently swallowed the error (record nothing, persist nothing)
-        // would also produce an empty storage and pass the lookup below.
+        // Co-assert that the breaker tick fired.
         let (_, f_post) = breaker_counts(&worker);
         assert!(
             f_post > f_pre,
@@ -896,9 +839,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// OpenAI-mode (non-/responses) chat-completions cancel: this exercises
-    /// the `OpenAIRouter` impl, which is a separate codepath from
-    /// `http::Router`, so the same cancel semantics need their own test.
+    /// OpenAI-mode (non-/responses) chat-completions cancel: this exercises the `OpenAIRouter` impl.
     #[tokio::test]
     async fn test_openai_router_streaming_cancel() {
         let worker_port = 20262;
@@ -961,15 +902,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// Tool-interception streaming cancel: when the client disconnects mid
-    /// second-turn (after the gateway has executed an MCP tool call and
-    /// re-issued an upstream request), the gateway must drop that second
-    /// upstream connection promptly. This guards the explicit policy
-    /// documented at `streaming.rs:712-722` ("don't keep workers and
-    /// external MCP services busy on results no one will read") against
-    /// silent regression — the inner `select! { ... _ = tx.closed() }`
-    /// in `handle_streaming_with_tool_interception` is the load-bearing
-    /// piece.
+    /// Tool-interception streaming cancel: when the client disconnects mid second-turn.
     #[tokio::test]
     async fn test_tool_interception_streaming_cancel_on_client_disconnect() {
         use smg::routers::{RouterFactory, RouterTrait};
@@ -1002,8 +935,7 @@ mod upstream_cancel_tests {
             fail_rate: 0.0,
         });
         let worker_url = worker.start().await.expect("start worker");
-        // Allow the mock worker's HTTP listener to bind before the router
-        // probes its health.
+        // Allow the mock worker's HTTP listener to bind before the router probes its health.
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let router_cfg = RouterConfig::builder()
@@ -1050,14 +982,9 @@ mod upstream_cancel_tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let mut body = resp.into_body();
-        // Pull a few frames so the body keeps draining while the gateway
-        // works through turn 1 (tool call) and starts turn 2 (slow text).
         let _ = read_n_chunks(&mut body, 8).await;
 
-        // Wait until the slow second-turn upstream request has actually
-        // started producing chunks — only the slow-stream branch in the
-        // mock initialises the tracker, so seeing chunks_sent>0 here
-        // means we're inside the second upstream request.
+        // Wait until the slow second-turn upstream request has started producing chunks — only the slow-stream branch.
         let mut waited_ms: u64 = 0;
         loop {
             if let Some(s) = get_stream_tracking_state(worker_port) {
@@ -1094,19 +1021,7 @@ mod upstream_cancel_tests {
         mcp.stop().await;
     }
 
-    /// Tool-interception path: client disconnects WHILE the gateway is
-    /// still waiting for the upstream's response headers (inside the
-    /// `request_builder.send().await` future, not yet streaming).
-    ///
-    /// The mock sleeps 1500ms before returning headers; the test drops
-    /// the response body ~50ms after the gateway has dispatched the
-    /// request. With the `tokio::select! { res = send() => …, _ = tx.closed() => return }`
-    /// guard in place, the gateway aborts the send before the mock ever
-    /// reaches its slow-stream init — so `get_stream_tracking_state`
-    /// stays at `None`. If the guard regresses to a plain
-    /// `request_builder.send().await`, the mock would complete its sleep,
-    /// initialise the tracker, and `get_stream_tracking_state` would
-    /// return `Some(...)`.
+    /// Tool-interception path: client disconnects WHILE the gateway is still waiting for the upstream's response headers.
     #[tokio::test]
     async fn test_tool_interception_cancel_during_send() {
         use smg::routers::{RouterFactory, RouterTrait};
@@ -1117,9 +1032,7 @@ mod upstream_cancel_tests {
         };
 
         let worker_port = 20264;
-        // slow_stream is configured so that IF the mock ever gets past
-        // the pre-response delay, the tracker is populated and the test
-        // would observe the regression.
+        // slow_stream is configured so that IF the mock ever gets past the pre-response delay.
         let total_chunks: usize = 5;
         reset_stream_tracker(worker_port);
         set_slow_stream_chunks(worker_port, total_chunks);
@@ -1137,8 +1050,7 @@ mod upstream_cancel_tests {
             port: worker_port,
             worker_type: WorkerType::Regular,
             health_status: HealthStatus::Healthy,
-            // 1500ms pre-response delay: long enough that the test's
-            // ~50ms drop reliably races *inside* the send().await window.
+            // 1500ms pre-response delay: long enough.
             response_delay_ms: 1500,
             fail_rate: 0.0,
         });
@@ -1188,17 +1100,12 @@ mod upstream_cancel_tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // Drop immediately, while the mock is still inside its 1500ms
-        // pre-response sleep. The gateway's spawned task is parked in
-        // `select! { res = send() => ..., _ = tx.closed() => return }`.
+        // Drop immediately, while the mock is still inside its 1500ms pre-response sleep.
         let body = resp.into_body();
         tokio::time::sleep(Duration::from_millis(50)).await;
         drop(body);
 
-        // Give the gateway and mock plenty of time to process the cancel
-        // and finish their respective sleeps. 2500ms > 1500ms ensures
-        // that even if the select! guard regressed, the mock would have
-        // long since reached `init_stream_tracking` by the time we check.
+        // Give the gateway and mock plenty of time to process the cancel and finish their respective sleeps.
         tokio::time::sleep(Duration::from_millis(2500)).await;
 
         assert!(
@@ -1215,10 +1122,7 @@ mod upstream_cancel_tests {
         mcp.stop().await;
     }
 
-    /// Tool-interception path with `store=true`: when the second-turn
-    /// upstream errors mid-stream, the gateway must NOT persist a torn
-    /// response. Mirrors `test_responses_simple_streaming_error_skips_persistence`
-    /// for the MCP-interception branch (streaming.rs:1023-1033).
+    /// Tool-interception path with `store=true`: when the second-turn upstream errors mid-stream.
     #[tokio::test]
     async fn test_tool_interception_streaming_error_skips_persistence() {
         use data_connector::ResponseId;
@@ -1306,8 +1210,7 @@ mod upstream_cancel_tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // Drain fully so the second-turn upstream error is observed (no
-        // client disconnect — the skip is driven by the error).
+        // Drain fully so the second-turn upstream error is observed.
         let mut body = resp.into_body();
         let mut captured: Vec<u8> = Vec::new();
         while let Some(Ok(frame)) = body.frame().await {
@@ -1326,11 +1229,6 @@ mod upstream_cancel_tests {
             .await
             .expect("second-turn producer to exit within timeout");
 
-        // Pin that the second-turn slow_stream branch actually fired with the
-        // error injection: if a future mock refactor sent turn 2 down the
-        // happy-path JSON branch, no chunks would have streamed and the
-        // persistence-skip assertion below would still pass for the wrong
-        // reason.
         assert!(
             state.chunks_sent >= error_after && !state.completed,
             "Second-turn must have entered slow_stream and errored after \
@@ -1340,8 +1238,7 @@ mod upstream_cancel_tests {
             state.completed,
         );
 
-        // Co-assert the breaker tick fired so a "skip-persistence + record
-        // nothing" regression can't silently pass this test.
+        // Co-assert the breaker tick fired so a "skip-persistence + record nothing" regression can't silently pass this.
         let (_, f_post) = breaker_counts(&pinned_worker);
         assert!(
             f_post > f_pre,
@@ -1364,12 +1261,7 @@ mod upstream_cancel_tests {
         mcp.stop().await;
     }
 
-    /// After enough consecutive mid-stream upstream errors, the
-    /// `BreakerTrackedStream` drop should record failures often enough
-    /// that the worker's circuit breaker opens. This locks in the
-    /// contract that mid-stream errors are *not* silently swallowed —
-    /// regressing to "log only, no breaker tick" would leave a
-    /// 200-then-broken worker permanently selectable.
+    /// After enough consecutive mid-stream upstream errors, the `BreakerTrackedStream` drop should record failures often enough.
     #[tokio::test]
     async fn test_streaming_errors_trip_circuit_breaker() {
         use smg::config::CircuitBreakerConfig;
@@ -1416,9 +1308,6 @@ mod upstream_cancel_tests {
                 .unwrap();
 
             let resp = app.clone().oneshot(req).await.unwrap();
-            // Don't assert on status — once the breaker trips, the gateway
-            // returns 503 instead of dispatching. Both outcomes count
-            // toward the test as long as the breaker opens by the end.
             let mut body = resp.into_body();
             while body.frame().await.is_some() {}
         }
@@ -1446,26 +1335,11 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    // -------- Breaker accounting tests --------
-    //
-    // For single-upstream-call streaming paths (http chat, OpenAI chat, PD
-    // generate, /responses simple), the worker's circuit breaker is ticked
-    // exactly once per request based on the upstream's actual termination:
-    // success on clean end, failure on mid-stream error, neither on client
-    // disconnect. The tool-interception path (/responses with MCP) is the
-    // documented exception — it ticks once per upstream HTTP call inside
-    // the tool loop, so a 3-iteration loop can tick up to 3 times.
+    // -------- Breaker accounting tests -------- For single-upstream-call
+    // streaming paths (http chat, OpenAI chat, PD generate, /responses
+    // simple).
 
     /// Returns `(total_successes, total_failures)` for the given worker.
-    ///
-    /// Callers MUST capture the `Arc<dyn Worker>` once at test start (via
-    /// `worker_registry.get_by_url(...).unwrap()`) and reuse it for every
-    /// snapshot. Looking up by URL each time is unsafe: any path that
-    /// re-registers a worker (e.g. the admin `UpdateWorkerPropertiesStep`
-    /// workflow) replaces the registry's `Arc` with a freshly-built worker
-    /// that has a fresh `CircuitBreaker`. Two `get_by_url` calls bracketing
-    /// a request can therefore return handles to two different breakers,
-    /// making counter deltas vacuous.
     fn breaker_counts(worker: &Arc<dyn smg::core::Worker>) -> (u64, u64) {
         let breaker = worker.circuit_breaker();
         (breaker.total_successes(), breaker.total_failures())
@@ -1480,11 +1354,7 @@ mod upstream_cancel_tests {
             .expect("worker should be registered")
     }
 
-    /// RAII cleanup for per-port stream injection state. Tests that
-    /// configure `set_slow_stream_chunks` / `set_stream_error_after_chunks`
-    /// must use this — without it, a panicking assertion would leave the
-    /// global injection map populated and poison any future test that
-    /// reuses the same port.
+    /// RAII cleanup for per-port stream injection state.
     struct StreamInjectionGuard(u16);
     impl Drop for StreamInjectionGuard {
         fn drop(&mut self) {
@@ -1494,7 +1364,6 @@ mod upstream_cancel_tests {
     }
 
     /// http chat: client disconnect mid-stream must NOT tick the breaker.
-    /// Guards `BreakerTrackedStream`'s drop-while-Active path.
     #[tokio::test]
     async fn test_disconnect_does_not_move_breaker_http_chat() {
         let worker_port = 20270;
@@ -1532,8 +1401,7 @@ mod upstream_cancel_tests {
         let _ = read_n_chunks(&mut body, 3).await;
         drop(body);
 
-        // Wait until the upstream producer exits so the body Drop has
-        // run and any breaker tick has landed.
+        // Wait until the upstream producer exits so the body Drop has run and any breaker tick has landed.
         let _ = assert_cancelled_before_completion(worker_port).await;
 
         let (s_post, f_post) = breaker_counts(&worker);
@@ -1552,9 +1420,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// OpenAIRouter chat: client disconnect mid-stream must NOT tick the
-    /// breaker. Same `BreakerTrackedStream` drop-while-Active story as the
-    /// http chat path.
+    /// OpenAIRouter chat: client disconnect mid-stream must NOT tick the breaker.
     #[tokio::test]
     async fn test_disconnect_does_not_move_breaker_openai_chat() {
         let worker_port = 20271;
@@ -1622,13 +1488,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// PD streaming client disconnect:
-    /// - decode breaker must show zero delta (`BreakerTrackedStream` drops
-    ///   Active → no tick).
-    /// - prefill breaker must show exactly +1 success (prefill is fully
-    ///   drained before decode streaming starts, so `record_outcome(true)`
-    ///   fires for the 2xx prefill regardless of what the client does to
-    ///   the decode stream).
+    /// PD streaming client disconnect: - decode breaker must show zero delta.
     #[tokio::test]
     async fn test_disconnect_does_not_move_breaker_pd_decode() {
         let prefill_port = 20272;
@@ -1723,9 +1583,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// /v1/responses simple (no-persist): client disconnect must not
-    /// move the worker's circuit breaker — recording neither success
-    /// nor failure on a request the client abandoned mid-stream.
+    /// /v1/responses simple (no-persist): client disconnect must not move the worker's circuit breaker.
     #[tokio::test]
     async fn test_disconnect_does_not_move_breaker_responses_simple() {
         let worker_port = 20274;
@@ -1794,11 +1652,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// /v1/responses simple, mid-stream error: the spawned forwarder in
-    /// `handle_simple_streaming_passthrough` must record a failure on
-    /// the worker's circuit breaker when an upstream stream errors
-    /// after headers — otherwise a "200 OK then broken pipe" worker
-    /// would never trip the breaker.
+    /// /v1/responses simple, mid-stream error: the spawned forwarder in `handle_simple_streaming_passthrough` must record a failure.
     #[tokio::test]
     async fn test_responses_simple_mid_stream_error_records_failure() {
         let worker_port = 20275;
@@ -1852,8 +1706,7 @@ mod upstream_cancel_tests {
         while body.frame().await.is_some() {}
         drop(body);
 
-        // Wait for the producer task to exit so any breaker tick is
-        // observable.
+        // Wait for the producer task to exit so any breaker tick is observable.
         let _ = wait_for_stream_finish(worker_port, STREAM_FINISH_TIMEOUT).await;
 
         let (_, f_post) = breaker_counts(&worker);
@@ -1870,10 +1723,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// OpenAIRouter chat, mid-stream upstream error: breaker MUST record
-    /// at least one failure. `Some(Err(_))` → terminal = Errored →
-    /// Drop ticks `record_failure`. Single-request analogue of
-    /// `test_streaming_errors_trip_circuit_breaker`.
+    /// OpenAIRouter chat, mid-stream upstream error: breaker MUST record at least one failure.
     #[tokio::test]
     async fn test_openai_chat_mid_stream_error_records_failure() {
         let worker_port = 20276;
@@ -1943,9 +1793,6 @@ mod upstream_cancel_tests {
     // -------- 5xx-streaming and happy-path success coverage --------
 
     /// http::Router streaming 5xx must record `record_failure`, not success.
-    /// Guards the `mark_errored()` pre-tag on the streaming branch — without
-    /// it, the small error body streams cleanly to `None` and Drop would
-    /// record a spurious success.
     #[tokio::test]
     async fn test_http_chat_streaming_5xx_records_failure() {
         let worker_port = 20290;
@@ -1992,8 +1839,6 @@ mod upstream_cancel_tests {
     }
 
     /// OpenAIRouter streaming 5xx must record `record_failure`, not success.
-    /// Guards the `mark_errored()` pre-tag on the streaming branch of
-    /// `OpenAIRouter::route_chat_completions`.
     #[tokio::test]
     async fn test_openai_chat_streaming_5xx_records_failure() {
         let worker_port = 20291;
@@ -2050,11 +1895,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// PD decode 5xx on streaming request: decode breaker records failure,
-    /// not success. Guards the `mark_errored()` pre-tag in
-    /// `PDRouter::create_streaming_response` — the synthetic single-Ok
-    /// SSE envelope built by `handle_decode_error_response` would otherwise
-    /// terminate cleanly and record success.
+    /// PD decode 5xx on streaming request: decode breaker records failure, not success.
     #[tokio::test]
     async fn test_pd_decode_streaming_5xx_records_failure() {
         let prefill_port = 20292;
@@ -2115,10 +1956,7 @@ mod upstream_cancel_tests {
             f_post
         );
 
-        // Healthy prefill must not be penalised when only decode returns
-        // 5xx. The outer dispatcher used to derive prefill's outcome
-        // from the synthetic 5xx response status returned by
-        // `handle_decode_error_response`, falsely failing prefill.
+        // Healthy prefill must not be penalised when only decode returns 5xx.
         let (_s_post_prefill, f_post_prefill) = breaker_counts(&prefill);
         assert_eq!(
             f_post_prefill - f_pre_prefill,
@@ -2132,22 +1970,12 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// PD non-streaming, decode 4xx: the decode breaker MUST NOT record a
-    /// failure. 4xx is a client-fault (malformed input, auth, etc.), not a
-    /// worker fault — the old outer dispatcher used `not_error =
-    /// is_success() || is_client_error()` and the streaming path's
-    /// `BreakerTrackedStream` pre-mark in `create_streaming_response`
-    /// still preserves that distinction. The early-record path added
-    /// for prefill misattribution must keep the same semantics for
-    /// decode, otherwise a client sending malformed payloads can open
-    /// the breaker on a healthy worker.
+    /// PD non-streaming, decode 4xx: the decode breaker MUST NOT record a failure.
     #[tokio::test]
     async fn test_pd_decode_non_streaming_4xx_does_not_penalise_breaker() {
         let prefill_port = 20313;
         let decode_port = 20314;
 
-        // Force decode's failure response to 400 (client error) instead
-        // of the default 500.
         set_fail_status_code(decode_port, 400);
 
         let config = RouterConfig::builder()
@@ -2193,14 +2021,7 @@ mod upstream_cancel_tests {
         let resp = app.oneshot(req).await.unwrap();
         let _ = resp.into_body().collect().await;
 
-        // Legacy semantics (preserved by the streaming path's
-        // `BreakerTrackedStream` pre-mark and the old outer
-        // `not_error = is_success() || is_client_error()` rule): a 4xx
-        // response is recorded as a non-fault outcome — it must NOT
-        // increment `total_failures`, otherwise repeated client-caused
-        // 400s could open the breaker on a healthy worker. Whether it
-        // increments `total_successes` is incidental; we only pin the
-        // load-bearing invariant (no failure tick).
+        // Legacy semantics.
         let (_s_post_decode, f_post_decode) = breaker_counts(&decode);
         assert_eq!(
             f_post_decode - f_pre_decode,
@@ -2211,8 +2032,7 @@ mod upstream_cancel_tests {
             f_post_decode,
         );
 
-        // Prefill stayed healthy and must also not be penalised by a
-        // client-caused decode 4xx.
+        // Prefill stayed healthy and must also not be penalised by a client-caused decode 4xx.
         let (_s_post_prefill, f_post_prefill) = breaker_counts(&prefill);
         assert_eq!(
             f_post_prefill - f_pre_prefill,
@@ -2227,10 +2047,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// /v1/responses simple streaming 5xx must record `record_failure`,
-    /// not success. Guards the `record_failure()` in the non-success status
-    /// arm of `handle_simple_streaming_passthrough` and confirms the eager
-    /// post-status `record_success()` is gone.
+    /// /v1/responses simple streaming 5xx must record `record_failure`, not success.
     #[tokio::test]
     async fn test_responses_simple_streaming_5xx_records_failure() {
         let worker_port = 20294;
@@ -2288,10 +2105,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// /v1/responses simple, clean stream: must record exactly one
-    /// success and no failures. Pins the absence of the old eager
-    /// `record_success()` at status-OK time (which would have produced
-    /// 2 successes — one eager, one on stream-end).
+    /// /v1/responses simple, clean stream: must record exactly one success and no failures.
     #[tokio::test]
     async fn test_responses_simple_clean_stream_records_one_success() {
         let worker_port = 20295;
@@ -2353,11 +2167,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// PD generate, clean stream: decode breaker must record exactly one
-    /// success, prefill exactly one success, neither failure. Specifically
-    /// guards the PD streaming loop's `[DONE]` detection — `mark_completed()`
-    /// must transition the wrapper from Active to Completed so Drop ticks
-    /// `record_success`, not "Active = no tick".
+    /// PD generate, clean stream: decode breaker must record exactly one success, prefill exactly one success.
     #[tokio::test]
     async fn test_pd_clean_stream_records_one_success() {
         let prefill_port = 20296;
@@ -2441,9 +2251,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// PD generate, prefill 5xx (decode never reached): prefill breaker
-    /// records failure, decode breaker untouched. Guards the prefill-only
-    /// failure attribution in the PD retry/dispatch path.
+    /// PD generate, prefill 5xx (decode never reached): prefill breaker records failure, decode breaker untouched.
     #[tokio::test]
     async fn test_pd_prefill_5xx_records_failure() {
         let prefill_port = 20298;
@@ -2521,15 +2329,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// http chat streaming, upstream connect failure BEFORE the
-    /// `BreakerTrackedStream` is constructed: the breaker MUST still record
-    /// a failure. Guards the pre-stream error arm in
-    /// `send_typed_request` — returning `convert_reqwest_error(e)` without
-    /// ticking the worker breaker would let a worker that's flapping at
-    /// the TCP layer remain selectable indefinitely (the streaming branch
-    /// skips the eager `record_outcome` on the assumption that a tracked
-    /// stream will fire on drop, but no tracked stream was ever installed
-    /// on this path).
+    /// http chat streaming, upstream connect failure BEFORE the `BreakerTrackedStream` is constructed.
     #[tokio::test]
     async fn test_http_chat_pre_stream_failure_records_breaker_streaming() {
         use smg::config::RetryConfig;
@@ -2537,7 +2337,7 @@ mod upstream_cancel_tests {
         let worker_port = 20310;
 
         // max_retries=1 keeps the assertion exact: one attempt → one
-        // failure tick. Any larger value just multiplies the count.
+        // failure tick. Any larger value multiplies the count.
         let config = TestRouterConfig::round_robin_with_retry(
             4310,
             RetryConfig {
@@ -2556,14 +2356,7 @@ mod upstream_cancel_tests {
         let worker = pin_worker(&ctx, &worker_url);
         let (s_pre, f_pre) = breaker_counts(&worker);
 
-        // Stop the worker AFTER startup health check has marked it
-        // healthy. The periodic health checker isn't spawned in
-        // AppTestContext setups (it's started in `server.rs`), so
-        // `is_healthy()` stays true and the worker remains selectable.
-        // The next streaming request will fail at TCP connect → reqwest
-        // returns Err → `convert_reqwest_error` synthesises a 5xx
-        // Response without any `BreakerTrackedStream` ever wrapping the
-        // body.
+        // Stop the worker AFTER startup health check has marked it healthy.
         ctx.workers[0].stop().await;
 
         let payload = json!({
@@ -2602,14 +2395,7 @@ mod upstream_cancel_tests {
         ctx.shutdown().await;
     }
 
-    /// PD streaming, decode connect failure BEFORE the
-    /// `BreakerTrackedStream` is constructed: decode breaker MUST record
-    /// a failure. Guards `pd_router.rs`'s pre-stream error arm — returning
-    /// `error::bad_gateway` without ticking the decode breaker would let a
-    /// decode worker that's flapping at the TCP layer remain selectable
-    /// indefinitely (the streaming branch skips the eager `record_outcome`
-    /// on the assumption that a tracked stream will fire on drop, but no
-    /// tracked stream was ever installed on this path).
+    /// PD streaming, decode connect failure BEFORE the `BreakerTrackedStream` is constructed.
     #[tokio::test]
     async fn test_pd_decode_pre_stream_failure_records_breaker_streaming() {
         use smg::config::RetryConfig;
@@ -2655,10 +2441,6 @@ mod upstream_cancel_tests {
         let (s_pre_decode, f_pre_decode) = breaker_counts(&decode_worker);
         let (_s_pre_prefill, f_pre_prefill) = breaker_counts(&prefill_worker);
 
-        // Stop ONLY the decode worker (index 1; prefill was registered
-        // first). Prefill stays up so its half of the tokio::join! send
-        // succeeds — the test specifically exercises the
-        // "decode_result is Err" arm in `execute_dual_dispatch_internal`.
         ctx.workers[1].stop().await;
 
         let payload = json!({ "text": "x", "stream": true });
@@ -2694,11 +2476,7 @@ mod upstream_cancel_tests {
             s_post_decode
         );
 
-        // Prefill stayed up and its `send()` returned 2xx. The decode
-        // connect failure must NOT be misattributed to prefill — the
-        // outer dispatcher used to record `prefill.record_outcome(false)`
-        // based on the final 502 response status, penalising a healthy
-        // worker for its peer's failure.
+        // Prefill stayed up and its `send()` returned 2xx.
         let (_s_post_prefill, f_post_prefill) = breaker_counts(&prefill_worker);
         assert_eq!(
             f_post_prefill - f_pre_prefill,

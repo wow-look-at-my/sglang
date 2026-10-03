@@ -1,6 +1,4 @@
-//! Manual routing policy integration tests
-//!
-//! Tests for the manual routing policy with sticky sessions using X-SMG-Routing-Key header.
+//! Manual routing policy integration.
 
 use std::collections::{HashMap, HashSet};
 

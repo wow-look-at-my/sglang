@@ -1,6 +1,6 @@
-/* Copyright 2025 SGLang Team. All Rights Reserved.
+/* Copyright SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
+Licensed under the Apache License, Version.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -18,7 +18,7 @@ limitations under the License.
 
 #include "sgl_kernel_ops.h"
 
-// FlashMLA exposes these two entry points only from csrc/api/*.cpp (its own pybind layer lives
+// FlashMLA exposes these entry points only from csrc/api/*.cpp (its own pybind layer lives
 // behind FLASH_MLA_LIBTORCH_ONLY), so declare them here the way csrc/python_api.cpp does.
 std::tuple<at::Tensor, at::Tensor, std::optional<at::Tensor>, std::optional<at::Tensor>> dense_attn_decode_interface(
     at::Tensor& q,

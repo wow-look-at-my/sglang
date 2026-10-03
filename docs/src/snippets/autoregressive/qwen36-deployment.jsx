@@ -174,10 +174,8 @@ export const Qwen36Deployment = () => {
       mambaCache: speculative === 'enabled' ? 'v2' : values.mambaCache,
     };
 
-    // NVFP4: nvidia/Qwen3.6-{35B-A3B,27B}-NVFP4 on Blackwell (B200/B300). Follows the exact command
-    // shape from the checkpoint's docs — explicit --tp-size 1, --attention-backend trtllm_mha,
-    // new-style --mamba-radix-cache-strategy, and explicit --host/--port (no
-    // --mem-fraction-static). Reasoning / tool-call parsers still follow their toggles.
+    // NVFP4: nvidia/Qwen3.6-{35B-A3B,27B}-NVFP4 on Blackwell (B200/B300). Reasoning / tool-call
+    // parsers still follow their toggles.
     if (quantization === 'nvfp4') {
       let cmd = `sglang serve --model-path nvidia/Qwen3.6-${sizeConfig.baseName}-NVFP4`;
       cmd += ` \\\n  --tp-size ${hwConfig.tp} --attention-backend trtllm_mha`;

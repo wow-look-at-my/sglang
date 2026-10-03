@@ -1,24 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Inbound cleartext-HTTP/2 (h2c) listener tests for the router's own server.
-//!
-//! Where `h2c_forward.rs` proves the router's *outbound* client speaks h2c to
-//! an HTTP/2-only worker, these prove the *inbound* side: the router's
-//! `axum::serve` listener accepts an h2c prior-knowledge client on the same
-//! cleartext port it serves HTTP/1.1 on, auto-negotiating per connection.
-//!
-//! Protocol negotiation happens at the connection layer, below the tower
-//! service — so unlike the `oneshot` tests in `chat_routing.rs`, these must
-//! drive a real socket via `axum::serve` (mirroring `main.rs`).
-//!
-//! What actually compiles the listener's h2 path is `hyper-util/http2`, reached
-//! through `server-auto`, and several dependencies enable it. So these tests do
-//! NOT fail if axum's own `http2` feature is dropped — verified by removing it.
-//! Their job is the property an operator depends on, whatever the feature graph
-//! happens to look like: one cleartext port serving both h2c prior-knowledge
-//! and HTTP/1.1. That is what would break if a dependency change silently took
-//! `hyper-util/http2` away.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,9 +19,7 @@ use axum::http::Version;
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn build_ctx() -> Arc<AppContext> {
-    // Reuse the shared fixture rather than restating the whole `Config`: this
-    // test is about the listener, not the routing policy, and a local literal
-    // would be one more site to edit every time `ModelConfig` gains a field.
+    // Reuse the shared fixture rather than restating the whole `Config`: this test is about the listener, not the routing policy.
     let mut cfg = crate::common::cache_aware_fixture::config();
     cfg.model.policy = PolicyKind::RoundRobin;
     cfg.model.cache_aware = None;
@@ -51,7 +32,7 @@ fn build_ctx() -> Arc<AppContext> {
 }
 
 /// Spawn the real router (`build_router`) behind `axum::serve` on an ephemeral
-/// port — the exact serve path used in `main.rs`. `/healthz` returns 200
+/// port — the exact serve path used in `main.rs`.
 /// unconditionally, so no worker is needed. Returns the base URL; the accept
 /// loop is dropped when the test runtime shuts down.
 async fn spawn_router() -> String {
@@ -71,8 +52,7 @@ async fn inbound_accepts_h2c_prior_knowledge() {
     let base = spawn_router().await;
 
     // `http2_prior_knowledge()` sends the HTTP/2 connection preface directly
-    // over cleartext (no ALPN, no h1 upgrade) — the same way a service-mesh
-    // sidecar dials h2c. The listener must recognize the preface and serve h2.
+    // over cleartext (no ALPN, no h1 upgrade).
     let client = reqwest::Client::builder()
         .http2_prior_knowledge()
         .build()
@@ -96,9 +76,7 @@ async fn inbound_accepts_h2c_prior_knowledge() {
 async fn inbound_still_accepts_http1() {
     let base = spawn_router().await;
 
-    // The default reqwest client speaks HTTP/1.1 over cleartext. Enabling h2c
-    // must not break existing HTTP/1.1 callers (load balancers, probes, curl)
-    // — the auto builder serves both on the same port.
+    // The default reqwest client speaks HTTP/1.1 over cleartext.
     let client = reqwest::Client::new();
 
     let resp = client

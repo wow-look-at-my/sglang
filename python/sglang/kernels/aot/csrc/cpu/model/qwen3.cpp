@@ -152,8 +152,6 @@ void fused_input_proj_kernel_impl(
 
 }  // anonymous namespace
 
-// mixed_qkvz: [batch, num_heads_qk * head_qk * 2 + num_heads_v * head_v * 2]
-// mixed_ba: [batch, num_heads_v * 2]
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> fused_qkvzba_split_reshape_cat_cpu(
     const at::Tensor& mixed_qkvz,
     const at::Tensor& mixed_ba,
@@ -197,8 +195,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> fused_qkvzba_split_re
   return std::make_tuple(mixed_qkv, z, b, a);
 }
 
-// mixed_qkvz: [batch, num_heads_qk * head_qk * 2 + num_heads_v * head_v * 2]
-// mixed_ba: [batch, num_heads_v * 2]
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> fused_qkvzba_split_reshape_cat_contiguous_cpu(
     const at::Tensor& mixed_qkvz,
     const at::Tensor& mixed_ba,
@@ -248,7 +244,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> fused_qkvzba_split_re
 //   ba_weight             : [ba_dim, hidden_size]
 //   projected_states_qkvz : [batch, qkvz_dim]
 //   projected_states_ba   : [batch, ba_dim]
-//
 std::tuple<at::Tensor, at::Tensor>
 fused_input_proj_cpu(at::Tensor& hidden_states, at::Tensor& qkvz_weight, at::Tensor& ba_weight, bool is_vnni) {
   const auto st = hidden_states.scalar_type();

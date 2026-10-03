@@ -3,11 +3,7 @@
 use std::ffi::CString;
 use std::os::raw::c_char;
 
-/// Free a C string allocated by Rust
-///
-/// # Safety
-/// This function must only be called with pointers returned by other FFI functions.
-/// Calling with arbitrary pointers or multiple times on the same pointer is undefined behavior.
+/// Free a C string allocated by Rust # Safety This function must only be called with pointers returned.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_free_string(s: *mut c_char) {
     if !s.is_null() {
@@ -15,11 +11,7 @@ pub unsafe extern "C" fn sgl_free_string(s: *mut c_char) {
     }
 }
 
-/// Free token IDs array allocated by Rust
-///
-/// # Safety
-/// This function must only be called with pointers returned by `sgl_tokenizer_encode`.
-/// The `count` parameter must match the length of the array.
+/// Free token IDs array allocated by Rust # Safety This function must only be called with pointers returned.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_free_token_ids(ptr: *mut u32, count: usize) {
     if !ptr.is_null() && count > 0 {

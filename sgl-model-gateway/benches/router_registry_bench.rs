@@ -31,7 +31,7 @@ fn setup_registry(count: usize) -> Arc<WorkerRegistry> {
 fn bench_optimizations(c: &mut Criterion) {
     let mut group = c.benchmark_group("Registry Optimizations");
 
-    // We test with 5000 workers to simulate high load
+    // We test with multiple workers to simulate high load
     let size = 5000;
     let registry = setup_registry(size);
 

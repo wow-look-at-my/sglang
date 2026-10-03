@@ -1,6 +1,4 @@
-//! Mamba (SSM state) component driver: overrides the methods Mamba customizes
-//! and inherits the rest from the `TreeComponent` defaults.
-//! Mamba data is per-leaf single-slot state; sizes count slots, not tokens.
+//! Mamba (SSM state) component driver: overrides the methods Mamba customizes and inherits the rest.
 
 use std::collections::HashMap;
 
@@ -39,8 +37,7 @@ impl MambaComponent {
             .mamba_cache_chunk_size
             .expect("the Mamba component requires mamba_cache_chunk_size");
         MambaComponent {
-            // A donated checkpoint must land on both the model's chunk grid and
-            // a radix-node boundary. `params.page_size` is already widened by DCP.
+            // A donated checkpoint must land on both the model's chunk grid and a radix-node boundary.
             mamba_checkpoint_grid: least_common_multiple(mamba_cache_chunk_size, params.page_size),
             mamba_max_states_per_path: params.mamba_max_states_per_path,
         }
@@ -135,16 +132,13 @@ impl<K: ChildKeyType> TreeComponent<K> for MambaComponent {
     ) -> MatchResult {
         let mamba_boundary_len = result.device_indices.size()[0] as usize + result.host_hit_length;
 
-        // Full KV may extend beyond the latest reusable Mamba state. The branching
-        // point is the last checkpoint-grid-aligned position within the Full-KV hit
-        // that lies beyond the current Mamba boundary.
+        // Full KV may extend beyond the latest reusable Mamba state.
         let aligned_seqlen =
             result.full_kv_hit_length / self.mamba_checkpoint_grid * self.mamba_checkpoint_grid;
         result.mamba_branching_seqlen =
             (aligned_seqlen > mamba_boundary_len).then_some(aligned_seqlen);
 
-        // HiCache: if mamba was evicted from device but has host backup,
-        // ensure mamba_host_hit_length >= 1 so load_back is triggered.
+        // HiCache: if mamba was evicted from device but has host backup.
         let last_node = tree_core.arena.node(best_match_node_idx);
         if !last_node.has_device_value(MAMBA) && last_node.has_host_value(MAMBA) {
             result.mamba_host_hit_length = result.mamba_host_hit_length.max(1);
@@ -191,7 +185,6 @@ impl<K: ChildKeyType> TreeComponent<K> for MambaComponent {
     }
 
     /// Mamba data stays on the original leaf; the new prefix node gets none.
-    /// Evict shallow Mamba device checkpoints beyond the per-path cap on the
     /// tail's root path; Full KV, host backups, the tail, forks, locked nodes,
     /// and device leaves are preserved (a best-effort soft cap).
     fn evict_excess_path_states(
@@ -351,8 +344,8 @@ impl<K: ChildKeyType> TreeComponent<K> for MambaComponent {
             "Mamba device eviction not started"
         );
         let mut cursor = tree_core.component_state(MAMBA).evict_device_cursor;
-        // The cursor is re-validated (reset to LRU head) if the previous
-        // node's eviction removed it.
+        // The cursor is re-validated (reset to LRU head) if the node's
+        // eviction removed it.
         if cursor.is_some_and(|c| !tree_core.device_lru_list(MAMBA).in_list(Some(c))) {
             cursor = tree_core
                 .device_lru_list(MAMBA)
@@ -415,9 +408,7 @@ impl<K: ChildKeyType> TreeComponent<K> for MambaComponent {
         if node.is_root() {
             return result;
         }
-        // Tombstones are counted too; ledger/LRU track only data-bearing
-        // nodes (a value materialized under lock is credited to protected
-        // at the materialization site).
+        // Tombstones are counted too.
         let has_value = Self::has_value(node, lock_host);
         if lock_host {
             if node.host_lock_ref(MAMBA) == 0 && has_value {
@@ -603,8 +594,7 @@ impl<K: ChildKeyType> TreeComponent<K> for MambaComponent {
                     return;
                 };
                 if let Some(device_indices) = &transfer.device_indices {
-                    // The materialization primitive owns the ledger/LRU moves,
-                    // including crediting protected when restored under lock.
+                    // The materialization primitive owns the ledger/LRU moves.
                     tree_core.set_component_device_value_(node_id, MAMBA, device_indices.copy());
                 }
             }

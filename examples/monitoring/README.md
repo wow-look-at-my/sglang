@@ -32,7 +32,7 @@ Default Grafana login credentials:
 - Username: `admin`
 - Password: `admin`
 
-You'll be prompted to change the password on first login.
+You will be prompted to change the password on first login.
 
 4. The SGLang dashboard will be automatically available in the "SGLang Monitoring" folder.
 

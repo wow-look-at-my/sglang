@@ -24,7 +24,6 @@ use crate::node::{
 use crate::unified_lru_list::UnifiedLRUList;
 use crate::unified_lru_list::{EvictionStrategy, PriorityKey, get_eviction_strategy};
 
-// A 42-bit mask keeps digest multiplication by 1_000_003 within i64.
 const COEXIST_RECLAIM_DIGEST_MULTIPLIER: i64 = 1_000_003;
 const COEXIST_RECLAIM_DIGEST_MASK: i64 = (1 << 42) - 1;
 
@@ -72,8 +71,7 @@ impl IncLockRefResult {
 /// Receipt required by `dec_lock_ref`.
 #[derive(Default)]
 pub struct DecLockRefParams {
-    /// The node the matching acquire locked; None only for receipts that did
-    /// not come from this core (a mispaired anchor is a protocol violation).
+    /// The node the matching acquire locked.
     pub node_id: Option<NodeId>,
     /// Components the matching acquire left untaken.
     pub skipped_lock_components: ComponentSet,
@@ -108,17 +106,14 @@ pub struct MatchResult {
     pub best_match_node_id: NodeId,
     /// Full-KV tokens that hit on host and must be loaded back to device.
     pub host_hit_length: usize,
-    /// SWA tokens that hit on host (within the sliding window) and will be
-    /// loaded back into the SWA device pool.
+    /// SWA tokens that hit on host (within the sliding window) and will be loaded back into the SWA device pool.
     pub swa_host_hit_length: usize,
     /// The longest page-aligned position that could have hit if an SWA window existed.
     pub swa_branching_seqlen: Option<usize>,
-    /// Mamba slots that hit on host and will be loaded back; 0 or 1.
     pub mamba_host_hit_length: usize,
     /// The longest chunk-aligned position that could have hit if a mamba state existed.
     pub mamba_branching_seqlen: Option<usize>,
-    /// Longest Full-KV prefix available on either device or host, independent
-    /// of other components.
+    /// Longest Full-KV prefix available on either device or host, independent of other components.
     pub full_kv_hit_length: usize,
     /// Actions for the controller to apply.
     pub cache_actions: Vec<CacheAction>,
@@ -138,13 +133,11 @@ pub struct InsertParams<'k, K: ChildKeyType> {
     pub key: &'k K,
     /// Namespace of the insert; picks the matching subtree root.
     pub namespace: KeyNamespaceRef<'k>,
-    /// Request session attributed to newly stored blocks. This is event metadata only;
-    /// it does not participate in tree matching or block hashing.
+    /// Request session attributed to newly stored blocks.
     pub session_id: Option<&'k str>,
     /// Device KV indices covering the key, one row per atom.
     pub value: Tensor,
-    /// Tokens of this request already cached before the insert (the duplicate
-    /// window starts past them).
+    /// Tokens of this request already cached before the insert (the duplicate window starts past them).
     pub prev_prefix_len: usize,
     /// The request's SWA-evicted prefix boundary; SWA data below it stays tombstoned.
     pub swa_evicted_seqlen: usize,
@@ -169,8 +162,7 @@ pub struct InsertResult {
     pub total_len: usize,
     /// The device-resident node at the end of the inserted path.
     pub last_device_node_id: Option<NodeId>,
-    /// Whether the cache holds Mamba state covering the inserted sequence;
-    /// vacuously true for an empty insert.
+    /// Whether the cache holds Mamba state covering the inserted sequence; vacuously true for an empty insert.
     pub mamba_exist: bool,
     /// Whether this insert reached the requested SWA branch boundary.
     pub swa_branch_inserted: bool,
@@ -210,7 +202,7 @@ impl InsertResult {
 }
 
 /// One step of a resumable insert: the Controller executes `actions`, then
-/// resumes while `result` is None; `result` is set on the final step.
+/// resumes while `result` is None.
 pub struct InsertStepResult {
     pub actions: Vec<CacheAction>,
     pub result: Option<InsertResult>,
@@ -255,7 +247,6 @@ pub struct KvCanaryWalkResult {
     pub slot_indices: Vec<i64>,
     /// Token depth from the root for each emitted slot.
     pub positions: Vec<i64>,
-    /// The preceding device slot on the path (-1 at a chain start).
     pub prev_slot_indices: Vec<i64>,
 }
 
@@ -263,25 +254,19 @@ pub struct KvCanaryWalkResult {
 pub enum CacheAction {
     /// Duplicate device KV slices the cache frees after the insert.
     FreeDeviceKV(Vec<Tensor>),
-    /// Free the full side only, for a tombstoned node whose SWA peers are gone;
-    /// FreeDeviceKV would release the SWA side twice.
+    /// Free the full side only, for a tombstoned node whose SWA peers are gone.
     FreeDeviceKVFullOnly(Vec<Tensor>),
     /// A device->host backup work item (the write-through threshold fired).
     BackupKV(BackupKV),
-    /// Replace the pending write-through node on a node split:
-    ///
-    ///     parent -> node    =>    parent -> new_node -> new_child
-    ///
-    /// old_node_id (the pre-split node) is replaced by new_node_id + new_child_node_id.
+    /// Replace the pending write-through node on a node split: parent -> node
+    /// => parent -> new_node -> new_child old_node_id.
     ReplaceWriteThroughOnNodeSplit {
         ack_id: usize,
         old_node_id: NodeId,
         new_node_id: NodeId,
         new_child_node_id: NodeId,
     },
-    /// Per-path Mamba state-cap eviction from the tail's root path; applied at
-    /// the insert's commit barrier, after the walk-time backups whose
-    /// write-through locks shield the backed-up chain.
+    /// Per-path Mamba state-cap eviction from the tail's root path.
     MambaEvictExcessPathStates { tail_node_id: NodeId },
     /// Free only the given component's device KV slots.
     FreeComponentDeviceSlot {
@@ -298,8 +283,8 @@ pub enum CacheAction {
         full_indices: Vec<Tensor>,
         swa_indices: Vec<Tensor>,
     },
-    /// Recover an SWA tombstone whose full is locked: keep the locked full, remap
-    /// it onto the incoming full's SWA translation, and free only the incoming full.
+    /// Recover an SWA tombstone whose full is locked: keep the locked full,
+    /// remap it onto the incoming full's SWA translation.
     RecoverSwaWithLockedFull {
         node_id: NodeId,
         kept_full: Tensor,
@@ -390,9 +375,7 @@ pub struct PoolTransferResult {
 /// A device->host backup work item for the cache to execute.
 #[derive(Default)]
 pub struct BackupKV {
-    /// Backup these nodes device->host in order, stopping at the first failure; the
-    /// caller orders them parent-before-child for write-through and child-first for
-    /// write-back. External handles: the list crosses to the orchestrator.
+    /// Backup these nodes device->host in order, stopping at the first failure; the caller orders them parent-before-child for write-through.
     pub node_ids: Vec<NodeId>,
 }
 
@@ -479,9 +462,7 @@ pub struct ComponentState {
     pub(crate) protected_size: usize,
     /// Whether a device-eviction walk is between start and end.
     pub(crate) is_evict_device_ongoing: bool,
-    /// The walk's resume point, captured at return time since the returned
-    /// leaf may be freed: the leaf's parent for Full, the LRU predecessor for
-    /// SWA and Mamba.
+    /// The walk's resume point, captured at return time since the returned leaf may be freed: the leaf's parent for Full.
     pub(crate) evict_device_cursor: Option<NodeIdx_>,
     /// Token budget for the current eviction walk.
     pub(crate) evict_device_request_cnt: usize,
@@ -532,8 +513,6 @@ impl Default for CacheInitParams {
 }
 
 /// Radix tree of cached token prefixes; each node carries its KV per component.
-/// A single eviction step's outputs: this step's per-component evicted
-/// counts (deltas, for the Controller to accumulate) and freed tensors.
 #[derive(Default, Debug)]
 pub struct EvictionStepResult {
     pub tracker: HashMap<ComponentType, usize>,
@@ -571,8 +550,7 @@ pub struct UnifiedTreeCore<K: ChildKeyType> {
     pub(crate) is_write_back: bool,
     /// Whether the host tier (HiCache) is wired.
     pub(crate) enable_hicache: bool,
-    /// Whether the host tier stages one node per FIFO backup intent rather than
-    /// caching windows; buffer mode sizes its storage keys off a single node.
+    /// Whether the host tier stages one node per FIFO backup intent rather than caching windows.
     pub(crate) is_host_memory_buffer_only: bool,
     /// Whether the storage tier (L3) is wired; gates page-hash computation.
     pub(crate) enable_storage: bool,
@@ -952,7 +930,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
 
     /// Decrease the reference count on a node's component locks. The receipt
     /// is required: a release must replay its acquire's evidence. After an SWA
-    /// early release (`dec_swa_lock_only`), `skip_swa` leaves SWA and the
+    /// early release (`dec_swa_lock_only`).
     /// lower-priority components it already dropped alone.
     pub fn dec_lock_ref(
         &mut self,
@@ -984,8 +962,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         };
         swa.release_window_lock(self, node_idx, params, device_frees, host_frees);
 
-        // Drop strictly-lower-priority locks co-located on the node, skipping
-        // any the paired inc never took.
+        // Drop strictly-lower-priority locks co-located on the node, skipping any the paired inc never took.
         let swa_priority = swa.eviction_priority(/* is_leaf = */ false);
         for i in (0..self.components.len()).rev() {
             let component = Arc::clone(&self.components[i]);
@@ -1061,7 +1038,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         if aligned_key_len == 0 {
             return self.empty_match_result();
         }
-        // The walk reads only [0, aligned_key_len); the ragged tail never enters.
+        // The walk reads only [aligned_key_len); the ragged tail never enters.
         let key = params.key;
 
         let root_id = self.arena.root();
@@ -1086,7 +1063,6 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
     }
 
     /// Read-only FULL-device match, independent of auxiliary components.
-    /// Returns the request match and the complete root-path length pinned by
     /// the deepest node; they differ when the key ends inside that node.
     pub fn match_full_device_prefix(
         &self,
@@ -1139,10 +1115,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         usize,
         Option<CacheAction>,
     ) {
-        // Non-HiCache mode has only device-resident matches, so the scheduler
-        // device anchor follows the best match. In HiCache mode, host-backed
-        // nodes can also match, so we separately track the best device-resident
-        // match for scheduler prefix indices and locking.
+        // Non-HiCache mode has only device-resident matches, so the scheduler device anchor follows the best match.
         let mut node_id = root_id;
         // Walk cursor: atoms of `key` already matched.
         let mut offset = 0;
@@ -1308,9 +1281,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         }
 
         // last_host_node will be used as the starting node for the subsequent
-        // `prefetch_from_storage` flow. We directly use best_match_node here,
-        // because best_match_node represents the node where all components
-        // have reached consensus on both device & host availability.
+        // `prefetch_from_storage` flow.
         let last_host_node_id = if self.enable_hicache {
             best_match_node_id
         } else {
@@ -1446,8 +1417,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         &mut self,
         params: &InsertParams<'_, K>,
     ) -> Result<InsertResult, TreeCoreRuntimeError> {
-        // Single-shot pump over the resumable walk: run every step inline and
-        // fold the step actions into the result for the caller to apply.
+        // Single-shot pump over the resumable walk: run every step inline and fold the step actions into the result for the caller.
         let mut actions = Vec::new();
         let mut step = self.try_begin_insert(params)?;
         loop {
@@ -1506,7 +1476,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
             let node = self.arena.node_mut(root_id);
             node.priority = node.priority.max(params.priority);
         }
-        // The walk reads only [0, aligned_key_len); the ragged tail never enters.
+        // The walk reads only [aligned_key_len); the ragged tail never enters.
         self.ongoing_insert_walk_state = Some(InsertWalkState {
             phase: InsertPhase::Walk,
             node_id: root_id,
@@ -1706,8 +1676,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
 
             let dup_start = state.prev_prefix_len.saturating_sub(cursor);
             if dup_start < consumed_from {
-                // The duplicate slice may straddle this request's own eviction
-                // floor; below it only the full side is still ours to release.
+                // The duplicate slice may straddle this request's own eviction floor.
                 let dup_len = consumed_from - dup_start;
                 let swa_already_freed = state
                     .swa_evicted_seqlen
@@ -1782,9 +1751,6 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         state.target_node_id = Some(target_node_id);
 
         // Finalize: let each component attach its data to the target node.
-        // e.g. Mamba attaches mamba_value to the leaf node
-        // All hooks run before their emitted actions execute; an action failure
-        // fail-stops the process, so partial-commit state is never observed.
         let result = state
             .result
             .as_mut()
@@ -1822,8 +1788,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
     fn needs_incremental_component_backup_(&self, node_id: NodeIdx_) -> bool {
         self.components.iter().any(|component| {
             let component_type = component.component_type();
-            // Write-back defers Full and Mamba to eviction; SWA still publishes
-            // its window here because out-of-window frees never reach eviction.
+            // Write-back defers Full and Mamba to eviction.
             component_type != BASE_COMPONENT_TYPE
                 && (!self.is_write_back || component_type == SWA)
                 && component.needs_incremental_backup(self, node_id)
@@ -1890,7 +1855,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         let child_namespace = child.namespace.clone();
         let child_external_cache_stored = child.external_cache_stored;
         let (key_head, key_tail) = child.key.split_at(split_len);
-        // key_head keeps the original key's first page, which keys the parent's child map.
+        // key_head keeps the key's first page, which keys the parent's child map.
         let parent_map_key = key_head.child_key(page_size);
         let new_node_id = self.new_node_in_namespace_(
             key_head,
@@ -2199,7 +2164,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
     }
 
     /// Evict one device leaf (demote if backuped, delete if write-through);
-    /// for an unbacked write-back node, return the BackupKV for the cache to
+    /// for an unbacked write-back node.
     /// execute and then demote, else None.
     pub fn evict_device_leaf(
         &mut self,
@@ -2241,7 +2206,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
     }
 
     /// Write-back fallback when a D-leaf's D->H backup fails under host
-    /// memory pressure: drop the subtree rooted at the unbacked leaf so
+    /// memory pressure.
     /// device eviction keeps making progress instead of leaving its KV
     /// unevictable until host space frees up.
     pub fn drop_subtree_no_host(
@@ -2256,8 +2221,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
                 self.is_evictable_device_leaf_(node),
                 "node {node_id} is not a D-leaf"
             );
-            // A failed backup never issues the D->H copy, so the subtree root has
-            // no host state and no in-flight DMA reading its device slots.
+            // A failed backup never issues the D->H copy.
             assert!(!node.backuped() && node.write_through_pending_id.is_none());
             if node.is_host_locked() {
                 return Ok((false, result));
@@ -2584,7 +2548,6 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
 
         // Now that all components (including SWA which depends on Full.value)
         // have been freed, we can safely tombstone Full.value.
-        // This is deferred from evict_component because free_swa needs it.
         if target == EvictLayer::Device && trigger_component_type == BASE_COMPONENT_TYPE {
             let _ = self.arena.take_device_value(node_id, FULL);
         }
@@ -2626,8 +2589,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         let lock_ref = node.device_lock_ref(component_type);
         let host_lock_ref = node.host_lock_ref(component_type);
         // A component whose true internal priority outranks the trigger is
-        // present only because leaf-collapse flattened priorities. Its lock is
-        // a legitimate pin; a lower-priority component's lock is a strand.
+        // present only because leaf-collapse flattened priorities.
         if component.eviction_priority(/* is_leaf = */ false) >= trigger_internal_priority {
             if target.contains(EvictLayer::Device) && lock_ref != 0 {
                 return Ok(false);
@@ -3174,10 +3136,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
             return Ok(result);
         }
 
-        // Under write-through, a host-only suffix below a device-only parent
-        // would violate the invariant that a backed-up child has a backed-up
-        // parent. Keep any split actions produced by the walk, but do not
-        // materialize the suffix.
+        // Under write-through, a host-only suffix below a device-only parent would violate the invariant.
         let parent = self.arena.node(node_id);
         if !self.is_write_back && !parent.is_root() && !parent.backuped() {
             result.host_insert_dropped = true;
@@ -3244,8 +3203,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         node: &Node<K>,
     ) -> (Tensor, HashMap<ComponentType, Vec<PoolTransfer>>) {
         // Overlapping backup chains may revisit a node whose Full KV already
-        // has a host copy. Keep building transfers for auxiliary components,
-        // but do not allocate and overwrite Full host KV a second time.
+        // has a host copy.
         let device_value = if node.backuped() {
             self.empty_device_indices.shallow_clone()
         } else {
@@ -4069,8 +4027,6 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         let all_nodes = self.collect_all_nodes_();
         let all_node_set: HashSet<NodeIdx_> = all_nodes.iter().copied().collect();
 
-        // ── PART 1: Tree Structure ──
-        // The single root: value-less, protected, parent-less, no node-level edges.
         let root_idx = self.arena.root();
         let root = self.arena.node(root_idx);
         for i in 0..self.components.len() {
@@ -4183,7 +4139,6 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
             }
         }
 
-        // ── PART 2: Per-node state machine and leaf qualification ──
         let mut expected_dev_leaves: HashSet<NodeIdx_> = HashSet::new();
         let mut expected_hst_leaves: HashSet<NodeIdx_> = HashSet::new();
         let mut expected_full_coexisting_host_nodes: HashSet<NodeIdx_> = HashSet::new();
@@ -4249,8 +4204,6 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
                         device_state.lock_ref
                     ));
                 }
-                // Locked tombstones are legal: segment locks count every
-                // node in [start, boundary], data-bearing or not.
             }
 
             // Collect expected leaf qualification (single pass)
@@ -4265,7 +4218,6 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
             }
         }
 
-        // ── PART 3: Tracking structures ──
 
         // Device leaf set must match the expected leaves.
         let device_leaves: HashSet<NodeIdx_> = self.evictable_device_leaves.iter().collect();
@@ -4374,8 +4326,7 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
                 lru.check_linked_list_(&format!("[device][{ct:?}]"), &mut errors);
                 host_lru.check_linked_list_(&format!("[host][{ct:?}]"), &mut errors);
             } else {
-                // Aux device values must match the device LRU; aux host-only
-                // states must match the host LRU; never both at once.
+                // Aux device values must match the device LRU.
                 let mut device_count = 0;
                 let mut host_only_count = 0;
                 // A host lock delists its node, so locked nodes are exempt.
@@ -4426,7 +4377,6 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
             }
         }
 
-        // ── PART 4: Size Accounting ──
         for i in 0..self.components.len() {
             let ct = self.components[i].component_type();
             let mut evictable = 0usize;
@@ -4460,7 +4410,6 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
             }
         }
 
-        // ── PART 5: Ongoing Operations ──
         for &(op_id, node_id) in ongoing_write_through {
             match self.arena.resolve(node_id) {
                 Err(_) => {
@@ -5005,13 +4954,11 @@ impl<K: ChildKeyType> UnifiedTreeCore<K> {
         self.protected_size_(FULL)
     }
 
-    /// Evictable token count for one component (0 if the component is absent).
     pub fn component_evictable_size(&self, component_type: ComponentType) -> usize {
         self.try_component_by_type_(component_type)
             .map_or(0, |_| self.evictable_size_(component_type))
     }
 
-    /// Protected token count for one component (0 if the component is absent).
     pub fn component_protected_size(&self, component_type: ComponentType) -> usize {
         self.try_component_by_type_(component_type)
             .map_or(0, |_| self.protected_size_(component_type))

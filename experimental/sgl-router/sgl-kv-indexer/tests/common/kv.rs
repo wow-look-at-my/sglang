@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use sgl_kv_indexer::pb::{
@@ -33,8 +33,7 @@ pub fn action_with_parent(
     }
 }
 
-/// A component-aware REPORT action: each hash carries its component bitmask and
-/// token count, index-aligned with `hashes`.
+/// A component-aware REPORT action: each hash carries its component bitmask and token count.
 #[allow(dead_code)] // used by memory_integration, not grpc_contract
 pub fn component_report(
     tier: i32,

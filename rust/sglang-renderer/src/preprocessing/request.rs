@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SamplingParams, TokenIds};
 
-/// Request-scoped metadata that must survive protocol lowering and prompt
-/// tokenization before the request is submitted to SGLang `/generate`.
+/// Request-scoped metadata that must survive protocol lowering and prompt tokenization before the request is submitted.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GenerateRequestMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,10 +46,8 @@ pub struct GenerationOptions {
 }
 
 #[derive(Debug, Clone)]
-/// Internal text-only generation request before tokenization.
-///
-/// Protocol adapters lower textual completions into this type. Structured chat
-/// reaches it only after [`crate::ChatPreprocessor`] renders the messages.
+/// Internal text-only generation request before tokenization. Protocol
+/// adapters lower textual completions into this type.
 pub struct TextRequest {
     pub rid: String,
     pub prompt: RenderedPrompt,
@@ -60,10 +57,6 @@ pub struct TextRequest {
 }
 
 /// One textual prompt shared by one or more generation choices.
-///
-/// OpenAI `n` fan-out changes request identity, not the prompt or generation
-/// options. Keeping those identities alongside one prompt lets preprocessing
-/// tokenize the prompt once before producing the individual engine requests.
 #[derive(Debug, Clone)]
 pub(crate) struct TextRequestGroup {
     pub prompt: RenderedPrompt,

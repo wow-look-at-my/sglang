@@ -17,7 +17,6 @@ nohup python3 -m sglang.launch_server \
     --hicache-write-policy write_through \
     &
 
-##################################################
 
 export CONFIG_PATH=/tmp/bench_mix_config.json
 

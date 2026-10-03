@@ -209,12 +209,10 @@ mod auth_tests {
 mod mtls_tests {
     use super::*;
 
-    /// Test that TLS configuration options exist
-    /// Note: Actual mTLS testing would require certificate setup
+    /// Test that TLS configuration options exist Note: Actual mTLS testing would require certificate setup
     #[tokio::test]
     async fn test_tls_config_available() {
-        // This test verifies the config builder accepts TLS-related options
-        // Actual mTLS testing requires certificate infrastructure
+        // This test verifies the config builder accepts TLS-related options Actual mTLS testing requires certificate.
         let config = TestRouterConfig::round_robin(4305);
 
         let ctx =

@@ -1,29 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Lifecycle bundle for the KV-event index.
-//!
-//! Couples the three submodules that are independent in their own right but
-//! always operate together in production:
-//!
-//! - [`HashTree`] — the cache-aware routing index keyed by SGLang block hash.
-//! - [`EngineReportedLoadTable`] — engine-reported per-worker load.
-//! - Two [`KvEventSubscriberRegistry`]s — one per `(worker_url, dp_rank)` on
-//!   the cache topic, one on the load topic.
-//! - A pump task that drains [`WorkerEvent`]s and applies KV batches to the
-//!   tree and `Load` snapshots to the engine-load table.
-//!
-//! `add_worker` / `remove_worker` are driven from the worker manager on every
-//! `DiscoveryEvent::Added` / `DiscoveryEvent::Removed`.
-//!
-//! # Race avoidance
-//!
-//! The pump runs independently of the lifecycle calls, so an event can sit in
-//! the mpsc buffer while `remove_worker` is in progress. To prevent stale
-//! events from re-inserting tree state for a worker that was just torn down,
-//! [`KvEventIndex`] maintains a `live_workers` set; entries are removed
-//! **before** the subscriber tasks are joined, and the pump filters every
-//! event through this set before mutating the tree.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -44,25 +22,16 @@ use super::wire::KvCacheEvent;
 use crate::state::load_monitor::engine_reported_load::EngineReportedLoadTable;
 
 /// Channel buffer between the subscriber registry and the pump task.
-///
-/// Bounded so a misbehaving publisher cannot exhaust memory.  Realistic
-/// per-worker event rates are < 1 kHz; a 1024-deep buffer absorbs a
-/// half-second burst at 2 kHz before back-pressuring the SUB sockets.
 const EVENT_CHANNEL_BUFFER: usize = 1024;
 
-/// Per-worker bookkeeping kept inside [`KvEventIndex`] so `remove_worker`
-/// knows which DP ranks were actually subscribed (not the advertised
-/// `dp_size`, which may overflow `u16` and skip ranks).
+/// Per-worker bookkeeping kept inside [`KvEventIndex`] so `remove_worker` knows which DP ranks were subscribed.
 #[derive(Debug, Clone)]
 struct WorkerEntry {
-    /// DP ranks that were successfully spawned for this worker. Used by
-    /// `remove_worker` to know which `(url, dp_rank)` cursors and tree
-    /// states to clear.
+    /// DP ranks that were successfully spawned for this worker.
     dp_ranks: Vec<u32>,
 }
 
-/// Ranks whose socket port is representable for a publisher range. This is
-/// shared by lifecycle bookkeeping and the subscriber registry contract so an
+/// Ranks whose socket port is representable for a publisher range.
 /// expected load rank always has a corresponding SUB socket.
 fn subscribable_ranks(port_base: u16, dp_size: u32) -> Vec<u32> {
     let port_base = u32::from(port_base);
@@ -71,9 +40,7 @@ fn subscribable_ranks(port_base: u16, dp_size: u32) -> Vec<u32> {
         .collect()
 }
 
-/// The read-only handles the `/metrics` scrape pulls the KV storage-tier
-/// series from. Narrower than an [`KvEventIndex`] handle on purpose: a route
-/// has no business calling `add_worker` / `remove_worker` / `shutdown`.
+/// The read-only handles the `/metrics` scrape pulls the KV storage-tier series from.
 #[derive(Clone)]
 pub struct KvIndexMetrics {
     pub(crate) tree: Arc<HashTree>,
@@ -95,38 +62,21 @@ pub struct KvEventIndex {
     tree: Arc<HashTree>,
     maintain_tree: bool,
     subscribers: Arc<KvEventSubscriberRegistry>,
-    /// Second registry subscribing to the load topic (one per worker rank),
-    /// feeding `LoadStat` snapshots into `engine_reported_load`. Shares the pump
-    /// channel with `subscribers`; keyed independently so KV and load
-    /// subscribers for the same worker don't collide.
+    /// Second registry subscribing to the load topic (one per worker rank), feeding `LoadStat` snapshots.
     load_subscribers: Arc<KvEventSubscriberRegistry>,
-    /// Engine-reported per-worker load, written by the pump from
-    /// `WorkerEvent::Load` and captured at request ingress.
+    /// Engine-reported per-worker load, written by the pump from `WorkerEvent::Load` and captured at request ingress.
     engine_reported_load: Arc<EngineReportedLoadTable>,
     pump: Mutex<Option<JoinHandle<()>>>,
     pump_cancel: CancellationToken,
     workers: Mutex<HashMap<String, WorkerEntry>>,
     http: reqwest::Client,
-    /// Set of currently-attached `(worker_url, dp_rank)` pairs. The pump
-    /// drops any event whose `worker` is not in this set, so a batch
-    /// queued by a subscriber that was torn down by `remove_worker` does
-    /// not re-pollute the tree after `clear_worker` ran.
+    /// Set of currently-attached `(worker_url, dp_rank)` pairs.
     live_workers: Arc<Mutex<HashSet<KvWorkerId>>>,
-    /// Per-`(worker_url, dp_rank)` last-applied sequence number. The
-    /// subscriber forwards every batch with no de-dup; this map filters
-    /// any batch whose `seq` is not strictly greater than the previously
-    /// applied one. Cleared on `remove_worker` because a re-added worker
-    /// may legitimately have a fresh publisher whose sequence numbers
-    /// restart from 1.
+    /// Per-`(worker_url, dp_rank)` last-applied sequence number.
     cursors: Arc<Mutex<HashMap<KvWorkerId, i64>>>,
-    /// Applied events by kind and storage medium, for the `/metrics` scrape.
-    /// Written only by the pump.
+    /// Applied events by kind and storage medium, for the `/metrics` scrape. Written only by the pump.
     tally: Arc<EventTally>,
     /// Worker-sourced `page_size` shared with prefix providers.
-    /// `add_worker` calls `try_set(cfg.block_size)` so the first worker
-    /// establishes the value; subsequent workers that disagree are
-    /// rejected (logged + not subscribed). Prefix providers read it at routing
-    /// time to size their `compute_block_hashes` calls.
     block_size_oracle: Arc<BlockSizeOracle>,
 }
 
@@ -147,10 +97,7 @@ impl KvEventIndex {
     }
 
     /// Constructor that lets the caller supply a pre-shared
-    /// [`BlockSizeOracle`]. Production wires this from `AppContext` so
-    /// the same oracle the index seeds is available to prefix providers.
-    /// Tests use this to pre-populate the
-    /// oracle and exercise the mismatch-rejection path.
+    /// [`BlockSizeOracle`].
     pub fn new_with_http_and_oracle(
         http: reqwest::Client,
         block_size_oracle: Arc<BlockSizeOracle>,
@@ -158,9 +105,9 @@ impl KvEventIndex {
         Self::new_with_mode(http, block_size_oracle, true)
     }
 
-    /// Discovers worker hash metadata only: seeds the shared [`BlockSizeOracle`]
-    /// but neither subscribes to KV events nor maintains the local tree, because
-    /// an external Indexer is the routing signal.
+    /// Discovers worker hash metadata only: seeds the shared
+    /// [`BlockSizeOracle`] but neither subscribes to KV events nor maintains
+    /// the local tree.
     pub fn new_metadata_only_with_http_and_oracle(
         http: reqwest::Client,
         block_size_oracle: Arc<BlockSizeOracle>,
@@ -214,21 +161,13 @@ impl KvEventIndex {
     }
 
     /// Clone the underlying tree handle for cache-aware selection and
-    /// metrics. The pump is the sole writer; callers should treat the
-    /// returned handle as read-only.
+    /// metrics.
     pub fn tree(&self) -> Arc<HashTree> {
         self.tree.clone()
     }
 
     /// Handles for the `/metrics` storage-tier series, or `None` when this
     /// router does not maintain a local tree.
-    ///
-    /// In metadata-only mode (an external Indexer is the routing signal) no KV
-    /// subscription is opened, so every tier series would be a structural
-    /// zero — while their own HELP text tells the operator to read a zero
-    /// `CPU_PINNED` row as "the tier stream is not reaching the router". That
-    /// is a different fault with a different fix, so emit nothing rather than
-    /// a confidently wrong zero.
     pub fn metrics_source(&self) -> Option<KvIndexMetrics> {
         self.maintain_tree.then(|| KvIndexMetrics {
             tree: Arc::clone(&self.tree),
@@ -236,9 +175,7 @@ impl KvEventIndex {
         })
     }
 
-    /// Shared accessor for the engine-load table. Load values are written solely by the pump
-    /// (from `LoadStat` events); `add_worker` / `remove_worker` here manage
-    /// the expected set and per-worker eviction.
+    /// Shared accessor for the engine-load table.
     pub fn engine_reported_load(&self) -> Arc<EngineReportedLoadTable> {
         Arc::clone(&self.engine_reported_load)
     }
@@ -248,11 +185,9 @@ impl KvEventIndex {
     /// the internal HTTP round-trip; otherwise (standalone callers,
     /// e.g. integration tests) we fall back to `fetch_event_config`.
     ///
-    /// Opens one ZMQ SUB per advertised DP rank for each usable stream. In
-    /// metadata-only mode KV subscriptions remain disabled, but the separate
-    /// #34608 load stream is still attached when its full descriptor exists.
+    /// Opens one ZMQ SUB per advertised DP rank for each usable stream.
     /// If the worker is not publishing KV events (older SGLang, opt-out
-    /// config), this is a logged no-op — the worker still routes via the
+    /// config).
     /// non-cache-aware policies.
     pub async fn add_worker(&self, worker_url: &str, preresolved: Option<EventConfig>) {
         let cfg: EventConfig = match preresolved {
@@ -293,9 +228,7 @@ impl KvEventIndex {
             );
             return;
         }
-        // Establish the bigram flag alongside block_size. EAGLE-family workers
-        // hash KV blocks over token bigrams, so the policy must use the bigram
-        // hasher for its query hashes to match the worker's stored hashes.
+        // Establish the bigram flag alongside block_size.
         self.block_size_oracle.set_bigram(cfg.is_bigram);
         let kv_dp_ranks = if self.maintain_tree {
             subscribable_ranks(cfg.port_base, cfg.dp_size)
@@ -406,13 +339,9 @@ impl KvEventIndex {
                 live.remove(id);
             }
         }
-        // 2. Cancel and join the per-rank subscriber tasks (KV + load). No
-        //    further events for these ranks will be queued after this returns.
+        // 2. Cancel and join the per-rank subscriber tasks (KV + load).
         self.subscribers.remove_worker(worker_url).await;
         self.load_subscribers.remove_worker(worker_url).await;
-        // 3. Drop each rank's tree state and cursor, and the worker's engine
-        //    load. Any event already in the mpsc buffer at this point will be
-        //    filtered by the live-set check inside the pump.
         self.engine_reported_load.forget_worker(worker_url);
         let mut cursors = self.cursors.lock();
         for id in &ids {
@@ -421,11 +350,7 @@ impl KvEventIndex {
         }
     }
 
-    /// Number of worker URLs the index is currently subscribed to. The
-    /// count includes workers whose `/server_info` resolved but excludes
-    /// any whose discovery returned `Ok(None)` (worker reachable but not
-    /// publishing) or `Err` (transient discovery failure). Exposed for
-    /// tests + future metrics; not part of the routing hot path.
+    /// Number of worker URLs the index is subscribed to.
     pub fn known_worker_count(&self) -> usize {
         self.workers.lock().len()
     }
@@ -481,10 +406,7 @@ async fn pump_loop(
             }
         };
 
-        // Filter events from workers that are no longer attached. This is
-        // load-bearing: `remove_worker` clears the live set BEFORE joining
-        // the subscriber task, so any event still buffered when the pump
-        // reaches it would otherwise re-pollute the tree.
+        // Filter events from workers that are no longer attached.
         let worker = ev.worker();
         if !live_workers.lock().contains(worker) {
             debug!(
@@ -496,8 +418,7 @@ async fn pump_loop(
 
         match ev {
             WorkerEvent::Load { worker, load } => {
-                // Gauge: last value wins, no sequence/dedup. The live-worker
-                // filter above already dropped load from detached workers.
+                // Gauge: last value wins, no sequence/dedup.
                 engine_reported_load.set(&worker.url, worker.dp_rank, load, Instant::now());
             }
             WorkerEvent::PublisherReset { worker } => {
@@ -520,14 +441,7 @@ async fn pump_loop(
                         );
                         continue;
                     }
-                    // The publisher's seq is dense, so a jump is exactly the
-                    // batches ZMQ dropped at its high-water mark. This became
-                    // worth counting with tier-tagged removals: a removal now
-                    // clears only its own tier, so losing the batch carrying a
-                    // block's LAST removal leaves the worker owning it until
-                    // the next AllBlocksCleared or teardown. The tree cannot
-                    // see that happened — only the sequence can. The
-                    // operator-visible signature is tree coverage above 1.
+                    // The publisher's seq is dense.
                     let lost = (seq - p - 1) as u64;
                     if lost > 0 {
                         tally.record_lost_batches(lost);
@@ -673,9 +587,7 @@ mod tests {
         .await
         .unwrap();
         drop(tx);
-        // Don't cancel — let rx.recv() return None naturally so any
-        // queued events drain first. (The pump's `biased` select would
-        // otherwise preempt unprocessed events on cancel.)
+        // Don't cancel — let rx.recv() return None naturally so any queued events drain first.
         pump.await.unwrap();
 
         let m = tree.match_prefix(None, &[10, 20, 30]);
@@ -683,11 +595,7 @@ mod tests {
         assert!(m.holds(&id), "tree must hold the worker");
     }
 
-    /// The pump must carry each event's `medium` into the tree. The engine's
-    /// write-back sequence for a backed-up block is a host-tagged store
-    /// followed by a device-tagged removal; applied tier-blind, the removal
-    /// erased the worker and every repeat of that prefix routed cold for the
-    /// whole host retention horizon.
+    /// The pump must carry each event's `medium` into the tree.
     #[tokio::test]
     async fn pump_keeps_host_backed_block_owned_across_device_eviction() {
         let id = worker_id("http://w1", 0);
@@ -730,10 +638,7 @@ mod tests {
         assert!(!m.device_workers().contains(&id), "device copy is gone");
     }
 
-    /// The metadata-only gate. Its whole justification is that a structural
-    /// zero would be read as "the tier stream is not reaching the router" — a
-    /// different fault with a different fix — so the gate itself needs pinning:
-    /// inverting it leaves every test green while `/metrics` starts lying.
+    /// The metadata-only gate.
     #[tokio::test]
     async fn metrics_source_is_none_only_without_a_local_tree() {
         let http = reqwest::Client::builder().build().unwrap();
@@ -751,9 +656,7 @@ mod tests {
         );
     }
 
-    /// Every applied event is tallied by kind and medium, blocks included, so
-    /// the scrape can show the tier stream the tree is consuming. An
-    /// out-of-order batch is filtered before the tally and must not count.
+    /// Every applied event is tallied by kind and medium, blocks included.
     #[tokio::test]
     async fn pump_tallies_applied_events_by_medium() {
         let id = worker_id("http://w1", 0);
@@ -792,9 +695,6 @@ mod tests {
         })
         .await
         .unwrap();
-        // A gap: seq 3 and 4 were dropped in transit. Counted, because a
-        // tagged removal now clears only its own tier, so a lost batch can
-        // strand a tier the tree will never clear on its own.
         tx.send(WorkerEvent::Batch {
             worker: id.clone(),
             seq: 5,
@@ -828,8 +728,7 @@ mod tests {
         );
     }
 
-    /// A `WorkerEvent::Load` lands in the engine-load table (gauge, no
-    /// cursor) keyed by the worker URL, and does not touch the tree.
+    /// A `WorkerEvent::Load` lands in the engine-load table (gauge, no cursor) keyed by the worker URL.
     #[tokio::test]
     async fn pump_applies_load_to_engine_load_table() {
         let id = worker_id("http://w1", 0);
@@ -858,15 +757,13 @@ mod tests {
         assert_eq!(tree.node_count(), 0);
     }
 
-    /// Out-of-order seq is filtered: a batch with seq <= last_applied is
-    /// dropped silently and does not mutate the tree.
+    /// Out-of-order seq is filtered: a batch with seq <= last_applied is dropped silently and does not mutate the tree.
     #[tokio::test]
     async fn pump_filters_out_of_order_seq() {
         let id = worker_id("http://w1", 0);
         let h = spawn_pump(std::slice::from_ref(&id));
         let (tree, cursors, tx, pump) = (h.tree, h.cursors, h.tx, h.pump);
 
-        // Apply seq=5 with block 10.
         tx.send(WorkerEvent::Batch {
             worker: id.clone(),
             seq: 5,
@@ -881,8 +778,7 @@ mod tests {
         })
         .await
         .unwrap();
-        // Then a duplicate-style seq=3 that tries to remove block 10. Must
-        // be dropped.
+        // Must be dropped.
         tx.send(WorkerEvent::Batch {
             worker: id.clone(),
             seq: 3,
@@ -894,9 +790,7 @@ mod tests {
         .await
         .unwrap();
         drop(tx);
-        // Don't cancel — let rx.recv() return None naturally so any
-        // queued events drain first. (The pump's `biased` select would
-        // otherwise preempt unprocessed events on cancel.)
+        // Don't cancel — let rx.recv() return None naturally so any queued events drain first.
         pump.await.unwrap();
 
         let m = tree.match_prefix(None, &[10]);
@@ -936,9 +830,7 @@ mod tests {
         .await
         .unwrap();
         drop(tx);
-        // Don't cancel — let rx.recv() return None naturally so any
-        // queued events drain first. (The pump's `biased` select would
-        // otherwise preempt unprocessed events on cancel.)
+        // Don't cancel — let rx.recv() return None naturally so any queued events drain first.
         pump.await.unwrap();
 
         let m = tree.match_prefix(None, &[1, 2]);
@@ -948,10 +840,7 @@ mod tests {
         );
     }
 
-    /// The pump drops events whose worker is not in `live_workers`. This
-    /// is the safety net against the remove-then-pump race: an event
-    /// queued before `remove_worker` clears the live set must not mutate
-    /// the tree.
+    /// The pump drops events whose worker is not in `live_workers`.
     #[tokio::test]
     async fn pump_drops_events_from_detached_workers() {
         let live_id = worker_id("http://live", 0);
@@ -991,20 +880,14 @@ mod tests {
         .await
         .unwrap();
         drop(tx);
-        // Don't cancel — let rx.recv() return None naturally so any
-        // queued events drain first. (The pump's `biased` select would
-        // otherwise preempt unprocessed events on cancel.)
+        // Don't cancel — let rx.recv() return None naturally so any queued events drain first.
         pump.await.unwrap();
 
         assert_eq!(tree.match_prefix(None, &[42]).matched_blocks, 0);
         assert_eq!(tree.match_prefix(None, &[99]).matched_blocks, 1);
     }
 
-    /// `add_worker` must reject a worker whose `EventConfig.block_size`
-    /// disagrees with the previously-established oracle value. The
-    /// router cannot hash prompts simultaneously at two block sizes;
-    /// silently accepting the mismatched worker would destroy
-    /// cache-aware routing quality for every request.
+    /// `add_worker` must reject a worker whose `EventConfig.block_size` disagrees.
     #[tokio::test]
     async fn add_worker_rejects_block_size_mismatch() {
         let index = KvEventIndex::new();
@@ -1034,9 +917,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_worker_seeds_oracle_with_first_block_size() {
-        // Without any prior priming, the first worker through `add_worker`
-        // should publish its `EventConfig.block_size` into the oracle so
-        // subsequent matching workers reconcile and mismatched ones fail.
+        // Without any prior priming, the first worker through `add_worker` should publish its `EventConfig.block_size` into the oracle.
         let index = KvEventIndex::new();
         assert_eq!(index.block_size_oracle().get(), None);
 
@@ -1059,9 +940,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_worker_seeds_bigram_flag_from_event_config() {
-        // The discovery->routing seam: add_worker must publish
-        // EventConfig.is_bigram into the oracle (alongside block_size) so
-        // select() picks the bigram hasher for EAGLE workers.
+        // The discovery->routing seam: add_worker must publish EventConfig.is_bigram into the oracle (alongside block_size) so select().
         let index = KvEventIndex::new();
         assert!(!index.block_size_oracle().is_bigram());
         // dp_size=0 short-circuits the subscriber spawn but still runs the seed.
@@ -1110,10 +989,7 @@ mod tests {
         index.shutdown().await;
     }
 
-    /// `remove_worker` clears the worker's engine load and its expected mark,
-    /// so a re-added worker does not inherit stale load. The worker advertises
-    /// a load port (no publisher there; the subscriber just retries in the
-    /// background and is cancelled on remove).
+    /// `remove_worker` clears the worker's engine load and its expected mark.
     #[tokio::test]
     async fn remove_worker_clears_engine_load() {
         let index = KvEventIndex::new();
@@ -1163,12 +1039,7 @@ mod tests {
         index.shutdown().await;
     }
 
-    /// `remove_worker` is the tree's SECOND writer: it clears every rank's
-    /// state from whatever task service discovery calls it on
-    /// (`workers/manager.rs`) while the pump is live and writing the same
-    /// tree. This pins the wiring that makes the collision
-    /// `HashTree::concurrent_writers_never_orphan_a_chain` covers reachable
-    /// at all — a refactor moving the clear onto the pump would retire it.
+    /// `remove_worker` is the tree's SECOND writer.
     #[tokio::test]
     async fn remove_worker_clears_the_tree_off_the_pump_task() {
         let index = KvEventIndex::new();

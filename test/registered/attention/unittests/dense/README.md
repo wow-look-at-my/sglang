@@ -1,16 +1,14 @@
 # Dense Attention Capability Matrix
 
-This folder covers standard dense MHA/GQA/MQA attention through `RadixAttention`.
-Expected outputs come from independent HF-style PyTorch reference modules with
-copied random projection weights, not from another SGLang attention backend.
+This folder covers standard dense MHA/GQA/MQA attention through `RadixAttention`. Expected outputs come from independent HF-style PyTorch reference modules with copied random projection weights, not from another SGLang attention backend.
 
 ## Coverage Matrix
 
-Columns are runner modes; rows are attention backends. Cells use:
+Columns are runner modes. Rows are attention backends. Cells use:
 - **✓ \<variants\>** — exercised, with the config variants listed in the cell
 - **—** — not applicable (no production path for this combination)
 - **blocked: \<reason\>** — production-unsupported, not a follow-up
-- **deferred: \<reason\>** — could land later, currently disabled
+- **deferred: \<reason\>** — can land later, disabled
 
 | Backend | Eager Phase 2 | CG decode | PCG extend | BCG extend | Verify eager | Verify CG | DE eager | DE CG | DE-V2 CG | EAGLE-draft runner | EAGLE-DE runner | FKVMTP runner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -39,45 +37,20 @@ Columns are runner modes; rows are attention backends. Cells use:
 
 ## Notes on the "—" cells
 
-- **`torch_native` graph rows** — `TorchNativeAttnBackend` does not override
-  `init_cuda_graph_state` / `init_forward_metadata_capture_cuda_graph` /
-  `init_forward_metadata_replay_cuda_graph`; the base class raises
-  `NotImplementedError` (`base_attn_backend.py:24-55`).
-- **`flex_attention` graph rows** — `TorchFlexAttnBackend` also has no CG hooks.
-  It additionally rejects non-causal (`torch_flex_backend.py:151`) and cross /
-  encoder-only attention (`torch_flex_backend.py:267-270`).
-- **`trtllm_mha` extend rows** — backend exposes decode only; prefill currently
-  reports `Unsupported architecture` and page sizes are restricted to
-  `{16, 32, 64}` (`server_args.py:2849-2853`).
-- **`triton` FKVMTP runner** — `FrozenKVMTPMultiStepDraftBackend` dispatch wires
-  Triton through the FlashInfer-style draft path; the dedicated runner case is
-  only enabled where production routes that draft worker.
+- **`torch_native` graph rows** — `TorchNativeAttnBackend` does not override `init_cuda_graph_state` / `init_forward_metadata_capture_cuda_graph` / `init_forward_metadata_replay_cuda_graph`. The base class raises `NotImplementedError` (`base_attn_backend.py:24-55`).
+- **`flex_attention` graph rows** — `TorchFlexAttnBackend` also has no CG hooks. It additionally rejects non-causal (`torch_flex_backend.py:151`) and cross / encoder-only attention (`torch_flex_backend.py:267-270`).
+- **`trtllm_mha` extend rows** — backend exposes decode only. Prefill currently reports `Unsupported architecture` and page sizes are restricted to `{16, 32, 64}` (`server_args.py:2849-2853`).
+- **`triton` FKVMTP runner** — `FrozenKVMTPMultiStepDraftBackend` dispatch wires Triton through the FlashInfer-style draft path. The dedicated runner case is only enabled where production routes that draft worker.
 
 ## Capture-vs-replay test contract
 
-The CUDA graph runner tests treat the capture-time forward as a JIT
-warmup (matching production semantics): the captured graph records
-kernel launches against metadata buffers that *will* be populated by
-`init_forward_metadata_replay_cuda_graph` at replay time. Only the
-replay output is asserted against the reference and against the eager
-result. Capture-time output is discarded.
+The CUDA graph runner tests treat the capture-time forward as a JIT warmup (matching production semantics). The captured graph records kernel launches against metadata buffers that *will* be populated by `init_forward_metadata_replay_cuda_graph` at replay time. Only the replay output is asserted against the reference and against the eager result. Capture-time output is discarded.
 
-Earlier iterations of this test asserted capture-time output too,
-which only worked for backends that happen to populate metadata
-buffers *during* their `init_forward_metadata_capture_cuda_graph`
-(Triton/FlashInfer populate `kv_indices` via
-`create_flashinfer_kv_indices_triton` at capture). FlashAttention
-v3/v4 assign buffer slices but don't write valid values at capture —
-that's intentional and correct for production where capture output is
-discarded. Dropping the capture-output assertion aligns the test with
-production and unblocks FA CG decode coverage without backend-specific
-shims.
+Earlier iterations of this test asserted capture-time output too, which only worked for backends that happen to populate metadata buffers *during* their `init_forward_metadata_capture_cuda_graph` (Triton/FlashInfer populate `kv_indices` via `create_flashinfer_kv_indices_triton` at capture). FlashAttention v3/v4 assign buffer slices. However, FlashAttention v3/v4 assign buffer do not write valid values at capture — that is intentional and correct for production where capture output is discarded. Dropping the capture-output assertion aligns the test with production and unblocks FA CG decode coverage without backend-specific shims.
 
 ## Next Work
 
 - Debug torch-native target-verify extend metadata.
 - Debug Triton `DRAFT_EXTEND` metadata/reference mismatch.
-- Debug remaining FA3/FA4 speculative-graph mismatches: EAGLE tree
-  verify (eager) diffs ~0.16 vs the bf16 HF reference (kernel-level
-  drift, NOT a CG issue — fires before any capture/replay).
+- Debug remaining FA3/FA4 speculative-graph mismatches: EAGLE tree verify (eager) diffs ~0.16 vs the bf16 HF reference (kernel-level drift, NOT a CG issue — fires before any capture/replay).
 - Add backend-specific graph coverage for `trtllm_mha` once local hardware and metadata behavior allow it.

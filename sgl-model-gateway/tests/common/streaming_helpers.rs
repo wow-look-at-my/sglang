@@ -1,16 +1,11 @@
 //! Streaming Test Helpers
-//!
-//! Utilities for creating realistic streaming chunks that simulate
-//! how LLM tokens actually arrive (1-5 characters at a time).
 
-/// Split input into realistic char-level chunks (2-3 chars each for determinism)
 pub fn create_realistic_chunks(input: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
 
     while i < chars.len() {
-        // Take 2-3 characters at a time (deterministic for testing)
         let chunk_size = if i + 3 <= chars.len() && chars[i].is_ascii_alphanumeric() {
             3 // Longer chunks for alphanumeric sequences
         } else {
@@ -39,7 +34,7 @@ pub fn create_strategic_chunks(input: &str) -> Vec<String> {
         // Break after strategic characters
         let should_break = matches!(ch, '"' | ':' | ',' | '{' | '}' | '[' | ']')
             || (i > 0 && chars[i-1] == '"' && ch == ' ') // Space after quote
-            || current.len() >= 5; // Max 5 chars per chunk
+            || current.len() >= 5; // Max multiple chars
 
         if should_break && !current.is_empty() {
             chunks.push(current.clone());

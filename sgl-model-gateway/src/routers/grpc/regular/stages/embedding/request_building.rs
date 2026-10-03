@@ -81,8 +81,7 @@ impl PipelineStage for EmbeddingRequestBuildingStage {
         // Extract original text
         let original_text = prep_output.original_text.clone();
 
-        // Use backend-specific builder to create ProtoEmbedRequest
-        // Currently only SGLang supports embedding via gRPC
+        // Use backend-specific builder to create ProtoEmbedRequest only SGLang supports embedding via gRPC
         let sglang_client = client.as_sglang();
 
         let sglang_req = sglang_client.build_embed_request(

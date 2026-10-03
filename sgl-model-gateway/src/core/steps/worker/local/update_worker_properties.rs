@@ -11,9 +11,6 @@ use crate::core::{
 };
 
 /// Step to update worker properties.
-///
-/// This step creates new worker instances with updated properties and
-/// re-registers them to replace the old workers in the registry.
 pub struct UpdateWorkerPropertiesStep;
 
 #[async_trait]
@@ -127,7 +124,7 @@ impl StepExecutor<WorkerUpdateWorkflowData> for UpdateWorkerPropertiesStep {
                 Arc::new(builder.build())
             };
 
-            // Re-register the worker (this replaces the old one)
+            // Re-register the worker (
             app_context.worker_registry.register(new_worker.clone());
 
             updated_workers.push(new_worker);

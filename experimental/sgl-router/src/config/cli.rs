@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Grouped CLI options and conversion into a validated [`Config`].
@@ -66,21 +66,13 @@ pub struct ModelArgs {
     pub tokenizer_path: Option<String>,
 
     /// Disable generated input_ids; workers tokenize messages, while routing still renders locally.
-    /// Use for worker-only thinking defaults, parser/template overrides, or template stop strings.
     #[arg(long)]
     pub disable_input_ids_forwarding: bool,
 
-    /// Fleet sampling defaults as JSON, e.g. {"temperature": 1, "top_p": 0.95}.
-    /// Accepts temperature, top_p, top_k, min_p, repetition_penalty,
-    /// frequency_penalty, presence_penalty, and n. Numeric values fill absent
-    /// fields; {"min": LO, "max": HI} bands only constrain supplied values
-    /// and require reject mode. See README for domains and null handling.
+    /// Fleet sampling defaults as JSON, e.g. {"temperature":, "top_p":. }.
     #[arg(long, value_name = "JSON")]
     pub override_sampling_params: Option<String>,
 
-    /// How to handle sampling values that differ from configured defaults:
-    /// reject returns 400 before admission; allow forwards the client value.
-    /// Defaults to reject. Requires --override-sampling-params.
     #[arg(
         long,
         value_enum,
@@ -100,14 +92,11 @@ pub struct ServerArgs {
     #[arg(long, default_value_t = default_port())]
     pub port: u16,
 
-    /// Keep serving after SIGTERM with /readyz returning 503 before stopping accepts.
-    /// Leave time in the pod grace period for in-flight requests; cover readiness
-    /// probe failureThreshold * periodSeconds when probe-driven. 0 disables the pause.
+    /// Keep serving after SIGTERM with /readyz returning before stopping accepts.
     #[arg(long, default_value_t = default_shutdown_drain_secs())]
     pub shutdown_drain_secs: u64,
 
     /// Pod terminationGracePeriodSeconds for the startup drain-budget check.
-    /// Omitting this assumes 30 seconds; this flag does not change the pod spec.
     #[arg(long)]
     pub termination_grace_secs: Option<u64>,
 
@@ -119,8 +108,6 @@ pub struct ServerArgs {
     pub stream_idle_timeout_secs: u64,
 
     /// Maximum in-flight request lifetime in seconds, including streaming responses.
-    /// Expiry returns 504 `stale_request_expired` before response headers are sent;
-    /// after streaming starts, it aborts the body without changing the HTTP status.
     #[arg(long, default_value_t = default_stale_request_timeout_secs())]
     pub stale_request_timeout_secs: u64,
 
@@ -143,13 +130,11 @@ pub struct DiscoveryArgs {
     #[arg(long)]
     pub service_discovery: bool,
 
-    /// Namespace to watch. Unset/empty watches all namespaces (requires
-    /// cluster-wide RBAC).
+    /// Namespace to watch. Unset/empty watches all namespaces (requires cluster-wide RBAC).
     #[arg(long)]
     pub service_discovery_namespace: Option<String>,
 
     /// Plain-mode label selector terms, AND-joined; Kubernetes selector grammar.
-    /// Mutually exclusive with --prefill-selector and --decode-selector.
     #[arg(long, num_args = 1..)]
     pub selector: Vec<String>,
 
@@ -185,9 +170,7 @@ pub struct RoutingArgs {
     #[arg(long)]
     pub bucket_config: Option<String>,
 
-    /// Weighted scoring terms, e.g. prefix_cache=2.0,load_based=0.3.
-    /// Defaults to prefix_cache,load_based for score_policy or fused_score.
-    /// Requires --policy score_policy or fused_score. Omitted weights use each term's default.
+    /// Weighted scoring terms, e.g. prefix_cache=.,load_based=..
     #[arg(long, value_delimiter = ',')]
     pub fuse: Vec<FusedTerm>,
 
@@ -207,8 +190,7 @@ pub struct RoutingArgs {
     #[arg(long)]
     pub cb_threshold: Option<NonZeroU32>,
 
-    /// Circuit-breaker cool-down in seconds. Only meaningful with
-    /// `--cb-threshold`; defaults to 30 when the breaker is enabled.
+    /// Circuit-breaker cool-down in seconds.
     #[arg(long)]
     pub cb_cool_down_secs: Option<u64>,
 }
@@ -220,21 +202,18 @@ pub struct CacheArgs {
     pub cache_prefix_provider: Option<CachePrefixProvider>,
 
     /// External KV indexer gRPC endpoint used as the authoritative cache signal.
-    /// Needs an explicit scheme, e.g. `http://10.0.0.1:50051`.
     #[arg(long)]
     pub kv_indexer_endpoint: Option<String>,
 
-    /// KV Indexer query timeout in milliseconds. Requires
-    /// `--kv-indexer-endpoint`; defaults to 100.
+    /// KV Indexer query timeout in milliseconds. Requires `--kv-indexer-endpoint`; defaults to.
     #[arg(long)]
     pub kv_indexer_query_timeout_ms: Option<u64>,
 
-    /// Maximum concurrent KV Indexer queries issued by this Router. Requires
-    /// `--kv-indexer-endpoint`; defaults to 32.
+    /// Maximum concurrent KV Indexer queries issued by this Router. Requires `--kv-indexer-endpoint`; defaults to.
     #[arg(long)]
     pub kv_indexer_query_max_inflight: Option<usize>,
 
-    /// Minimum cache-hit tokens for a candidate. Defaults to 1024.
+    /// Minimum cache-hit tokens for a candidate. Defaults to.
     #[arg(long)]
     pub cache_affinity_min_matched_tokens: Option<u64>,
 
@@ -242,39 +221,31 @@ pub struct CacheArgs {
     #[arg(long)]
     pub cache_affinity_min_match_ratio: Option<f64>,
 
-    /// Minimum number of cache candidates to try. Defaults to 8.
+    /// Minimum number of cache candidates to try. Defaults to.
     #[arg(long)]
     pub cache_candidate_min_workers: Option<usize>,
 
-    /// Fraction of healthy prefill workers considered as cache candidates. Defaults to 0.05.
+    /// Fraction of healthy prefill workers considered as cache candidates. Defaults to.05.
     #[arg(long)]
     pub cache_candidate_ratio: Option<f64>,
 
-    /// Maximum number of cache candidates to try. Defaults to 32.
+    /// Maximum number of cache candidates to try. Defaults to.
     #[arg(long)]
     pub cache_candidate_max_workers: Option<usize>,
 
-    /// Maximum uncached-work difference that pressure may override. Defaults to 1024 tokens.
+    /// Maximum uncached-work difference that pressure may override. Defaults to tokens.
     #[arg(long)]
     pub cache_switch_margin_tokens: Option<u64>,
 
     /// Divert cache-affine requests when an engine queue reaches this limit.
-    /// Prefer another prefix owner, then the least-loaded worker. Missing fresh
-    /// queue data leaves affinity intact. Unset disables; scale with engine --dp-size.
     #[arg(long)]
     pub worker_queue_limit: Option<u64>,
 
-    /// Keep the least-pressured prefix owner when the queue gate rejects all
-    /// admitted cache candidates and no worker has a fresh queue below this floor.
-    /// Requires --worker-queue-limit; must be positive and at most that limit.
-    /// Unset disables; scale with engine --dp-size.
+    /// Keep the least-pressured prefix owner when the queue gate rejects all admitted cache candidates.
     #[arg(long)]
     pub saturation_queue_floor: Option<u64>,
 
-    /// Min-load fallback sample size. Defaults to 2; requires --policy cache_aware.
-    /// Values at least the pool size choose the exact minimum with random ties.
-    /// A value of 1 draws uniformly with no backup for admission or pressure guards.
-    /// Unlike --cache-candidate-* (prefix owners), this bounds the fallback sample.
+    /// Min-load fallback sample size. Defaults to; requires --policy cache_aware.
     #[arg(long)]
     pub min_load_choices: Option<usize>,
 }
@@ -285,11 +256,11 @@ pub struct AffinityArgs {
     #[arg(long)]
     pub session_id_header: Option<String>,
 
-    /// Session idle timeout in seconds (--policy session_aware). Defaults to 600.
+    /// Session idle timeout in seconds (--policy session_aware). Defaults to.
     #[arg(long)]
     pub session_idle_secs: Option<u64>,
 
-    /// Session eviction interval in seconds (--policy session_aware). Defaults to 60.
+    /// Session eviction interval in seconds (--policy session_aware). Defaults to.
     #[arg(long)]
     pub session_eviction_interval_secs: Option<u64>,
 
@@ -313,12 +284,11 @@ pub struct AffinityArgs {
     #[arg(long, value_enum)]
     pub sticky_fallback_policy: Option<StickyFallbackKind>,
 
-    /// Idle timeout in seconds (--policy sticky). Defaults to 600.
+    /// Idle timeout in seconds (--policy sticky). Defaults to.
     #[arg(long)]
     pub sticky_idle_secs: Option<u64>,
 
-    /// Eviction sweep interval in seconds (--policy sticky).
-    /// Defaults to 60.
+    /// Eviction sweep interval in seconds (--policy sticky). Defaults to.
     #[arg(long)]
     pub sticky_eviction_interval_secs: Option<u64>,
 
@@ -326,7 +296,7 @@ pub struct AffinityArgs {
     #[arg(long)]
     pub disable_pressure_guard: bool,
 
-    /// Pressure-guard token gap (session_aware or cache_aware). Defaults to 1024.
+    /// Pressure-guard token gap (session_aware or cache_aware). Defaults to.
     #[arg(long)]
     pub pressure_abs_threshold_tokens: Option<u64>,
 
@@ -334,7 +304,7 @@ pub struct AffinityArgs {
     #[arg(long)]
     pub pressure_abs_threshold_ms: Option<f64>,
 
-    /// Pressure-guard token multiplier (session_aware or cache_aware). Defaults to 1.5.
+    /// Pressure-guard token multiplier (session_aware or cache_aware). Defaults to.5.
     #[arg(long)]
     pub pressure_rel_threshold: Option<f64>,
 }
@@ -1017,8 +987,7 @@ mod tests {
         assert_eq!(c.server.shutdown_drain_secs, 30);
     }
 
-    /// Several values, not just the default: a clamp or a rescale in the
-    /// mapping satisfies any single-value assertion.
+    /// Several values, not the default: a clamp or a rescale in the mapping satisfies any single-value assertion.
     #[test]
     fn shutdown_drain_secs_maps_into_config() {
         for secs in ["0", "17", "1800"] {
@@ -1073,8 +1042,7 @@ mod tests {
         assert_eq!(c.server.termination_grace_secs, Some(120));
     }
 
-    /// With `--tokenizer-path` omitted, the tokenizer source defaults to the
-    /// model id (treated as an HF repo id at load time).
+    /// With `--tokenizer-path` omitted, the tokenizer source defaults to the model id.
     #[test]
     fn tokenizer_path_defaults_to_model_id_when_omitted() {
         let c = into_config(&[
@@ -1208,8 +1176,7 @@ mod tests {
         }
     }
 
-    /// Multiple `--selector` terms AND-join into one comma-separated
-    /// label selector (matches the Python router's space-separated form).
+    /// Multiple `--selector` terms AND-join into one comma-separated label selector.
     #[test]
     fn k8s_plain_selector_joins_multiple_terms() {
         let c = into_config_owned(with_model(&[
@@ -1269,8 +1236,7 @@ mod tests {
         }
     }
 
-    /// `--service-discovery` with no selector at all fails `resolve_mode`
-    /// validation with the `NoSelector` wording.
+    /// `--service-discovery` with no selector at all fails `resolve_mode` validation with the `NoSelector` wording.
     #[test]
     fn rejects_k8s_without_selector() {
         let err = into_config_owned(with_model(&["--service-discovery"]))
@@ -1295,8 +1261,7 @@ mod tests {
         );
     }
 
-    /// Identical prefill/decode selectors are rejected through the full CLI
-    /// path (would silently leave the decode pool empty at runtime).
+    /// Identical prefill/decode selectors are rejected through the full CLI path.
     #[test]
     fn rejects_k8s_identical_pd_selectors() {
         let err = into_config_owned(with_model(&[
@@ -1806,8 +1771,7 @@ mod tests {
         assert!(err.contains("invalid value"), "got: {err}");
     }
 
-    /// A zero eviction interval would panic `tokio::time::interval` at
-    /// startup — reject it at config-build time with a clear message.
+    /// A zero eviction interval would panic `tokio::time::interval` at startup — reject it at config-build time.
     #[test]
     fn rejects_zero_sticky_eviction_interval() {
         let err = into_config_owned(with_model(&[
@@ -2337,8 +2301,7 @@ mod tests {
         );
     }
 
-    /// The flag reaches `ModelConfig`, and is opt-in: unset leaves the model
-    /// with an empty sampling contract, so no request is ever checked.
+    /// The flag reaches `ModelConfig`, and is opt-in: unset leaves the model with an empty sampling contract.
     #[test]
     fn override_sampling_params_reaches_the_model_config() {
         let c = into_config_owned(with_model(&[
@@ -2349,8 +2312,7 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(c.model.sampling_overrides.params.len(), 2);
-        // `reject` is the default mode: declaring a contract is the usual
-        // reason to declare one.
+        // `reject` is the default mode: declaring a contract is the usual reason to declare one.
         assert_eq!(c.model.sampling_overrides.conflict, ConflictPolicy::Reject);
 
         let c = into_config_owned(with_model(&["--worker-urls", "http://x:30000"])).unwrap();
@@ -2382,8 +2344,7 @@ mod tests {
         assert!(err.contains("--override-sampling-params"), "got: {err}");
     }
 
-    /// A malformed contract fails the launch with the parser's own message,
-    /// rather than starting a router that 400s every request at the engine.
+    /// A malformed contract fails the launch with the parser's own message.
     #[test]
     fn malformed_override_sampling_params_fails_the_launch() {
         let err = into_config_owned(with_model(&[

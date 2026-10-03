@@ -25,14 +25,8 @@ struct alignas(32) m256i_wrapper {
 };
 
 inline std::array<m256i_wrapper, 2> load_zps_4vnni(const int8_t* __restrict__ zps) {
-  // broadcast 01234567 to
-  // 01234567012345670123456701234567
   __m256i vzps_low = _mm256_set1_epi64x(*reinterpret_cast<const long*>(zps));
   __m256i vzps_high = _mm256_set1_epi64x(*reinterpret_cast<const long*>(zps + 8));
-  // shuffle from
-  // 01234567012345670123456701234567
-  // to
-  // 00001111222233334444555566667777
   __m256i shuffle_mask =
       _mm256_set_epi8(7, 7, 7, 7, 6, 6, 6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0);
   vzps_low = _mm256_shuffle_epi8(vzps_low, shuffle_mask);
@@ -57,10 +51,6 @@ inline std::array<m256i_wrapper, 2> load_uint4_as_int8(const uint8_t* __restrict
 
 template <int64_t N, int64_t ldb>
 void _dequant_weight_zp_only(const uint8_t* __restrict__ B, int8_t* dqB, const int8_t* __restrict__ qzeros, int64_t K) {
-  // unpack weight int8 -> two int4
-  // subtract zero point
-  // B shape = [K, ldb] = [K, N / 2], actual shape = [K / 4, N / 2, 4]
-  // dqB shape = [K, N], actual shape = [K / 4, N, 4]
 #pragma GCC unroll 2
   for (int n = 0; n < N; n += 16) {
     auto [zps_low_wp, zps_high_wp] = load_zps_4vnni(&qzeros[n]);
@@ -138,8 +128,6 @@ void _dequant_and_store(
 #else
 template <int64_t N, int64_t ldb>
 void _dequant_weight_zp_only(const uint8_t* B, int8_t* dqB, const int8_t* qzeros, int64_t K) {
-  // B shape = [K, N / 2]
-  // dqB shape = [K, N]
   for (int k = 0; k < K; ++k) {
     for (int n = 0; n < N / 2; ++n) {
       int32_t b = (int32_t)B[k * ldb + n];
@@ -428,8 +416,6 @@ void _da8w4_linear_impl(
     int64_t N,
     int64_t K,
     int64_t num_groups) {
-  // weight + compensation shape = [Nc, Kc, BLOCK_N * _block_k / 2 + BLOCK_N*sizeof(int32_t)]
-  // scales/qzeros shape = [Nc, G, BLOCK_N]
   const bool use_brgemm = can_use_brgemm<int8_t>(M);
   int64_t block_m = [&]() -> long {
     if (M <= 48) {
@@ -529,10 +515,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> convert_int4_weight_packed_with_c
   int64_t Nc = N / block_n;
   int64_t Kc = K / _block_k;
 
-  // Reorder weight to [N/block_n, K/_block_k, _block_k, block_n]
-  // Reorder scales/qzeros to [N/block_n, G, block_n]
-  // weight + compensation shape = [Nc, Kc, block_n * _block_k / 2 + block_n*sizeof(int32_t)]
-  // scales/qzeros shape = [Nc, G, block_n]
   auto weight_view = weight.view({Nc, block_n, Kc, _block_k});
   at::Tensor weight_reordered = weight_view.permute({0, 2, 3, 1}).contiguous();
   at::Tensor blocked_weight;
@@ -557,14 +539,9 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> convert_int4_weight_packed_with_c
       int32_t* comp_in_prt = compensation_ptr + i * block_n;
       int32_t* comp_out_prt = (int32_t*)(void*)(blocked_weight_ptr + i * block_n * (_block_k / 2 + sizeof(int32_t)) +
                                                 _block_k * block_n / 2);
-      // Reorder weight block to VNNI4 and pack two lanes along N
-      // N=16 viewed as two lanes: a0, ...a7, b0, ...b7
-      // pack two lanes: [a0, b0], ..., [a7, b7]
-      // plain shape = [_block_k, block_n]
-      // packed shape = [_block_k / 4, block_n / 2, 4] viewed as [_block_k, block_n / 2]
       constexpr int n_group_size = 8;
       constexpr int vnni_size = 4;
-      constexpr int n_group = block_n / n_group_size;  // 4
+      constexpr int n_group = block_n / n_group_size;
       for (int nb = 0; nb < n_group; nb += 2) {
         for (int k = 0; k < _block_k; k += vnni_size) {
           for (int ni = 0; ni < n_group_size; ++ni) {
@@ -598,9 +575,8 @@ std::tuple<at::Tensor, at::Tensor> unpack_4bit_to_32bit_signed(const at::Tensor&
   const auto Z0 = qzeros.size(0);
   const auto Z1 = qzeros.size(1);
 
-  // unpacked_weights: (W0 * 8, W1), int8
+  // unpacked_weights: (W0 * multiple W1), int8
   auto unpacked_weights = at::zeros({W0 * 8, W1}, at::TensorOptions().dtype(at::kChar));
-  // unpacked_zeros: (Z0, Z1 * 8), int8
   auto unpacked_zeros = at::zeros({Z0, Z1 * 8}, at::TensorOptions().dtype(at::kChar));
 
   const int32_t* qw_ptr = qweight.data_ptr<int32_t>();
@@ -610,8 +586,8 @@ std::tuple<at::Tensor, at::Tensor> unpack_4bit_to_32bit_signed(const at::Tensor&
 
   // ---- unpack qweight ----
   for (int64_t row = 0; row < W0 * 8; ++row) {
-    const int i = row & 7;         // row % 8
-    const int src_row = row >> 3;  // row // 8
+    const int i = row & 7;
+    const int src_row = row >> 3;
     const int shift = 4 * i;
     for (int64_t col = 0; col < W1; ++col) {
       int32_t v = qw_ptr[src_row * W1 + col];
@@ -666,9 +642,8 @@ std::tuple<at::Tensor, at::Tensor> int4pack(at::Tensor qweight, at::Tensor qzero
     // autoawq unpacking
     qweight = qweight.contiguous();
     qzeros = qzeros.contiguous();
-    // bitshifts: [0, 4, 1, 5, 2, 6, 3, 7] * 4
     auto bitshifts = at::tensor({0, 4, 1, 5, 2, 6, 3, 7}, at::kInt) * 4;
-    auto qweight_unsq = qweight.unsqueeze(-1);  // [..., K, N/8, 1]
+    auto qweight_unsq = qweight.unsqueeze(-1);
     auto unpacked = (at::bitwise_right_shift(qweight_unsq, bitshifts) & 0xF).contiguous();
     auto qweight_final = unpacked.flatten(-2).transpose(-1, -2).to(at::kByte).clone();
     auto qzeros_unsq = qzeros.unsqueeze(-1);
@@ -687,9 +662,9 @@ std::tuple<at::Tensor, at::Tensor> int4pack(at::Tensor qweight, at::Tensor qzero
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> convert_weight_packed_scale_zp(
-    at::Tensor qweight,  // awq: (*, K, N / 8)  ||  gptq: (*, K / 8, N) , int32
-    at::Tensor qzeros,   // awq: (*, K / group_size, N / 8) ||  gptq: (*, K / group_size, N / 8) , int32
-    at::Tensor scales,   // awq: (*, K / group_size, N) ||  gptq: (*, K / group_size, N) , bfloat16
+    at::Tensor qweight,
+    at::Tensor qzeros,
+    at::Tensor scales,   // awq: (*, K / group_size, N) || gptq: (*, K / group_size, N), bfloat16
     int64_t quant_method_4bit) {
   at::Tensor _qweight;
   at::Tensor _qzeros;
@@ -758,14 +733,12 @@ at::Tensor int4_scaled_mm_cpu_with_quant(
   auto Aq_data = act_buffer.data_ptr<uint8_t>();
   auto As_data = reinterpret_cast<float*>(Aq_data + M_a * K_a);
   auto Azp_data = reinterpret_cast<int32_t*>(As_data + M_a);
-  fill_val_stub(Azp_data, 128, M_a);  // sym_a s8s8 is unified to u8s8 with compensation (128)
+  fill_val_stub(Azp_data, 128, M_a);
 
   auto out_sizes = input.sizes().vec();
   int64_t N = weight_scales.size(0) * weight_scales.size(-1);
   out_sizes.back() = N;
   auto output = at::empty(out_sizes, input.options());
-  // weight + compensation shape = [Nc, Kc, BLOCK_N * _block_k / 2 + BLOCK_N*sizeof(int32_t)]
-  // scales/qzeros shape = [Nc, G, BLOCK_N]
   int64_t Nc = weight.size(0);
   int64_t Kc = weight.size(1);
   int64_t _block_k = K_a / Kc;

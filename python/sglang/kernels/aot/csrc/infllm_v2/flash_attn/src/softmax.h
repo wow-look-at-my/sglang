@@ -1,6 +1,4 @@
-/******************************************************************************
- * Copyright (c) 2024, Tri Dao.
- ******************************************************************************/
+/***************************************************************************** */
 
 #pragma once
 
@@ -183,7 +181,7 @@ struct Softmax {
 
   template <bool Is_first, bool Check_inf = false, typename Tensor0, typename Tensor1>
   __forceinline__ __device__ void softmax_rescale_o(Tensor0& acc_s, Tensor1& acc_o, float softmax_scale_log2) {
-    // Reshape acc_s from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
+    // Reshape acc_s from (MMA=4, MMA_M, MMA_N) to (nrow=(MMA_M), ncol=(MMA_N))
     Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
     static_assert(decltype(size<0>(scores))::value == kNRows);
     if (Is_first) {
@@ -194,7 +192,7 @@ struct Softmax {
       Tensor scores_max_prev = make_fragment_like(row_max);
       cute::copy(row_max, scores_max_prev);
       flash::template reduce_max</*zero_init=*/false>(scores, row_max);
-      // Reshape acc_o from (MMA=4, MMA_M, MMA_K) to (nrow=(2, MMA_M), ncol=(2, MMA_K))
+      // Reshape acc_o from (MMA=4, MMA_M, MMA_K) to (nrow=(MMA_M), ncol=(MMA_K))
       Tensor acc_o_rowcol = make_tensor(acc_o.data(), flash::convert_layout_acc_rowcol(acc_o.layout()));
       static_assert(decltype(size<0>(acc_o_rowcol))::value == kNRows);
 #pragma unroll
@@ -216,7 +214,7 @@ struct Softmax {
 
   template <bool Is_first, bool Check_inf = false, typename Tensor0>
   __forceinline__ __device__ void softmax_rescale_simple(Tensor0& acc_s, float softmax_scale_log2) {
-    // Reshape acc_s from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
+    // Reshape acc_s from (MMA=4, MMA_M, MMA_N) to (nrow=(MMA_M), ncol=(MMA_N))
     Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
     static_assert(decltype(size<0>(scores))::value == kNRows);
     if (Is_first) {
@@ -242,7 +240,7 @@ struct Softmax {
 
   template <typename Tensor0>
   __forceinline__ __device__ void softmax_rescale_gt(Tensor0& acc_s, float softmax_scale_log2) {
-    // Reshape acc_s from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
+    // Reshape acc_s from (MMA=4, MMA_M, MMA_N) to (nrow=(MMA_M), ncol=(MMA_N))
     Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
     static_assert(decltype(size<0>(scores))::value == kNRows);
     flash::get_softmax(scores, row_max, row_sum, softmax_scale_log2);

@@ -422,9 +422,7 @@ Ensure SGLang server is running and check `SGL_GRPC_ENDPOINT`.
 
 ### Tokenizer Not Found
 
-Set `SGL_TOKENIZER_PATH` environment variable.
-2. Verify path contains required files: `ls $SGL_TOKENIZER_PATH`
-3. Files should include: `tokenizer.json`, `vocab.json`, `config.json`
+Set `SGL_TOKENIZER_PATH` environment variable. 2. Verify path contains required files: `ls $SGL_TOKENIZER_PATH` 3. Files must include: `tokenizer.json`, `vocab.json`, `config.json`
 
 ### Build Failures
 

@@ -34,6 +34,6 @@ log_cli = false
 # (last release 2019) was tried but its thread dispatch leaks fixture
 # references between tests, causing model_pool deadlocks; the parallel
 # speedup never materialized on a 2-GPU runner since the suite is
-# eviction-bound across 5 model:mode combos. ModelPool / GPUAllocator
-# remain thread-safe so re-introducing parallelism (xdist or otherwise)
-# stays a tractable option.
+# eviction-bound across multiple model:mode combos. ModelPool /
+# GPUAllocator remain thread-safe so re-introducing parallelism (xdist
+# or otherwise) stays a tractable option.

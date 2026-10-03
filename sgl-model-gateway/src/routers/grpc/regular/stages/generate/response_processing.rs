@@ -96,7 +96,7 @@ impl GenerateResponseProcessingStage {
             // Streaming: Use StreamingProcessor and return SSE response
             let response = self.streaming_processor.clone().process_streaming_generate(
                 execution_result,
-                ctx.generate_request_arc(), // Cheap Arc clone (8 bytes)
+                ctx.generate_request_arc(), // Cheap Arc clone (several
                 dispatch,
                 tokenizer,
             );

@@ -41,9 +41,6 @@ impl TokenizerBackend for HuggingFaceTokenizerBackend {
 }
 
 /// Rust-native tokenizer wrapper with pluggable backends.
-///
-/// This mirrors Python's `get_tokenizer` shape: inspect the tokenizer path,
-/// choose a backend, and fall back to Python for unsupported tokenizer families.
 pub struct RustTokenizer {
     backend: Box<dyn TokenizerBackend>,
 }
@@ -111,8 +108,7 @@ impl RustTokenizer {
 }
 
 fn load_backend(tokenizer_json: &Path) -> Result<Box<dyn TokenizerBackend>, String> {
-    // Add new native backend probes here. Unsupported formats should return an
-    // error so callers can fall back to Python without changing the public API.
+    // Add new native backend probes here.
     HuggingFaceTokenizerBackend::from_file(tokenizer_json)
         .map(|backend| Box::new(backend) as Box<dyn TokenizerBackend>)
 }

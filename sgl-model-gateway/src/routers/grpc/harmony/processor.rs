@@ -27,10 +27,7 @@ use crate::{
     },
 };
 
-/// Processor for non-streaming Harmony responses
-///
-/// Collects all output tokens from execution and parses them using
-/// HarmonyParserAdapter to extract the complete response.
+/// Processor for non-streaming Harmony responses Collects all output tokens from execution and parses them using HarmonyParserAdapter.
 pub(crate) struct HarmonyResponseProcessor;
 
 impl HarmonyResponseProcessor {
@@ -174,21 +171,14 @@ pub(crate) enum ResponsesIterationResult {
 }
 
 impl HarmonyResponseProcessor {
-    /// Process a single Responses API iteration
-    ///
-    /// Parses Harmony channels and determines if tool calls are present.
-    /// If tool calls found, returns ToolCallsFound for MCP loop to execute.
-    /// If no tool calls, builds final ResponsesResponse.
-    ///
-    /// # Arguments
-    ///
-    /// * `execution_result` - The execution result from the model
-    /// * `responses_request` - The original Responses API request
-    /// * `dispatch` - Dispatch metadata for request tracking
-    ///
-    /// # Returns
-    ///
-    /// ResponsesIterationResult indicating whether to continue loop or return
+    /// Process a single Responses API iteration Parses Harmony channels and
+    /// determines if tool calls are present. If tool calls found, returns
+    /// ToolCallsFound for MCP loop to execute. If no tool calls, builds final
+    /// ResponsesResponse. # Arguments * `execution_result` - The execution
+    /// result from the model * `responses_request` - The Responses API
+    /// request * `dispatch` - Dispatch metadata for request tracking #
+    /// Returns ResponsesIterationResult indicating whether to continue loop
+    /// or return
     pub async fn process_responses_iteration(
         &self,
         execution_result: ExecutionResult,
@@ -250,9 +240,7 @@ impl HarmonyResponseProcessor {
                 )
             })?;
 
-        // VALIDATION: Check if model incorrectly generated Tool role messages
-        // This happens when the model copies the format of tool result messages
-        // instead of continuing as assistant. This is a model hallucination bug.
+        // VALIDATION: Check if model incorrectly generated Tool role messages This happens when the model copies the format.
         let messages = parser.get_messages();
         let tool_messages_generated = messages.iter().any(|msg| {
             msg.author.role == openai_harmony::chat::Role::Tool

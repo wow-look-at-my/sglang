@@ -5,12 +5,7 @@ use serde_json;
 use smg_mesh::OptionalMeshSyncManager;
 use tracing::{debug, info, warn};
 
-/// Policy Registry for managing model-to-policy mappings
-///
-/// This registry manages the dynamic assignment of load balancing policies to models.
-/// When the first worker of a new model is added, it determines the policy for that model.
-/// All subsequent workers of the same model use the established policy.
-/// When the last worker of a model is removed, the policy mapping is cleaned up.
+/// Policy Registry for managing model-to-policy mappings This registry manages the dynamic assignment of load balancing policies.
 use super::{BucketPolicy, CacheAwarePolicy, LoadBalancingPolicy, PolicyFactory};
 use crate::{config::types::PolicyConfig, core::Worker};
 
@@ -32,9 +27,7 @@ pub struct PolicyRegistry {
     /// Decode policy for PD mode (set once at startup, lock-free reads via OnceLock)
     decode_policy: Arc<OnceLock<Arc<dyn LoadBalancingPolicy>>>,
 
-    /// Optional mesh sync manager for state synchronization
-    /// When None, the registry works independently without mesh synchronization
-    /// Uses RwLock for thread-safe access when setting mesh_sync after initialization
+    /// Optional mesh sync manager for state synchronization When None.
     mesh_sync: Arc<RwLock<OptionalMeshSyncManager>>,
 }
 
@@ -99,7 +92,7 @@ impl PolicyRegistry {
 
         // Sync to mesh if enabled (no-op if mesh is not enabled)
         if let Some(ref mesh_sync) = *self.mesh_sync.read().unwrap() {
-            // Serialize policy config (simplified - just store policy name for now)
+            // Serialize policy config (simplified - store policy name)
             let config = serde_json::to_vec(&policy.name()).unwrap_or_default();
             mesh_sync.sync_policy_state(model_id.to_string(), policy.name().to_string(), config);
         }
@@ -226,15 +219,13 @@ impl PolicyRegistry {
 
     /// Set the prefill policy for PD mode (lock-free, set once at startup)
     pub fn set_prefill_policy(&self, policy: Arc<dyn LoadBalancingPolicy>) {
-        // OnceLock::set returns Err if already set, which we ignore since
-        // the policy should only be set once at startup
+        // OnceLock::set returns Err if already set, which we ignore since the policy should only be set once at startup
         let _ = self.prefill_policy.set(policy);
     }
 
     /// Set the decode policy for PD mode (lock-free, set once at startup)
     pub fn set_decode_policy(&self, policy: Arc<dyn LoadBalancingPolicy>) {
-        // OnceLock::set returns Err if already set, which we ignore since
-        // the policy should only be set once at startup
+        // OnceLock::set returns Err if already set, which we ignore since the policy should only be set once at startup
         let _ = self.decode_policy.set(policy);
     }
 

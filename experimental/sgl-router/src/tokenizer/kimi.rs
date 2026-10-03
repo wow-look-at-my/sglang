@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Kimi-K3 request semantics from `serving_chat.py` and the checkpoint's
-//! `tokenization_kimi.py`, applied around dynamo-render's native formatter.
+//! Kimi-K3 request semantics from `serving_chat.py` and the checkpoint's `tokenization_kimi.py`.
 
 use anyhow::{ensure, Result};
 use dynamo_tokenizers::{EncodeSegment, Tokenizer};
@@ -15,8 +14,7 @@ pub(super) fn normalize(
     messages: &mut [Value],
     kwargs: &mut ChatTemplateKwargs,
 ) -> Result<()> {
-    // Dynamo reads `reasoning_effort` and treats a non-bool `thinking` as true;
-    // the checkpoint ignores the former and uses Python truthiness for the latter.
+    // Dynamo reads `reasoning_effort` and treats a non-bool `thinking` as true.
     kwargs.remove("reasoning_effort");
     let thinking = kwargs
         .get("thinking")

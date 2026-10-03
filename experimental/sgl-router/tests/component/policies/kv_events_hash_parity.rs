@@ -1,22 +1,7 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Cross-implementation parity test for the KV-event block-hash algorithm.
-//!
-//! The Rust implementation at `src/policies/kv_events/hash.rs` must produce
-//! the same i64 block hashes as SGLang's `radix_cache::RadixKey.hash_page`
-//! followed by `hash_str_to_int64`.  Hard-coded `cross_language_golden_*`
-//! values inside `hash.rs` are correct but brittle: if either side's
-//! algorithm changes, the comments don't get regenerated and the tests
-//! pass with stale expectations.
-//!
-//! This test consumes a fixture produced by
-//! `tests/scripts/generate_kv_events_hash_parity.py`, which replicates the
-//! SGLang algorithm verbatim (see the script's docstring for authority
-//! pointers). CI regenerates the fixture (see
-//! `.github/workflows/pr-test-sgl-router.yml`) and diffs against the
-//! committed file; this test asserts the Rust implementation matches
-//! whatever fixture is checked in.
 
 use serde::Deserialize;
 use sgl_router::state::kv_events::compute_block_hashes;
@@ -55,14 +40,10 @@ fn fixture_is_non_empty() {
     );
 }
 
-/// Drives every case in the fixture through `compute_block_hashes` and
-/// asserts equality with the Python-derived expectation.
+/// Drives every case in the fixture through `compute_block_hashes` and asserts equality.
 #[test]
 fn rust_block_hashes_match_python_radix_cache() {
     for case in load_cases() {
-        // block_size of 0 is rejected by `compute_block_hashes` with a
-        // panic; the Python generator also rejects it.  The fixture
-        // doesn't include a 0 case, so unwrap is safe.
         let block_size = std::num::NonZeroUsize::new(case.block_size)
             .unwrap_or_else(|| panic!("case {} has block_size=0 which is invalid", case.name));
         let got = compute_block_hashes(&case.tokens, block_size.get());

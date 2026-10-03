@@ -1,6 +1,4 @@
-//! Harmony request builder
-//!
-//! Handles encoding of Chat/Responses requests into Harmony format using openai-harmony library.
+//! Harmony request.
 
 use std::sync::OnceLock;
 
@@ -109,10 +107,8 @@ fn has_custom_tools(tool_types: &[&str]) -> bool {
     !tool_types.iter().all(|t| BUILTIN_TOOLS.contains(t))
 }
 
-/// Harmony request builder
-///
-/// Converts OpenAI-format requests into Harmony-encoded format with input_ids,
-/// stop tokens, and selection text for worker routing.
+/// Harmony request builder Converts OpenAI-format requests into
+/// Harmony-encoded format with input_ids, stop tokens.
 pub(crate) struct HarmonyBuilder {
     encoding: &'static HarmonyEncoding,
 }
@@ -207,7 +203,7 @@ impl HarmonyBuilder {
             .flat_map(|set| set.into_iter())
             .collect();
 
-        // Decode tokens to see what the model actually receives
+        // Decode tokens to see what the model receives
         let decoded_text = self
             .encoding
             .tokenizer()
@@ -378,8 +374,6 @@ impl HarmonyBuilder {
     /// - Complex response input parsing with function call tracking
     ///
     /// # Arguments
-    /// * `request` - The ResponsesRequest
-    /// * `prev_response` - Optional previous response to continue from
     fn construct_input_messages_with_harmony(
         &self,
         request: &ResponsesRequest,
@@ -421,10 +415,7 @@ impl HarmonyBuilder {
                 all_messages.push(dev_msg);
             }
         } else {
-            // Continue the previous conversation
-            // NOTE: Previous messages are loaded by serve_harmony_responses() before calling this method.
-            // The request.input will already contain the conversation history when previous_response_id was set.
-            // We just proceed with parsing the input items as normal.
+            // Continue the conversation NOTE.
             debug!("Continuing conversation (history already loaded in request.input)");
         }
 
@@ -549,9 +540,7 @@ impl HarmonyBuilder {
                 // If there's an output, this represents the tool result
                 // Otherwise, it's the tool call itself
                 if let Some(output_str) = output {
-                    // Tool result - use Tool role with "functions.{name}" as author name
-                    // IMPORTANT: Must include recipient="assistant" for parser to recognize it.
-                    // We keep channel=None to minimize what the model might copy.
+                    // Tool result - use Tool role with "functions.{name}" as author name IMPORTANT.
                     let author_name = format!("functions.{}", name);
                     debug!(
                         tool_name = %name,
@@ -572,8 +561,7 @@ impl HarmonyBuilder {
                         content_type: None,
                     })
                 } else {
-                    // Tool call - assistant message in commentary channel with recipient
-                    // msg.with_channel("commentary").with_recipient(f"functions.{name}")
+                    // Tool call - assistant message in commentary channel.
                     let recipient = format!("functions.{}", name);
                     debug!(
                         tool_name = %name,
@@ -595,7 +583,8 @@ impl HarmonyBuilder {
                 }
             }
 
-            // Function call output (separate from call) - requires looking up the original call
+            // Function call output (separate from call) - requires looking up
+            // the call
             ResponseInputOutputItem::FunctionCallOutput {
                 call_id, output, ..
             } => {

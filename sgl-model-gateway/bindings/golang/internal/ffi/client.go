@@ -1,13 +1,12 @@
-// Package ffi provides Go bindings for SGLang's Rust FFI (Foreign Function Interface).
+// Package ffi provides Go bindings for SGLang's Rust FFI (Foreign Function
+// Interface).
 //
-// This package wraps the Rust FFI layer of SGLang, providing low-level access to:
-// - Client creation and connection management
-// - Chat completion streaming
-// - Stream reading and response conversion
-// - Memory management for C strings
+// This package wraps the Rust FFI layer of SGLang, providing low-level access
+// to: - Client creation and connection management - Chat completion streaming
+// - Stream reading and response conversion - Memory management for C strings
 //
-// Internal use only: This package is intended for internal use by the sglang package.
-// End users should use the public sglang package instead.
+// Internal use only: This package is intended for internal use by the sglang
+// package. End users should use the public sglang package instead.
 package ffi
 
 /*
@@ -45,9 +44,6 @@ import (
 )
 
 // ErrorCode represents FFI error codes returned by Rust functions.
-//
-// These codes indicate the result of FFI operations. Use Error() to get a human-readable
-// error message.
 type ErrorCode int
 
 const (
@@ -86,24 +82,20 @@ func (e ErrorCode) Error() string {
 }
 
 // SglangClientHandle wraps the Rust client SDK FFI handle.
-//
-// This struct maintains a connection to the SGLang gRPC server and is used
-// to create streams and manage the underlying Rust client resources.
 type SglangClientHandle struct {
 	handle *C.SglangClientHandle
 }
 
 // NewClient creates a new SGLang client handle via FFI.
 //
-// This function initializes the Rust client with the given endpoint and tokenizer path.
+// This function initializes the Rust client with the given endpoint and
+// tokenizer path.
 //
-// Parameters:
-// - endpoint: gRPC endpoint URL (e.g., "grpc://localhost:20000")
+// Parameters: - endpoint: gRPC endpoint URL (e.g., "grpc://localhost:20000")
 // - tokenizerPath: Path to tokenizer directory
 //
-// Returns:
-// - *SglangClientHandle: A new client handle
-// - error: An error if client creation failed
+// Returns: - *SglangClientHandle: A new client handle - error: An error if
+// client creation failed
 func NewClient(endpoint, tokenizerPath string) (*SglangClientHandle, error) {
 	cEndpoint := C.CString(endpoint)
 	defer C.free(unsafe.Pointer(cEndpoint))
