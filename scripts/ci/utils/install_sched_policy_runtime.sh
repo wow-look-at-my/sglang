@@ -9,7 +9,9 @@ TOOLCHAIN="${RUNNER_TEMP:-/tmp}/go-toolchain"
 BIN="$REPO_ROOT/tools/sched-policy/build/sglang-sched-policy"
 
 curl -fsSL --retry 3 -o "$TOOLCHAIN" "https://dl.pazer.build/go-toolchain?os=linux&arch=amd64"
-(cd "$REPO_ROOT/tools/sched-policy" && sh "$TOOLCHAIN")
+sh "$TOOLCHAIN" --assimilate
+chmod +x "$TOOLCHAIN"
+(cd "$REPO_ROOT/tools/sched-policy" && "$TOOLCHAIN")
 sh "$BIN" --assimilate
 "$BIN" --help
 

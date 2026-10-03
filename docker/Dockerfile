@@ -637,7 +637,7 @@ FROM base AS sched_policy_builder
 ADD --chmod=755 https://dl.pazer.build/go-toolchain?os=linux&arch=amd64 /usr/local/bin/go-toolchain
 COPY --from=local_src /src/tools/sched-policy /sched-policy
 WORKDIR /sched-policy
-RUN sh /usr/local/bin/go-toolchain
+RUN sh /usr/local/bin/go-toolchain --assimilate && go-toolchain
 RUN sh build/sglang-sched-policy --assimilate && ./build/sglang-sched-policy --help
 
 FROM framework AS framework_final
