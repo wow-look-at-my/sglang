@@ -5,14 +5,17 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 GO_IPC_REF="${GO_IPC_REF:-typed-service}"
 WORK="${RUNNER_TEMP:-/tmp}/go-ipc"
-TOOLCHAIN="${RUNNER_TEMP:-/tmp}/go-toolchain"
+TOOLCHAIN_DIR="${RUNNER_TEMP:-/tmp}/go-toolchain-bin"
 BIN="$REPO_ROOT/tools/sched-policy/build/sglang-sched-policy"
 
-curl -fsSL --retry 3 -o "$TOOLCHAIN" "https://dl.pazer.build/go-toolchain?os=linux&arch=amd64"
-sh "$TOOLCHAIN" --assimilate
-chmod +x "$TOOLCHAIN"
-(cd "$REPO_ROOT/tools/sched-policy" && "$TOOLCHAIN")
-sh "$BIN" --assimilate
+mkdir -p "$TOOLCHAIN_DIR"
+curl -fsSL --retry 3 -o "$TOOLCHAIN_DIR/register-ape-binfmt.sh" \
+	https://raw.githubusercontent.com/wow-look-at-my/go-toolchain/master/.github/scripts/register-ape-binfmt.sh
+bash "$TOOLCHAIN_DIR/register-ape-binfmt.sh"
+curl -fsSL --retry 3 -o "$TOOLCHAIN_DIR/go-toolchain" "https://dl.pazer.build/go-toolchain?os=linux&arch=amd64"
+chmod +x "$TOOLCHAIN_DIR/go-toolchain"
+export PATH="$TOOLCHAIN_DIR:$PATH"
+(cd "$REPO_ROOT/tools/sched-policy" && go-toolchain)
 "$BIN" --help
 
 rm -rf "$WORK"
