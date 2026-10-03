@@ -21,7 +21,7 @@ export PATH="$TOOLCHAIN_DIR:$PATH"
 rm -rf "$WORK"
 git clone --depth 1 --branch "$GO_IPC_REF" --recurse-submodules --shallow-submodules \
 	https://github.com/wow-look-at-my/go-ipc.git "$WORK"
-make -C "$WORK/c" build/libgoipc.so
+make -C "$WORK/c" "$WORK/c/build/libgoipc.so"
 
 echo "SGLANG_SCHED_POLICY_BIN=$BIN" >> "$GITHUB_ENV"
 echo "GOIPC_LIBRARY=$WORK/c/build/libgoipc.so" >> "$GITHUB_ENV"

@@ -630,7 +630,7 @@ FROM base AS goipc_builder
 ARG GO_IPC_REF=typed-service
 RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*
 ADD https://github.com/wow-look-at-my/go-ipc.git#${GO_IPC_REF} /go-ipc
-RUN make -C /go-ipc/c build/libgoipc.so
+RUN make -C /go-ipc/c /go-ipc/c/build/libgoipc.so
 
 # The scheduler's policy process, built and tested by go-toolchain; needs the host's APE binfmt handler.
 FROM base AS sched_policy_builder
