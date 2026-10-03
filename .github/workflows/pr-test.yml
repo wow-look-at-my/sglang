@@ -367,7 +367,7 @@ jobs:
 
   base-a-test-cpu:
     needs: [check-changes, call-gate, rust-ext-build]
-    permissions: {actions: write, contents: read, issues: read, pull-requests: read, id-token: write}
+    permissions: {actions: write, contents: write, issues: read, pull-requests: read, id-token: write}
     if: |
       always() &&
       needs.check-changes.result == 'success' &&

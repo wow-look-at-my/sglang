@@ -173,7 +173,7 @@ jobs:
 
   simulator-test-cpu:
     needs: [check-changes, call-gate, rust-ext-build]
-    permissions: {actions: write, contents: read, issues: read, pull-requests: read, id-token: write}
+    permissions: {actions: write, contents: write, issues: read, pull-requests: read, id-token: write}
     if: ${{ !failure() && !cancelled() && needs.check-changes.result == 'success' && (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') }}
     uses: ./.github/workflows/_pr-test-simulator-cpu.yml
     with:

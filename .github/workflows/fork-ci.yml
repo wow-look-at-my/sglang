@@ -184,7 +184,7 @@ jobs:
 
   base-a-test-cpu:
     needs: [fork-check-changes, fork-rust-ext-build]
-    permissions: {actions: read, contents: read, issues: read, pull-requests: read, id-token: write}
+    permissions: {actions: read, contents: write, issues: read, pull-requests: read, id-token: write}
     if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' }}
     uses: ./.github/workflows/_pr-test-stage-cpu.yml
     with:

@@ -158,6 +158,8 @@ jobs:
       # Every scheduler spawns the Go policy process and reaches it over goipc.
       - name: Build the policy process and libgoipc
         timeout-minutes: 20
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/ci/utils/install_sched_policy_runtime.sh
 
       - name: Run test
