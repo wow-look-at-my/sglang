@@ -364,19 +364,12 @@ jobs:
       - uses: wow-look-at-my/go-toolchain@drop-common-checks
         with:
           working-directory: tools/sched-policy
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sglang-sched-policy
-          path: tools/sched-policy/build/sglang-sched-policy
-          if-no-files-found: error
-          overwrite: true
 
   base-a-test-cpu:
-    needs: [check-changes, call-gate, rust-ext-build, sched-policy-build]
+    needs: [check-changes, call-gate, rust-ext-build]
     if: |
       always() &&
       needs.check-changes.result == 'success' &&
-      needs.sched-policy-build.result == 'success' &&
       ((github.event_name == 'schedule' || inputs.test_parallel_dispatch == true) || (!failure() && !cancelled()))
     uses: ./.github/workflows/_pr-test-stage-cpu.yml
     with:

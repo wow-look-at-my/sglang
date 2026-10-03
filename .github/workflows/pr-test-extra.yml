@@ -170,15 +170,9 @@ jobs:
       - uses: wow-look-at-my/go-toolchain@drop-common-checks
         with:
           working-directory: tools/sched-policy
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sglang-sched-policy
-          path: tools/sched-policy/build/sglang-sched-policy
-          if-no-files-found: error
-          overwrite: true
 
   simulator-test-cpu:
-    needs: [check-changes, call-gate, rust-ext-build, sched-policy-build]
+    needs: [check-changes, call-gate, rust-ext-build]
     if: ${{ !failure() && !cancelled() && needs.check-changes.result == 'success' && (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') }}
     uses: ./.github/workflows/_pr-test-simulator-cpu.yml
     with:

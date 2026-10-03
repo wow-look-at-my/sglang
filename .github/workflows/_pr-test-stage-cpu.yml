@@ -153,13 +153,8 @@ jobs:
             "$URL" -o /tmp/partition-model.json
 
       # Every scheduler spawns the Go policy process and reaches it over goipc.
-      - uses: actions/download-artifact@v4
-        with:
-          name: sglang-sched-policy
-          path: tools/sched-policy/build
-
-      - name: Build libgoipc
-        timeout-minutes: 15
+      - name: Build the policy process and libgoipc
+        timeout-minutes: 20
         run: bash scripts/ci/utils/install_sched_policy_runtime.sh
 
       - name: Run test
