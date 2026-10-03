@@ -90,10 +90,12 @@ jobs:
   # unrelated label addition from dispatching a full CI run.
   check-changes:
     if: |
-      github.event_name != 'pull_request' ||
-      github.event.action != 'labeled' ||
-      github.event.label.name == 'run-ci' ||
-      github.event.label.name == 'run-ci-extra'
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name != 'pull_request' ||
+        github.event.action != 'labeled' ||
+        github.event.label.name == 'run-ci' ||
+        github.event.label.name == 'run-ci-extra'
+      )
     uses: ./.github/workflows/_pr-test-check-changes.yml
     with:
       git_ref: ${{ inputs.git_ref || '' }}
@@ -109,7 +111,10 @@ jobs:
   # row of skipped test jobs instead of consuming a runner.
   call-gate:
     needs: check-changes
-    if: github.event_name != 'schedule' && needs.check-changes.result == 'success'
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        github.event_name != 'schedule' && needs.check-changes.result == 'success'
+      )
     uses: ./.github/workflows/pr-gate.yml
     with:
       require-run-ci: true
@@ -141,9 +146,11 @@ jobs:
   rust-ext-build:
     needs: [check-changes, call-gate]
     if: |
-      !cancelled() &&
-      needs.check-changes.result == 'success' &&
-      (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
+      github.repository == 'sgl-project/sglang' && (
+        !cancelled() &&
+        needs.check-changes.result == 'success' &&
+        (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
+      )
     uses: ./.github/workflows/_pr-test-rust-ext-build.yml
     with:
       runs_on: ubuntu-22.04
@@ -154,7 +161,10 @@ jobs:
 
   simulator-test-cpu:
     needs: [check-changes, call-gate, rust-ext-build]
-    if: ${{ !failure() && !cancelled() && needs.check-changes.result == 'success' && (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') }}
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        !failure() && !cancelled() && needs.check-changes.result == 'success' && (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped')
+      )
     uses: ./.github/workflows/_pr-test-simulator-cpu.yml
     with:
       check_changes: ${{ toJson(needs.check-changes.outputs) }}
@@ -211,11 +221,13 @@ jobs:
     # Without this guard an unrelated label starts a run that finishes green with
     # nothing executed, over the real failure; `skipped` is what pr-states.yml reads.
     if: |
-      always() &&
-      (github.event_name != 'pull_request' ||
-       github.event.action != 'labeled' ||
-       github.event.label.name == 'run-ci' ||
-       github.event.label.name == 'run-ci-extra')
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
+        (github.event_name != 'pull_request' ||
+         github.event.action != 'labeled' ||
+         github.event.label.name == 'run-ci' ||
+         github.event.label.name == 'run-ci-extra')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Check all dependent job statuses

@@ -32,6 +32,7 @@ concurrency:
 jobs:
   # ==================== Check Changes ==================== #
   check-changes:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       changes_exist: ${{ steps.filter.outputs.main_package == 'true'
@@ -93,7 +94,7 @@ jobs:
   # ==================== PR Gate ==================== #
   pr-gate:
     needs: check-changes
-    if: needs.check-changes.outputs.changes_exist == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.check-changes.outputs.changes_exist == 'true')
     uses: ./.github/workflows/pr-gate.yml
     secrets: inherit
 

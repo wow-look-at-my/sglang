@@ -38,6 +38,7 @@ jobs:
   # Either outcome is logged on the gate job's page, so operators can
   # see *why* the tiers were skipped instead of guessing.
   sgl-router-gate:
+    if: github.repository == 'sgl-project/sglang'
     name: gate
     runs-on: ubuntu-latest
     outputs:
@@ -95,7 +96,7 @@ jobs:
   sgl-router-lint:
     name: tier-1 — lint
     needs: sgl-router-gate
-    if: needs.sgl-router-gate.outputs.should_run == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.sgl-router-gate.outputs.should_run == 'true')
     runs-on: ubuntu-latest
     env:
       # Scoped per-job (not workflow-wide) to avoid SMG's documented breakage
@@ -164,7 +165,7 @@ jobs:
   sgl-router-build-and-test:
     name: tier-2 — build + test
     needs: [sgl-router-gate, sgl-router-lint]
-    if: needs.sgl-router-gate.outputs.should_run == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.sgl-router-gate.outputs.should_run == 'true')
     runs-on: ubuntu-latest
     env:
       RUSTC_WRAPPER: sccache
@@ -265,7 +266,7 @@ jobs:
   sgl-router-docker-build-test:
     name: tier-3 — docker (placeholder)
     needs: [sgl-router-gate, sgl-router-build-and-test]
-    if: needs.sgl-router-gate.outputs.should_run == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.sgl-router-gate.outputs.should_run == 'true')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -283,7 +284,7 @@ jobs:
   sgl-router-k8s-integration:
     name: tier-3 — k8s integration
     needs: [sgl-router-gate, sgl-router-build-and-test]
-    if: needs.sgl-router-gate.outputs.should_run == 'true'
+    if: github.repository == 'sgl-project/sglang' && (needs.sgl-router-gate.outputs.should_run == 'true')
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -404,10 +405,12 @@ jobs:
     # gate's `skipped` (impossible today, kept for symmetry) and
     # require the gate itself to have succeeded.
     if: |
-      always() &&
-      needs.sgl-router-gate.result == 'success' &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled')
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
+        needs.sgl-router-gate.result == 'success' &&
+        !contains(needs.*.result, 'failure') &&
+        !contains(needs.*.result, 'cancelled')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: All required checks completed
