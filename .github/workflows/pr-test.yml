@@ -84,6 +84,15 @@ jobs:
       github.repository == 'sgl-project/sglang' && (
         github.event_name == 'schedule' || inputs.test_parallel_dispatch == true || inputs.run_all_tests == true
       )
+    permissions:
+      actions: write
+      contents: write
+      issues: read
+      pull-requests: read
+      id-token: write
+      checks: read
+      deployments: write
+      artifact-metadata: write
     uses: ./.github/workflows/pr-test-extra.yml
     with:
       git_ref: ${{ inputs.git_ref || '' }}
@@ -347,9 +356,20 @@ jobs:
       checks: read
       deployments: write
       artifact-metadata: write
-    uses: ./.github/workflows/_sched-policy-build.yml
-    with:
-      git_ref: ${{ inputs.git_ref || '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.sha }}
+      - uses: wow-look-at-my/go-toolchain@drop-common-checks
+        with:
+          working-directory: tools/sched-policy
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sglang-sched-policy
+          path: tools/sched-policy/build/sglang-sched-policy
+          if-no-files-found: error
+          overwrite: true
 
   base-a-test-cpu:
     needs: [check-changes, call-gate, rust-ext-build, sched-policy-build]
