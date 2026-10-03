@@ -152,7 +152,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: wow-look-at-my/go-toolchain@drop-common-checks
+      - uses: wow-look-at-my/go-toolchain@master
         with:
           working-directory: tools/sched-policy
 
