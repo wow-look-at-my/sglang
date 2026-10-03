@@ -635,8 +635,9 @@ RUN make -C /go-ipc/c /go-ipc/c/build/libgoipc.so
 # The scheduler's policy process, built and tested by go-toolchain; needs the host's APE binfmt handler.
 FROM base AS sched_policy_builder
 ADD --chmod=755 https://dl.pazer.build/go-toolchain?os=linux&arch=amd64 /usr/local/bin/go-toolchain
-COPY --from=local_src /src/tools/sched-policy /sched-policy
-WORKDIR /sched-policy
+COPY --from=local_src /src/tools/sched-policy /sched-policy/tools/sched-policy
+COPY --from=local_src /src/python/sglang/srt/managers/scheduler_components /sched-policy/python/sglang/srt/managers/scheduler_components
+WORKDIR /sched-policy/tools/sched-policy
 RUN go-toolchain && ./build/sglang-sched-policy --help
 # A serving host registers no APE handler, so the binary is started through /bin/sh as that handler would.
 RUN printf '#!/bin/sh\nexec /bin/sh /opt/sglang/sched-policy/sglang-sched-policy.ape "$@"\n' > build/launcher \
@@ -703,8 +704,8 @@ ENV SGLANG_RUST_BUILD_MODE=never
 
 
 # The scheduler's policy process (tools/sched-policy) and the goipc binding it talks over.
-COPY --from=sched_policy_builder /sched-policy/build/sglang-sched-policy /opt/sglang/sched-policy/sglang-sched-policy.ape
-COPY --from=sched_policy_builder /sched-policy/build/launcher /opt/sglang/sched-policy/sglang-sched-policy
+COPY --from=sched_policy_builder /sched-policy/tools/sched-policy/build/sglang-sched-policy /opt/sglang/sched-policy/sglang-sched-policy.ape
+COPY --from=sched_policy_builder /sched-policy/tools/sched-policy/build/launcher /opt/sglang/sched-policy/sglang-sched-policy
 COPY --from=goipc_builder /go-ipc/c/build/libgoipc.so /opt/sglang/lib/libgoipc.so
 COPY --from=goipc_builder /go-ipc/python/goipc /opt/sglang/lib/python3.12/site-packages/goipc
 ENV SGLANG_SCHED_POLICY_BIN=/opt/sglang/sched-policy/sglang-sched-policy \
