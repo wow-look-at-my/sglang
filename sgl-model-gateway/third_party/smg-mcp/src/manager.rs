@@ -1,8 +1,4 @@
 //! MCP client management and orchestration.
-//!
-//! Manages static MCP servers (from config) and dynamic MCP servers (from requests).
-//! Static clients are never evicted; dynamic clients use LRU eviction via the connection pool.
-//! Request-scoped tools are handled by `RequestMcpContext` and do not use the pool.
 
 use std::{
     borrow::Cow,
@@ -268,8 +264,7 @@ impl McpManager {
 
     /// List tools only from specific servers plus all static servers
     ///
-    /// This method filters tools to only include:
-    /// 1. Tools from static servers (always visible)
+    /// Tools from static servers (always visible)
     /// 2. Tools from the specified dynamic servers
     ///
     /// This provides request-scoped tool isolation while maintaining
@@ -279,23 +274,16 @@ impl McpManager {
             .list_tools()
             .into_iter()
             .filter(|(_tool_name, server_key, _tool_info)| {
-                // Include if:
-                // 1. It's a static server (check by name in static_clients)
-                // 2. It's in the requested servers list
                 self.is_static_server_by_key(server_key) || server_keys.contains(server_key)
             })
             .map(|(_tool_name, _server_key, tool_info)| tool_info)
             .collect()
     }
 
-    /// Check if a server key belongs to a static server
-    ///
-    /// Static servers can be identified by checking if their name
-    /// exists in the static_clients map. We need to handle the fact
-    /// that static servers use name as key while dynamic use URL.
+    /// Check if a server key belongs to a static server Static servers can be
+    /// identified by checking if their name exists.
     fn is_static_server_by_key(&self, server_key: &str) -> bool {
-        // For static servers, the server_key in inventory is the server name
-        // Check if this key exists in static_clients
+        // For static servers, the server_key in inventory is the server name Check if this key exists in static_clients
         self.static_clients.contains_key(server_key)
     }
 
@@ -426,8 +414,6 @@ impl McpManager {
         Ok(())
     }
 
-    /// Start background refresh for ALL servers (static + dynamic)
-    /// Refreshes every 10-15 minutes to keep tool inventory up-to-date
     pub fn spawn_background_refresh_all(
         self: Arc<Self>,
         refresh_interval: Duration,
@@ -439,9 +425,9 @@ impl McpManager {
             loop {
                 interval.tick().await;
 
-                // Get all static server keys
-                // Note: Dynamic clients in the connection pool are refreshed on-demand
-                // when they are accessed via get_or_create_client()
+                // Get all static server keys Note: Dynamic clients in the
+                // connection pool are refreshed on-demand when they are
+                // accessed.
                 let server_keys: Vec<String> = self
                     .static_clients
                     .iter()
@@ -495,8 +481,7 @@ impl McpManager {
 
         debug!("Subscribing to '{}' on '{}'", uri, server_name);
 
-        // resources/subscribe is deprecated only from protocol 2026-07-28;
-        // rmcp negotiates 2025-11-25 (ProtocolVersion::LATEST), where it is current.
+        // resources/subscribe is deprecated only from protocol.
         #[expect(deprecated)]
         let result = client
             .peer()
@@ -567,8 +552,7 @@ impl McpManager {
             }
         }
 
-        // Clear dynamic clients from connection pool
-        // The pool will handle cleanup on drop
+        // Clear dynamic clients from connection pool The pool will handle cleanup on drop
         self.connection_pool.clear();
     }
 
@@ -832,7 +816,7 @@ impl McpManager {
             }
 
             McpTransport::Streamable { url, token } => {
-                // Note: Streamable transport doesn't support proxy yet
+                // Note.
                 let _proxy_config = crate::proxy::resolve_proxy_config(config, global_proxy);
                 if _proxy_config.is_some() {
                     warn!(
@@ -873,9 +857,6 @@ impl McpManager {
 }
 
 /// Request-scoped MCP context for Responses API.
-///
-/// Holds per-request clients and a private tool inventory, while still
-/// allowing access to static tools managed by `McpManager`.
 pub struct RequestMcpContext {
     inventory: Arc<ToolInventory>,
     clients: HashMap<String, Arc<McpClient>>,

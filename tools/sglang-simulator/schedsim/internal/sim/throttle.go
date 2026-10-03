@@ -2,20 +2,12 @@ package sim
 
 import "sort"
 
-// Throttle is EvictionThrottle (scheduler_components/eviction_throttle.py): it
-// holds a request back when admitting it would evict a cached prefix while the
-// conversations the scheduler has served do not all fit what the cache can keep.
-//
-// The Python recognizes a returning conversation by the tail of its previous
-// context because a rank cannot key the ledger on request identity across a
-// requeue; here a request carries its conversation id, so the ledger is keyed
-// by that.
+// Throttle is EvictionThrottle (scheduler_components/eviction_throttle.py):
+// it holds a request back when admitting it would evict a cached prefix.
 type Throttle struct {
-	// Capacity is the larger cache tier: write-through mirrors every cached
-	// prefix on host, so that is what the live set must fit.
+	// Capacity is the larger cache tier: write-through mirrors every cached prefix on host.
 	Capacity int
-	// DeviceTokens bounds the aging wait: holding the head longer than
-	// rebuilding the whole device pool would take is never worthwhile.
+	// DeviceTokens bounds the aging wait.
 	DeviceTokens int
 	// PerToken is the measured prefill rate that turns tokens into seconds.
 	PerToken func() float64

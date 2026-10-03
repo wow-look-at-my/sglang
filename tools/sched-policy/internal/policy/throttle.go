@@ -9,27 +9,6 @@ import (
 
 // Throttle holds a conversation back instead of letting it thrash the prefix
 // cache.
-//
-// Admission's capacity predicate is the allocator's free tokens plus the
-// tree's evictable tokens. What admission can take is the cached prefix of a
-// conversation between turns. When the conversations in use need more than
-// the cache can keep, admitting one evicts another, which on its next turn
-// evicts another, and every turn reloads or recomputes its prefix.
-//
-// The throttle keeps a ledger of the conversations served, recognizes a
-// returning one by the tail of its previous context, and holds a request back
-// when admitting it would evict while the live conversations plus it do not
-// fit what the cache can keep:
-//
-//   - A conversation is live while a request of it is queued or running, or
-//     while its idle time is within the longest gap between one of its turns
-//     finishing and the next arriving observed so far.
-//   - What the cache can keep is the device pool, or the HiCache host tier
-//     when larger.
-//   - A request whose own context is mostly resident on device is never held.
-//   - Held requests keep FIFO order. The oldest may evict once it has waited,
-//     since its arrival or the previous evicting admission, as long as
-//     recomputing the whole device pool takes at the measured prefill rate.
 type Throttle struct {
 	deviceTokens           int
 	capacity               int
@@ -40,7 +19,6 @@ type Throttle struct {
 }
 
 // TailTokens is how many trailing tokens recognize a returning conversation.
-// Arbitrary; long enough that unrelated contexts do not collide.
 const TailTokens = 64
 
 // Verdict is the throttle's decision for one request.
@@ -74,8 +52,7 @@ func (t *Throttle) OnRequestFinished(rid string, length int, tail []int32, now f
 }
 
 // BeginPass starts one scan of the waiting queue. present lists the requests
-// queued, running or in flight; any other request the ledger holds active
-// left without finishing (an abort) and is let go.
+// queued, running or in flight.
 func (t *Throttle) BeginPass(present []string) {
 	t.headTaken = false
 	t.ledger.DropAbsent(present)

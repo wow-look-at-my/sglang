@@ -1,5 +1,4 @@
 package schedpolicy
 
-// ProtocolVersion is exchanged in Hello. The Python side carries the same
-// number as PROTOCOL_VERSION in sched_policy.py; a test holds them equal.
+// ProtocolVersion is exchanged in Hello.
 const ProtocolVersion uint32 = 2

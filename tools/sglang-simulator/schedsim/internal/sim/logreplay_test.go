@@ -15,8 +15,6 @@ func log2Boot(t *testing.T, index int) *trace.Boot {
 	return &boots[index]
 }
 
-// Boot 4 is the 38-minute lifetime that held the day's worst pile-up: 14
-// conversations decoding behind a chain of cold prompts at 00:08-00:18Z.
 func TestLogReplayRebuildsBootFour(t *testing.T) {
 	b := log2Boot(t, 4)
 	l, err := BuildLogReplay(b, 4096, 0, 0)
@@ -41,7 +39,6 @@ func TestLogReplayRebuildsBootFour(t *testing.T) {
 	if c := l.ColdTurns(); c < 20 {
 		t.Errorf("cold turns = %d", c)
 	}
-	// Arrivals are monotone and prompt sizes plausible for a 524288 context.
 	for i, tn := range l.Turns {
 		if i > 0 && tn.At < l.Turns[i-1].At {
 			t.Fatalf("turn %d arrives before turn %d", i, i-1)
@@ -62,8 +59,7 @@ func TestLogReplayRebuildsBootFour(t *testing.T) {
 			}
 		}
 	}
-	// Initial releases one turn per conversation, and OnFinish walks the rest
-	// in order, never earlier than logged.
+	// Initial releases one turn per conversation, and OnFinish walks the rest in order, never earlier than logged.
 	init := l.Initial()
 	if len(init) != l.Convs {
 		t.Errorf("Initial released %d, want %d", len(init), l.Convs)
@@ -113,8 +109,6 @@ func TestChainTokensStopsAtThePartialChunk(t *testing.T) {
 	full := func(pending int) trace.Step {
 		return trace.Step{Kind: trace.Prefill, NewSeq: 1, NewTokens: 4096, Pending: pending}
 	}
-	// A 10,000-token prompt behind a 300,000-token queue: first chunk, one
-	// full chunk, a partial one, then the queued prompt's own first chunk.
 	prefill := []trace.Step{full(305904), full(301808), {Kind: trace.Prefill, NewSeq: 1, NewTokens: 1808, Pending: 300000}, full(295904)}
 	if got := chainTokens(prefill, 0, 4096); got != 4096+1808 {
 		t.Errorf("chain = %d, want 5904 (pending counted the queue)", got)

@@ -1,6 +1,4 @@
 //! MCP tool argument handling.
-//!
-//! Supports both JSON strings and parsed Maps with automatic type coercion.
 
 use serde_json::Map;
 

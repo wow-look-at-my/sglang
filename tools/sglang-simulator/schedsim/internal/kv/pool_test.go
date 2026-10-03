@@ -4,7 +4,7 @@ import "testing"
 
 // A pool with no host tier loses an evicted prefix outright, so the next turn
 // of that conversation recomputes its whole input; a host tier that can hold it
-// turns the same eviction into a reload. This is the difference between the two
+// turns the same eviction into a reload. This is the difference between both
 // sides of the thrash collapse, so both directions are asserted on one run.
 func TestEvictionWithAndWithoutHostTier(t *testing.T) {
 	const (
@@ -62,8 +62,7 @@ func TestRebuildSecondsPricesHostAndRecompute(t *testing.T) {
 		ctxLen    = 300_000
 		recompute = 68.4e-6
 	)
-	// A 450K-token reservation against a 600K pool that already holds one 300K
-	// prefix has to take that prefix.
+	// A 450K-token reservation against a 600K pool that already holds one 300K prefix has to take that prefix.
 	admit := func(p *Pool) []Eviction { return p.Admit(2, 450_000, 0, 0, 0, 1) }
 	t.Run("spilled to host", func(t *testing.T) {
 		p := New(ctxLen*2, ctxLen*4)

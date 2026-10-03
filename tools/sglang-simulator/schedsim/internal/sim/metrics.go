@@ -5,27 +5,17 @@ import (
 	"sort"
 )
 
-// Metrics is the seven measurements the comparison is judged on, plus the
-// supporting columns the spec asks to report alongside them. Every one is a pure
-// function of the run trace, so two runs with the same trace report the same
-// numbers.
+// Metrics is the measurements the comparison is judged on, plus the supporting
+// columns the spec asks to report alongside them. Every one is a pure function
+// of the run trace, so runs with the same trace report the same numbers.
 type Metrics struct {
-	// 1: tokens per second per stream, over the seconds each agent stream spent
-	// past its first token inside a cold prefill's window.
-	StreamDecodeTokSCold float64
-	// 2: the same tokens over the cold window times every agent conversation, so
-	// a follow-up stuck in the queue shows up as a lost rate.
-	PerAgentTokSCold float64
-	// 3: the longest gap between consecutive deliveries of any stream.
-	LongestStall float64
-	// 4: time to first token of the cold prompts.
+	StreamDecodeTokSCold      float64
+	PerAgentTokSCold          float64
+	LongestStall              float64
 	ColdTTFTMean, ColdTTFTMax float64
-	// 5 and 6: inter-token latency percentiles, each gap spread over the tokens
-	// its chunk carried, which is what a per-token claim compares against.
-	ITLp99, ITLp999 float64
-	// 7: output tokens per second over the window, and full-prefix recomputes.
-	OutputTokS float64
-	Recomputes int
+	ITLp99, ITLp999           float64
+	OutputTokS                float64
+	Recomputes                int
 
 	// Supporting columns.
 	StallFrac1s    float64
@@ -44,7 +34,7 @@ type Metrics struct {
 	ShortTTFTp99   float64
 }
 
-// MetricKey names one of the seven metrics the contract is written over.
+// MetricKey names one of the metrics the contract is written over.
 type MetricKey int
 
 const (
@@ -58,7 +48,7 @@ const (
 	MRecomputes
 )
 
-// ContractMetrics is the ordered list of the seven metrics.
+// ContractMetrics is the ordered list of the metrics.
 var ContractMetrics = []MetricKey{MStreamRate, MAgentRate, MLongestStall, MColdTTFT,
 	MITLp99, MITLp999, MThroughput, MRecomputes}
 
@@ -119,7 +109,6 @@ func (m Metrics) Value(k MetricKey) float64 {
 // interval is a merged stretch of cold-prefill time.
 type interval struct{ lo, hi float64 }
 
-// Measure reduces a run's trace to the metrics, over [0, window].
 func Measure(res *Result, window float64) Metrics {
 	var m Metrics
 	if window <= 0 {
@@ -132,9 +121,7 @@ func Measure(res *Result, window float64) Metrics {
 			m.ColdServed++
 		}
 	}
-	// Cold TTFT over the prompts that reached a first token; the arrived/served
-	// count is reported beside it so an unserved prompt cannot hide a number. A
-	// workload with no cold prompt has no value to report, not a zero one.
+	// Cold TTFT over the prompts that reached a first token.
 	var ttft []float64
 	for _, w := range res.Windows {
 		if w.Done() {
@@ -268,8 +255,6 @@ func coldTokens(res *Result, wins []interval) []float64 {
 	return out
 }
 
-// streamSeconds is the time each agent stream spent past its first token inside
-// the cold windows, summed over streams: metric 1's denominator.
 func streamSeconds(res *Result, wins []interval) float64 {
 	total := 0.0
 	for _, r := range res.Requests {

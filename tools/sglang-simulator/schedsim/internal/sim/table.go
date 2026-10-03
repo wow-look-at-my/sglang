@@ -7,14 +7,13 @@ import (
 	"strings"
 )
 
-// ExtraRow is one of the supporting columns, reported beside the seven metrics
-// but not part of the contract written over them.
+// ExtraRow is one of the supporting columns, reported beside the metrics but
+// not part of the contract written over them.
 type ExtraRow struct {
 	Name string
 	V    [NumModes]string
 }
 
-// WriteTables prints every scenario's three-policy comparison block.
 func WriteTables(w io.Writer, rows []Row) {
 	fmt.Fprintln(w, "Every cost the scheduler charges is the production log's own calibration;")
 	fmt.Fprintln(w, "the metric values below are simulated from that model.")
@@ -93,7 +92,7 @@ func pctText(v float64) string {
 	return fmt.Sprintf("%.1f%%", 100*v)
 }
 
-// extras lists the supporting columns for one scenario's three policies.
+// extras lists the supporting columns for one scenario's policies.
 func extras(r Row) []ExtraRow {
 	m := r.Metrics
 	return []ExtraRow{

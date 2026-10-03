@@ -3,21 +3,6 @@
 package policy
 
 // Balancer shares GPU time between prefill and decode while both have work.
-//
-// It measures how long each batch occupied the GPU, from the previous
-// completion (or its own launch, if the GPU was idle) to its own completion,
-// and keeps a running balance, debt, accumulated only while both classes
-// contend (a prefill is pending and running requests can decode):
-//
-//   - Share. Prefill batches and decode batches get equal GPU time; only
-//     batches that actually ran are charged.
-//   - Stall bound. Between points where decode has caught up, at most
-//     BurstTokens prefill tokens are launched. A chunked prompt's next chunk
-//     is capped in seconds rather than tokens, since its cost per token rises
-//     with the context attention reads.
-//   - Piggybacked decode rows in a mixed batch are charged as prefill minus
-//     their marginal cost.
-//   - Decode banks at most the last decode batch's time.
 type Balancer struct {
 	// burstTokens is nil when chunked prefill is off: defer on debt alone.
 	burstTokens *int
@@ -128,7 +113,7 @@ func (b *Balancer) OnBatchLaunched(class BatchClass, tokens, decodeRows int, now
 	}
 }
 
-// OnBatchFinished charges the oldest launched batch, whose result was just
+// OnBatchFinished charges the oldest launched batch, whose result was
 // processed at now.
 func (b *Balancer) OnBatchFinished(now float64) {
 	if len(b.inFlight) == 0 {
@@ -139,8 +124,7 @@ func (b *Balancer) OnBatchFinished(now float64) {
 	b.busySince = now
 	batch := b.inFlight[0]
 	b.inFlight = b.inFlight[1:]
-	// A decode row adds one token to the extend pass; its attention over its
-	// own context is not counted, so the estimate errs toward decode time.
+	// A decode row adds one token to the extend pass.
 	piggyback := min(float64(batch.decodeRows)*b.PrefillSecondsPerToken(), elapsed)
 	if batch.class == ClassPrefill && batch.tokens > 0 {
 		b.extendSeconds += elapsed

@@ -1,7 +1,4 @@
 //! MCP error types.
-//!
-//! Defines error variants for MCP operations including connection, tool execution,
-//! and configuration errors.
 
 use thiserror::Error;
 

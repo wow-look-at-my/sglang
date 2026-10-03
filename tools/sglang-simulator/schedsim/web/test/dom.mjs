@@ -1,6 +1,4 @@
-// A stand-in for the page: the elements index.html declares, with the
-// values it gives them, canvases whose 2d context records what was drawn,
-// and the two browser globals the UI block uses.
+// A stand-in for the page: the elements index.html declares, with the values it gives them, canvases whose 2d context records what was drawn.
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import vm from "node:vm";

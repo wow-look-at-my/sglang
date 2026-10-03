@@ -14,11 +14,9 @@ import (
 // the behaviours the log states as fact and check the fitted model against the log
 // lines it was solved on.
 
-// TestReplayReproducesTheLoggedBatch pins the batch the log reports at its
-// "#new-seq: 3" line: 4000 new tokens and 248320 cached, made of three items of
-// 263, 921 and 2816 tokens. The composition depends on the page rounding, the token
-// budget, the cede's half-chunk rule and which prefix the pool reports for the
-// follow-up, so it fails if any of those drift.
+// The composition depends on the page rounding, the token budget, the cede's
+// half-chunk rule and which prefix the pool reports for the follow-up, so it fails
+// if any of those drift.
 func TestReplayReproducesTheLoggedBatch(t *testing.T) {
 	sc := ScenarioA()
 	cost := NewCost(calib(t))
@@ -56,10 +54,7 @@ func TestReplayReproducesTheLoggedBatch(t *testing.T) {
 	}
 }
 
-// TestOldRunsNoDecodeDuringTheColdPrefills is the log's own shape. C1's first chunk is
-// the prefill line whose pending work plus itself exceeds 400K; from there the log runs
-// 105 chunks of 4096 tokens with no decode line between them, and only the batch that
-// finishes C1 (#new-seq 3, 4000 new tokens) is followed by decode. Upstream
+// TestOldRunsNoDecodeDuringTheColdPrefills is the log's own shape. Upstream
 // prefill-priority launches a prefill batch whenever one can be formed, so the replay
 // of OLD has to show the same silence.
 func TestOldRunsNoDecodeDuringTheColdPrefills(t *testing.T) {
@@ -116,7 +111,7 @@ func TestOldRunsNoDecodeDuringTheColdPrefills(t *testing.T) {
 // reported gen throughput covers a whole interval of decode steps, so accepted tokens
 // over throughput is a step time the model has to reproduce. Lines that follow a
 // prefill are excluded because their throughput window contains the prefill; they are
-// reported, not fitted, and the gap between the two populations is the reason.
+// reported, not fitted, and the gap between both populations is the reason.
 func TestDecodeRateMatchesTheLog(t *testing.T) {
 	steps := mustSteps(t)
 	d := calib(t).Decode
@@ -159,7 +154,7 @@ func TestDecodeRateMatchesTheLog(t *testing.T) {
 
 // TestRunIsDeterministic pins the entry point's promise: the same scenario, policy and
 // seed produce byte-identical tables, and a parallel suite reports what a serial one
-// does. The two orderings dispatch the same runs through different goroutines, so this
+// does. Both orderings dispatch the same runs through different goroutines, so this
 // also covers the suite's own aggregation.
 func TestRunIsDeterministic(t *testing.T) {
 	cost := NewCost(calib(t))

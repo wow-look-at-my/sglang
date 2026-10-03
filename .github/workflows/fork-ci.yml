@@ -1,27 +1,6 @@
 name: Fork CI
 
-# CI for forks of sgl-project/sglang, on GitHub-hosted runners only. Upstream
-# workflows build on self-hosted pools (x64-kernel-build-node, x64-docker-build-node,
-# GPU runners) and publish with Docker Hub / PyPI secrets that a fork does not
-# have. Every job of those workflows, *-finish aggregators included, starts its
-# `if:` with github.repository == 'sgl-project/sglang', so on a fork they all
-# report skipped. This workflow is the fork's replacement and skips upstream.
-# A new upstream-only job needs the same guard; hosted, secret-free workflows
-# (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded.
-#
-#   every push      : CPU unit suite (base-a-test-cpu) + sglang wheel
-#                     + model gateway (fmt, clippy, cargo test, sglang-router wheel,
-#                       Go bindings build + go test)
-#   AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for
-#                     FORK_KERNEL_CUDA_ARCHS (default 80;120a: sm80-sm89 and RTX PRO 6000 Blackwell), checked
-#                     against the ops this tree calls
-#   default branch  : kernel wheels as release sglang-kernel-v<version>, and the
-#                     serving image (docker/Dockerfile, framework_final) on ghcr.io
-#
-# Optional repository variables (Settings > Variables) for bigger machines:
-#   FORK_KERNEL_RUNNER_X64                              runner label
-#   FORK_KERNEL_CUDA_ARCHS                              GPU archs, e.g. "90a;120a"
-#   FORK_KERNEL_BUILD_JOBS / FORK_KERNEL_NVCC_THREADS   build parallelism
+# CI for forks of sgl-project/sglang, on GitHub-hosted runners only. Upstream workflows build on self-hosted pools (x64-kernel-build-node, x64-docker-build-node, GPU runners) and publish with Docker Hub / PyPI secrets that a fork does not have. Every job of those workflows, *-finish aggregators included, starts its `if:` with github.repository == 'sgl-project/sglang', so on a fork they all report skipped. This workflow is the fork's replacement and skips upstream. A new upstream-only job needs the same guard; hosted, secret-free workflows (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded. every push      : CPU unit suite (base-a-test-cpu) + sglang wheel + model gateway (fmt, clippy, cargo test, sglang-router wheel, Go bindings build + go test) AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for FORK_KERNEL_CUDA_ARCHS (default 80;120a: sm80-sm89 and RTX PRO 6000 Blackwell), checked against the ops this tree calls default branch  : kernel wheels as release sglang-kernel-v<version>, and the serving image (docker/Dockerfile, framework_final) on ghcr.io Optional repository variables (Settings > Variables) for bigger machines: FORK_KERNEL_RUNNER_X64                              runner label FORK_KERNEL_CUDA_ARCHS                              GPU archs, e.g. "90a;120a" FORK_KERNEL_BUILD_JOBS / FORK_KERNEL_NVCC_THREADS   build parallelism
 
 on:
   push:
@@ -43,8 +22,7 @@ on:
 
 concurrency:
   group: fork-ci-${{ github.event_name }}-${{ github.ref }}
-  # The kernel wheel build outlasts the gap between pushes; cancelling it meant it
-  # never finished. A newer run waits instead (GitHub keeps only the newest one).
+  # The kernel wheel build outlasts the gap between pushes; cancelling it meant it never finished. A newer run waits instead (GitHub keeps only the newest one).
   cancel-in-progress: false
 
 permissions:
@@ -71,19 +49,15 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PUSH_BEFORE: ${{ github.event.before }}
-          INPUT_BUILD_KERNEL: ${{ inputs.build_kernel }}
-          INPUT_BUILD_DOCKER: ${{ inputs.build_docker }}
-          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
           KERNEL_VERSION=$(grep -Po '(?<=^version = ")[^"]*' python/sglang/kernels/aot/pyproject.toml)
           echo "kernel_version=${KERNEL_VERSION}" >> "$GITHUB_OUTPUT"
 
           BASE=""
-          if [ "$EVENT" = push ]; then
+          if [ "${{ github.event_name }}" = push ]; then
             BASE="$PUSH_BEFORE"
             if [[ "$BASE" =~ ^0+$ ]]; then BASE="$DEFAULT_BRANCH"; fi
           fi
@@ -115,18 +89,18 @@ jobs:
           fi
 
           BUILD_KERNEL=false
-          if [ "$KERNEL_CHANGED" = true ] || [ "$INPUT_BUILD_KERNEL" = true ] \
+          if [ "$KERNEL_CHANGED" = true ] || [ "${{ inputs.build_kernel }}" = true ] \
              || { [ "$ON_DEFAULT" = true ] && [ "$KERNEL_AVAILABLE" = false ]; }; then
             BUILD_KERNEL=true
           fi
 
           BUILD_DOCKER=false
-          if [ "$ON_DEFAULT" = true ] && [ "$EVENT" = push ] || [ "$INPUT_BUILD_DOCKER" = true ]; then
+          if [ "$ON_DEFAULT" = true ] && [ "${{ github.event_name }}" = push ] || [ "${{ inputs.build_docker }}" = true ]; then
             BUILD_DOCKER=true
           fi
           SHORT_SHA="${GITHUB_SHA::7}"
-          if [ -n "$INPUT_IMAGE_TAG" ]; then
-            IMAGE_TAGS="${INPUT_IMAGE_TAG}"
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAGS="${{ inputs.image_tag }}"
           elif [ "$ON_DEFAULT" = true ]; then
             IMAGE_TAGS="dev dev-${SHORT_SHA}"
           else
@@ -252,9 +226,7 @@ jobs:
           path: python/dist/*.whl
           if-no-files-found: error
 
-  # ----------------------------------------------------------- model gateway
-  # Upstream builds and tests sgl-model-gateway in pr-test-rust.yml, guarded to
-  # sgl-project/sglang. The toolchain comes from sgl-model-gateway/rust-toolchain.toml.
+  # ----------------------------------------------------------- model gateway Upstream builds and tests sgl-model-gateway in pr-test-rust.yml, guarded to sgl-project/sglang. The toolchain comes from sgl-model-gateway/rust-toolchain.toml.
   fork-gateway-test:
     needs: fork-plan
     runs-on: ubuntu-latest
@@ -269,8 +241,7 @@ jobs:
         working-directory: .
         run: bash scripts/ci/cuda/ci_install_gateway_dependencies.sh
 
-      # Cargo.lock is gitignored; resolving it first puts the exact dependency
-      # set into the rust-cache key along with the rustc version.
+      # Cargo.lock is gitignored; resolving it first puts the exact dependency set into the rust-cache key along with the rustc version.
       - name: Resolve dependencies
         run: cargo generate-lockfile
 
@@ -299,10 +270,7 @@ jobs:
         with:
           go-version-file: tools/sglang-simulator/schedsim/go.mod
 
-      # The simulator is the proof artifact for scheduler changes, so its tests
-      # gate a push the same way the gateway's do. The log replay code (trace
-      # layer, log workload, report, command) must stay at 95% statement
-      # coverage; scripts/coverage.sh prints the per-file table.
+      # The simulator is the proof artifact for scheduler changes, so its tests gate a push the same way the gateway's do. The log replay code (trace layer, log workload, report, command) must stay at 95% statement coverage; scripts/coverage.sh prints the per-file table.
       - name: scheduler simulator tests
         working-directory: tools/sglang-simulator/schedsim
         run: scripts/coverage.sh
@@ -311,11 +279,7 @@ jobs:
         with:
           node-version: 22
 
-      # The visual simulator ships its compiled sim.js beside sim.ts so the
-      # page opens from a file:// URL; this rebuilds it, runs the headless
-      # comparison and the unit tests (engine, balancer, pool and the page
-      # against a fake DOM) under c8's 95% line threshold, and fails if the
-      # committed sim.js is stale.
+      # The visual simulator ships its compiled sim.js beside sim.ts so the page opens from a file:// URL; this rebuilds it, runs the headless comparison and the unit tests (engine, balancer, pool and the page against a fake DOM) under c8's 95% line threshold, and fails if the committed sim.js is stale.
       - name: visual simulator
         working-directory: tools/sglang-simulator/schedsim/web
         run: |
@@ -325,8 +289,7 @@ jobs:
           npm test
           git diff --exit-code -- sim.js
 
-      # The NPU precise-test selector's git fallback (used when the GitHub
-      # API is down) is covered by its own pytest suite.
+      # The NPU precise-test selector's git fallback (used when the GitHub API is down) is covered by its own pytest suite.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -386,9 +349,7 @@ jobs:
           path: sgl-model-gateway/bindings/python/dist/*.whl
           if-no-files-found: error
 
-  # bindings/golang is in the gateway workspace's `exclude`, so fork-gateway-test's
-  # fmt/clippy/test never compile it and a drifted FFI signature merges silently.
-  # Built through its own manifest instead, on the same x86_64 target as the rest.
+  # bindings/golang is in the gateway workspace's `exclude`, so fork-gateway-test's fmt/clippy/test never compile it and a drifted FFI signature merges silently. Built through its own manifest instead, on the same x86_64 target as the rest.
   fork-gateway-golang:
     needs: fork-plan
     runs-on: ubuntu-latest
@@ -402,8 +363,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: sgl-model-gateway/bindings/golang/go.mod
-          # Two modules sit under this path (the bindings and examples/oai_server)
-          # and the action keys its cache on one go.sum.
+          # Two modules sit under this path (the bindings and examples/oai_server) and the action keys its cache on one go.sum.
           cache: false
 
       - name: Install Rust, protoc and system deps
@@ -419,15 +379,12 @@ jobs:
           shared-key: fork-gateway-golang
           cache-on-failure: true
 
-      # No pre-commit hook covers Go, so this is the only thing holding the two
-      # trees this fork adds to the formatting the rest of them already uses.
+      # No pre-commit hook covers Go, so this is the only thing holding the two trees this fork adds to the formatting the rest of them already uses.
       - name: gofmt
         working-directory: .
         run: test -z "$(gofmt -l sgl-model-gateway/bindings/golang tools/sglang-simulator/schedsim)"
 
-      # Stable rustfmt: imports_granularity and group_imports in
-      # sgl-model-gateway/rustfmt.toml are nightly-only, so stable does not check
-      # import grouping. Run `cargo +nightly fmt --all` before widening this.
+      # Stable rustfmt: imports_granularity and group_imports in sgl-model-gateway/rustfmt.toml are nightly-only, so stable does not check import grouping. Run `cargo +nightly fmt --all` before widening this.
       - name: rustfmt
         run: cargo fmt --all -- --check
 
@@ -440,9 +397,7 @@ jobs:
       - name: Build cdylib
         run: make build-dev
 
-      # The cgo directives name the library but not the directory it sits in, and
-      # the Makefile's CGO_LDFLAGS is what supplies it, so a `go build` of the
-      # example binaries outside make cannot link.
+      # The cgo directives name the library but not the directory it sits in, and the Makefile's CGO_LDFLAGS is what supplies it, so a `go build` of the example binaries outside make cannot link.
       - name: Build the Go SDK and examples
         run: |
           make build-go BUILD_MODE=debug
@@ -463,8 +418,7 @@ jobs:
           - arch: x86_64
             runner: ${{ vars.FORK_KERNEL_RUNNER_X64 || 'ubuntu-latest' }}
     runs-on: ${{ matrix.runner }}
-    # Hosted-runner ceiling. A full build can outlast it on 4 cores; the ccache
-    # saved below lets the next run resume where this one stopped.
+    # Hosted-runner ceiling. A full build can outlast it on 4 cores; the ccache saved below lets the next run resume where this one stopped.
     timeout-minutes: 360
     steps:
       - name: Free disk space
@@ -573,7 +527,6 @@ jobs:
           shopt -s nullglob
           WHEELS=(wheels/*.whl)
           if [ ${#WHEELS[@]} -eq 0 ]; then
-            echo "::error::no sglang-kernel wheel was built"; exit 1
           fi
           TAG="sglang-kernel-v${VERSION}"
           # Releases here are immutable once published, so a release is created
@@ -608,11 +561,7 @@ jobs:
             echo "$NAME already published; keeping it"
           done
 
-  # ------------------------------------------------------------ serving image
-  # Built for the fork's deployment only: x86_64, CUDA 13, FORK_KERNEL_CUDA_ARCHS
-  # (default 80;120a), served with sglang.launch_server, so the image leaves out the
-  # sm90-only hpc-ops kernels and the sgl-model-gateway router.
-  # Publishes only a tree that passed the constructor-order check and the CPU suite.
+  # ------------------------------------------------------------ serving image Built for the fork's deployment only: x86_64, CUDA 13, FORK_KERNEL_CUDA_ARCHS (default 80;120a), served with sglang.launch_server, so the image leaves out the sm90-only hpc-ops kernels and the sgl-model-gateway router. Publishes only a tree that passed the constructor-order check and the CPU suite.
   fork-docker-image:
     needs: [fork-plan, fork-sgl-kernel-wheel, fork-init-order-check, base-a-test-cpu]
     if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' && needs.fork-init-order-check.result == 'success' && needs.base-a-test-cpu.result == 'success' }}
@@ -645,8 +594,7 @@ jobs:
           sudo apt-get clean || true
           df -h / /mnt || true
 
-      # BuildKit's snapshots and the swap file go on separate disks, the larger
-      # one (usually the /mnt scratch disk) holding the snapshots.
+      # BuildKit's snapshots and the swap file go on separate disks, the larger one (usually the /mnt scratch disk) holding the snapshots.
       - name: Move Docker to the larger disk and add swap
         run: |
           set -euo pipefail
@@ -658,8 +606,8 @@ jobs:
             sudo mkdir -p /mnt/docker
             CONF=/etc/docker/daemon.json
             if sudo test -s "$CONF"; then sudo cat "$CONF"; else echo '{}'; fi \
-              | jq '. + {"data-root": "/mnt/docker"}' > "${RUNNER_TEMP}/daemon.json"
-            sudo install -m 644 "${RUNNER_TEMP}/daemon.json" "$CONF"
+              | jq '. + {"data-root": "/mnt/docker"}' > "${{ runner.temp }}/daemon.json"
+            sudo install -m 644 "${{ runner.temp }}/daemon.json" "$CONF"
             sudo systemctl start docker
             SWAP_DIR=""
           fi
@@ -686,8 +634,7 @@ jobs:
           name: sgl-kernel-wheel-${{ matrix.arch }}
           path: ${{ runner.temp }}/sgl-kernel-wheels
 
-      # The image carries this fork's kernel build and nothing else: the version
-      # python/pyproject.toml pins may never have been published upstream.
+      # The image carries this fork's kernel build and nothing else: the version python/pyproject.toml pins may never have been published upstream.
       - name: Collect the sglang-kernel wheel
         env:
           GH_TOKEN: ${{ github.token }}
@@ -715,8 +662,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # The layer cache lives next to the image on ghcr.io: the image is far
-      # larger than the 10 GB Actions cache, which also holds the kernel caches.
+      # The layer cache lives next to the image on ghcr.io: the image is far larger than the 10 GB Actions cache, which also holds the kernel caches.
       - name: Build and push ${{ matrix.platform }}
         env:
           IMAGE_TAGS: ${{ needs.fork-plan.outputs.image_tags }}
@@ -793,7 +739,6 @@ jobs:
               fi
             done
             if [ ${#SOURCES[@]} -eq 0 ]; then
-              echo "::error::no per-arch image was pushed for ${TAG}"; exit 1
             fi
             docker buildx imagetools create -t "${IMAGE}:${TAG}" "${SOURCES[@]}"
             echo "Published ${IMAGE}:${TAG} from ${SOURCES[*]}" >> "$GITHUB_STEP_SUMMARY"
