@@ -36,10 +36,17 @@ env:
 
 jobs:
   run:
-    name: simulator-test-cpu
+    name: simulator-test-cpu (${{ matrix.test }})
     if: fromJson(inputs.check_changes).main_package == 'true' || fromJson(inputs.check_changes).simulator == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      matrix:
+        test:
+          - test_simulation_sglang_runner.py
+          - test_simulation_sglang_serving.py
+          - test_simulation_cache_hit_ratio.py
+          - test_simulation_offline_blocking.py
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -130,10 +137,7 @@ jobs:
             mkdir -p "$GITHUB_WORKSPACE/.coverage-engine"
             PYTHON=(python3 -m coverage run --rcfile="$GITHUB_WORKSPACE/.ci-tooling/scripts/ci/utils/engine-coverage.toml")
           fi
-          "${PYTHON[@]}" -m pytest -q tools/sglang-simulator/test/test_simulation_sglang_runner.py
-          "${PYTHON[@]}" -m pytest -q tools/sglang-simulator/test/test_simulation_sglang_serving.py
-          "${PYTHON[@]}" -m pytest -q tools/sglang-simulator/test/test_simulation_cache_hit_ratio.py
-          "${PYTHON[@]}" -m pytest -q tools/sglang-simulator/test/test_simulation_offline_blocking.py
+          "${PYTHON[@]}" -m pytest -q "tools/sglang-simulator/test/${{ matrix.test }}"
 
       - name: Combine coverage
         if: ${{ !cancelled() && inputs.coverage_artifact != '' }}
@@ -142,6 +146,51 @@ jobs:
       - name: Upload coverage
         if: ${{ !cancelled() && inputs.coverage_artifact != '' }}
         uses: actions/upload-artifact@v4
+        with:
+          name: leg-${{ inputs.coverage_artifact }}-${{ strategy.job-index }}
+          path: .coverage-engine/.coverage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # One coverage artifact per call, whatever the number of legs above.
+  coverage:
+    name: simulator-test-cpu coverage
+    needs: run
+    if: ${{ !cancelled() && inputs.coverage_artifact != '' && needs.run.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout CI scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci/utils
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install coverage
+        run: pip install "coverage>=7.10"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: leg-${{ inputs.coverage_artifact }}-*
+          path: ${{ runner.temp }}/legs
+
+      - name: Combine the legs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob dotglob
+          PARTS=("${{ runner.temp }}"/legs/*/.coverage)
+          if [ "${#PARTS[@]}" -eq 0 ]; then
+            echo "::error::no simulator-test-cpu leg uploaded coverage"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/.coverage-engine"
+          python3 -m coverage combine --rcfile="$GITHUB_WORKSPACE/scripts/ci/utils/engine-coverage.toml" "${PARTS[@]}"
+
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.coverage_artifact }}
           path: .coverage-engine/.coverage
