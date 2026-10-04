@@ -848,10 +848,10 @@ jobs:
             --build-context rust_ext_modules="${RUNNER_TEMP}/rust-ext-modules" \
             --cache-from "type=registry,ref=${CACHE}" \
             --cache-from "type=registry,ref=${CACHE_TO}" \
-            --cache-to "type=registry,ref=${CACHE_TO},mode=max,ignore-error=true" \
+            --cache-to "type=registry,ref=${CACHE_TO},mode=max,ignore-error=true,oci-mediatypes=true,compression=zstd,compression-level=12" \
             --label org.opencontainers.image.source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
             --label org.opencontainers.image.revision="${GITHUB_SHA}" \
-            --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true" \
+            --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true,compression=zstd,compression-level=12,force-compression=true" \
             --metadata-file "${RUNNER_TEMP}/build-metadata.json" \
             .
           DIGEST=$(jq -er '."containerimage.digest"' "${RUNNER_TEMP}/build-metadata.json")
