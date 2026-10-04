@@ -24,7 +24,11 @@ ENV NV_CUDA_LIB_VERSION=13.0.3-1 \
     NVIDIA_PRODUCT_NAME=CUDA
 COPY --from=cuda_runtime /opt/nvidia /opt/nvidia
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-RUN apt-get update && apt-get install -y --no-install-recommends \
+ARG GPU_ARCHS
+# prune-cuda-libs.sh rebuilds cuBLAS, cuBLASLt, cuRAND, cuSPARSE and cuSOLVER with SASS for GPU_ARCHS only.
+# An image built with a GPU_ARCHS list cannot run these libraries on any other GPU.
+RUN --mount=type=bind,source=docker/prune-cuda-libs.sh,target=/tmp/prune-cuda-libs.sh \
+    apt-get update && apt-get install -y --no-install-recommends \
         cuda-command-line-tools-13-0=${NV_CUDA_LIB_VERSION} \
         cuda-cudart-dev-13-0=${NV_CUDA_CUDART_VERSION} \
         cuda-libraries-dev-13-0=${NV_CUDA_LIB_VERSION} \
@@ -41,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-mark manual $(dpkg-query -W -f '${Package}\n' | grep -E '^(cuda-|libcu|libnv|libnccl)' | grep -v '^libnpp') \
     && apt-get purge -y 'libnpp-*' \
     && ! ls /usr/local/cuda-13.0/targets/*/lib/libnpp* 2>/dev/null \
+    && bash /tmp/prune-cuda-libs.sh "$GPU_ARCHS" \
     # nvcc links libcudart_static.a by default, so it stays.
     && find /usr/local/cuda-13.0 -name '*_static*.a' ! -name libcudart_static.a -delete \
     && rm -f /usr/lib/$(uname -m)-linux-gnu/libnccl_static.a \
@@ -317,15 +322,19 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && touch README.md \
     && touch LICENSE \
     && python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cu${CUINDEX} ".[${BUILD_TYPE}]" \
-    # The pip CUDA wheels hold byte-identical copies of libraries in /usr/local/cuda; a symlink keeps one.
+    # The pip CUDA wheels hold copies of libraries in /usr/local/cuda; a symlink keeps one. A copy matches when it
+    # is byte-identical, or when its sha256 is that of the original that prune-cuda-libs.sh replaced.
     && n=0 && mb=0 \
     && for f in /opt/sglang/lib/python3.12/site-packages/nvidia/cu13/lib/*; do \
            s=$(readlink -f "/usr/local/cuda/lib64/${f##*/}"); \
-           if [ -f "$f" ] && [ ! -L "$f" ] && [ -f "$s" ] && cmp -s "$f" "$s"; then \
+           if [ -f "$f" ] && [ ! -L "$f" ] && [ -f "$s" ] \
+               && { cmp -s "$f" "$s" || grep -qx "$(sha256sum "$f" | cut -d' ' -f1)  ${f##*/}" /usr/local/share/cuda-unpruned.sha256 2>/dev/null; }; then \
                mb=$((mb + $(stat -c %s "$f") / 1048576)) && n=$((n + 1)) && ln -sf "$s" "$f"; \
            fi; \
        done \
-    && echo "Linked ${n} pip CUDA libraries (${mb} MB) to their identical /usr/local/cuda copies" \
+    && echo "Linked ${n} pip CUDA libraries (${mb} MB) to their /usr/local/cuda copies" \
+    # Binds every symbol now, so a rebuilt CUDA library that torch cannot use fails the build here.
+    && LD_BIND_NOW=1 python3 -c "import torch; print('torch', torch.__version__, 'CUDA', torch.version.cuda)" \
     && dedup-layer /opt/sglang \
     && cd /sgl-workspace \
     && rm -rf /tmp/sglang_deps \
