@@ -1,11 +1,6 @@
 name: Fork site
 
-# Publish the visual scheduler simulator (tools/sglang-simulator/schedsim/web)
-# to buildhost on every push. The project defaults to this repository's name,
-# so the default branch serves at https://sglang.pazer.site/ and every other
-# branch at https://sglang.pazer.site/@<branch>/ (slashes flattened to `-`).
-# Authentication is the runner's OIDC token: buildhost auto-provisions the
-# project for this org, so no secret is stored here.
+# Publish the visual scheduler simulator (tools/sglang-simulator/schedsim/web) to buildhost on every push. The project defaults to this repository's name, so the default branch serves at https://sglang.pazer.site/ and every other branch at https://sglang.pazer.site/@<branch>/ (slashes flattened to `-`). Authentication is the runner's OIDC token: buildhost auto-provisions the project for this org, so no secret is stored here.
 
 on:
   push:
@@ -25,8 +20,8 @@ permissions:
   deployments: write
 
 concurrency:
-  group: fork-site-${{ github.ref }}
-  cancel-in-progress: true
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   publish-simulator:
@@ -38,16 +33,15 @@ jobs:
         with:
           node-version: 22
 
-      # sim.js is committed beside sim.ts; rebuild so the site is never stale
-      # relative to the source, and stage only what the page needs.
+      # sim.js is committed beside sim.ts; rebuild so the site is never stale relative to the source, and stage only what the page needs.
       - name: Build the simulator page
         working-directory: tools/sglang-simulator/schedsim/web
         run: |
           npm install --no-audit --no-fund --silent typescript@5
           npx tsc -p tsconfig.json
           node sim.js
-          mkdir -p "$RUNNER_TEMP/site"
-          cp index.html sim.js style.css "$RUNNER_TEMP/site/"
+          mkdir -p "${{ runner.temp }}/site"
+          cp index.html sim.js style.css "${{ runner.temp }}/site/"
 
       - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-site@master
         with:

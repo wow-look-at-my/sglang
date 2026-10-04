@@ -1,13 +1,10 @@
 package sim
 
-// Kind separates the traffic classes the scenarios mix, because the metrics are
-// defined per class: cold prompts measure time to first token, agent turns
-// measure the stall an in-flight stream suffers.
+// Kind separates the traffic classes the scenarios mix, because the metrics are defined per class: cold prompts measure time to first token.
 type Kind int
 
 const (
-	// KindAgent is one turn of a closed-loop conversation: its previous context
-	// is in the prefix cache unless the pool thrashed it away.
+	// KindAgent is one turn of a closed-loop conversation.
 	KindAgent Kind = iota
 	// KindCold is a one-shot prompt with no cached prefix at all.
 	KindCold
@@ -26,9 +23,7 @@ func (k Kind) String() string {
 	}
 }
 
-// Delivery is one streamed chunk: N tokens observed at time T. With MTP a chunk
-// carries 1 to NumDraft+1 tokens, so inter-token gaps must be spread over the
-// token count to compare against a per-token latency claim.
+// Delivery is one streamed chunk: N tokens observed at time T.
 type Delivery struct {
 	T float64
 	N int
@@ -38,16 +33,14 @@ type Delivery struct {
 type Request struct {
 	ID   int
 	Kind Kind
-	// Conv is the conversation the request belongs to; the prefix cache is keyed
-	// by it, so a one-shot prompt owns its own id.
+	// Conv is the conversation the request belongs to.
 	Conv int
 
 	Arrival   float64
 	InputLen  int
 	OutTarget int
 
-	// Prefix counts the tokens already computed for this request: its cache hit
-	// at arrival plus every chunk of its own prefill since.
+	// Prefix counts the tokens already computed for this request.
 	Prefix int
 	// OutDone counts the tokens this request has streamed.
 	OutDone int
@@ -64,12 +57,9 @@ type Request struct {
 	Finish       float64
 	Deliveries   []Delivery
 
-	// ArrivedDuringCold is set at queueing: a cold prefill was in flight or
-	// queued when this request joined the waiting queue.
+	// ArrivedDuringCold is set at queueing.
 	ArrivedDuringCold bool
 
-	// Win indexes this request's entry in the run's cold windows, -1 for a
-	// request that is not a cold prompt.
 	Win int
 
 	// Tag names a scripted request so a test can point at it.
@@ -94,8 +84,8 @@ func (r *Request) Work() int {
 	return w
 }
 
-// InDecodePhase reports whether the stream was past its first token and not yet
-// finished at time t, the window the per-stream decode rate is measured over.
+// InDecodePhase reports whether the stream was past its first token and not
+// yet finished at time t.
 func (r *Request) InDecodePhase(t float64) bool {
 	if r.FirstTok < 0 || t < r.FirstTok {
 		return false

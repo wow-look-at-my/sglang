@@ -5,10 +5,7 @@ import (
 	"sort"
 )
 
-// AgentParams describes one closed-loop conversation's turn distribution. The
-// defaults are the deployment's agent traffic: a turn adds 200-1400 tokens of
-// tool output to the context, asks for 200-800 tokens back, and returns 1-5 s
-// later.
+// AgentParams describes one closed-loop conversation's turn distribution.
 type AgentParams struct {
 	NewMin, NewMax     int
 	OutMin, OutMax     int
@@ -18,18 +15,16 @@ type AgentParams struct {
 // DefaultAgent is the agent turn model the scenarios are built on.
 var DefaultAgent = AgentParams{NewMin: 200, NewMax: 1400, OutMin: 200, OutMax: 800, ThinkMin: 1, ThinkMax: 5}
 
-// ThrashAgent is the ten-conversation episode's turn model: longer idle gaps and
-// a shorter answer, over contexts no cache can hold.
+// ThrashAgent is those-conversation episode's turn model: longer idle gaps and a shorter answer.
 var ThrashAgent = AgentParams{NewMin: 200, NewMax: 1400, OutMin: 200, OutMax: 600, ThinkMin: 2, ThinkMax: 8}
 
 // Workload produces arrivals. A conversation is closed-loop: its next turn
-// arrives a think time after the previous turn's last token.
+// arrives a think time after the turn's last token.
 type Workload interface {
 	Initial() []*Request
 	// OnFinish returns the request's conversation's next turn, if any.
 	OnFinish(r *Request, now float64) []*Request
-	// Agents is the number of closed-loop conversations, the denominator of the
-	// per-agent decode rate.
+	// Agents is the number of closed-loop conversations, the denominator of the per-agent decode rate.
 	Agents() int
 }
 
@@ -40,8 +35,7 @@ type Mix struct {
 	nextID int
 	nextCh int
 
-	// Shared is the system-prompt prefix every turn of the conversation carries;
-	// it stays resident while whole conversation prefixes are evicted.
+	// Shared is the system-prompt prefix every turn of the conversation carries.
 	Shared int
 	// StopAt ends the closed loop: no turn arrives after this time.
 	StopAt float64
@@ -67,8 +61,7 @@ func NewMix(seed int64, cost Cost, shared int) *Mix {
 // Cost exposes the calibrated model to scripted scenario builders.
 func (m *Mix) Cost() Cost { return m.cost }
 
-// Rand exposes the workload's generator so a scripted scenario draws its own
-// turn parameters from the same deterministic stream.
+// Rand exposes the workload's generator so a scripted scenario draws its own turn parameters.
 func (m *Mix) Rand() *rand.Rand { return m.rng }
 
 // NextRequestID allocates an id that no other request in this run holds.
@@ -84,7 +77,7 @@ func (m *Mix) AddStream(ctx int, firstArrival float64, p AgentParams) *Stream {
 }
 
 // RegisterStream adds a conversation whose first turn is scripted rather than
-// drawn, so a scenario can hand an episode's requests a continuing stream.
+// drawn.
 func (m *Mix) RegisterStream(ctx int, p AgentParams) *Stream {
 	st := &Stream{ID: len(m.streams), Ctx: ctx, P: p}
 	m.streams[st.ID] = st
@@ -99,9 +92,8 @@ func (m *Mix) Turn(st *Stream, at float64) *Request {
 		UniInt(nc, st.P.OutMin, st.P.OutMax), "")
 }
 
-// AddScripted queues a request the scenario names itself, bound to an existing
-// conversation. Scenario A's episode is scripted this way: its follow-up and cold
-// prompts each belong to a conversation that keeps going afterwards.
+// AddScripted queues a request the scenario names itself, bound to an
+// existing conversation.
 func (m *Mix) AddScripted(kind Kind, conv int, at float64, input, out int, tag string) *Request {
 	r := NewRequest(m.NextRequestID(), kind, conv, at, input, out, tag)
 	m.initial = append(m.initial, r)
@@ -147,8 +139,7 @@ func (m *Mix) OnFinish(r *Request, now float64) []*Request {
 // Agents counts the closed-loop conversations.
 func (m *Mix) Agents() int { return len(m.streams) }
 
-// SharedPrefix is the system prompt every turn carries, resident in the pool for
-// the whole run.
+// SharedPrefix is the system prompt every turn carries, resident in the pool for the whole run.
 func (m *Mix) SharedPrefix() int { return m.Shared }
 
 // WarmSeeds lists the conversations whose context starts out cached, with the
@@ -191,7 +182,7 @@ func BuildShortChat(seed int64, cost Cost, rate, window float64) *Mix {
 	return m
 }
 
-// BuildThrash: ten long conversations whose working set is far larger than the
+// BuildThrash: long conversations whose working set is far larger than the
 // cache, so every turn pays for a prefix the pool could not keep.
 func BuildThrash(seed int64, cost Cost, window float64, ctxMin, ctxMax int, p AgentParams) *Mix {
 	m := NewMix(seed, cost, SharedSystemPrompt)

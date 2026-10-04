@@ -12,9 +12,6 @@ import (
 	"schedsim/internal/trace/tracetest"
 )
 
-// stalledLog writes a two-boot production log to a temp file: one boot with
-// a 24-chunk cold prompt behind four decoding conversations, then a restart
-// with a 20-chunk one, so every timestamped section has something to print.
 func stalledLog(t *testing.T) string {
 	t.Helper()
 	first := tracetest.Stalled("w1-first", 24).String()
@@ -27,9 +24,19 @@ func stalledLog(t *testing.T) string {
 	return path
 }
 
-func TestRunOnTheEmbeddedLog(t *testing.T) {
+// incidentLog writes the generated bare-format incident to a file.
+func incidentLog(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "incident.log")
+	if err := os.WriteFile(path, []byte(tracetest.Incident(tracetest.DefaultIncident).String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRunOnABareLog(t *testing.T) {
 	var out bytes.Buffer
-	err := run([]string{"-sweep-policies=false", "-only", "A:"}, &out)
+	err := run([]string{"-log", incidentLog(t), "-sweep-policies=false", "-only", "A:"}, &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +98,9 @@ func TestRunReplayFlagsSelectBoots(t *testing.T) {
 
 func TestRunErrors(t *testing.T) {
 	var out bytes.Buffer
+	if err := run(nil, &out); err == nil || !strings.Contains(err.Error(), "-log FILE is required") {
+		t.Errorf("no log: %v", err)
+	}
 	if err := run([]string{"-log", filepath.Join(t.TempDir(), "missing")}, &out); err == nil || !strings.Contains(err.Error(), "read log") {
 		t.Errorf("missing log: %v", err)
 	}
@@ -99,7 +109,7 @@ func TestRunErrors(t *testing.T) {
 	if err := run([]string{"-log", empty}, &out); err == nil || !strings.Contains(err.Error(), "parse log") {
 		t.Errorf("empty log: %v", err)
 	}
-	if err := run([]string{"-chunk-size", "12345"}, &out); err == nil || !strings.Contains(err.Error(), "no 12345-token cold prefill stretch") {
+	if err := run([]string{"-log", incidentLog(t), "-chunk-size", "12345"}, &out); err == nil || !strings.Contains(err.Error(), "no 12345-token cold prefill stretch") {
 		t.Errorf("no stretch: %v", err)
 	}
 	if err := run([]string{"-no-such-flag"}, &out); err == nil {
@@ -112,7 +122,7 @@ func TestRunSweepsWithTheSeedList(t *testing.T) {
 		t.Skip("runs the whole scenario suite")
 	}
 	var out bytes.Buffer
-	if err := run([]string{"-seeds", "1", "-only", "A:", "-a-seed", "3"}, &out); err != nil {
+	if err := run([]string{"-log", incidentLog(t), "-seeds", "1", "-only", "A:", "-a-seed", "3"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if s := out.String(); !strings.Contains(s, "Cells where the contract does not hold") || !strings.Contains(s, "interval") {
@@ -159,13 +169,12 @@ func TestHelpersOnBoots(t *testing.T) {
 		t.Errorf("printBoots:\n%s", out.String())
 	}
 
-	// Episodes over a bare log have no timestamps: the measured column is
-	// blank and the calibration line is not printed.
-	bare, _ := trace.ParseBoots(trace.EmbeddedLog)
+	// Episodes over a bare log have no timestamps: the measured column is blank and the calibration line is not printed.
+	bare, _ := trace.ParseBoots(tracetest.Incident(tracetest.DefaultIncident).String())
 	params := func(w sched.Workload, p sched.Policy) sched.Params { return w.Params(p) }
 	eps := collectEpisodes(bare, 4096, params)
 	if len(eps) == 0 {
-		t.Fatal("no episodes in the embedded log")
+		t.Fatal("no episodes in the incident log")
 	}
 	out.Reset()
 	printEpisodes(&out, bare, eps, 4096)
@@ -180,7 +189,7 @@ func TestHelpersOnBoots(t *testing.T) {
 }
 
 func TestPrintReplayWithNothingToReplay(t *testing.T) {
-	bare, _ := trace.ParseBoots(trace.EmbeddedLog)
+	bare, _ := trace.ParseBoots(tracetest.Incident(tracetest.DefaultIncident).String())
 	cal, _ := trace.CalibrateBoots(bare, 4096, 64)
 	var out bytes.Buffer
 	rf := &replayFlags{on: true, seconds: 60, hostMul: 4}

@@ -1,6 +1,4 @@
 //! MCP tool, prompt, and resource inventory.
-//!
-//! Thread-safe cache for MCP capabilities across all connected servers.
 
 use dashmap::DashMap;
 
@@ -27,10 +25,8 @@ pub(crate) struct CachedResource {
     pub resource: Resource,
 }
 
-/// Tool inventory with periodic refresh
-///
-/// Provides thread-safe caching of MCP tools, prompts, and resources.
-/// Entries are refreshed periodically by background tasks.
+/// Tool inventory with periodic refresh Provides thread-safe caching of MCP
+/// tools, prompts, and resources.
 pub struct ToolInventory {
     /// Map of tool_name -> cached tool
     tools: DashMap<String, CachedTool>,
@@ -61,8 +57,7 @@ impl Default for ToolInventory {
 
 impl ToolInventory {
     // ============================================================================
-    // Tool Methods
-    // ============================================================================
+    // Tool Methods.
 
     /// Get a tool if it exists
     pub fn get_tool(&self, tool_name: &str) -> Option<(String, Tool)> {
@@ -98,8 +93,7 @@ impl ToolInventory {
     }
 
     // ============================================================================
-    // Prompt Methods
-    // ============================================================================
+    // Prompt Methods.
 
     /// Get a prompt if it exists
     pub fn get_prompt(&self, prompt_name: &str) -> Option<(String, Prompt)> {
@@ -140,8 +134,7 @@ impl ToolInventory {
     }
 
     // ============================================================================
-    // Resource Methods
-    // ============================================================================
+    // Resource Methods.
 
     /// Get a resource if it exists
     pub fn get_resource(&self, resource_uri: &str) -> Option<(String, Resource)> {
@@ -386,7 +379,7 @@ mod tests {
             handle.await.unwrap();
         }
 
-        // Should have 10 tools
+        // Should have tools
         let (tools, _, _) = inventory.counts();
         assert_eq!(tools, 10);
     }

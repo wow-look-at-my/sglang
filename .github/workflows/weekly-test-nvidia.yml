@@ -36,6 +36,7 @@ jobs:
   # sgl_kernel stays empty: every test runs, and no job waits on a wheel this
   # workflow never builds.
   check-changes:
+    if: github.repository == 'sgl-project/sglang'
     uses: ./.github/workflows/_pr-test-check-changes.yml
     with:
       pr_test_yml: '.github/workflows/weekly-test-nvidia.yml'

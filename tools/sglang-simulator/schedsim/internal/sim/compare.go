@@ -113,10 +113,7 @@ func Pool(runs []*Result, window float64) Metrics {
 	}
 	m := Measure(merged, window)
 	n := float64(len(runs))
-	// These are per-run ratios: their denominators are that run's own cold windows
-	// and conversation count, so they are averaged across seeds. The latency
-	// percentiles pool their samples instead, which is what makes a p99 meaningful
-	// over five seeds rather than five separate p99s.
+	// These are per-run ratios: their denominators are that run's own cold windows and conversation count.
 	m.OutputTokS, m.GPUBusyShare, m.DecodeShare = out/n, util/n, share/n
 	m.StreamDecodeTokSCold, m.PerAgentTokSCold = stream/n, agent/n
 	if !isNaN(stalled) {
@@ -175,20 +172,14 @@ func Better(k MetricKey, a, b float64) bool {
 	return a <= b
 }
 
-// TieRelative is the relative gap below which a cell's ordering is set by which
-// requests happened to fall inside the measurement window rather than by the
-// policy: half a percent of a throughput or a latency percentile is seed noise,
-// and a contract that asserts on it would be asserting on the seed list. A cell
-// at or beyond this gap is a win or a loss and is argued as one; the deficit is
-// always reported with the number, never rounded away.
+// TieRelative is the relative gap below which a cell's ordering is set by which requests happened to fall inside the measurement window.
 const TieRelative = 0.005
 
-// Verdict is the outcome of comparing one metric across two policies.
+// Verdict is the outcome of comparing one metric across policies.
 type Verdict int
 
 const (
-	// VerdictUndefined: at least one side has no value (no cold prompt in the
-	// workload), so no claim is made either way.
+	// VerdictUndefined: at least one side has no value (no cold prompt in the workload), so no claim is made either way.
 	VerdictUndefined Verdict = iota
 	VerdictWin
 	VerdictTie
@@ -226,10 +217,8 @@ func Judge(k MetricKey, newv, other float64) (Verdict, float64) {
 	}
 }
 
-// Deficient reports how far a falls short of b under the metric's direction, as a
-// fraction of b: positive when a is worse, negative when a is better. A policy
-// that delivered nothing (b == 0) on a rate metric is beaten by any positive
-// value, which is the one case the ratio cannot express.
+// Deficient reports how far a falls short of b under the metric's direction,
+// as a fraction of b: positive when a is worse, negative when a is better.
 func Deficient(k MetricKey, a, b float64) float64 {
 	if isNaN(a) || isNaN(b) {
 		return 0

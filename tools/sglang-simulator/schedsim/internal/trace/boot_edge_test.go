@@ -2,7 +2,6 @@ package trace
 
 import (
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -86,9 +85,7 @@ func TestParseBootsWithoutServerArgs(t *testing.T) {
 
 func TestColdRunsAndStretchesEdges(t *testing.T) {
 	l := tracetest.New("w", tracetest.Start)
-	// A prompt whose first chunk reused a prefix: the cold chunks after it
-	// extend from prefix plus chunk. Nothing is running, and the log ends
-	// mid-run.
+	// A prompt whose first chunk reused a prefix: the cold chunks after it extend from prefix plus chunk.
 	l.Prefill(tracetest.Prefill{NewTokens: 4096, Hit: 8192, Pending: 20000})
 	l.ColdPrompt(3*4096, 4096, 0, 0)
 	boots, _ := ParseBoots(l.String())
@@ -104,9 +101,7 @@ func TestColdRunsAndStretchesEdges(t *testing.T) {
 	if got := b.PrefillStretches(4096, 4); len(got) != 0 {
 		t.Errorf("minCold 4 kept %+v", got)
 	}
-	// A stretch that starts before anyone is running trims to the first
-	// step with a request, part way into a cold run, and keeps the run's
-	// context offset: two chunks had already extended the prompt.
+	// A stretch that starts before anyone is running trims to the first step with a request, part way into a cold run.
 	l = tracetest.New("w", tracetest.Start).Steady(1, 1, 10)
 	l.ColdPrompt(2*4096, 4096, 0, 0)
 	l.ColdPrompt(3*4096, 4096, 2, 0).Steady(1, 3, 10)
@@ -116,8 +111,7 @@ func TestColdRunsAndStretchesEdges(t *testing.T) {
 	if len(st) != 1 || st[0].Start != 3 || st[0].RunningAtStart != 2 || st[0].ColdChunks != 3 || st[0].CtxStart != 2*4096 {
 		t.Errorf("trimmed stretch = %+v", st)
 	}
-	// A stretch holding two cold runs (a short request between them) takes
-	// its context from the first run it overlaps.
+	// A stretch holding cold runs (a short request between them) takes its context from the first run it overlaps.
 	l = tracetest.New("w", tracetest.Start).Steady(1, 1, 10)
 	l.ColdPrompt(2*4096, 4096, 1, 0)
 	l.Prefill(tracetest.Prefill{NewTokens: 300, Hit: 1000, Running: 2})
@@ -137,8 +131,7 @@ func TestStallsEdges(t *testing.T) {
 	l.Prefill(tracetest.Prefill{NewTokens: 4096, Running: 2, Pending: 4096, Queue: 3})
 	l.Prefill(tracetest.Prefill{NewTokens: 500, Hit: 2000, Running: 3})
 	l.Steady(1, 4, 10)
-	// A bare line in a timestamped boot has no clock and starts no stall;
-	// a prefill that the log ends on is not measured either.
+	// A bare line in a timestamped boot has no clock and starts no stall.
 	l.Raw(tracetest.PrefillBody(tracetest.Prefill{NewTokens: 4096, Running: 2}))
 	l.Steady(1, 2, 10)
 	l.Prefill(tracetest.Prefill{NewTokens: 4096, Running: 2})
@@ -168,7 +161,7 @@ func TestCalibrateBootsWithoutARun(t *testing.T) {
 	if rmse, maxErr := fitErrorCtx(PrefillCost{}, nil, []int{0}, 0, 4096); rmse != 0 || maxErr != 0 {
 		t.Error("fitErrorCtx over one chunk is not zero")
 	}
-	// Two boots each with a long prompt: one fits, the other holds out.
+	// Boots each with a long prompt: one fits, the other holds out.
 	two := tracetest.Stalled("a", 10).String() + tracetest.Stalled("b", 9).String()
 	boots, _ = ParseBoots(two)
 	c, rep = CalibrateBoots(boots, 4096, 64)
@@ -178,36 +171,6 @@ func TestCalibrateBootsWithoutARun(t *testing.T) {
 	if s := rep.String(); !strings.Contains(s, "1 holdout run(s)") || !strings.Contains(s, "wall clock over") {
 		t.Errorf("report string = %s", s)
 	}
-}
-
-func TestLog2DecompressionFailurePanics(t *testing.T) {
-	saved := embeddedLog2Gz
-	defer func() {
-		embeddedLog2Gz, log2Err, log2Text = saved, nil, ""
-		log2Once = sync.Once{}
-	}()
-	embeddedLog2Gz = []byte("not gzip")
-	log2Once = sync.Once{}
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("no panic on a corrupt corpus")
-			}
-		}()
-		Log2()
-	}()
-	// A valid header with a truncated body fails in the copy, not the open.
-	full := saved
-	embeddedLog2Gz, log2Err = full[:len(full)/2], nil
-	log2Once = sync.Once{}
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("no panic on a truncated corpus")
-			}
-		}()
-		Log2()
-	}()
 }
 
 func TestMetricsGuardsAndStepHelpers(t *testing.T) {

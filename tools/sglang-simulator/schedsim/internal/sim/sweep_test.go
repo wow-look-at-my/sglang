@@ -8,9 +8,9 @@ import (
 
 // TestSweepCoversThePerturbations pins the sensitivity sweep's breadth: one-at-a-time
 // perturbations of the calibrated cost terms, the scheduler's own knobs and the
-// workload, each compared across the three policies. The first variant is the reference
-// the others are read against and perturbs nothing by design; every other row has to
-// change something, or it measures the reference twice.
+// workload, each compared across the policies. The first variant is the reference the
+// others are read against and perturbs nothing by design; every other row has to change
+// something, or it measures the reference twice.
 func TestSweepCoversThePerturbations(t *testing.T) {
 	steps := mustSteps(t)
 	cost := NewCost(calib(t))
@@ -28,7 +28,7 @@ func TestSweepCoversThePerturbations(t *testing.T) {
 		}
 	}
 
-	rows := RunSweep(cost, linear, []int64{1, 2, 3}, 7, 0)
+	rows := RunSweep(cost, linear, testEpisodePtr(), []int64{1, 2, 3}, 7, 0)
 	if len(rows) != len(variants) {
 		t.Fatalf("%d rows for %d variants", len(rows), len(variants))
 	}

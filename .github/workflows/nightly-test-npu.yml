@@ -66,6 +66,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 jobs:
   set-image-config:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       ref: ${{ steps.set-vars.outputs.ref }}
@@ -378,7 +379,7 @@ jobs:
       run_start_metadata: ${{ needs.set-image-config.outputs.run_start_metadata }}
 
   check-all-jobs:
-    if: ${{ !cancelled() }}
+    if: github.repository == 'sgl-project/sglang' && (!cancelled())
     needs:
       - nightly-1-npu-a3
       - nightly-2-npu-a3

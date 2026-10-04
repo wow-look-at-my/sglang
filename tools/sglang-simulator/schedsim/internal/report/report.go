@@ -46,18 +46,14 @@ type Input struct {
 	LogName    string
 	Fidelities []Fidelity
 
-	// ColdFirstLine and ColdLastLine are the log lines of the cold prefill's
-	// first and last chunk, so the report can point a reader at the evidence.
+	// ColdFirstLine and ColdLastLine are the log lines of the cold prefill's first and last chunk.
 	ColdFirstLine int
 	ColdLastLine  int
 
 	// Revised holds the revised balancer's runs, one per pending-queue size.
 	Revised []RevisedRun
 
-	// Incident is what the operator reported alongside the log, when the log
-	// came with a report: the generation band they saw and the sag they
-	// quoted. Nil for a log that arrived without one, so the report does not
-	// attribute one incident's words to another log.
+	// Incident is what the operator reported alongside the log, when the log came with a report.
 	Incident *Incident
 }
 
@@ -65,13 +61,9 @@ type Input struct {
 type Incident struct {
 	// BandLo and BandHi bound the tok/s the interrupted conversation got.
 	BandLo, BandHi float64
-	// SagFrom and SagTo are the input tok/s they quoted at the start and
-	// bottom of the cold prefill.
+	// SagFrom and SagTo are the input tok/s they quoted at the start and bottom of the cold prefill.
 	SagFrom, SagTo float64
 }
-
-// EmbeddedIncident is the report that came with the embedded log.
-var EmbeddedIncident = &Incident{BandLo: 8, BandHi: 20, SagFrom: 13874, SagTo: 4831}
 
 // RevisedRun is one queue-balance run and the queue length behind its chunks.
 type RevisedRun struct {

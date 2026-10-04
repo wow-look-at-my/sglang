@@ -1,6 +1,4 @@
 //! HTTP proxy configuration for MCP connections.
-//!
-//! Resolves proxy settings and creates HTTP clients for MCP server connections.
 
 use std::time::Duration;
 
@@ -9,27 +7,16 @@ use crate::{
     error::{McpError, McpResult},
 };
 
-/// Resolve proxy configuration for a server
-/// Priority: server.proxy > global.proxy > None
-///
-/// # Arguments
-/// * `server_config` - Server-specific configuration
-/// * `global_proxy` - Global proxy configuration from McpConfig
-///
-/// # Returns
-/// The resolved proxy configuration, or None for direct connection
+/// Resolve proxy configuration for a server Priority: server.proxy >
+/// global.proxy > None # Arguments * `server_config` - Server-specific
+/// configuration * `global_proxy` - Global proxy configuration.
 pub(crate) fn resolve_proxy_config<'a>(
     server_config: &'a McpServerConfig,
     global_proxy: Option<&'a McpProxyConfig>,
 ) -> Option<&'a McpProxyConfig> {
-    // Priority 1: Check if server has explicit proxy config
-    // Note: server.proxy = Some(config) uses that config
-    //       server.proxy = None (set explicitly in YAML as null) forces direct connection
-    //       server.proxy not set (field missing) falls back to global
     if server_config.proxy.is_some() {
         server_config.proxy.as_ref()
     } else {
-        // Priority 2: Fall back to global proxy
         global_proxy
     }
 }

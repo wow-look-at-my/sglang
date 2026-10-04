@@ -18,12 +18,8 @@ import (
 // the token budget divide -- are unchanged; only the wall clock each prefill
 // batch occupies moves, by the factor itself.
 func TestCostScaleMovesTheReportedMetrics(t *testing.T) {
-	steps, err := trace.Parse(trace.EmbeddedLog)
-	if err != nil {
-		t.Fatalf("parse embedded log: %v", err)
-	}
-	cal := trace.Calibrate(steps, BaselineChunkSize, 64)
-	sc := ScenarioA()
+	cal := trace.Calibrate(mustSteps(t), BaselineChunkSize, 64)
+	sc := ScenarioA(testEpisode())
 
 	var ttft, stall, stallOld []float64
 	for _, k := range []float64{0.5, 1, 2} {
@@ -61,9 +57,7 @@ func TestCostScaleMovesTheReportedMetrics(t *testing.T) {
 	}
 
 	// The factor has to reach the metrics at the rate it is applied, not merely
-	// agree in sign: at x2 the stall OLD reports must be past x1's, and the
-	// spread between the two ends of the range must be of the order the factor
-	// itself implies.
+	// agree in sign.
 	if !(stallOld[2] > 1.5*stallOld[1]) {
 		t.Errorf("doubling the prefill cost moved OLD's longest stall from %.2f s to only %.2f s",
 			stallOld[1], stallOld[2])

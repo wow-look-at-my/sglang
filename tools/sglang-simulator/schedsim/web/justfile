@@ -1,0 +1,14 @@
+# The package's own binaries come first on PATH, as npm run puts them.
+export PATH := justfile_directory() + "/node_modules/.bin:" + env_var("PATH")
+
+# The npm script build.
+build:
+	tsc -p tsconfig.json
+
+# The npm script check.
+check:
+	tsc -p tsconfig.json && node sim.js
+
+# The npm script test.
+test:
+	c8 --check-coverage node --test "test/*.test.mjs"

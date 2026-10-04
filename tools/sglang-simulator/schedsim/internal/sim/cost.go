@@ -5,15 +5,11 @@ import (
 	"schedsim/internal/trace"
 )
 
-// Cost prices a batch from the calibration fitted to the production log. The
-// sweep's perturbations are fields here rather than edits to the fit, so every
-// variant states which measurement it moved.
+// Cost prices a batch from the calibration fitted to the production log.
 type Cost struct {
 	Cal trace.Calibration
 
-	// AcceptMean overrides the log's mean accepted length; 0 keeps the fit's.
-	AcceptMean float64
-	// ReloadPerToken overrides the host-tier copy rate; 0 keeps kv's constant.
+	AcceptMean     float64
 	ReloadPerToken float64
 }
 
@@ -45,8 +41,7 @@ func (c Cost) ReloadSecondsPerToken() float64 {
 // DeviceTokens is the KV pool capacity the log implies.
 func (c Cost) DeviceTokens() int { return c.Cal.DeviceTokens }
 
-// PerBatchSeconds is the extend batch's fixed overhead: the launch and the
-// kernels that run once per pass regardless of how many tokens the pass carries.
+// PerBatchSeconds is the extend batch's fixed overhead.
 func (c Cost) PerBatchSeconds() float64 { return c.Cal.Prefill.Base }
 
 // ExtendSeconds prices an extend batch: the per-batch base plus every item at
@@ -74,8 +69,6 @@ func (c Cost) ChunkSeconds(prefix int) float64 {
 	})
 }
 
-// AcceptProb returns q with 1+q+q^2+...+q^numDraft = L, the sequential
-// acceptance whose expected length is one step's accepted-token count.
 func AcceptProb(L float64, numDraft int) float64 {
 	lo, hi := 0.0, 1.0
 	for i := 0; i < 60; i++ {
@@ -94,9 +87,6 @@ func AcceptProb(L float64, numDraft int) float64 {
 	return (lo + hi) / 2
 }
 
-// WithPrefillBase moves the per-batch overhead to sec while holding a chunk's
-// cost at prefix 0 unchanged, so a variant isolates the overhead's effect on
-// short batches instead of changing overall prefill throughput.
 func WithPrefillBase(p trace.PrefillCost, sec float64) trace.PrefillCost {
 	q := p
 	if q.ChunkTokens > 0 {

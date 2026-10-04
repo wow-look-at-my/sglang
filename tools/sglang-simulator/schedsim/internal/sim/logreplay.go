@@ -9,19 +9,7 @@ import (
 )
 
 // A serving log records what every client sent and when, one prefill line per
-// arrival. LogReplay turns one boot of that into a workload the engine can run
-// under each policy, so the comparison is over the traffic the deployment
-// actually saw rather than a scripted stand-in for it.
-//
-// What the log states outright: each request's arrival time, its prefix hit
-// (#cached-token) and its new tokens (#new-token plus #pending-token for a
-// chunked prompt). What it does not state is which conversation a request
-// belongs to or how long its reply was; both come from the same observation.
-// An agent's next turn carries the whole previous turn (prompt and reply) as
-// its prefix, so a request whose #cached-token equals a known conversation's
-// last prompt plus some tokens is that conversation's next turn, and those
-// tokens are the reply. A cold request whose size matches a conversation
-// that went idle is that conversation returning after eviction.
+// arrival.
 
 // LogTurn is one request as the log recorded it.
 type LogTurn struct {
@@ -29,8 +17,7 @@ type LogTurn struct {
 	// At is the arrival in seconds after the replay's start.
 	At    float64
 	Input int
-	// Out is the reply length: measured from the next turn's prefix when
-	// there is one, the median reply otherwise.
+	// Out is the reply length: measured from the next turn's prefix when there is one, the median reply otherwise.
 	Out      int
 	Hit      int
 	Kind     Kind
@@ -48,28 +35,21 @@ type LogReplay struct {
 	Start  time.Time
 	Shared int
 	Convs  int
-	// Returning counts the cold turns that matched an idle conversation:
-	// the log's own count of full-prefix recomputes.
+	// Returning counts the cold turns that matched an idle conversation: the log's own count of full-prefix recomputes.
 	Returning int
 
 	byConv map[int][]int
 	next   map[int]int
 }
 
-// The matching tolerances. A reply is at most maxReply tokens, so a prefix
-// hit that overshoots a conversation's last prompt by more than that belongs
-// to another conversation; a returning cold request must match an idle
-// conversation's size to within returnTol of it.
+// The matching tolerances.
 const (
 	maxReply  = 8192
 	returnTol = 0.03
 )
 
-// BuildLogReplay reconstructs the requests of a boot from its prefill lines:
-// those arriving from skipSeconds after the boot's first request, for
-// maxSeconds (0 for the rest of the boot). Requests before the window are
-// not replayed, so a conversation that began there looks new at its first
-// turn inside it.
+// Requests before the window are not replayed, so a conversation that began
+// there looks new at its first turn inside it.
 func BuildLogReplay(b *trace.Boot, chunkSize int, skipSeconds, maxSeconds float64) (*LogReplay, error) {
 	skip := skipSeconds
 	if !b.Timestamped() {
@@ -92,11 +72,7 @@ func BuildLogReplay(b *trace.Boot, chunkSize int, skipSeconds, maxSeconds float6
 	// convs holds each conversation's latest turn (an index into l.Turns).
 	var convs []*struct{ lastTurn int }
 	var outs []int
-	// A prompt longer than one chunk is logged as its first line followed by
-	// full chunks and a final partial one; #pending-token also counts the
-	// requests queued behind it, so the prompt's size is the sum of its own
-	// lines. chain is open while the previous line was a full chunk with
-	// tokens still pending.
+	// A prompt longer than one chunk is logged as its first line followed by full chunks and a final partial one.
 	chain := false
 	prefill := prefillSteps(steps)
 	ctxCap := b.Args.ContextLength
@@ -116,10 +92,10 @@ func BuildLogReplay(b *trace.Boot, chunkSize int, skipSeconds, maxSeconds float6
 		chain = s.Pending > 0 && s.NewTokens == chunkSize
 		rest := chainTokens(prefill, pi, chunkSize)
 		arrivals := splitArrivals(s, chunkSize, rest)
-		// A line admitting several requests does not itemise their prefix
-		// hits, but each follow-up is some conversation's next turn: the
-		// most recently idle conversations whose last prompts add up to the
-		// line's hit are the ones, and each one's hit is its own last prompt.
+		// A line admitting several requests does not itemise their prefix hits, but
+		// each follow-up is some conversation's next turn: the most recently idle
+		// conversations whose last prompts add up to the line's hit are the ones,
+		// and each's hit is its own last prompt.
 		if len(arrivals) > 1 {
 			var followUps []int
 			for k, arr := range arrivals {
@@ -153,8 +129,7 @@ func BuildLogReplay(b *trace.Boot, chunkSize int, skipSeconds, maxSeconds float6
 				continue
 			}
 			if arr.conv >= 0 {
-				// Assigned above: its reply is the line's own new tokens'
-				// share less nothing we can see, so the median stands in.
+				// Assigned above: its reply is the line's own new tokens' share less nothing we can see, so the median stands in.
 				t.Conv = arr.conv
 			}
 			// A prefix hit beyond the shared prompt names the conversation
@@ -245,7 +220,7 @@ func BuildLogReplay(b *trace.Boot, chunkSize int, skipSeconds, maxSeconds float6
 
 type arrival struct {
 	hit, nw, pending int
-	conv             int // -1 unless assigned by the caller
+	conv             int
 }
 
 // splitArrivals divides a batch line among the requests it admitted. One

@@ -1,6 +1,4 @@
-/// MCP Connection Pool
-///
-/// This module provides connection pooling for dynamic MCP servers (per-request).
+/// MCP Connection Pool This module provides connection pooling for dynamic MCP servers (per-request).
 use std::sync::Arc;
 
 use lru::LruCache;
@@ -46,12 +44,10 @@ pub struct McpConnectionPool {
     /// Maximum number of cached connections (LRU capacity)
     max_connections: usize,
 
-    /// Global proxy configuration (applied to all dynamic servers)
-    /// Can be overridden per-server via McpServerConfig.proxy
+    /// Global proxy configuration (applied to all dynamic servers) Can be overridden per-server.
     global_proxy: Option<McpProxyConfig>,
 
-    /// Optional eviction callback (called when LRU evicts a connection)
-    /// Used to clean up tools from inventory
+    /// Optional eviction callback (called when LRU evicts a connection) Used to clean up tools from inventory
     eviction_callback: Option<EvictionCallback>,
 }
 
@@ -61,8 +57,6 @@ impl McpConnectionPool {
 
     /// Create a new connection pool with default settings
     ///
-    /// Default settings:
-    /// - max_connections: 200
     /// - global_proxy: Loaded from environment variables (MCP_HTTP_PROXY, etc.)
     pub fn new() -> Self {
         Self {
@@ -109,10 +103,7 @@ impl McpConnectionPool {
 
     /// Get an existing connection or create a new one
     ///
-    /// This method:
-    /// 1. Checks if a connection exists for the given URL (fast path <1ms)
-    /// 2. If exists, promotes it in LRU and returns it
-    /// 3. If not exists, creates new connection (slow path 70-650ms)
+    /// Checks if a connection exists for the given URL (fast path <1ms)
     ///
     /// # Arguments
     /// * `server_url` - The MCP server URL (used as cache key)
@@ -307,13 +298,10 @@ mod tests {
 
     #[test]
     fn test_pool_proxy_from_env() {
-        // Note: This test depends on environment variables
-        // In production, proxy is loaded from MCP_HTTP_PROXY or HTTP_PROXY env vars
+        // Note: This test depends on environment variables In production.
         let pool = McpConnectionPool::new();
 
-        // Pool should either have proxy from env or None
-        // We can't assert specific value since it depends on test environment
-        // Just verify it doesn't panic
+        // Pool should either have proxy from env or None We can't assert specific value since it depends.
         assert!(pool.global_proxy.is_some() || pool.global_proxy.is_none());
     }
 }

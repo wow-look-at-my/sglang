@@ -2441,7 +2441,10 @@ jobs:
           retention-days: 30
 
   check-all-jobs:
-    if: always() && (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+    if: |
+      github.repository == 'sgl-project/sglang' && (
+        always() && (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+      )
     needs:
       # 1-GPU Unit Tests (MI30x + MI35x)
       - nightly-test-1-gpu-unit

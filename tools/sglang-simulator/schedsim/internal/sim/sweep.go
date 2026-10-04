@@ -8,9 +8,8 @@ import (
 	"schedsim/internal/trace"
 )
 
-// BParams are the scenario-B traffic knobs, which the sensitivity sweep moves one
-// at a time. Scenario B is also the template for scenario D (one cold prompt) and
-// the overload case (a one-minute cadence), so the sweep reaches those shapes too.
+// BParams are the scenario-B traffic knobs, which the sensitivity sweep moves
+// one at a time.
 type BParams struct {
 	Agents   int
 	CtxMin   int
@@ -27,8 +26,6 @@ type BParams struct {
 	HostMul    float64
 }
 
-// DefaultBParams is scenario B as specified: five agent streams at 100K-250K
-// context, a cold 400K prompt every two minutes, a 15 minute run.
 func DefaultBParams() BParams {
 	return BParams{
 		Agents: 5, CtxMin: AgentContextMin, CtxMax: AgentContextMax, Turn: DefaultAgent,
@@ -65,16 +62,14 @@ func ScenarioFromB(p BParams, name, key, note string) Scenario {
 	}
 }
 
-// Variant is one sensitivity perturbation. Each moves a single measurement or
-// setting, so a conclusion that survives every variant is not resting on it.
+// Variant is one sensitivity perturbation.
 type Variant struct {
 	Name string
 	Cost func(*Cost)
 	Cfg  func(*Config)
 	// B moves the traffic parameters of the swept scenario.
 	B func(*BParams)
-	// SkipA leaves scenario A at its baseline for variants that only make sense
-	// against a steady agent mix.
+	// SkipA leaves scenario A at its baseline for variants that only make sense against a steady agent mix.
 	SkipA bool
 }
 
@@ -117,22 +112,20 @@ func SweepVariants(linear trace.PrefillCost) []Variant {
 	}
 }
 
-// SweepRow is one variant measured on the swept scenario B and, unless the variant
-// only makes sense against a steady agent mix, on scenario A as well.
+// SweepRow is one variant measured on the swept scenario B and, unless the
+// variant only makes sense against a steady agent mix.
 type SweepRow struct {
 	Name   string
 	B      [NumModes]Metrics
 	A      [NumModes]Metrics
 	SweptA bool
-	// Breaks lists the seven-metric cells where NEW is worse than the policy
-	// named, so the sweep reports where the contract does not hold rather than
-	// only where it does.
+	// Breaks lists those-metric cells where NEW is worse than the policy named.
 	Breaks []string
 }
 
 // RunSweep measures every variant. The seeds are the sweep's own, typically fewer
 // than a scenario's, since the point is the direction of each perturbation.
-func RunSweep(base Cost, linear trace.PrefillCost, seeds []int64, aSeed int64, workers int) []SweepRow {
+func RunSweep(base Cost, linear trace.PrefillCost, ep *Episode, seeds []int64, aSeed int64, workers int) []SweepRow {
 	variants := SweepVariants(linear)
 	rows := make([]SweepRow, len(variants))
 	var jobs []func()
@@ -161,11 +154,11 @@ func RunSweep(base Cost, linear trace.PrefillCost, seeds []int64, aSeed int64, w
 				}
 				rows[i].B[mi] = Pool(runs, sc.Window)
 			}
-			if v.SkipA {
+			if v.SkipA || ep == nil {
 				return
 			}
 			rows[i].SweptA = true
-			asc := ScenarioA()
+			asc := ScenarioA(*ep)
 			asc.Seeds = []int64{aSeed}
 			for mi, mode := range Modes {
 				cfg := DefaultConfig(mode, cost)

@@ -8,14 +8,7 @@ import (
 )
 
 // Calibrate pairs the first cold run in a log with the second as fit and
-// holdout. On a single-incident log those are two prompts of one deployment.
-// On a day-long log they are whatever two runs happen to come first, which
-// may be a 6-chunk fragment and an 85-chunk prompt from a boot with a
-// different context length: a quadratic fitted to 17 points and evaluated
-// far outside their context range reads hundreds of percent off. CalibReport
-// fits the largest run instead and holds every other substantial run out,
-// per boot, so the error it reports is the model's spread across the prompts
-// it will be asked to price.
+// holdout.
 
 // HoldoutError is the fit's relative error on one held-out cold run.
 type HoldoutError struct {
@@ -43,16 +36,10 @@ type CalibReport struct {
 	// HoldoutMedian is the median holdout RMSE, the number to quote.
 	HoldoutMedian float64
 	Pools         []PoolSize
-	// DecodeSamples counts the steady single-request decode lines pooled
-	// across boots for the decode step time.
+	// DecodeSamples counts the steady single-request decode lines pooled across boots for the decode step time.
 	DecodeSamples int
 
-	// The wall clock check, available with timestamps. For every cold chunk
-	// followed by another batch line, the gap between the two lines is what
-	// the chunk actually took, and NewTokens/Throughput is what the model
-	// charges. WallRatioMedian is the median of gap/model and
-	// WallOverheadMedian the median of gap-model in seconds: the measured
-	// counterpart of the assumed PrefillBaseSeconds.
+	// The wall clock check, available with timestamps.
 	WallSamples        int
 	WallRatioMedian    float64
 	WallOverheadMedian float64
@@ -113,9 +100,7 @@ func CalibrateBoots(boots []Boot, chunkSize, page int) (Calibration, CalibReport
 		}
 	}
 
-	// Decode lines are pooled across boots with a prefill sentinel between
-	// them, so FitDecode's "previous line was decode" test never pairs the
-	// last line of one boot with the first of the next.
+	// Decode lines are pooled across boots with a prefill sentinel between them.
 	var pooled []Step
 	for _, b := range boots {
 		pooled = append(pooled, Step{Kind: Prefill})

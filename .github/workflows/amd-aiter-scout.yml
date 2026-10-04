@@ -34,6 +34,7 @@ concurrency:
 
 jobs:
   resolve-aiter:
+    if: github.repository == 'sgl-project/sglang'
     runs-on: ubuntu-latest
     outputs:
       aiter_sha: ${{ steps.resolve.outputs.sha }}
@@ -109,7 +110,7 @@ jobs:
       continue_on_error: ${{ inputs.continue_on_error == '' && true || inputs.continue_on_error }}
 
   check-all-jobs:
-    if: always()
+    if: github.repository == 'sgl-project/sglang' && (always())
     needs:
       - resolve-aiter
       - call-nightly-amd

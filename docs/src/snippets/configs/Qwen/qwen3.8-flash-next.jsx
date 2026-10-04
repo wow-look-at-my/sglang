@@ -850,9 +850,8 @@ export const config = {
     // native), with the concurrency pinned explicitly:
     // the hybrid model reserves mamba state slots per running request (5 with
     // the default extra_buffer strategy, 4 with extra_buffer_lazy), and the
-    // scheduler caps --max-running-requests to what the mamba pool admits;
-    // without a pin that pool is sized for the requested concurrency only up
-    // to 47% of the budget, so --max-mamba-cache-size = requests x slots is set.
+    // scheduler silently caps --max-running-requests to what the mamba pool
+    // admits unless --max-mamba-cache-size = requests x slots is set.
     // The PLE Offload row is forced to Off on this hardware (see overlayDims),
     // which appends --no-ple-offload-embedding: the FP8 table stays GPU-resident
     // and TP-sharded, since on unified memory the "offloaded" pinned-host copy

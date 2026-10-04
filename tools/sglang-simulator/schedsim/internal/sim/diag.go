@@ -7,16 +7,14 @@ import (
 	"sort"
 )
 
-// GapRun is one stretch of prefill batches launched back to back: no decode
-// batch ran between them, so every running stream waits out the whole stretch.
+// GapRun is one stretch of prefill batches launched back to back.
 type GapRun struct {
 	First, Last   int
 	Batches       []*Batch
 	Tokens        int
 	Seconds       float64
 	Continuations int
-	// DecodeWait is the time from the end of the previous decode batch to the
-	// start of the next one, which is what a stream's gap can be at most.
+	// DecodeWait is the time from the end of the decode batch to the start of the next one.
 	DecodeWait float64
 }
 
@@ -129,16 +127,13 @@ type deliveryKey struct {
 	T   int64
 }
 
-// deliveryClass labels a batch by what it handed the stream: "mixed" is a
-// prefill batch's piggybacked row, "decode" a pure decode step, "first" the
-// prefill that sampled the stream's first token.
+// deliveryClass labels a batch by what it handed the stream.
 type deliveryClass struct {
 	Label   string
 	Samples int
 	Copies  int
 	Tokens  int
-	// PerToken has one entry per delivery, Values one per token: the metric
-	// quantiles over tokens, so Values is its population.
+	// PerToken has one entry per delivery, Values one per token: the metric quantiles over tokens.
 	PerToken  []float64
 	Values    []float64
 	RawGaps   []float64
@@ -210,12 +205,13 @@ func deliveryClassStats(res *Result) map[string]*deliveryClass {
 }
 
 // WriteDeliveryClassBreakdown prints, per class of delivering batch, how many
-// tokens it handed out and what per-token gap it therefore contributed. A mixed
-// batch hands one token per riding request where a decode step hands the
-// sampled accept length, so the same wall-clock wait is divided differently.
+// tokens it handed out and what per-token gap it therefore contributed. A
+// mixed batch hands one token per riding request where a decode step hands
+// the sampled accept length, so the same wall-clock wait is divided
+// differently.
 //
-// The tail lines name the class the reported p99 and p99.9 actually fall in,
-// which is decided by each class's weight in samples, not its delivery count.
+// The tail lines name the class the reported p99 and p99.9 fall in, which is
+// decided by each class's weight in samples, not its delivery count.
 func WriteDeliveryClassBreakdown(w io.Writer, res *Result) {
 	type tokenSample struct {
 		value float64
@@ -227,8 +223,7 @@ func WriteDeliveryClassBreakdown(w io.Writer, res *Result) {
 		labels = append(labels, l)
 	}
 	sort.Strings(labels)
-	// Built in label order and sorted stably, so a tie between classes names the
-	// same label every run.
+	// Built in label order and sorted stably, so a tie between classes names the same label every run.
 	var all []tokenSample
 	for _, l := range labels {
 		for _, perToken := range byLabel[l].Values {
@@ -270,7 +265,6 @@ func WriteDeliveryClassBreakdown(w io.Writer, res *Result) {
 	}
 }
 
-// trimFloat spells a percentile the way the metric's name does: 99.0 as "99".
 func trimFloat(p float64) string {
 	if p == math.Trunc(p) {
 		return fmt.Sprintf("%.0f", p)
@@ -278,10 +272,6 @@ func trimFloat(p float64) string {
 	return fmt.Sprintf("%.1f", p)
 }
 
-// WritePrefillCostBreakdown prints what a single prefill batch costs in seconds
-// and tokens, split by whether it continues a chunked prompt or starts fresh
-// work: the stall bound is stated in tokens, so these two columns show what that
-// bound is worth in seconds at each point of the context range.
 func WritePrefillCostBreakdown(w io.Writer, res *Result) {
 	var cont, fresh []float64
 	var contToks, freshToks []float64

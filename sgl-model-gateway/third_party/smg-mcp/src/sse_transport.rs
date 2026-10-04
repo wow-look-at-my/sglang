@@ -1,12 +1,4 @@
-//! Client side of the legacy MCP HTTP+SSE transport (protocol revision 2024-11-05).
-//!
-//! rmcp dropped this transport in 1.x in favour of Streamable HTTP, but deployed servers
-//! (and `protocol: sse` configs) still speak it: the client holds a GET event stream open,
-//! the server's first `endpoint` event names the URL to POST JSON-RPC messages to, and
-//! responses arrive as `message` events on the stream. Reconnection follows what rmcp 0.8's
-//! `SseClientTransport` did: a broken stream is reopened with `Last-Event-ID`, failed
-//! reopen attempts are retried forever at max(1s, server `retry:`), and a stream the
-//! server closes cleanly ends the session.
+//! Client side of the MCP HTTP+SSE transport (protocol revision).
 
 use std::time::Duration;
 
@@ -22,7 +14,6 @@ use url::Url;
 
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 const HEADER_LAST_EVENT_ID: &str = "Last-Event-ID";
-// Same floor as rmcp 0.8's FixedInterval::DEFAULT_MIN_DURATION.
 const MIN_RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
 
 type EventStream = BoxStream<'static, Result<Sse, sse_stream::Error>>;
@@ -223,8 +214,6 @@ fn record_event_metadata(
     }
 }
 
-/// Resolves the `endpoint` event payload against the SSE URL the way rmcp 0.8 did:
-/// an absolute URL is used as is, `?query` keeps the SSE path, and any other value
 /// replaces path and query on the SSE URL's origin.
 fn resolve_message_endpoint(sse_url: &Url, endpoint: &str) -> Result<Url, SseTransportError> {
     let invalid = |e| SseTransportError::InvalidUrl(endpoint.to_string(), e);

@@ -5,10 +5,8 @@ import (
 	"math"
 )
 
-// Calibration is the cost model the scheduler simulation charges batches with.
-// Every coefficient here is produced by fitting the logged steps, so a scenario
-// run costs GPU time the way the deployment measured it. The residual priors are
-// named at their point of use below.
+// Calibration is the cost model the scheduler simulation charges batches
+// with.
 
 // ExtendItem is one request's contribution to a prefill batch: the tokens it
 // computes new, and the mid-context at which it computes them.
@@ -17,8 +15,6 @@ type ExtendItem struct {
 	MidCtx float64
 }
 
-// PrefillCost prices an extend batch as Base + sum(Items.Tokens *
-// (PerToken + PerTokenCtx*MidCtx + PerTokenCtxSq*MidCtx^2)).
 type PrefillCost struct {
 	ChunkTokens   int
 	Base          float64
@@ -26,10 +22,7 @@ type PrefillCost struct {
 	PerTokenCtx   float64
 	PerTokenCtxSq float64
 
-	// RMSEFit and RMSEHoldout are the relative error of the quadratic fit on the
-	// first logged cold run (the fit set) and the second (held out), and
-	// MaxErrHoldout its worst single chunk. A linear fit measures ~10% on the
-	// holdout; the quadratic form is what the log supports.
+	// RMSEFit and RMSEHoldout are the relative error of the quadratic fit on the first logged cold run (the fit set) and the second (held out).
 	RMSEFit        float64
 	RMSEHoldout    float64
 	MaxErrHoldout  float64
@@ -42,23 +35,20 @@ type DecodeCost struct {
 	Base        float64
 	PerReq      float64
 	PerTokenCtx float64
-	// MeanCtx is the context of the steady single-request lines the base term was
-	// solved at, so a term can be re-scaled without moving the fitted step time.
+	// MeanCtx is the context of the steady single-request lines the base term was solved at, so a term can be re-scaled without moving the fitted.
 	MeanCtx  float64
 	NumDraft int
-	// Accept carries the accepted-token counts the log reported per step; a run
-	// draws a per-request acceptance rate from it.
+	// Accept carries the accepted-token counts the log reported per step.
 	Accept     []float64
 	AcceptMean float64
 	Samples    int
 }
 
-// Calibration bundles the two cost models plus the pool occupancy they imply.
+// Calibration bundles both cost models plus the pool occupancy they imply.
 type Calibration struct {
 	Prefill PrefillCost
 	Decode  DecodeCost
-	// DeviceTokens is the KV pool's capacity in tokens, from the log's own
-	// #full token / full token usage ratio.
+	// DeviceTokens is the KV pool's capacity in tokens, from the log's own #full token / full token usage ratio.
 	DeviceTokens int
 	// ChunkSize is the deployment's chunked_prefill_size, and Page its page size.
 	ChunkSize int
@@ -66,23 +56,18 @@ type Calibration struct {
 }
 
 // PrefillBaseSeconds is charged once per extend batch, before its tokens.
-// Arbitrary; a kernel-launch and bookkeeping floor, not a measurement -- the
-// per-token terms absorb almost all of a 4096-token chunk's time, and the sweep
-// varies 0 ms to 40 ms with no scenario changing its conclusion.
 const PrefillBaseSeconds = 10e-3
 
 // DecodePerReqSeconds and DecodePerTokenCtxSeconds are the batch-size and
-// context-length terms of a decode step. The log only ever decodes one request
-// at one context, so these two cannot be measured from it; they are priors, and
-// the sensitivity sweep varies each 0x to 3x.
+// context-length terms of a decode step.
 const (
 	DecodePerReqSeconds      = 1.5e-3
 	DecodePerTokenCtxSeconds = 6e-9
 )
 
 // ColdRuns groups the indices of consecutive full cold chunks: a prefill step
-// of exactly chunkSize new tokens with no prefix hit. Two runs in the log are
-// isolated cold prompts, the first with nothing running and the second with two
+// of exactly chunkSize new tokens with no prefix hit. Runs in the log are
+// isolated cold prompts, the first with nothing running and the second with
 // requests running, which makes the second a genuine holdout for the fit.
 func ColdRuns(steps []Step, chunkSize int) [][]int {
 	var runs [][]int
@@ -103,9 +88,8 @@ func ColdRuns(steps []Step, chunkSize int) [][]int {
 	return runs
 }
 
-// FitPrefill fits the quadratic in mid-context to the logged cold chunks, using
-// the first run as the fit set and the second as the holdout. Chunk seconds come
-// from StepSeconds, which inverts the log's own input-throughput definition.
+// FitPrefill fits the quadratic in mid-context to the logged cold chunks,
+// using the first run as the fit set and the second as the holdout.
 func FitPrefill(steps []Step, chunkSize int) PrefillCost {
 	return fitPrefill(steps, chunkSize, 2)
 }
@@ -214,9 +198,7 @@ func FitDecode(steps []Step) DecodeCost {
 		maxAcc float64
 	)
 	for i, s := range steps {
-		// Steady means the previous line was a decode line too, so the reported
-		// gen throughput covers a whole interval of decode steps and not the gap
-		// left by an interleaved prefill.
+		// Steady means the line was a decode line too.
 		if i == 0 || s.Kind != Decode || steps[i-1].Kind != Decode {
 			continue
 		}
