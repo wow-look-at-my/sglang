@@ -332,9 +332,11 @@ jobs:
     needs: [check-changes, call-gate, rust-ext-build]
     permissions: {actions: write, contents: write, issues: read, pull-requests: read, id-token: write}
     if: |
-      always() &&
-      needs.check-changes.result == 'success' &&
-      ((github.event_name == 'schedule' || inputs.test_parallel_dispatch == true) || (!failure() && !cancelled()))
+      github.repository == 'sgl-project/sglang' && (
+        always() &&
+        needs.check-changes.result == 'success' &&
+        ((github.event_name == 'schedule' || inputs.test_parallel_dispatch == true) || (!failure() && !cancelled()))
+      )
     uses: ./.github/workflows/_pr-test-stage-cpu.yml
     with:
       self_name: base-a-test-cpu
