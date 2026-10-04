@@ -6,8 +6,7 @@ import (
 )
 
 // mixedShare is the weight of mixed-batch deliveries in the metric's population,
-// which counts one ITL sample per token. Above 1% a mixed delivery alone decides
-// the reported p99, whatever pure decode steps are doing.
+// which counts one ITL sample per token.
 func mixedShare(res *Result) float64 {
 	stats := deliveryClassStats(res)
 	total, mixed := 0, 0
@@ -78,8 +77,7 @@ func TestScenarioBBalanceWinsAgainstPrev(t *testing.T) {
 					seconds(decodeP99), seconds(prev.ITLp99))
 			}
 
-			// The bound holds per batch: at most one chunk of prefill tokens, plus
-			// the one extend token each riding request adds.
+			// The bound holds per batch: at most one chunk of prefill tokens, plus the extend token each riding request adds.
 			limit := row.Runs[ModeNew][0].Cfg.ChunkSize + row.Runs[ModeNew][0].Agents
 			for _, r := range row.Runs[ModeNew] {
 				for _, b := range r.Batches {
@@ -145,7 +143,7 @@ func TestMixedRideIsWhatDecidesTheP99Cell(t *testing.T) {
 			withoutRide.StreamDecodeTokSCold, prevOff.StreamDecodeTokSCold)
 	}
 	// The table in docs/derivation-itl-percentiles-under-mixed-chunk.md is these
-	// three rows; each is printed as PREV / NEW.
+	// rows; each is printed as PREV / NEW.
 	for _, r := range []struct {
 		label     string
 		prev, neu Metrics
@@ -161,12 +159,8 @@ func TestMixedRideIsWhatDecidesTheP99Cell(t *testing.T) {
 	}
 }
 
-// TestITLP99BandFollowsTheMixedShare pins the pivot docs/derivation-itl-percentiles-under-mixed-chunk.md
-// computes: whether mixed deliveries are more or less than 1% of the metric's
-// samples decides whether ITL p99 reports a prefill batch's seconds or a decode
-// step's. The dense cold cadence and the busy short-chat scenario land above the
-// line, the sparse cadence below it, and that is the whole difference between NEW
-// winning p99 in one and losing it in the other.
+// The dense cold cadence and the busy short-chat scenario land above the line, the sparse cadence below
+// it, and that is the whole difference between NEW winning p99 in one and losing it in the other.
 func TestITLP99BandFollowsTheMixedShare(t *testing.T) {
 	cost := ScenarioCost()
 	for _, tc := range []struct {
@@ -214,11 +208,8 @@ func TestITLP99BandFollowsTheMixedShare(t *testing.T) {
 
 // TestDeliveryClassShareTable prints the rows
 // docs/derivation-itl-percentiles-under-mixed-chunk.md tabulates for the scenarios
-// whose ITL cells the tables mark. The mixed share says which band a reported
-// percentile is drawn from - over 1% decides p99, over 0.1% decides p99.9 - and the
-// band's height then says whether it beats the other interleaving policy. Counts are
-// summed per run rather than read off a merged trace, because request ids repeat
-// across seeds.
+// whose ITL cells the tables mark. Counts are summed per run rather than read off a
+// merged trace, because request ids repeat across seeds.
 func TestDeliveryClassShareTable(t *testing.T) {
 	cost := ScenarioCost()
 	for _, sc := range []Scenario{

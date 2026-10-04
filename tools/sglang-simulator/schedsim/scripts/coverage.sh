@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# Runs the simulator's tests with coverage and fails if any file of the log
-# replay work (the trace layer, the log-derived workload, the report and the
-# command) is under 95% statement coverage. The scenario engine and KV pool
-# are not held to the bar here; they have their own contract tests.
+# Runs the simulator's tests with coverage and fails if any file of the log replay work.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 go test ./... -count=1 -coverprofile=cover.out -coverpkg=./... "$@"

@@ -43,7 +43,6 @@ test("balancer defers prefill while it is ahead and lets one burst through", () 
   b.onFinish(0.3);
   assert.equal(b.burstUsed, 4096);
   assert.equal(b.prefillTokenBudget(false), 0);
-  // Prefill charged 0.3 s against no decode: ahead, so deferred.
   assert.equal(b.shouldDeferPrefill(true, true, false), true);
   assert.ok(b.debt > 0);
   // A chunk continuing a long prompt is bounded at its marginal rate.
@@ -72,7 +71,7 @@ test("balancer defers prefill while it is ahead and lets one burst through", () 
 test("pool caches whole conversations, evicts LRU and keeps a host copy", () => {
   const p = new Pool(1000, 1000);
   assert.deepEqual(p.lookup(1, 100), { dev: 0, host: 0 });
-  // Two conversations run and finish; their contexts stay cached.
+  // Conversations run and finish; their contexts stay cached.
   p.admit(1, 300, 0, 0, 0, 0);
   p.admit(2, 400, 0, 0, 0, 0);
   assert.equal(p.free(), 300);
@@ -83,7 +82,6 @@ test("pool caches whole conversations, evicts LRU and keeps a host copy", () => 
   assert.ok(Math.abs(p.usage() - 0.7) < 1e-12);
   p.touch(1, 5);
   p.touch(9, 5);
-  // Evicting for conversation 3 takes the least recently used other one.
   assert.equal(p.evictFor(3, 100), true);
   assert.equal(p.evictions, 1);
   assert.equal(p.entries.get(2).dev, 0);
@@ -91,8 +89,7 @@ test("pool caches whole conversations, evicts LRU and keeps a host copy", () => 
   assert.deepEqual(p.lookup(2, 400), { dev: 0, host: 399 });
   // More than can be freed: false, everything idle evicted.
   assert.equal(p.evictFor(3, 5000), false);
-  // A conversation seen before that comes back with under half its prefix
-  // cached is a recompute; a host hit is a reload.
+  // A conversation seen before that comes back with under half its prefix cached is a recompute.
   p.admit(2, 400, 50, 0, 399, 6);
   assert.equal(p.reloads, 1);
   assert.equal(p.recomputes, 0);
@@ -177,7 +174,7 @@ test("feed and engine edge cases", () => {
   f.injectFollowUp(e, 1, 999);
   f.onFinish(e, { conv: 999 }, 1);
   assert.equal(e.requests.length, 1);
-  // maxRunning 1 keeps a second arrival waiting while the first runs.
+  // maxRunning keeps a second arrival waiting while the first runs.
   f.injectCold(e, 0.2, 50000, 50, "a");
   f.injectCold(e, 0.2, 50000, 50, "b");
   e.advanceTo(0.5);

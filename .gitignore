@@ -43,6 +43,7 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.hf-cache/
 nosetests.xml
 coverage.xml
 *.cover
@@ -283,3 +284,4 @@ artifacts/
 
 # Internal, non-published docs
 internal-docs/
+/build/

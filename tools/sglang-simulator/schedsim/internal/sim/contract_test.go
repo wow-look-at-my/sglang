@@ -33,7 +33,7 @@ func suite(t *testing.T) map[string]Row {
 }
 
 // TestContractEveryScenarioEveryMetric is the comparison's contract: NEW is at
-// least as good as OLD and as PREV on each of the seven metrics, in that metric's
+// least as good as OLD and as PREV on each of the metrics, in that metric's
 // better direction. Cells that fall inside TieRelative are ties; cells beyond it
 // must be wins or must be argued in the derivation named beside them, which this
 // test then checks instead of the win.
@@ -163,13 +163,11 @@ func boundEvidence(sc Scenario, k MetricKey, opp string, r Row) (string, bool) {
 	return "", false
 }
 
-// thrashPrefix names the scenario family whose turns all miss their prefix. None
-// of them has a cold prompt, so the cold-window derivations have nothing to say
-// about them and their inter-token tail is argued under eviction instead.
+// thrashPrefix names the scenario family whose turns all miss their prefix.
 const thrashPrefix = "thrash"
 
-// One losing cell is argued by exactly one derivation. boundName is the single
-// table of which, so a bound and the evidence it reports cannot drift apart.
+// One losing cell is argued by exactly one derivation. boundName is the table
+// of which, so a bound and the evidence it reports cannot drift apart.
 const (
 	boundWholeGPU       = "cold TTFT against the policy that withholds decode"
 	boundOwnWork        = "cold TTFT against the same balancer"
@@ -201,9 +199,9 @@ func boundName(sc Scenario, k MetricKey, opp string) string {
 	return ""
 }
 
-// boundCell returns the check for a losing cell, keyed by the mechanism rather
-// than by the scenario, so a cell can only be excused by an argument that actually
-// applies to it.
+// boundCell returns the check for a losing cell, keyed by the mechanism
+// rather than by the scenario, so a cell can only be excused by an argument
+// that applies to it.
 func boundCell(sc Scenario, k MetricKey, opp string) bound {
 	switch boundName(sc, k, opp) {
 	case boundWholeGPU:
@@ -251,28 +249,16 @@ func logWindowCensus(t *testing.T, r Row) {
 	}
 }
 
-// ownTolerance bounds how far the two policies may differ on the cold prompt's
-// own prefill work before the comparison stops being about scheduling.
+// ownTolerance bounds how far both policies may differ on the cold prompt's own prefill work.
 const ownTolerance = 0.05
 
-// oldDecodeShare is the share of its cold windows OLD may spend decoding and
-// still be the policy that handed the prompt the GPU. It is ownTolerance, not a
-// second number: the bound grants that at most that fraction of OLD's cold window
-// is anything other than the prompt's own prefill, and OLD's decode seconds are
-// exactly such a portion, so giving the same claim two tolerances would let the
-// bound keep a term it never accounts for. The asymmetry the derivation rests on
-// survives at this size: NEW spends a third to a half of the same windows on
-// decode, so the cap keeps OLD an order of magnitude further from sharing.
-// See docs/derivation-cold-ttft-vs-old.md.
+// oldDecodeShare is the share of its cold windows OLD may spend decoding and still be the policy.
 const oldDecodeShare = ownTolerance
 
-// coldTTFTSlack is the arithmetic tolerance on the account: the buckets are sums
-// of floats, not counts, so the bound admits a little over a percent.
+// coldTTFTSlack is the arithmetic tolerance on the account: the buckets are sums of floats, not counts.
 const coldTTFTSlack = 1.02
 
-// coldTTFTIdentitySlack bounds the round-off in the account identity: both sides
-// are sums of the same five buckets, so a gap that survives subtraction to better
-// than a part per million is bookkeeping that still holds.
+// coldTTFTIdentitySlack bounds the round-off in the account identity.
 const coldTTFTIdentitySlack = 1e-6
 
 // coldAccts is one policy's share of the account over a fixed set of cold prompts.
@@ -286,8 +272,8 @@ type coldAccts struct {
 
 // coldAccounts prices the same cold prompts under NEW and under opp: every window
 // NEW can price that opp also served, paired by prompt tag. Pairing is what makes
-// the two accounts comparable; the difference of their terms is the whole content
-// of the bounds below, and a window either policy failed to serve is counted.
+// both accounts comparable; the difference of their terms is the whole content of
+// the bounds below, and a window either policy failed to serve is counted.
 func coldAccounts(r Row, opp string) (n, o coldAccts, err error) {
 	newRuns := r.Runs[PolicyIndex(ModeNew)]
 	oppRuns := r.Runs[PolicyIndex(ModeOld)]
@@ -346,14 +332,14 @@ func (a *coldAccts) add(a2 WindowAccount, ttft float64) {
 	a.OwnTokens += a2.OwnTokens
 }
 
-// boundColdTTFT argues the one cell the specification grants: OLD hands the whole
-// GPU to a saturating cold prefill, so it reaches first token after the prompt's
-// own prefill work and nothing else, while any policy that keeps streams
-// generating spends that window on prefill and decode together. The bound is
-// arithmetic, from docs/derivation-cold-ttft-vs-old.md: the same prompt's own
-// prefill work is identical under both policies, and NEW's extra wait must equal
-// the time it spent on decode, on the follow-ups the cede admitted beside the
-// chunk, and on idle, with nothing else left over.
+// boundColdTTFT argues the cell the specification grants: OLD hands the whole
+// GPU to a saturating cold prefill, so it reaches first token after the
+// prompt's own prefill work and nothing else, while any policy that keeps
+// streams generating spends that window on prefill and decode together. The
+// bound is arithmetic, from docs/derivation-cold-ttft-vs-old.md: the same
+// prompt's own prefill work is identical under both policies, and NEW's extra
+// wait must equal the time it spent on decode, on the follow-ups the cede
+// admitted beside the chunk, and on idle, with nothing else left over.
 func boundColdTTFT(r Row, k MetricKey, _ string) error {
 	n, o, err := coldAccounts(r, "OLD")
 	if err != nil {
@@ -396,24 +382,19 @@ func boundColdTTFT(r Row, k MetricKey, _ string) error {
 	return nil
 }
 
-// prevIdleSlack bounds how much more GPU time NEW may leave unused inside the
-// cold windows than PREV, beyond which its later first token is not work bought
-// elsewhere. Expressed as a share of the paired windows; the measured cells idle
-// a small fraction of a second in total.
+// prevIdleSlack bounds how much more GPU time NEW may leave unused inside the cold windows than PREV.
 const prevIdleSlack = 0.002
 
 // boundStreamRateVsPrev argues the cells where NEW keeps streams generating at a
-// slightly lower tok/s than PREV inside a cold prefill. Metric 1 is a ratio whose
-// denominator is the policy's own doing: a second of stream time only exists
-// because the policy admitted the turn and reached its first token. So the cell is
-// arguable only if NEW delivered at least as many agent tokens in those windows,
-// and the loss is then arithmetically the extra seconds those tokens spread over.
-// Those seconds are bounded from below by the mixed channel's own price: a stream
-// riding a prefill batch earns one token per pass, so no stream-second served that
-// way can return more than one token per batch. If NEW's extra seconds returned
-// less than the channel's floor, they were life-support and not service, and this
-// bound says so rather than excusing the cell.
-// See docs/derivation-stream-rate-under-mixed-chunk.md.
+// slightly lower tok/s than PREV inside a cold prefill. So the cell is arguable
+// only if NEW delivered at least as many agent tokens in those windows, and the
+// loss is then arithmetically the extra seconds those tokens spread over. Those
+// seconds are bounded from below by the mixed channel's own price: a stream riding
+// a prefill batch earns one token per pass, so no stream-second served that way
+// can return more than one token per batch. If NEW's extra seconds returned less
+// than the channel's floor, they were life-support and not service, and this bound
+// says so rather than excusing the cell. See
+// docs/derivation-stream-rate-under-mixed-chunk.md.
 func boundStreamRateVsPrev(r Row, k MetricKey, opp string) error {
 	n, o := coldFlowOf(r, ModeNew), coldFlowOf(r, Mode(prevOr(opp)))
 	if n.Secs <= 0 || o.Secs <= 0 {
@@ -434,7 +415,7 @@ func boundStreamRateVsPrev(r Row, k MetricKey, opp string) error {
 			" so the rate cannot be the lower one; the metric and the flow disagree",
 			n.Toks, n.Secs, opp, o.Toks, o.Secs)
 	}
-	// The two quantities that do not divide by self-chosen stream time must favour
+	// Both quantities that do not divide by self-chosen stream time must favour
 	// NEW, or the extra seconds bought nothing.
 	if !(r.Metrics[ni].PerAgentTokSCold > r.Metrics[oi].PerAgentTokSCold) {
 		return fmt.Errorf("NEW's per-agent rate in the cold windows is %.2f tok/s against %s %.2f,"+
@@ -479,10 +460,10 @@ func rowTokenFloor(r Row) float64 {
 }
 
 // boundColdTTFTvsPrev argues a cell of a different kind: PREV runs the same
-// balancer on the same prompt, so there is no whole-GPU asymmetry to invoke. The
-// two accounts close by construction, so subtracting them is an identity over the
-// six buckets and the bound's whole content is which of them may carry the gap.
-// NEW may be later than PREV by the follow-up prefill its cede let in beside the
+// balancer on the same prompt, so there is no whole-GPU asymmetry to invoke. Both
+// accounts close by construction, so subtracting them is an identity over the
+// buckets and the bound's whole content is which of them may carry the gap. NEW
+// may be later than PREV by the follow-up prefill its cede let in beside the
 // chunk, by the decode rows it folded into the cold prompt's batches, by the
 // per-pass overhead and reload copy those batch-mates made the pass pay, and by
 // the decode those follow-ups kept alive. It may not be later because it computed
@@ -540,8 +521,8 @@ func boundColdTTFTvsPrev(r Row, k MetricKey, opp string) error {
 	return nil
 }
 
-// excludedNote renders the windows a bound had to leave out, so a number quoted
-// without them says how few windows it was actually argued from.
+// excludedNote renders the windows a bound had to leave out, so a number
+// quoted without them says how few windows it was argued from.
 func excludedNote(skipped [NumExclusions]int) string {
 	total, parts := 0, []string{}
 	for e := Exclusion(1); e < Exclusion(NumExclusions); e++ {
@@ -560,7 +541,7 @@ func excludedNote(skipped [NumExclusions]int) string {
 // larger one. The percentile is taken over per-token samples, and a delivery of N
 // tokens contributes N samples of gap/N, so which delivery the named sample came
 // from is a count, not a guess: the class that fills the p(1-q) tail owns the
-// reported number. Two classes can fill it, and the bound each gets is different.
+// reported number. Classes can fill it, and the bound each gets is different.
 //
 // Mixed class first. A mixed delivery is one token carried by a prefill batch, so
 // it files that batch's whole wall clock as one sample; a policy that serves its
@@ -568,31 +549,6 @@ func excludedNote(skipped [NumExclusions]int) string {
 // tokens. When that class alone reaches the tail's slot count the named sample is a
 // ride, and the bound is that it is not longer than one of NEW's own forward
 // passes -- the stall bound in another unit.
-//
-// When the mixed class falls short of the slot count, the named sample is the
-// largest non-mixed one and a mixed ride is not this cell's mechanism. The tail
-// then belongs to the pass-cost class: the samples that waited out a prefill pass
-// they were not a row on. Every one of those is a stream's first gap, because the
-// pass it waits out was composed one overlap decision before it joined the running
-// batch (see Balancer's charge-at-completion note), and a stream that is already a
-// row is served by every pass. One gap therefore spans at most one pass, and the
-// bound on it is the calibrated wall clock of that pass plus the step that ended
-// the gap: a whole chunk plus one extend token per riding request, both priced at
-// the deepest mid-context this run's extend batches attended over, the largest
-// host-tier copy any pass paid, and the calibrated decode step at the largest
-// decode batch NEW launched. Every term is computed from the cost model and the
-// run's own trace, never stated as a constant, and if the run's numbers cannot
-// produce a ceiling the percentile sits under, the cell is not arguable and fails.
-//
-// The pass-cost bound carries two more claims. None of the tail's wait may be GPU
-// time inside no launched pass: a percentile made of dead time is a defect, not a
-// trade. And NEW's pure-decode samples must beat the opponent's reported percentile
-// outright -- the improvement claim, which is what trips if a future control law
-// makes NEW's own steps the slower ones rather than merely shifting its tail.
-//
-// Admissibility is shared: the older policy must be withholding tokens outright,
-// which is what makes its shorter tail a symptom rather than a merit.
-// See docs/derivation-itl-percentiles-under-mixed-chunk.md.
 func boundITLPercentile(r Row, k MetricKey, opp string) error {
 	newRuns, oppRuns := r.Runs[PolicyIndex(ModeNew)], r.Runs[PolicyIndex(ModeOld)]
 	if opp == "PREV" {
@@ -641,38 +597,25 @@ func boundITLPercentile(r Row, k MetricKey, opp string) error {
 // Both branches of boundITLPercentile and the evidence line read it, so a cell is
 // argued on the numbers it can also show.
 type itlBand struct {
-	// Samples is the metric's population, one per generated token, and Slots the
-	// count a p(1-q) names: the samples at or above the reported percentile.
+	// Samples is the metric's population, one per generated token, and Slots the count a p(1-q) names.
 	Samples, Slots int
-	// Mixed counts samples a prefill batch handed its riding request; Waited
-	// counts the decode-class samples whose gap spanned a prefill pass, of which
-	// WaitedFirst are a stream's first gap and WaitedMid the ones that were not.
+	// Mixed counts samples a prefill batch handed its riding request.
 	Mixed, Waited, WaitedFirst, WaitedMid int
-	// TailMixed and TailWaited are the same two classes within the samples at or
-	// above the reported percentile, which is what decides what that percentile is.
+	// TailMixed and TailWaited are the same classes within the samples at or above the reported percentile.
 	TailMixed, TailWaited int
 	// MaxPasses is the most prefill passes any one decode-class gap spanned.
 	MaxPasses int
-	// Idle and Wait sum the unaccounted and the total GPU-clock seconds over the
-	// samples at or above the cut.
+	// Idle and Wait sum the unaccounted and the total GPU-clock seconds over the samples at or above the cut.
 	Idle, Wait float64
-	// DecodeCut is the p(1-q) of NEW's decode-class samples, token-weighted like
-	// the metric itself: the percentile with the pass-cost samples taken out.
+	// DecodeCut is the p(1-q) of NEW's decode-class samples, token-weighted like the metric itself.
 	DecodeCut float64
-	// PassMax and StepMax are the longest prefill pass and decode step NEW
-	// launched. Ceiling is what one such pair may cost at most: a whole chunk of
-	// prefill tokens plus one extend token for every request the pass can carry a
-	// row for, both priced at the deepest mid-context this run's extend batches
-	// attended over, the largest host-tier copy any pass paid, and the calibrated
-	// step at the largest decode batch. Every term comes from the cost model the run
-	// itself ran on and from the run's own batches.
+	// PassMax and StepMax are the longest prefill pass and decode step NEW launched.
 	PassMax, StepMax, Ceiling float64
 	// MaxRows is the most requests any one pass carried as decode rows.
 	MaxRows int
 	// The terms Ceiling is built from, kept so the evidence line can show the sum.
 	ChunkCeil, RowCeil, ReloadCeil, StepCeil float64
-	// OppSamples and OppMixed are the same population for the policy compared
-	// against, counted the same way.
+	// OppSamples and OppMixed are the same population for the policy compared against, counted the same way.
 	OppSamples, OppMixed int
 }
 
@@ -726,9 +669,7 @@ func itlPassBand(r Row, opp Mode, q float64) (itlBand, error) {
 				band.StepMax = d
 			}
 		}
-		// One pass can carry a whole chunk of prefill tokens, one extend token per
-		// riding request, and the host-tier copy the admission it completes pays.
-		// All of it priced at the deepest context this run's prefill attended over.
+		// One pass can carry a whole chunk of prefill tokens, one extend token per riding request.
 		perTok := cost.Cal.Prefill.PrefillSecondsPerToken(deepest)
 		chunkCeil := float64(res.Cfg.ChunkSize)*perTok + cost.PerBatchSeconds()
 		rowCeil := float64(rowsMax) * perTok
@@ -853,11 +794,7 @@ func (b itlBand) checkPassCost(value, oppValue, q float64) error {
 	return nil
 }
 
-// itlIdleSlack bounds the share of a tail sample's wait that no launched forward
-// pass accounts for. The engine charges every pass its calibrated seconds and
-// starts each at the end of the last one, so a gap with time inside no pass is the
-// scheduler holding no work; measured, the tail samples of every cell this bound
-// covers account for 100% of their wait.
+// itlIdleSlack bounds the share of a tail sample's wait that no launched forward pass accounts for.
 const itlIdleSlack = 0.01
 
 // boundTailAdmissible is the shared test that the policy being beaten was
@@ -884,9 +821,7 @@ func boundTailAdmissible(r Row, k MetricKey, opp string) error {
 	return nil
 }
 
-// gpuTimeline indexes one run's batches for a gap query. The engine starts every
-// pass at or after the end of the previous one, so the list is ordered and
-// non-overlapping and a gap's contents are a binary search plus two prefix sums.
+// gpuTimeline indexes one run's batches for a gap query.
 type gpuTimeline struct {
 	starts, ends, busy, prefill []float64
 }
@@ -933,16 +868,12 @@ func idleShare(b itlBand) float64 {
 	return b.Idle / b.Wait
 }
 
-// coldFlow is metric 1's numerator and denominator for one policy, summed over
-// the scenario's seeds, with the mixed-batch rows that carry part of the
-// numerator.
 type coldFlow struct {
 	Toks, Secs, Rows, RowSecs float64
 }
 
 func (f coldFlow) rate() float64 { return f.Toks / f.Secs }
 
-// coldFlowOf reduces one policy's runs to metric 1's two quantities.
 func coldFlowOf(r Row, mode Mode) coldFlow {
 	var f coldFlow
 	for _, res := range r.Runs[PolicyIndex(mode)] {

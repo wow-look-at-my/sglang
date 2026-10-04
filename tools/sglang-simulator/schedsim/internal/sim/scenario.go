@@ -6,9 +6,7 @@ import (
 	"schedsim/internal/trace"
 )
 
-// SharedSystemPrompt is the prefix every conversation of the thrash episode
-// carries. The log's thrashed turns hit exactly this many tokens, so it stays
-// resident while whole conversation prefixes are evicted around it.
+// SharedSystemPrompt is the prefix every conversation of the thrash episode carries.
 const SharedSystemPrompt = 11_584
 
 // ThrashConversations is the logged thrash episode's conversation count.
@@ -28,13 +26,11 @@ const (
 // Scenario is a committed workload plus the window its metrics use.
 type Scenario struct {
 	Name string
-	// Key shares runs between scenarios whose workload is identical, so the
-	// comparison never measures the same run twice.
+	// Key shares runs between scenarios whose workload is identical, so the comparison never measures the same run twice.
 	Key   string
 	Note  string
 	Build func(seed int64, cost Cost) Workload
-	// Window is the interval the throughput and rate metrics use. HardStop runs
-	// past it so in-flight turns finish, without stretching the window.
+	// Window is the interval the throughput and rate metrics use.
 	HardStop   float64
 	Window     float64
 	MaxRunning int
@@ -57,9 +53,6 @@ var episodeOnce = sync.OnceValue(func() Episode {
 // EpisodeOf returns the logged episode, derived once from the embedded log.
 func EpisodeOf() Episode { return episodeOnce() }
 
-// ScenarioA replays the logged incident: the 430K cold prompt, a follow-up that
-// queues 1.3 s into its prefill, two more cold prompts behind it, then the four
-// conversations continuing as closed-loop agents.
 func ScenarioA() Scenario {
 	return Scenario{
 		Name: "A: logged episode",
@@ -69,8 +62,7 @@ func ScenarioA() Scenario {
 			ep := EpisodeOf()
 			m := NewMix(seed, cost, 0)
 			m.StopAt = 300
-			// Conversation X already holds R2's matched prefix; the other three
-			// start with nothing cached, which is what makes their prompts cold.
+			// Conversation X already holds R2's matched prefix.
 			x := m.RegisterStream(ep.R2Cached, DefaultAgent)
 			y := m.RegisterStream(0, DefaultAgent)
 			z := m.RegisterStream(0, DefaultAgent)
@@ -90,9 +82,8 @@ func ScenarioA() Scenario {
 	}
 }
 
-// ScenarioB: five closed-loop agent streams plus a cold prompt on a fixed
-// cadence. The 1-minute cadence is the overload case: prefill demand above half
-// the GPU, where cold prompts must queue rather than starve decode forever.
+// The 1-minute cadence is the overload case: prefill demand above half the GPU,
+// where cold prompts must queue rather than starve decode forever.
 func ScenarioB(everyMin float64) Scenario {
 	name := "B: 5 agents + cold 400K every " + itoa(int(everyMin)) + " min"
 	note := "5 agent streams at 100K-250K context, one cold 400K prompt every " + itoa(int(everyMin)) + " min, 15 min"
@@ -123,7 +114,7 @@ func ScenarioC(rate float64, maxRunning int) Scenario {
 	}
 }
 
-// ScenarioD: one cold prompt at t=60 s against five agents, sweeping the cold
+// ScenarioD: one cold prompt at t=60 s against agents, sweeping the cold
 // prompt's length, which is the "how large a prompt is too large" question.
 func ScenarioD(coldLen int) Scenario {
 	p := DefaultBParams()
@@ -135,7 +126,7 @@ func ScenarioD(coldLen int) Scenario {
 		"5 agent streams, a single cold prompt at t=60 s, 420 s")
 }
 
-// ScenarioThrash: the ten-conversation episode whose working set is far past the
+// ScenarioThrash: those-conversation episode whose working set is far past the
 // cache, at each host tier. The tier decides whether an evicted prefix reloads or
 // must be recomputed, which is the difference between a stall and a collapse.
 func ScenarioThrash(hostMul, window float64) Scenario {

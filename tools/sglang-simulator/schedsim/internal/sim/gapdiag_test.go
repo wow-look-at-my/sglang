@@ -52,7 +52,7 @@ func TestGapDiagnosticScenarioB(t *testing.T) {
 //
 // Each seed is re-identified on the way in. classifyDeliveries keys a delivery by
 // (request id, delivery time) because within one run that pair names exactly one batch,
-// but ids are assigned per seed, so two seeds can present the same pair with different
+// but ids are assigned per seed, so seeds can present the same pair with different
 // classes and the merged map would label both with whichever batch wrote last. The
 // clones exist only in the merged trace; the runs themselves are not touched.
 func pooledTrace(runs []*Result) *Result {

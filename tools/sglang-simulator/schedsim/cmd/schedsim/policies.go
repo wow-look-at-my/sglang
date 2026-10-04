@@ -10,9 +10,7 @@ import (
 	"schedsim/internal/trace"
 )
 
-// policyFlags are the knobs of the three-policy comparison. The defaults print
-// every committed scenario and the whole sweep, which is what go run ./cmd/schedsim
-// is expected to produce.
+// policyFlags are the knobs of those-policy comparison.
 type policyFlags struct {
 	only    string
 	workers int

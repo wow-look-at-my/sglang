@@ -12,9 +12,6 @@ import (
 	"schedsim/internal/trace/tracetest"
 )
 
-// stalledLog writes a two-boot production log to a temp file: one boot with
-// a 24-chunk cold prompt behind four decoding conversations, then a restart
-// with a 20-chunk one, so every timestamped section has something to print.
 func stalledLog(t *testing.T) string {
 	t.Helper()
 	first := tracetest.Stalled("w1-first", 24).String()
@@ -159,8 +156,7 @@ func TestHelpersOnBoots(t *testing.T) {
 		t.Errorf("printBoots:\n%s", out.String())
 	}
 
-	// Episodes over a bare log have no timestamps: the measured column is
-	// blank and the calibration line is not printed.
+	// Episodes over a bare log have no timestamps: the measured column is blank and the calibration line is not printed.
 	bare, _ := trace.ParseBoots(trace.EmbeddedLog)
 	params := func(w sched.Workload, p sched.Policy) sched.Params { return w.Params(p) }
 	eps := collectEpisodes(bare, 4096, params)

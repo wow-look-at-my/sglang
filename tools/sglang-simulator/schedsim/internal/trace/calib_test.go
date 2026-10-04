@@ -39,7 +39,6 @@ func TestPrefillFitPredictsTheHeldOutRun(t *testing.T) {
 		t.Errorf("fit relative RMSE %.4f, want under 3%%", c.Prefill.RMSEFit)
 	}
 
-	// The same least-squares solve at degree 1, scored on the held-out run.
 	var xs, ys []float64
 	for k, i := range runs[0] {
 		if k == 0 {

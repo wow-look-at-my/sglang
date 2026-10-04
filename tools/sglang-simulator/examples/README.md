@@ -2,12 +2,11 @@
 
 The example assets are organized by purpose:
 
-- `sim_configs/`: standalone AIC SOL, AIC SILICON, ML, and replay simulator configs;
-- `assets/`: the small illustrative ML model, replay table, and test tokenizer;
-- `workloads/`: ShareGPT and timestamped simulator/Autobench workload examples;
+- `sim_configs/`: standalone AIC SOL, AIC SILICON, ML, and replay simulator configs.
+- `assets/`: the small illustrative ML model, replay table, and test tokenizer.
+- `workloads/`: ShareGPT and timestamped simulator/Autobench workload examples.
 
-The ML model is an illustrative constant-latency sklearn model, not a calibrated
-hardware predictor. Rebuild it and the tokenizer with:
+The ML model is an illustrative constant-latency sklearn model, not a calibrated hardware predictor. Rebuild it and the tokenizer with:
 
 ```bash
 python3 examples/build_example_assets.py
@@ -15,9 +14,7 @@ python3 examples/build_example_assets.py
 
 Only load pickle/joblib assets from sources you trust.
 
-For maintained direct-run and serving examples, see
-[`test_simulation_sglang_runner.py`](../test/test_simulation_sglang_runner.py) and
-[`test_simulation_sglang_serving.py`](../test/test_simulation_sglang_serving.py).
+For maintained direct-run and serving examples, see [`test_simulation_sglang_runner.py`](../test/test_simulation_sglang_runner.py) and [`test_simulation_sglang_serving.py`](../test/test_simulation_sglang_serving.py).
 
 Start a server with any example config:
 
@@ -28,8 +25,7 @@ python3 -m sglang_simulator.simulation.sglang.launch_server \
   --port 30000
 ```
 
-Run a ShareGPT workload with at least four output tokens so decode and TPOT are
-measured:
+Run a ShareGPT workload with a few output tokens so decode and TPOT are measured:
 
 ```bash
 cd /path/to/sglang
@@ -46,5 +42,4 @@ python3 benchmark/simulator/bench_serving.py \
   --profile
 ```
 
-The timestamp trace uses the simulator-owned Autobench JSONL contract. Its
-`timestamp` values are request-arrival times in milliseconds.
+The timestamp trace uses the simulator-owned Autobench JSONL contract. Its `timestamp` values are request-arrival times in milliseconds.

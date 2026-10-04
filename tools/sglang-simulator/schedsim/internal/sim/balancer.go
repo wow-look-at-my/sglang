@@ -1,15 +1,10 @@
 package sim
 
-// Balancer is PrefillDecodeBalancer (prefill_decode_balancer.py), shared by the
-// two balancing modes: Prev selects the balance floored at zero with no token
-// bound and no piggyback credit, and the default selects HEAD's rules.
-//
-// Elapsed time is charged at completion, from the previous completion (or the
-// batch's own launch when the GPU was idle), because the overlap scheduler
-// picks batch N+1 while batch N still runs.
+// Balancer is PrefillDecodeBalancer (prefill_decode_balancer.py), shared by
+// both balancing modes: Prev selects the balance floored at zero with no
+// token bound and no piggyback credit, and the default selects HEAD's rules.
 type Balancer struct {
-	Prev bool
-	// BurstTokens is the stall bound in prefill tokens; 0 means none.
+	Prev        bool
 	BurstTokens int
 	// PiggybackCredit prices a mixed batch's decode rows out of its charge.
 	PiggybackCredit bool
@@ -20,13 +15,10 @@ type Balancer struct {
 	LastDecode  float64
 	UnsettledN  int
 	BurstUsed   int
-	// ExtendSecond and ExtendTokens are the running measurement behind
-	// prefill_seconds_per_token, which prices a mixed batch's decode rows. They
-	// count prefill batches only, so the rate stays a prefill rate.
+	// ExtendSecond and ExtendTokens are the running measurement behind prefill_seconds_per_token.
 	ExtendSecond float64
 	ExtendTokens int
-	// LastPrefillSecond and LastPrefillTokens are the marginal rate of the last
-	// prefill batch: what a token cost at the context it attended over.
+	// LastPrefillSecond and LastPrefillTokens are the marginal rate of the last prefill batch.
 	LastPrefillSecond float64
 	LastPrefillTokens int
 
@@ -51,8 +43,6 @@ func NewBalancer(f Features, chunkSize int) *Balancer {
 	return b
 }
 
-// PrefillSecondsPerToken is the measured cost of one prefill token so far; 0
-// before any prefill batch has finished.
 func (b *Balancer) PrefillSecondsPerToken() float64 {
 	if b.ExtendTokens == 0 {
 		return 0
@@ -60,9 +50,8 @@ func (b *Balancer) PrefillSecondsPerToken() float64 {
 	return b.ExtendSecond / float64(b.ExtendTokens)
 }
 
-// marginalSecondsPerToken is the last prefill batch's own cost per token, which
-// is the rate the next chunk of the same prompt faces: cost per token rises with
-// the context attention reads. 0 before any prefill batch has finished.
+// marginalSecondsPerToken is the last prefill batch's own cost per token,
+// which is the rate the next chunk of the same prompt faces.
 func (b *Balancer) marginalSecondsPerToken() float64 {
 	if b.LastPrefillTokens == 0 {
 		return 0
@@ -104,15 +93,6 @@ func (b *Balancer) ShouldDeferPrefill(prefillPending, decodeRunnable, continuesC
 	return b.BurstUsed >= b.BurstTokens
 }
 
-// PrefillTokenBudget caps the next prefill batch's tokens; -1 is Python's None.
-// continuesChunk picks which bound applies. A batch that continues a chunked
-// prompt is capped to the GPU seconds one chunk is worth at the measured average
-// rate, priced at the marginal rate this prompt's context is now paying: cost per
-// token rises with the context attention reads, so the token bound alone lets the
-// same 4096 tokens stall decode for three times the seconds they promise. A fresh
-// request cannot drift that far - its cost is bounded by its own length - so fresh
-// work keeps the token form, which is what lets several short prefills share one
-// burst instead of each waiting out a decode slice.
 func (b *Balancer) PrefillTokenBudget(continuesChunk bool) int {
 	if b.BurstTokens == 0 {
 		return -1
@@ -142,7 +122,7 @@ func (b *Balancer) OnLaunch(isPrefill bool, tokens, rows int, now float64) {
 }
 
 // OnFinish charges the oldest launched batch the elapsed time, from the
-// previous completion rather than from its own launch.
+// completion rather than from its own launch.
 func (b *Balancer) OnFinish(now float64) {
 	if len(b.inFlight) == 0 {
 		return

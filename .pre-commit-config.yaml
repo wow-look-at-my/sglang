@@ -29,7 +29,7 @@ repos:
     rev: 7.0.0
     hooks:
       - id: isort
-        exclude: '^python/sglang/srt/grpc/.*_pb2\.py$|^python/sglang/srt/grpc/.*_pb2_grpc\.py$|^python/sglang/srt/grpc/.*_pb2\.pyi$|^python/sglang/srt/grpc/.*_pb2_grpc\.pyi$'
+        exclude: '^python/sglang/srt/grpc/.*_pb2\.py$|^python/sglang/srt/grpc/.*_pb2_grpc\.py$|^python/sglang/srt/grpc/.*_pb2\.pyi$|^python/sglang/srt/grpc/.*_pb2_grpc\.pyi$|^python/sglang/srt/managers/scheduler_components/sched_policy_messages\.py$'
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.1
     hooks:
@@ -47,9 +47,10 @@ repos:
           python/sglang/srt/grpc/.*_pb2_grpc\.py$|
           python/sglang/srt/grpc/.*_pb2\.pyi$|
           python/sglang/srt/grpc/.*_pb2_grpc\.pyi$|
+          python/sglang/srt/managers/scheduler_components/sched_policy_messages\.py$|
           )$
       - id: ruff-format
-        exclude: '^python/sglang/srt/grpc/.*_pb2\.py$|^python/sglang/srt/grpc/.*_pb2_grpc\.py$|^python/sglang/srt/grpc/.*_pb2\.pyi$|^python/sglang/srt/grpc/.*_pb2_grpc\.pyi$'
+        exclude: '^python/sglang/srt/grpc/.*_pb2\.py$|^python/sglang/srt/grpc/.*_pb2_grpc\.py$|^python/sglang/srt/grpc/.*_pb2\.pyi$|^python/sglang/srt/grpc/.*_pb2_grpc\.pyi$|^python/sglang/srt/managers/scheduler_components/sched_policy_messages\.py$'
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.1
     hooks:
@@ -137,9 +138,9 @@ repos:
         pass_filenames: false
       - id: clippy-rust-workspace
         name: clippy rust/ workspace (auto-fix)
-        # Three steps: apply machine-applicable fixes, then fail on anything
-        # left (combining --fix with -D warnings can abort the fix phase), then
-        # cover sglang-mm's PyO3 bindings + rayon fan-out — both sit behind
+        # Steps: apply machine-applicable fixes, then fail on anything left
+        # (combining --fix with -D warnings can abort the fix phase), then cover
+        # sglang-mm's PyO3 bindings + rayon fan-out — both sit behind
         # non-default features, so `--workspace` alone never compiles them. protoc
         # is not required: sglang-grpc's build.rs falls back to a vendored binary.
         entry: bash -c 'cd rust && cargo clippy --workspace --fix --allow-dirty --allow-staged && cargo clippy --workspace -- -D warnings && cargo clippy -p sglang-mm --features python,parallel --lib -- -D warnings && cargo clippy --manifest-path sglang-radix-tree/Cargo.toml --all-targets --no-default-features --features tch/doc-only -- -D warnings'

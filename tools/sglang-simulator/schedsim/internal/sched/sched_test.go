@@ -19,10 +19,9 @@ func workload(t *testing.T) (Workload, trace.Metrics) {
 	return WorkloadFromLog(steps, m, 4096), m
 }
 
-// The property the collapse is about: under prefill priority no decode step runs
-// in the cold-prefill window, and under the balancer many do. This is the
-// before/after the operator asked for, and it fails if either policy's rule is
-// changed so the effect disappears.
+// The property the collapse is about: under prefill priority no decode step
+// runs in the cold-prefill window, and under the balancer many do. This is
+// the before/after.
 func TestOldPolicyStarvesDecodeAndNewPolicyDoesNot(t *testing.T) {
 	w, _ := workload(t)
 
@@ -123,9 +122,6 @@ func TestPrefillShareTradesPrefillTimeAgainstGeneration(t *testing.T) {
 	}
 }
 
-// The balancer's own rule is symmetric at 50/50, so the split it produces must
-// be near even. This is what makes PrefillShare=0.5 a reproduction of the
-// shipped rule rather than a tunable invented here.
 func TestBalancedShareSplitsGPUTimeEvenly(t *testing.T) {
 	w, _ := workload(t)
 
@@ -180,8 +176,8 @@ func TestDecodeCostKnobResponds(t *testing.T) {
 	scaled.DecodePerReqFraction = 1.0
 	rScaled := Simulate(w, scaled, 0)
 
-	// Both generate for three conversations, so compare step counts and window,
-	// which the per-request cost does govern.
+	// Both generate for conversations, so compare step counts and window, which
+	// the per-request cost does govern.
 	if rScaled.DecodeSteps >= rFlat.DecodeSteps {
 		t.Fatalf("decode cost knob did nothing: %d steps at flat cost, %d at 3x",
 			rFlat.DecodeSteps, rScaled.DecodeSteps)
@@ -247,9 +243,6 @@ func TestPerRequestDecodeCostDividesGeneration(t *testing.T) {
 	}
 }
 
-// Requests queued behind the chunk cannot join it, so they must not weigh the
-// split: the revised balancer gives decode the shipped 50/50 share whatever
-// the queue, carrying at most one decode step of overshoot per chunk.
 func TestQueueBalanceIgnoresRequestsThatCannotRun(t *testing.T) {
 	w, _ := workload(t)
 
@@ -303,7 +296,7 @@ func TestMixedChunkRidesOnTopOfDecodeHalf(t *testing.T) {
 	}
 }
 
-// Every chunk the workload carries must be a step the log actually contains.
+// Every chunk the workload carries must be a step the log contains.
 func TestWorkloadChunksComeFromTheLog(t *testing.T) {
 	w, m := workload(t)
 
@@ -317,8 +310,7 @@ func TestWorkloadChunksComeFromTheLog(t *testing.T) {
 		if c.Seconds <= 0 {
 			t.Fatalf("chunk %d has %v seconds", i, c.Seconds)
 		}
-		// The log reports throughput to two decimals, so the identity holds to
-		// that rounding rather than exactly.
+		// The log reports throughput to decimals, so the identity holds to that rounding rather than exactly.
 		back := float64(c.Tokens) / c.Seconds
 		if rel := (back - c.InputTPS) / c.InputTPS; rel > 1e-4 || rel < -1e-4 {
 			t.Fatalf("chunk %d: %.2f tok/s and %v s disagree with %d tokens by %.4f",

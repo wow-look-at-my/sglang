@@ -547,9 +547,14 @@ def create_scheduler_watchdog(
 
     return WatchdogRaw(
         debug_name="Scheduler",
-        get_counter=lambda: scheduler.forward_ct,
+        # A loop pass counts as progress, so a hang between forwards (a stuck
+        # cross-rank call while choosing the next batch) is caught as well.
+        get_counter=lambda: (scheduler.forward_ct, scheduler.event_loop_ct),
         is_active=lambda: (
-            scheduler.is_initializing or scheduler.cur_batch_for_debug is not None
+            scheduler.is_initializing
+            or scheduler.cur_batch_for_debug is not None
+            or bool(scheduler.waiting_queue)
+            or not scheduler.running_batch.is_empty()
         ),
         watchdog_timeout=watchdog_timeout,
         soft=soft,
