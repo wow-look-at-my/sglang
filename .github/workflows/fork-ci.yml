@@ -166,9 +166,13 @@ jobs:
         with:
           node-version: 22
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
       - run: npm ci --ignore-scripts
-      - run: npm test
-      - run: npm run check
+      - run: just test
+      - run: just check
 
   # ------------------------------------------------------------ sglang wheel
   fork-sglang-wheel:
@@ -261,14 +265,17 @@ jobs:
         with:
           node-version: 22
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
       # The visual simulator ships its compiled sim.js beside sim.ts so the page opens from a file:// URL; this rebuilds it, runs the headless comparison and the unit tests (engine, balancer, pool and the page against a fake DOM) under c8's 95% line threshold, and fails if the committed sim.js is stale.
       - name: visual simulator
         working-directory: tools/sglang-simulator/schedsim/web
         run: |
           npm install --no-audit --no-fund --silent
-          npx tsc -p tsconfig.json
-          node sim.js
-          npm test
+          just check
+          just test
           git diff --exit-code -- sim.js
 
       # The NPU precise-test selector's git fallback (used when the GitHub. API is down) is covered by its own pytest suite.
