@@ -7,7 +7,7 @@ CMD="${1:?$USAGE}"
 
 build_goipc() {
 	local out="$1"
-	local ref="${GO_IPC_REF:-typed-service}"
+	local ref="${GO_IPC_REF:-master}"
 	local work="${RUNNER_TEMP:-/tmp}/go-ipc"
 	rm -rf "$work"
 	git clone --depth 1 --branch "$ref" --recurse-submodules --shallow-submodules \
