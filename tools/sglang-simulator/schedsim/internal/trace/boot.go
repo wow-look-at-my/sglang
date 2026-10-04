@@ -7,10 +7,7 @@ import (
 	"time"
 )
 
-// A production log is many process lifetimes in one file: every restart prints
-// a new server_args line, workers overlap during a rolling update, and a cold
-// run of chunks that straddles a restart is two prompts, not one. Boot is one
-// such lifetime, and every analysis that walks steps in order walks one Boot.
+// A production log is many process lifetimes in one file: every restart prints a new server_args line, workers overlap during a rolling update, and a cold run of chunks that straddles a restart is prompts.
 
 // ServerArgs is the subset of the server_args line the simulator prices with.
 type ServerArgs struct {
@@ -38,8 +35,7 @@ type JITCompile struct {
 type Boot struct {
 	Index  int
 	Worker string
-	// Start is the server_args line's timestamp and End the last line the
-	// worker printed; both are zero in the bare format.
+	// Start is the server_args line's timestamp and End the last line the worker printed.
 	Start, End time.Time
 	Args       ServerArgs
 	ArgsKnown  bool
@@ -47,8 +43,7 @@ type Boot struct {
 	// Completions are the timestamps of "POST /v1/chat/completions ... 200".
 	Completions []time.Time
 	JITCompiles []JITCompile
-	// EndedBy is "sigterm" (a drain), "crash" (a scheduler exception or a
-	// child's SIGQUIT), or "eof" (the log ends with the process still up).
+	// EndedBy is "sigterm" (a drain), "crash" (a scheduler exception or a child's SIGQUIT).
 	EndedBy string
 }
 
@@ -217,26 +212,17 @@ func (b *Boot) Summarize(chunkSize int) Metrics {
 // into the boot's Steps.
 type ColdRun struct {
 	Start, End int
-	// Tokens is the run's prefill work; Pending is #pending-token on its first
-	// chunk, the log's own statement of how much prompt was still outstanding.
+	// Tokens is the run's prefill work.
 	Tokens  int
 	Pending int
-	// RunningAtStart is #running-req on the first chunk: the conversations
-	// that were decoding when the prompt took the GPU.
+	// RunningAtStart is #running-req on the first chunk.
 	RunningAtStart int
 	QueuePeak      int
-	// StartAt is the first chunk's timestamp and EndAt the timestamp of the
-	// step after the run (the last chunk's own when there is none); zero in
-	// the bare format.
+	// StartAt is the first chunk's timestamp and EndAt the timestamp of the step after the run (the last chunk's own when there is none).
 	StartAt, EndAt time.Time
-	// ColdChunks counts the cold chunks in the run. For a run from
-	// ColdRunsAll it equals Chunks(); for a stretch from PrefillStretches
-	// the other steps are the arrivals and follow-ups the stretch also ran.
+	// ColdChunks counts the cold chunks in the run.
 	ColdChunks int
-	// CtxStart is the context the run's first chunk extends from. A cold
-	// prompt starts at 0; a prompt whose first chunk reused a cached prefix
-	// logs that chunk with #cached-token > 0, so the cold chunks that follow
-	// it start at prefix plus that chunk, and cost what that context costs.
+	// CtxStart is the context the run's first chunk extends from.
 	CtxStart int
 }
 
@@ -254,8 +240,8 @@ func (r ColdRun) Indexes() []int {
 
 // ColdRunsAll lists every maximal run of consecutive cold chunks in this
 // boot, in order, one chunk or longer. coldWindow keeps only the longest of
-// these; a day-long log holds many prompts, and each one starves decode on
-// its own.
+// these; a day-long log holds many prompts, and each starves decode on its
+// own.
 func (b *Boot) ColdRunsAll(chunkSize int) []ColdRun {
 	var runs []ColdRun
 	steps := b.Steps
@@ -309,9 +295,7 @@ func (b *Boot) PrefillStretches(chunkSize, minCold int) []ColdRun {
 		for ; j < len(steps) && steps[j].Kind == Prefill; j++ {
 		}
 		end := j
-		// Prefill with nothing decoding starves no one, so the stretch
-		// starts at the first step that had a request running; a stretch
-		// that never did keeps its first step and RunningAtStart 0.
+		// Prefill with nothing decoding starves no one, so the stretch starts at the first step that had a request running.
 		first := i
 		for k := i; k < end; k++ {
 			if steps[k].RunningReq > 0 {
@@ -357,20 +341,15 @@ func (b *Boot) PrefillStretches(chunkSize, minCold int) []ColdRun {
 	return out
 }
 
-// Stall is a stretch where requests were decoding, a prefill took the GPU,
-// and no decode step ran again for Seconds: the log's direct measurement of
-// decode starvation, available only with timestamps.
+// Stall is a stretch where requests were decoding, a prefill took the GPU.
 type Stall struct {
-	// Start is the first prefill step logged with running requests, End the
-	// next decode step; [Start, End) indexes into the boot's Steps.
+	// Start is the first prefill step logged with running requests, End the next decode step.
 	Start, End int
 	Seconds    float64
-	// PrefillTokens is all prefill work in the window and ColdTokens the part
-	// with no prefix hit.
+	// PrefillTokens is all prefill work in the window and ColdTokens the part with no prefix hit.
 	PrefillTokens int
 	ColdTokens    int
-	// RunningReq is #running-req on the first prefill and RunningPeak the
-	// most any prefill in the window reported (arrivals join the count).
+	// RunningReq is #running-req on the first prefill and RunningPeak the most any prefill in the window reported.
 	RunningReq  int
 	RunningPeak int
 	QueuePeak   int

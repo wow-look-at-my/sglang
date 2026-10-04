@@ -5,17 +5,11 @@ package kv
 
 import "sort"
 
-// ReloadSecondsPerToken is what a host-resident prefix costs to bring back per
-// token. ASSUMED: about 12 KB/token/GPU of full-attention KV (12 of 48 layers,
-// 2 KV heads of 256 dims in bf16, split over TP2) over ~25 GB/s pinned
-// PCIe Gen5, which is ~0.5 us/token. The sweep varies it 10x.
+// ReloadSecondsPerToken is what a host-resident prefix costs to bring back per token.
 const ReloadSecondsPerToken = 0.5e-6
 
 // Entry is one conversation's cached prefix, the radix leaf a returning turn
-// matches against. A prefix is resident on device, backed on host, both, or
-// gone; partial residency is not modelled because a GDN/Mamba state cannot be
-// resumed mid-prefix, so the log's thrash turns hit only the shared system
-// prompt rather than half of a conversation.
+// matches against.
 type Entry struct {
 	Conv    int
 	DevLen  int
@@ -34,19 +28,14 @@ type Pool struct {
 	hostUsed  int
 	seen      map[int]bool
 
-	// Recomputes counts, per conversation, the turns that found less than half
-	// of their input cached after the conversation had been served once: a
-	// full-prefix recompute, the cost the collapse is measured by.
+	// Recomputes counts, per conversation, the turns that found less than half of their input cached after the conversation had been served once.
 	Recomputes map[int]int
-	// ReloadTokens and RecomputeTokens are the prefix tokens brought back from
-	// host and recomputed instead, over the whole run.
+	// ReloadTokens and RecomputeTokens are the prefix tokens brought back from host and recomputed instead.
 	ReloadTokens    int
 	RecomputeTokens int
 	EvictedTokens   int
 }
 
-// New builds a pool with a device tier of devCap tokens and a host tier of
-// hostCap tokens; hostCap 0 is a cache with no HiCache.
 func New(devCap, hostCap int) *Pool {
 	return &Pool{
 		DevCap:     devCap,
@@ -61,7 +50,7 @@ func New(devCap, hostCap int) *Pool {
 func (p *Pool) Free() int { return p.DevCap - p.inflight - p.devCached }
 
 // Capacity is what the cache can keep across a turn boundary: write-through
-// mirrors every cached prefix on host, so the larger tier is the bound.
+// mirrors every cached prefix on host.
 func (p *Pool) Capacity() int {
 	if p.HostCap > p.DevCap {
 		return p.HostCap
@@ -87,8 +76,7 @@ func (p *Pool) Warm(conv, tokens int, now float64) {
 }
 
 // Lookup is match_prefix: a device hit if the prefix is resident, otherwise a
-// host hit to load back. One token of the input is always recomputed, because
-// the request samples its first token at the end of its prefill.
+// host hit to load back.
 func (p *Pool) Lookup(conv, inputLen int) (devHit, hostHit int) {
 	e := p.entries[conv]
 	if e == nil {
@@ -167,9 +155,8 @@ func (p *Pool) hostDrops(conv, tokens int) []*Entry {
 	return out
 }
 
-// Eviction is one prefix's passage out of the device cache, snapshotted before
-// it happens: `ToHost` says whether a copy survived there, which decides whether
-// the conversation pays a reload or a full recompute for it later.
+// Eviction is one prefix's passage out of the device cache, snapshotted
+// before it happens: `ToHost` says whether a copy survived there.
 type Eviction struct {
 	Conv   int
 	Tokens int
@@ -239,9 +226,8 @@ func (p *Pool) Admit(conv, inputLen, outTarget, devHit, hostHit int, now float64
 }
 
 // CountRecompute records what a request found on arrival: a conversation that
-// had been served before and now matches less than half of its input is paying
-// for its whole prefix again. Half separates a conversation's own context from
-// a hit on nothing but the shared system prompt.
+// had been served before and now matches less than half of its input is
+// paying for its whole prefix again.
 func (p *Pool) CountRecompute(conv, inputLen, devHit, hostHit int) {
 	if !p.seen[conv] {
 		return
@@ -298,8 +284,7 @@ func (p *Pool) RebuildSeconds(evicted []Eviction, recomputeSecPerTok float64) fl
 	return t
 }
 
-// CachedConversations reports how many prefixes are resident on device, which
-// is what the pool-thrash collapse looks like from the scheduler's side.
+// CachedConversations reports how many prefixes are resident on device.
 func (p *Pool) CachedConversations() int {
 	n := 0
 	for _, e := range p.entries {

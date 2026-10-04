@@ -1,8 +1,6 @@
 package sim
 
-// SharedSystemPrompt is the prefix every conversation of the thrash episode
-// carries. The log's thrashed turns hit exactly this many tokens, so it stays
-// resident while whole conversation prefixes are evicted around it.
+// SharedSystemPrompt is the prefix every conversation of the thrash episode carries.
 const SharedSystemPrompt = 11_584
 
 // ThrashConversations is the logged thrash episode's conversation count.
@@ -22,13 +20,11 @@ const (
 // Scenario is a committed workload plus the window its metrics use.
 type Scenario struct {
 	Name string
-	// Key shares runs between scenarios whose workload is identical, so the
-	// comparison never measures the same run twice.
+	// Key shares runs between scenarios whose workload is identical, so the comparison never measures the same run twice.
 	Key   string
 	Note  string
 	Build func(seed int64, cost Cost) Workload
-	// Window is the interval the throughput and rate metrics use. HardStop runs
-	// past it so in-flight turns finish, without stretching the window.
+	// Window is the interval the throughput and rate metrics use.
 	HardStop   float64
 	Window     float64
 	MaxRunning int
@@ -45,8 +41,7 @@ func ScenarioA(ep Episode) Scenario {
 		Build: func(seed int64, cost Cost) Workload {
 			m := NewMix(seed, cost, 0)
 			m.StopAt = 300
-			// Conversation X already holds R2's matched prefix; the others start
-			// with nothing cached, which is what makes their prompts cold.
+			// Conversation X already holds R2's matched prefix.
 			x := m.RegisterStream(ep.R2Cached, DefaultAgent)
 			y := m.RegisterStream(0, DefaultAgent)
 			z := m.RegisterStream(0, DefaultAgent)

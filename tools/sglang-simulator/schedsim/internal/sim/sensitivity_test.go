@@ -57,9 +57,7 @@ func TestCostScaleMovesTheReportedMetrics(t *testing.T) {
 	}
 
 	// The factor has to reach the metrics at the rate it is applied, not merely
-	// agree in sign: at x2 the stall OLD reports must be past x1's, and the
-	// spread between the two ends of the range must be of the order the factor
-	// itself implies.
+	// agree in sign.
 	if !(stallOld[2] > 1.5*stallOld[1]) {
 		t.Errorf("doubling the prefill cost moved OLD's longest stall from %.2f s to only %.2f s",
 			stallOld[1], stallOld[2])

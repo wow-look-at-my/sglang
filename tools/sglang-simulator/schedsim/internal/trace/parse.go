@@ -44,8 +44,7 @@ type Step struct {
 	AcceptLen  float64 // decode: speculative tokens accepted per step
 	Throughput float64 // the step's own reported tok/s (input or gen)
 
-	// At is the line's timestamp in the production format ("<RFC3339Nano>
-	// <worker> <LEVEL> TP0] ..."); zero for the bare "TP0] ..." format.
+	// At is the line's timestamp in the production format.
 	At time.Time
 	// Worker is the process id the line carries in the production format.
 	Worker string
@@ -53,9 +52,7 @@ type Step struct {
 	Rank int
 }
 
-// kindRe matches a batch line in either format: the bare "TP0] Prefill batch,"
-// the embedded log uses, or the production line with its
-// "<timestamp> <worker> <level> " prefix.
+// kindRe matches a batch line in either format.
 var kindRe = regexp.MustCompile(`^(?:(\d{4}-\d\d-\d\dT\S+) (\S+) (\S+) )?TP(\d+)\] (Prefill|Decode) batch,`)
 
 // Parse reads every scheduler step line out of a log, ignoring the HTTP request
@@ -198,8 +195,7 @@ type Metrics struct {
 	PrefillSteps int
 	DecodeSteps  int
 
-	// ColdStart and ColdEnd bound the stretch of full-chunk, no-cache-reuse
-	// prefill steps that belong to the first cold prompt: [ColdStart, ColdEnd).
+	// ColdStart and ColdEnd bound the stretch of full-chunk, no-cache-reuse prefill steps that belong to the first cold prompt.
 	ColdStart int
 	ColdEnd   int
 	// PendingAtCold is #pending-token on the first step of that stretch.
@@ -227,9 +223,7 @@ type Metrics struct {
 	DecodeStepToks float64 // median speculative tokens accepted per decode step
 	RunningDecode  int     // running requests on the last decode step before the stretch
 
-	// LowGenLines counts pre-collapse decode lines reporting a bounded number of
-	// tok/s and LowGenNearPrefill how many of those sit within a line or some of
-	// a prefill line, which is the signature of a log window that swallowed a chunk.
+	// LowGenLines counts pre-collapse decode lines reporting a bounded number of tok/s and LowGenNearPrefill how many.
 	LowGenLines       int
 	LowGenNearPrefill int
 }
@@ -243,21 +237,17 @@ func (m Metrics) NormalDecodeStepsPerSec() float64 {
 	return 1 / m.DecodeStepSecs
 }
 
-// MaxDecodeStepsInColdWindow bounds the decode steps that could have run inside
-// the cold prefill while still logging no decode line: the log interval minus
-// one. This is the strongest statement the absence of lines supports.
+// MaxDecodeStepsInColdWindow bounds the decode steps that could have run inside the cold prefill while still logging no decode line.
 func MaxDecodeStepsInColdWindow() int { return DecodeLogInterval - 1 }
 
-// NormalDecodeStepsInColdWindow is how many decode steps would have run over the
-// cold window at the pre-collapse rate, for contrast with the bound above.
+// NormalDecodeStepsInColdWindow is how many decode steps would have run over
+// the cold window at the pre-collapse rate.
 func (m Metrics) NormalDecodeStepsInColdWindow() float64 {
 	return m.ColdSeconds * m.NormalDecodeStepsPerSec()
 }
 
-// StepsForGenRate is how many decode steps the window would need for an
-// interrupted conversation to generate at rate tokens/s: the window's duration
-// times the rate, divided by the tokens one step produces. It turns a claimed
-// generation rate into a testable step count.
+// StepsForGenRate is how many decode steps the window will need for an
+// interrupted conversation to generate at rate tokens/s.
 func (m Metrics) StepsForGenRate(rate float64) float64 {
 	if m.DecodeStepToks <= 0 {
 		return 0
@@ -274,10 +264,8 @@ func (m Metrics) GenRateForSteps(steps int) float64 {
 	return float64(steps) * m.DecodeStepToks / m.ColdSeconds
 }
 
-// DecodeDutyCycleForRate is the fraction of scheduling steps that must be decode
-// for a conversation to generate at rate tokens/s. It turns an observed rate
-// into the share of the GPU that conversation was getting, which is how a
-// partial-starvation figure is read back out of the model.
+// DecodeDutyCycleForRate is the fraction of scheduling steps that must be
+// decode for a conversation to generate at rate tokens/s.
 func (m Metrics) DecodeDutyCycleForRate(rate float64) float64 {
 	if m.DecodeStepToks <= 0 || m.DecodeStepSecs <= 0 {
 		return 0
@@ -285,9 +273,8 @@ func (m Metrics) DecodeDutyCycleForRate(rate float64) float64 {
 	return rate * m.DecodeStepSecs / m.DecodeStepToks
 }
 
-// isColdChunk reports whether a step looks like a chunk of a cold long prompt:
-// a full-size chunk that reuses no cached prefix. Any other prefill (a short
-// request, or a prefix-cache hit) breaks the stretch.
+// isColdChunk reports whether a step looks like a chunk of a cold long
+// prompt: a full-size chunk that reuses no cached prefix.
 func isColdChunk(s Step, chunkSize int) bool {
 	return s.Kind == Prefill && s.HitTokens == 0 && s.NewTokens == chunkSize
 }
@@ -388,8 +375,7 @@ func Summarize(steps []Step, chunkSize int) Metrics {
 			m.LowGenNearPrefill++
 		}
 	}
-	// One decode step's duration is tokens-per-step divided by the rate that
-	// produced them, which is exactly how the log defines gen throughput.
+	// One decode step's duration is tokens-per-step divided by the rate that produced them.
 	var durs, toks []float64
 	for _, s := range steps {
 		if s.Kind == Decode && s.AcceptLen > 0 {
@@ -421,8 +407,7 @@ func nearPrefill(steps []Step, at, radius int) bool {
 }
 
 // StepSeconds is one prefill step's measured GPU duration: the step's new
-// tokens over the input rate the log reports for that same step. It inverts the
-// log's own definition of input throughput, so nothing here is assumed.
+// tokens over the input rate the log reports for that same step.
 func StepSeconds(s Step) float64 {
 	return float64(s.NewTokens) / s.Throughput
 }

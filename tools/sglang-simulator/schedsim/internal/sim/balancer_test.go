@@ -3,8 +3,8 @@ package sim
 import "testing"
 
 // TestFeaturesTablePinsTheModes guards the comparison itself: each mode's rule set
-// is what the Python at its own commit does, and the three must differ only where
-// the ports say they do. A silent edit here would compare NEW against an invented
+// is what the Python at its own commit does, and those must differ only where the
+// ports say they do. A silent edit here would compare NEW against an invented
 // PREV, which is worse than no comparison.
 func TestFeaturesTablePinsTheModes(t *testing.T) {
 	old := FeaturesOf(ModeOld)
@@ -19,10 +19,7 @@ func TestFeaturesTablePinsTheModes(t *testing.T) {
 	if prev.Cede != CedeHalf {
 		t.Errorf("PREV cede = %v, want the plain half cap", prev.Cede)
 	}
-	// arg_groups/mixed_chunk_hook.py does not exist at f15db9ee6a, so nothing
-	// resolves --enable-mixed-chunk on: PREV's streams take tokens in pure decode
-	// batches only. A PREV that rode a token inside every chunk would report an
-	// inflated per-stream decode rate and a shrunken longest stall.
+	// arg_groups/mixed_chunk_hook.py does not exist at f15db9ee6a.
 	if prev.MixedChunk {
 		t.Error("PREV must not form mixed batches: its commit has no mixed-chunk auto-enable")
 	}
@@ -45,9 +42,9 @@ func TestFeaturesTablePinsTheModes(t *testing.T) {
 	}
 }
 
-// The debt floors are the line the two balancers differ on besides the stall
-// bound: a decode slice longer than the prefill it faces can never become credit
-// under PREV, and under NEW is credit up to one decode batch.
+// The debt floors are the line both balancers differ on besides the stall bound:
+// a decode slice longer than the prefill it faces can never become credit under
+// PREV, and under NEW is credit up to one decode batch.
 func TestBalancerDebtFloorsDiffer(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -55,8 +52,6 @@ func TestBalancerDebtFloorsDiffer(t *testing.T) {
 		want []float64
 	}{
 		{"PREV floors at zero", true, []float64{0, 0, 0}},
-		// A 2 ms prefill against a 4 ms decode leaves -2 ms each round, and the
-		// bank stops at one decode batch rather than accumulating.
 		{"NEW banks one decode batch", false, []float64{-0.002, -0.004, -0.004}},
 	} {
 		b := &Balancer{Prev: tc.prev}
@@ -109,14 +104,13 @@ func TestBurstBoundGatesContinuationsNotFreshWork(t *testing.T) {
 	}
 }
 
-// Cost per prefill token rises with the context attention reads, so a token bound
-// alone lets a chunked prompt's later chunks stall decode for several times the
-// seconds one chunk promises. The continuation's cap is the GPU seconds one chunk
-// is worth at the measured average rate, priced at the marginal rate of the batch
-// that just ran.
+// Cost per prefill token rises with the context attention reads, so a token
+// bound alone lets a chunked prompt's later chunks stall decode for several
+// times the seconds one chunk promises. The continuation's cap is the GPU
+// seconds one chunk is worth at the measured average rate, priced at the
+// marginal rate of the batch that ran.
 func TestContinuationBudgetIsDenominatedInSeconds(t *testing.T) {
 	b := NewBalancer(FeaturesOf(ModeNew), 4096)
-	// The first prefill measures 200 us per token, and a decode batch follows it.
 	b.OnLaunch(true, 4000, 0, 0)
 	b.OnFinish(0.8)
 	b.OnLaunch(false, 0, 0, 0.8)
@@ -124,8 +118,6 @@ func TestContinuationBudgetIsDenominatedInSeconds(t *testing.T) {
 	if avg := b.PrefillSecondsPerToken(); avg != 0.0002 {
 		t.Fatalf("average prefill rate %v, want 0.0002 s/token", avg)
 	}
-	// The same prompt's next chunk reads a longer context: 2000 tokens cost the
-	// same 0.8 s, twice the prefill rate measured so far.
 	b.OnLaunch(true, 2000, 0, 1.0)
 	b.OnFinish(1.8)
 	average, marginal := b.PrefillSecondsPerToken(), b.marginalSecondsPerToken()
@@ -153,7 +145,7 @@ func TestDecodeBatchTokensDoNotEnterThePrefillRates(t *testing.T) {
 	b := NewBalancer(FeaturesOf(ModeNew), 4096)
 	b.OnLaunch(true, 4000, 0, 0)
 	b.OnFinish(0.8)
-	b.OnLaunch(false, 8, 0, 0.8) // a decode step of 8 requests, as the scheduler reports it
+	b.OnLaunch(false, 8, 0, 0.8) // a decode step of multiple requests, as the scheduler
 	b.OnFinish(1.0)
 	if avg := b.PrefillSecondsPerToken(); avg != 0.0002 {
 		t.Errorf("average prefill rate %v after a decode batch, want 0.0002 s/token", avg)

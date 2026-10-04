@@ -62,8 +62,7 @@ func TestLogReplayRebuildsABoot(t *testing.T) {
 			}
 		}
 	}
-	// Initial releases one turn per conversation, and OnFinish walks the rest
-	// in order, never earlier than logged.
+	// Initial releases one turn per conversation, and OnFinish walks the rest in order, never earlier than logged.
 	init := l.Initial()
 	if len(init) != l.Convs {
 		t.Errorf("Initial released %d, want %d", len(init), l.Convs)

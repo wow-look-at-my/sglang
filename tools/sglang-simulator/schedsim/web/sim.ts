@@ -1,11 +1,5 @@
-// Visual scheduler simulator: the old prefill-priority rule and the fork's
+// Visual scheduler simulator: the prefill-priority rule and the fork's
 // time-sharing balancer, side by side, fed the same traffic.
-//
-// The cost model and the two scheduling rules are ports of internal/sim and
-// python/sglang/srt/managers/scheduler_components/prefill_decode_balancer.py,
-// priced with the calibration schedsim fitted to the Qwen3.8-Flash-Next log
-// (see docs/replaying-a-serving-log.md). One file, no imports, so the compiled
-// sim.js runs from a file:// open.
 
 // ---------------------------------------------------------------- cost model
 
@@ -23,9 +17,9 @@ interface Calibration {
   reloadPerToken: number; // host tier reload, s per token
 }
 
-// schedsim's fit on the 28-hour log: "prefill 10.0 ms + 65.874 us/token +
-// 7.43e-11/token/ctx + 5.54e-16/token/ctx^2; decode 13.269 ms + 1.5 ms/req +
-// 6e-09 s/token-ctx (accept 2.78); pool 1398667 tokens".
+// schedsim's fit on the 28-hour log: "prefill.0 ms +. us/token +
+// 7.43e-11/token/ctx + 5.54e-16/token/ctx^; decode.269 ms +. ms/req +
+// 6e-09 s/token-ctx (accept.78); pool tokens".
 const LOG_CALIBRATION: Calibration = {
   chunk: 4096,
   prefillBase: 10e-3,
@@ -59,10 +53,10 @@ function decodeSeconds(c: Calibration, batch: number, sumCtx: number): number {
 
 // PrefillDecodeBalancer: measured GPU seconds of prefill against decode while
 // both have work; prefill is deferred while it is ahead. Time is charged at
-// completion, from the previous completion, because the overlap scheduler
-// picks batch N+1 while N still runs. A burst of at most one chunk's tokens
-// runs before decode must catch up; a chunk continuing a long prompt is
-// bounded in GPU seconds at its marginal (context-inflated) rate.
+// completion, from the completion, because the overlap scheduler picks batch
+// N+1 while N still runs. A burst of at most one chunk's tokens runs before
+// decode must catch up; a chunk continuing a long prompt is bounded in GPU
+// seconds at its marginal (context-inflated) rate.
 class Balancer {
   debt = 0;
   unsettledPf = 0;
@@ -108,7 +102,6 @@ class Balancer {
     return this.burstUsed >= this.burstTokens;
   }
 
-  // -1 means no bound.
   prefillTokenBudget(continuesChunk: boolean): number {
     if (this.burstTokens === 0) return -1;
     const average = this.prefillSecondsPerToken();
@@ -275,9 +268,7 @@ interface EngineConfig {
   maxRunning: number;
   hostMul: number;
   mixedChunk: boolean;
-  // cede: while a long prompt is being chunked, waiting requests short enough
-  // to finish inside half a chunk ride along (the fork's cede budget); the
-  // upstream rule gives the chunked prompt the whole chunk every time.
+  // cede: while a long prompt is being chunked, waiting requests short enough to finish inside half a chunk ride along (the fork's cede budget).
   cede: boolean;
 }
 
@@ -441,8 +432,7 @@ class Engine {
     let cold = false;
     if (b.kind === "prefill") {
       const priced = b.items.map((it) => ({ tokens: it.tokens, midCtx: it.req.prefix + it.tokens / 2 }));
-      // Mixed chunk: each running request rides along as one extend token
-      // at the chunk's rate and yields one plain token.
+      // Mixed chunk: each running request rides along as one extend token at the chunk's rate.
       for (const r of b.rows) priced.push({ tokens: 1, midCtx: r.input + r.outDone });
       seconds = prefillSeconds(cal, priced);
       for (const it of b.items) {
@@ -557,7 +547,7 @@ interface TrafficParams {
   outMax: number;
   thinkMin: number;
   thinkMax: number;
-  coldEvery: number; // mean seconds between random cold prompts, 0 = none
+  coldEvery: number;
   coldMin: number;
   coldMax: number;
   shared: number;
@@ -640,8 +630,7 @@ class Side {
 
 // ---------------------------------------------------------------- headless check
 
-// `node sim.js` runs a short comparison and prints it; the browser skips
-// this, and so does a test that loads the file as a module.
+// `node sim.js` runs a short comparison and prints it.
 declare const process: any;
 declare const require: any;
 declare const module: any;

@@ -1,7 +1,4 @@
 //! Model Context Protocol (MCP) client implementation.
-//!
-//! Provides MCP client functionality including tools, prompts, resources, and OAuth.
-//! Supports stdio, SSE, and HTTP transports with connection pooling and caching.
 
 pub mod config;
 pub mod connection_pool;

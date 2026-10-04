@@ -1,4 +1,4 @@
-// Command schedsim drives two scheduler policies over the same cold-prefill
+// Command schedsim drives scheduler policies over the same cold-prefill
 // workload parsed from a live serving log, and prints what each does.
 //
 // Usage:
@@ -7,8 +7,8 @@
 //	go run ./cmd/schedsim -log FILE -chunk-size 2048 -prefill-share 0.5
 //	go run ./cmd/schedsim -log FILE -replay-boots 4 -replay-seconds 0
 //
-// A production log (timestamped lines, several boots) adds three sections:
-// the boots it holds, every cold prompt with its measured stall beside the
+// A production log (timestamped lines, several boots) adds sections: the
+// boots it holds, every cold prompt with its measured stall beside the
 // policies, and a replay of each stalled boot's own traffic through the
 // engine. docs/replaying-a-serving-log.md describes them.
 package main
@@ -63,8 +63,7 @@ func run(args []string, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("parse log: %w", err)
 	}
-	// The single-window report models the longest cold prompt in the log,
-	// taken within one boot so a restart never splices two prompts together.
+	// The single-window report models the longest cold prompt in the log.
 	anchor := longestRunBoot(boots, *chunkSize)
 	if anchor < 0 {
 		return fmt.Errorf("no %d-token cold prefill stretch found in %s", *chunkSize, logName)
@@ -107,10 +106,7 @@ func run(args []string, w io.Writer) error {
 		in.Params.RunningReqs = work.RunningReqs
 	}
 
-	// The revised scheduler as it resolves by default (mixed chunk on, so the
-	// running requests also decode inside every chunk), then the balancer
-	// alone, and with the log's peak queue behind the chunks (which cannot
-	// join a chunk and so does not count).
+	// The revised scheduler as it resolves by default (mixed chunk on, so the running requests also decode inside every chunk).
 	var revisedRes sched.Result
 	for _, q := range []struct {
 		label string
@@ -176,11 +172,9 @@ func run(args []string, w io.Writer) error {
 	return nil
 }
 
-// PageSize is the page_size to assume when the log carries no server_args
-// line to read it from.
+// PageSize is the page_size to assume when the log carries no server_args line to read it from.
 const PageSize = 64
 
-// longestRunBoot is the boot holding the longest run of cold chunks, or -1.
 func longestRunBoot(boots []trace.Boot, chunkSize int) int {
 	best, bestLen := -1, 0
 	for i := range boots {
@@ -193,7 +187,7 @@ func longestRunBoot(boots []trace.Boot, chunkSize int) int {
 	return best
 }
 
-// printBoots lists the process lifetimes the log holds, with what each one
+// printBoots lists the process lifetimes the log holds, with what each
 // measured: its stalls and its serving-time kernel compiles.
 func printBoots(w io.Writer, boots []trace.Boot, chunkSize int) {
 	fmt.Fprintf(w, "\n=== Boots in the log ===\n\n")

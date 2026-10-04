@@ -85,8 +85,7 @@ type Prefill struct {
 	TPS                                             float64
 }
 
-// PrefillBody is the bare body of a prefill line. A zero TPS is written as
-// 13874.93, the corpus's steady rate, and NewSeq 0 as 1.
+// PrefillBody is the bare body of a prefill line.
 func PrefillBody(p Prefill) string {
 	if p.TPS == 0 {
 		p.TPS = 13874.93
@@ -100,8 +99,7 @@ func PrefillBody(p Prefill) string {
 }
 
 // Prefill writes a prefill line and advances the clock by the time the line
-// itself says the batch took (tokens over its rate), so wall clock and model
-// agree the way they do in the corpus.
+// itself says the batch took (tokens over its rate), so wall clock.
 func (l *Log) Prefill(p Prefill) *Log {
 	l.Line(PrefillBody(p))
 	tps := p.TPS
@@ -117,8 +115,7 @@ type Decode struct {
 	Usage, Accept, TPS         float64
 }
 
-// DecodeBody is the bare body of a decode line. Zero Accept and TPS are
-// written as 2.78 and 190.0, one healthy single-request step.
+// DecodeBody is the bare body of a decode line.
 func DecodeBody(d Decode) string {
 	if d.Accept == 0 {
 		d.Accept = 2.78
@@ -135,7 +132,7 @@ func DecodeBody(d Decode) string {
 }
 
 // Decode writes a decode line and advances the clock by one log interval of
-// steps at the line's own rate (40 steps of accept/TPS seconds each).
+// steps at the line's own rate (steps of accept/TPS seconds each).
 func (l *Log) Decode(d Decode) *Log {
 	l.Line(DecodeBody(d))
 	accept, tps := d.Accept, d.TPS
@@ -200,7 +197,7 @@ func (l *Log) ColdPrompt(tokens, chunk, running, queue int) *Log {
 func Stalled(worker string, chunks int) *Log {
 	l := New(worker, Start).ServerArgs(DefaultArgs)
 	l.Advance(1).JIT("_fwd_kernel", 1.5)
-	// Four conversations arrive with a shared 12k prefix and decode.
+	// Conversations arrive with a shared 12k prefix and decode.
 	for i := 0; i < 4; i++ {
 		l.Prefill(Prefill{NewTokens: 1500, Hit: 12288, Running: i, Usage: 0.2})
 	}

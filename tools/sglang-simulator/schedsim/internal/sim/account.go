@@ -6,24 +6,17 @@ import (
 	"schedsim/internal/trace"
 )
 
-// Exclusion names why a cold window cannot be priced at all, as opposed to being
-// priced and coming out unfavourable. Every window lands in exactly one of these,
-// so a comparison can state how many windows it actually rested on.
+// Exclusion names why a cold window cannot be priced at all, as opposed to being priced and coming out unfavourable.
 type Exclusion int
 
 const (
 	// Priced: the window has an arrival, a first token and a matching request.
 	Priced Exclusion = iota
-	// Unserved: the run ended before the prompt reached its first token, so
-	// there is no arrival-to-first-token interval to price. The delay the policy
-	// did impose shows up in the cold-window rate metrics instead, whose window
-	// runs to the end of the run for exactly this case.
+	// Unserved: the run ended before the prompt reached its first token.
 	Unserved
-	// Orphan: no request in the run opened this window, so the window's own
-	// prefill work cannot be identified and every bucket would be "other".
+	// Orphan: no request in the run opened this window.
 	Orphan
-	// Empty: the first token is not after the arrival, which no served prompt can
-	// produce; pricing it would report a negative wait as a measurement.
+	// Empty: the first token is not after the arrival, which no served prompt can produce.
 	Empty
 )
 
@@ -44,10 +37,7 @@ func (e Exclusion) String() string {
 const NumExclusions = int(Empty) + 1
 
 // WindowAccount splits one cold prompt's wait into the GPU work and idle time
-// that filled it. Every batch's seconds are charged in full and attributed
-// proportionally to what the batch priced, so the six buckets sum to the window
-// by construction; what the account proves is the *split*, which is why a longer
-// wait is or is not something the policy bought on purpose.
+// that filled it.
 type WindowAccount struct {
 	Window     float64
 	OwnPrefill float64
@@ -55,25 +45,16 @@ type WindowAccount struct {
 	OtherPrefill float64
 	// DecodeRows is the work a mixed batch does for the running streams.
 	DecodeRows float64
-	// Overhead is what a forward pass costs without computing anything: the
-	// per-batch base and the host-to-device reload copy. It is split across the
-	// batch's requests by their tokens, so charging it here changes no second of
-	// the window; it stops it being reported as prefill work belonging to
-	// whichever request happened to share the batch.
+	// Overhead is what a forward pass costs without computing anything.
 	Overhead float64
 	Decode   float64
 	Idle     float64
 	// Batches counts the forward passes that ran inside the window.
 	Batches int
-	// OwnBatches and OwnTokens describe the prompt's own prefill: how many
-	// forward passes carried its chunks, and how many tokens those chunks came
-	// to. Re-cutting a fixed token count into a different number of passes moves
-	// the priced bucket by the overhead of the passes, which is the only way the
-	// same computation can cost one policy more than another.
+	// OwnBatches and OwnTokens describe the prompt's own prefill: how many forward passes carried its chunks.
 	OwnBatches int
 	OwnTokens  int
-	// Skip is Unserved, Orphan or Empty when the window has no interval to price;
-	// the buckets are then all zero and Window must not be read as a measurement.
+	// Skip is Unserved, Orphan or Empty when the window has no interval to price.
 	Skip Exclusion
 }
 
@@ -148,11 +129,7 @@ func AccountWindow(res *Result, win ColdWindow) WindowAccount {
 		if total <= 0 {
 			otherCost, total = 1, 1
 		}
-		// A pass costs its tokens plus a fixed overhead and any reload copy it made
-		// before its kernels. The window's slice of the pass is split across the
-		// parts in the pass's own proportions, so the five buckets still add up to
-		// the window; what the split decides is which request a second is charged
-		// to, and the overhead is not the prompt's compute.
+		// A pass costs its tokens plus a fixed overhead and any reload copy it made before its kernels.
 		overhead := b.ReloadSeconds + res.Cfg.Cost.PerBatchSeconds()
 		if k := secs / (total + overhead); k > 0 {
 			ac.OwnPrefill += k * ownCost
@@ -178,8 +155,8 @@ func (r *Result) ColdRequest(win ColdWindow) *Request {
 	return nil
 }
 
-// WindowCensus tallies one run's cold windows by whether they can be priced, so a
-// bound that excludes windows can state how many and for what reason.
+// WindowCensus tallies one run's cold windows by whether they can be priced,
+// so a bound that excludes windows can state how many.
 type WindowCensus struct {
 	Arrived int
 	Priced  int

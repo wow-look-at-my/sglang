@@ -322,8 +322,7 @@ func TestPrefillStretchesMatchStalls(t *testing.T) {
 			for _, st := range stalls {
 				if st.Start == r.Start {
 					matched++
-					// The stall's wall clock and the stretch's summed
-					// chunk costs measure the same stretch two ways.
+					// The stall's wall clock and the stretch's summed chunk costs measure the same stretch ways.
 					var model float64
 					for k := r.Start; k < r.End; k++ {
 						model += StepSeconds(b.Steps[k])

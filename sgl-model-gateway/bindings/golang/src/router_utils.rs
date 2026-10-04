@@ -1,8 +1,4 @@
 //! Chat-request preparation, built on the gateway's public crate APIs.
-//!
-//! Mirrors the gRPC router's preparation steps so an out-of-tree FFI consumer
-//! produces the same prompt text, tool constraint and stop decoder as the
-//! in-process router.
 
 use std::collections::HashMap;
 use std::sync::Arc;

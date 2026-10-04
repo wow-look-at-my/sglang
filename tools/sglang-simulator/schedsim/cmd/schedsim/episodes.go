@@ -10,25 +10,18 @@ import (
 	"schedsim/internal/trace"
 )
 
-// One incident is one data point. A day of serving holds every cold prompt
-// the deployment prefilled, and the log's timestamps say how long decode
-// actually stopped for each of them. This section runs the single-window
-// policies over every such prompt and puts the measured stall beside what
-// the old policy's model predicts for it: agreement there is what makes the
-// new policy's column worth reading.
+// One incident is one data point.
 
 // episode is one prefill stretch and what each policy does with it.
 type episode struct {
 	boot     int
 	run      trace.ColdRun
-	measured float64 // stall the timestamps recorded, 0 without one
+	measured float64
 	old, new sched.Result
 	revised  sched.Result
 }
 
-// minEpisodeChunks keeps the table to prompts long enough to starve decode
-// for whole seconds; shorter runs are the per-line dips the log interval
-// smears out.
+// minEpisodeChunks keeps the table to prompts long enough to starve decode for whole seconds.
 const minEpisodeChunks = 8
 
 func collectEpisodes(boots []trace.Boot, chunkSize int, params func(w sched.Workload, p sched.Policy) sched.Params) []episode {

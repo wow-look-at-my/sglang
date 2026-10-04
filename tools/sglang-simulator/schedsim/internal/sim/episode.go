@@ -6,41 +6,31 @@ import (
 	"schedsim/internal/trace"
 )
 
-// Episode is the logged incident reduced to the arrivals a replay needs. Every
-// number is derived from a counter in the log rather than typed in, so a rebuilt
-// log moves the scenario with it; TestEpisodeMatchesTheLog pins the derivation
-// to the values the incident report quotes.
+// Episode is the logged incident reduced to the arrivals a replay needs.
 type Episode struct {
 	// ChunkSize is the deployment's chunked_prefill_size.
 	ChunkSize int
-	// C1Len is the first cold prompt's input length: #pending-token on its first
-	// chunk counts what that chunk left over.
+	// C1Len is the first cold prompt's input length: #pending-token on its first chunk counts what that chunk left over.
 	C1Len int
 	// C1Chunks counts C1's full-size chunks; its tail is C1Len mod ChunkSize.
 	C1Chunks int
 
-	// R2Len is the follow-up that queued during C1's prefill, and R2Cached the
-	// prefix it matched. R3Len and R4Len are the two cold prompts behind it.
+	// R2Len is the follow-up that queued during C1's prefill, and R2Cached the prefix it matched.
 	R2Len, R2Cached int
 	R3Len, R4Len    int
 
-	// R2AfterK and the rest count how many of C1's chunks had completed when the
-	// queue-depth counter first showed that request waiting.
+	// R2AfterK and the rest count how many of C1's chunks had completed when the queue-depth counter first showed.
 	R2AfterK, R3AfterK, R4AfterK int
 
-	// MixedNewSeq, MixedNewTokens and MixedHit describe the batch that finished
-	// C1, which the log printed.
+	// MixedNewSeq, MixedNewTokens and MixedHit describe the batch that finished C1, which the log printed.
 	MixedNewSeq, MixedNewTokens, MixedHit int
 	MixedLine                             int
 
-	// ChunkSeconds is the log's measured duration of each of C1's chunks. The
-	// first chunk's gap includes the idle time before the prompt arrived, so the
-	// arrival clock substitutes the model's cost for it.
+	// ChunkSeconds is the log's measured duration of each of C1's chunks.
 	ChunkSeconds []float64
 }
 
-// R2Arrival is when the follow-up queued, measured from C1's arrival: the
-// incident's own statement of it, in seconds.
+// R2Arrival is when the follow-up queued, measured from C1's arrival: the incident's own statement of it, in seconds.
 const R2Arrival = 1.3
 
 // TailLen is C1's last, short chunk.
@@ -49,9 +39,8 @@ func (e Episode) TailLen() int { return e.C1Len % e.ChunkSize }
 // R2Work is the follow-up's uncached input.
 func (e Episode) R2Work() int { return e.R2Len - e.R2Cached }
 
-// Arrival is the wall time a request that queued after k of C1's chunks reached
-// the scheduler: the log's own chunk durations summed from the second chunk,
-// since the first line's gap includes idle time before the prompt arrived.
+// Arrival is the wall time a request that queued after k of C1's chunks
+// reached the scheduler.
 func (e Episode) Arrival(k int, firstChunkSeconds float64) float64 {
 	t := firstChunkSeconds
 	for i := 1; i < k && i < len(e.ChunkSeconds); i++ {
@@ -78,9 +67,7 @@ func ExtractEpisode(steps []trace.Step, chunkSize int) (Episode, error) {
 	k := 0
 	prevQueue := 0
 	last := first
-	// #pending-token counts C1's remainder plus every queued request's whole
-	// input, so the length of each arrival is the step the residual takes; the
-	// queue-depth counter says which chunk it arrived behind.
+	// #pending-token counts C1's remainder plus every queued request's whole input, so the length of each arrival is the step the residual takes.
 	residualPrev := 0
 	var queued []int
 	for i := first; i < len(steps); i++ {
@@ -120,8 +107,7 @@ func ExtractEpisode(steps []trace.Step, chunkSize int) (Episode, error) {
 		}
 		if s.NewSeq >= 2 {
 			ep.MixedNewSeq, ep.MixedNewTokens, ep.MixedHit, ep.MixedLine = s.NewSeq, s.NewTokens, s.HitTokens, s.Line
-			// The follow-up is the request that matched a prefix in that batch: the
-			// two cold prompts in it matched none, and the cold run's tail is known.
+			// The follow-up is the request that matched a prefix in that batch.
 			ep.R2Cached = s.HitTokens
 			break
 		}
@@ -137,8 +123,8 @@ func ExtractEpisode(steps []trace.Step, chunkSize int) (Episode, error) {
 }
 
 // MixedItems is the composition of the batch that finished C1: its tail, the
-// follow-up's uncached work, and what is left of the chunk budget for the next
-// cold prompt. This is the batch-formation rule the log reproduced.
+// follow-up's uncached work, and what is left of the chunk budget for the
+// next cold prompt.
 func (e Episode) MixedItems() (tail, follow, next int) {
 	tail = e.TailLen()
 	follow = e.R2Work()

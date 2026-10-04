@@ -1,6 +1,4 @@
 //! MCP configuration types and utilities.
-//!
-//! Defines configuration structures for MCP servers, transports, proxies, and inventory.
 
 use std::{collections::HashMap, fmt};
 
@@ -16,8 +14,7 @@ pub struct McpConfig {
     #[serde(default)]
     pub pool: McpPoolConfig,
 
-    /// Global MCP proxy configuration (default for all servers)
-    /// Can be overridden per-server
+    /// Global MCP proxy configuration (default for all servers) Can be overridden per-server
     #[serde(default)]
     pub proxy: Option<McpProxyConfig>,
 
@@ -36,14 +33,11 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpTransport,
 
-    /// Per-server proxy override (overrides global proxy)
-    /// Set to `null` in YAML to force direct connection (no proxy)
+    /// Per-server proxy override (overrides global proxy) Set to `null` in YAML to force direct connection (no proxy)
     #[serde(default)]
     pub proxy: Option<McpProxyConfig>,
 
-    /// Whether this server is required for router startup
-    /// - true: Router startup fails if this server cannot be reached
-    /// - false: Log warning but continue (default)
+    /// Whether this server is required for router startup - true: Router startup fails if this server cannot be reached - false.
     #[serde(default)]
     pub required: bool,
 }
@@ -106,8 +100,7 @@ pub struct McpProxyConfig {
     /// HTTPS proxy URL
     pub https: Option<String>,
 
-    /// Comma-separated hosts to exclude from proxying
-    /// Example: "localhost,127.0.0.1,*.internal,10.*"
+    /// Comma-separated hosts to exclude from proxying Example: "localhost,127.0.0.1,*.internal,10.*"
     pub no_proxy: Option<String>,
 
     /// Custom proxy authentication (if needed)
@@ -170,7 +163,7 @@ fn default_max_connections() -> usize {
 }
 
 fn default_idle_timeout() -> u64 {
-    300 // 5 minutes
+    300 // A few
 }
 
 fn default_true() -> bool {
@@ -178,11 +171,11 @@ fn default_true() -> bool {
 }
 
 fn default_tool_ttl() -> u64 {
-    300 // 5 minutes
+    300 // A few
 }
 
 fn default_refresh_interval() -> u64 {
-    60 // 1 minute
+    60
 }
 
 // Default implementations
@@ -245,8 +238,7 @@ impl McpConfig {
 
     /// Load configuration from environment variables (optional)
     pub fn from_env() -> Option<Self> {
-        // This could be expanded to read from env vars
-        // For now, return None to indicate env config not implemented
+        // This could be expanded to read from env vars return None to indicate env config not implemented
         None
     }
 

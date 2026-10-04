@@ -30,8 +30,7 @@ type Config struct {
 	MaxRunning int
 	// HostMul is the HiCache host tier as a multiple of the device pool.
 	HostMul float64
-	// Overlap is the overlap scheduler: batch N+1 is chosen and launched before
-	// batch N's result is processed, so the balancer is charged at completion.
+	// Overlap is the overlap scheduler: batch N+1 is chosen and launched before batch N's result is processed.
 	Overlap bool
 	// MixedChunk folds one decode row per running request into each prefill batch.
 	MixedChunk bool
@@ -76,8 +75,7 @@ type Batch struct {
 	ReloadSeconds float64
 	// NewSeq is how many requests the batch prefilled, as #new-seq reports it.
 	NewSeq int
-	// Continuation is the request whose chunk this batch continues, if any: its
-	// own already-computed tokens are not a cache hit in the log's counting.
+	// Continuation is the request whose chunk this batch continues, if any.
 	Continuation *Request
 	Start        float64
 	End          float64
@@ -119,8 +117,7 @@ type ColdWindow struct {
 // Done reports whether the prompt ever reached its first token.
 func (w ColdWindow) Done() bool { return w.FirstTok >= 0 }
 
-// newColdWindow opens a window with no first token yet. FirstTok must start at
-// -1: 0.0 is a time, and Done() would read an unfinished prompt as served.
+// newColdWindow opens a window with no first token yet.
 func newColdWindow(tag string, arrival float64) ColdWindow {
 	return ColdWindow{Tag: tag, Arrival: arrival, FirstTok: -1}
 }
@@ -132,8 +129,7 @@ type Result struct {
 	Batches    []*Batch
 	DecodeLog  []DecodeLogLine
 	PrefillLog []PrefillLogLine
-	// Windows lists every cold prompt's prefill stretch in arrival order; a
-	// Request's Win field is its index here.
+	// Windows lists every cold prompt's prefill stretch in arrival order; a Request's Win field is its index here.
 	Windows     []ColdWindow
 	Pool        *kv.Pool
 	Agents      int
@@ -361,8 +357,7 @@ func (e *engine) prefillBatch(policyOn bool) *Batch {
 			return e.waiting[i].Work() < e.waiting[j].Work()
 		})
 	}
-	// The cede compares uncached work, so every candidate's prefix match must be
-	// current before it runs; match_prefix_for_req is the same refresh.
+	// The cede compares uncached work, so every candidate's prefix match must be current before it runs.
 	chunkedWas := e.chunked
 	for _, r := range e.waiting {
 		devHit, hostHit := e.prefixHit(r)
@@ -420,9 +415,7 @@ func (e *engine) prefillBatch(policyOn bool) *Batch {
 			break
 		}
 		deviceHit := minI(e.sharedTokens(r)+devHit, r.InputLen)
-		// A held request is skipped rather than ending the scan: ShouldHold holds
-		// back every later candidate that would also evict, and one that fits
-		// without eviction takes its own place in the batch.
+		// A held request is skipped rather than ending the scan.
 		if e.th != nil && e.th.ShouldHold(r.Conv, r.InputLen, deviceHit, own+r.OutTarget,
 			wouldEvict, r.Arrival, e.now) {
 			e.res.Held++
@@ -475,8 +468,7 @@ func (e *engine) prefillBatch(policyOn bool) *Batch {
 	return b
 }
 
-// sharedTokens is the part of a request's input every conversation carries,
-// which stays resident while conversation prefixes come and go.
+// sharedTokens is the part of a request's input every conversation carries.
 func (e *engine) sharedTokens(r *Request) int { return minI(e.shared, r.InputLen) }
 
 // prefixHit is match_prefix over the conversation's own prefix; the shared
@@ -542,8 +534,7 @@ func (e *engine) launch(b *Batch) {
 			}
 			r.Prefix += it.Extend
 			if it.Completes {
-				// The prefill samples the first token; the request joins the
-				// running batch at the next decision.
+				// The prefill samples the first token; the request joins the running batch at the next decision.
 				r.OutDone = 1
 				if r.OutDone > r.OutTarget {
 					r.OutDone = r.OutTarget
@@ -743,9 +734,6 @@ func (e *engine) cedeFair(chunked *Request, budget, runningBs int) int {
 	return e.reserveCeded(chunked, budget, maxReserved, e.cfg.MaxRunning-runningBs-1)
 }
 
-// reserveCeded moves every waiting request with less uncached work than the
-// chunked request has left ahead of the queue and reserves budget for it; the
-// result is what the chunked request may still take, -1 for the whole budget.
 func (e *engine) reserveCeded(chunked *Request, budget, maxReserved, maxNewReqs int) int {
 	page := e.cfg.Page
 	remaining := chunked.InputLen - chunked.Prefix

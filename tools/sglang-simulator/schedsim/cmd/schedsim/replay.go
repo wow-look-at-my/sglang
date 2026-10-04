@@ -11,12 +11,7 @@ import (
 	"schedsim/internal/trace"
 )
 
-// The scenario suite is scripted traffic. A timestamped log is the traffic
-// itself: every boot's arrivals, prompt sizes and prefix hits, and beside
-// them the stalls and completions the deployment measured. This section runs
-// each boot's own requests through the three policies and prints the log's
-// measurements next to the old policy's column, which is what says whether
-// the model deserves to be read for the new one.
+// The scenario suite is scripted traffic.
 
 type replayFlags struct {
 	on      bool
@@ -79,8 +74,7 @@ func printReplay(w io.Writer, boots []trace.Boot, cost sim.Cost, chunkSize int, 
 		if len(want) == 0 && len(b.Stalls(5)) == 0 {
 			continue
 		}
-		// The window opens half an hour before the boot's first stall, so the
-		// cache is warm by the time the stalls the log measured come around.
+		// The window opens half an hour before the boot's first stall.
 		skip := 0.0
 		if st := b.Stalls(5); len(st) > 0 {
 			var first time.Time

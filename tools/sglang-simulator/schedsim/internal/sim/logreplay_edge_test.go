@@ -40,22 +40,17 @@ func TestBuildLogReplayErrors(t *testing.T) {
 func TestBuildLogReplayReconstructsConversations(t *testing.T) {
 	const chunk = 4096
 	l := tracetest.New("w", tracetest.Start).ServerArgs(tracetest.DefaultArgs)
-	// Conversation 0 opens on the shared 12288-token prompt and, after a
-	// 400-token reply, sends its second turn.
+	// Conversation multiple opens on the shared 12288-token prompt and, after a 400-token reply, sends its second turn.
 	l.Prefill(tracetest.Prefill{NewTokens: 1000, Hit: 12288})
 	l.Steady(2, 1, 50000)
 	l.Prefill(tracetest.Prefill{NewTokens: 700, Hit: 13288 + 400, Running: 1})
-	// Conversations 1 and 2 open, then their follow-ups share one line:
-	// its prefix hit is both last prompts plus their replies (300, 200).
 	l.Prefill(tracetest.Prefill{NewTokens: 3000, Hit: 12288, Running: 1})
 	l.Advance(1)
 	l.Prefill(tracetest.Prefill{NewTokens: 6000, Hit: 12288, Running: 2})
 	l.Steady(2, 3, 50000)
 	l.Prefill(tracetest.Prefill{NewSeq: 2, NewTokens: 1200, Hit: 15288 + 300 + 18288 + 200, Running: 3})
 	l.Steady(2, 3, 50000)
-	// A cold prompt of 40 chunks and a partial one, chunked over lines whose
-	// #pending-token also counts a 3000-token request queued behind it,
-	// which then runs as a new conversation.
+	// A cold prompt of multiple chunks and a partial one, chunked.
 	const coldLen = 40*chunk + 100
 	l.Prefill(tracetest.Prefill{NewTokens: chunk, Pending: coldLen + 3000, Running: 3, Queue: 1})
 	for left := coldLen - chunk; left > 0; left -= chunk {
@@ -92,15 +87,12 @@ func TestBuildLogReplayReconstructsConversations(t *testing.T) {
 	if r.Agents() != r.Convs || r.SharedPrefix() != r.Shared {
 		t.Error("accessors")
 	}
-	// Conversation 0's reply was measured from its second turn's prefix.
 	if first := r.Turns[0]; !first.Measured || first.Out != 400 || first.Input != 13288 {
 		t.Errorf("first turn = %+v", first)
 	}
 	if second := r.Turns[1]; second.Conv != 0 || second.Kind != KindAgent || second.Hit != 13688 {
 		t.Errorf("follow-up = %+v", second)
 	}
-	// The shared line's two follow-ups went to conversations 2 and 1, the
-	// most recently idle, each with its own last prompt as its hit.
 	f2, f1 := r.Turns[4], r.Turns[5]
 	if f2.Conv != 2 || f1.Conv != 1 || f2.Hit != 18288 || f1.Hit != 15288 || f2.Input != 18288+600 {
 		t.Errorf("follow-ups = %+v, %+v", f2, f1)
@@ -122,7 +114,6 @@ func TestBuildLogReplayReconstructsConversations(t *testing.T) {
 	if m := r.MeasuredOuts(); m != 2 {
 		t.Errorf("measured replies = %d", m)
 	}
-	// Initial releases five first turns; OnFinish walks conversation 0.
 	init := r.Initial()
 	if len(init) != 5 {
 		t.Errorf("Initial released %d", len(init))
@@ -141,8 +132,7 @@ func TestBuildLogReplayReconstructsConversations(t *testing.T) {
 	if len(fresh.Initial()) != 5 || len(r.next) == 0 {
 		t.Error("Reset did not start the cursors over")
 	}
-	// A window that starts after the first turns sees them as new, and a
-	// context cap clamps the prompt.
+	// A window that starts after the first turns sees them as new, and a context cap clamps the prompt.
 	b.Args.ContextLength = 10000
 	late, err := BuildLogReplay(b, chunk, 3, 20)
 	if err != nil {
