@@ -28,7 +28,7 @@ func TestSweepCoversThePerturbations(t *testing.T) {
 		}
 	}
 
-	rows := RunSweep(cost, linear, []int64{1, 2, 3}, 7, 0)
+	rows := RunSweep(cost, linear, testEpisodePtr(), []int64{1, 2, 3}, 7, 0)
 	if len(rows) != len(variants) {
 		t.Fatalf("%d rows for %d variants", len(rows), len(variants))
 	}

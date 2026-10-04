@@ -65,9 +65,6 @@ type Incident struct {
 	SagFrom, SagTo float64
 }
 
-// EmbeddedIncident is the report that came with the embedded log.
-var EmbeddedIncident = &Incident{BandLo: 8, BandHi: 20, SagFrom: 13874, SagTo: 4831}
-
 // RevisedRun is one queue-balance run and the queue length behind its chunks.
 type RevisedRun struct {
 	Queue  int

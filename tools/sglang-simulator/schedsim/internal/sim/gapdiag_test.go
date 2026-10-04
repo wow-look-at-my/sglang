@@ -3,18 +3,39 @@ package sim
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"testing"
 
 	"schedsim/internal/trace"
+	"schedsim/internal/trace/tracetest"
 )
+
+// incidentSteps is the generated incident log the scenarios are calibrated on.
+var incidentSteps = sync.OnceValue(func() []trace.Step {
+	steps, err := trace.Parse(tracetest.Incident(tracetest.DefaultIncident).String())
+	if err != nil {
+		panic("incident log: " + err.Error())
+	}
+	return steps
+})
+
+// testEpisode is the incident's episode, which scenario A replays.
+func testEpisode() Episode {
+	ep, err := ExtractEpisode(incidentSteps(), BaselineChunkSize)
+	if err != nil {
+		panic("incident episode: " + err.Error())
+	}
+	return ep
+}
+
+func testEpisodePtr() *Episode {
+	ep := testEpisode()
+	return &ep
+}
 
 // ScenarioCost is the calibrated cost model the committed scenarios run on.
 func ScenarioCost() Cost {
-	steps, err := trace.Parse(trace.EmbeddedLog)
-	if err != nil {
-		panic("embedded log: " + err.Error())
-	}
-	return NewCost(trace.Calibrate(steps, BaselineChunkSize, 64))
+	return NewCost(trace.Calibrate(incidentSteps(), BaselineChunkSize, 64))
 }
 
 // TestGapDiagnosticScenarioB dumps, for each policy, where scenario B's
@@ -112,7 +133,7 @@ func remapRequests(rs []*Request, remap func(*Request) *Request) []*Request {
 // "decode", and one lost to a key collision cannot reappear anywhere.
 func TestMergedTraceAttributesEverySeed(t *testing.T) {
 	cost := ScenarioCost()
-	for _, sc := range []Scenario{ScenarioA(), ScenarioB(2), ScenarioThrash(4, 600)} {
+	for _, sc := range []Scenario{ScenarioA(testEpisode()), ScenarioB(2), ScenarioThrash(4, 600)} {
 		var runs []*Result
 		want := map[string]int{}
 		total := 0

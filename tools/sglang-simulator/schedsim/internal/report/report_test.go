@@ -7,11 +7,15 @@ import (
 
 	"schedsim/internal/sched"
 	"schedsim/internal/trace"
+	"schedsim/internal/trace/tracetest"
 )
+
+// incident is the operator's report that came with the incident log.
+var incident = &Incident{BandLo: 8, BandHi: 20, SagFrom: 13874, SagTo: 4831}
 
 func embedded(t *testing.T) (trace.Metrics, sched.Workload) {
 	t.Helper()
-	steps, err := trace.Parse(trace.EmbeddedLog)
+	steps, err := trace.Parse(tracetest.Incident(tracetest.DefaultIncident).String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +31,7 @@ func TestWriteRendersEverySection(t *testing.T) {
 	in := Input{
 		Metrics: m, Old: old, New: new, ChunkSize: 4096, Params: w.Params(sched.PolicyTimeBalance),
 		LogLines: 10, LogName: "test.log", ColdFirstLine: 1, ColdLastLine: 2,
-		Fidelities: DefaultFidelities(m, EmbeddedIncident), Incident: EmbeddedIncident,
+		Fidelities: DefaultFidelities(m, incident), Incident: incident,
 		Revised: []RevisedRun{{Queue: 1, Label: "one", Result: rev}},
 		Sweep:   []SweepPoint{{Interval: 2, DecodeSteps: 3, EffectiveGenTPS: 4, PrefillFinishSecs: 5}},
 	}

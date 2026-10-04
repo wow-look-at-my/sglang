@@ -1,15 +1,21 @@
 package trace
 
 import (
+	"math"
 	"strings"
 	"testing"
+
+	"schedsim/internal/trace/tracetest"
 )
+
+// incident is the bare-format incident log every test in this file reads.
+var incident = tracetest.DefaultIncident
 
 func mustParse(t *testing.T) []Step {
 	t.Helper()
-	steps, err := Parse(EmbeddedLog)
+	steps, err := Parse(tracetest.Incident(incident).String())
 	if err != nil {
-		t.Fatalf("parse embedded log: %v", err)
+		t.Fatalf("parse incident log: %v", err)
 	}
 	return steps
 }
@@ -52,9 +58,9 @@ func TestParseKeepsPrefillAndDecodeApart(t *testing.T) {
 	}
 }
 
-// The log must contain the ~426K-token pending prefill the collapse was
-// reported against, and the cold stretch must be the isolated one the
-// operator described: full chunks, no cache reuse, nothing else on the GPU.
+// The cold window must be the incident's C1: what its first chunk left
+// pending, every one of its full chunks, and the isolation the log shows:
+// full chunks, no cache reuse, nothing else on the GPU.
 func TestColdPrefillIsTheReportedOne(t *testing.T) {
 	steps := mustParse(t)
 	m := Summarize(steps, 4096)
@@ -62,11 +68,11 @@ func TestColdPrefillIsTheReportedOne(t *testing.T) {
 	if m.ColdStart < 0 {
 		t.Fatal("no cold 4096-token prefill stretch found")
 	}
-	if m.PendingAtCold < 420000 || m.PendingAtCold > 430000 {
-		t.Fatalf("#pending-token at the start of the cold prefill = %d, want ~426K", m.PendingAtCold)
+	if want := incident.C1Len() - incident.Chunk; m.PendingAtCold != want {
+		t.Fatalf("#pending-token at the start of the cold prefill = %d, want C1's %d", m.PendingAtCold, want)
 	}
-	if m.ColdChunks < 100 {
-		t.Fatalf("cold prefill has %d chunks, want ~100 at 4096 tokens each", m.ColdChunks)
+	if m.ColdChunks != incident.C1Chunks {
+		t.Fatalf("cold prefill has %d chunks, want C1's %d", m.ColdChunks, incident.C1Chunks)
 	}
 	if m.RunningAtCold != 0 {
 		t.Fatalf("#running-req on the first cold chunk = %d, want 0 (nothing else running)", m.RunningAtCold)
@@ -86,18 +92,17 @@ func TestColdPrefillIsTheReportedOne(t *testing.T) {
 	}
 }
 
-// The prefill sag is measured, not invented: the log's own throughput falls from
-// the steady start to the bottom the operator quoted.
+// The prefill sag is measured, not invented: the steady band is the log's
+// second chunk and the bottom its deepest one, each the rate the line printed.
 func TestMeasuredSagMatchesTheReportedNumbers(t *testing.T) {
 	steps := mustParse(t)
 	m := Summarize(steps, 4096)
 
-	// Operator: "~13,874 tok/s at the start ... down to ~4,831 tok/s".
-	if m.ColdSteadyTP < 13700 || m.ColdSteadyTP > 14000 {
-		t.Fatalf("steady cold-chunk throughput = %.2f, want ~13,874", m.ColdSteadyTP)
+	if want := incident.C1ChunkTPS(1); math.Abs(m.ColdSteadyTP-want) > 0.01 {
+		t.Fatalf("steady cold-chunk throughput = %.2f, want the second chunk's %.2f", m.ColdSteadyTP, want)
 	}
-	if m.ColdMinTP < 4800 || m.ColdMinTP > 4860 {
-		t.Fatalf("lowest cold-chunk throughput = %.2f, want ~4,831", m.ColdMinTP)
+	if want := incident.C1ChunkTPS(incident.C1Chunks - 1); math.Abs(m.ColdMinTP-want) > 0.01 {
+		t.Fatalf("lowest cold-chunk throughput = %.2f, want the last chunk's %.2f", m.ColdMinTP, want)
 	}
 	if m.ColdMinTP >= m.ColdSteadyTP {
 		t.Fatalf("no sag: steady %.2f, bottom %.2f", m.ColdSteadyTP, m.ColdMinTP)

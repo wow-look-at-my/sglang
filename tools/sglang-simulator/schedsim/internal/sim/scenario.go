@@ -1,11 +1,5 @@
 package sim
 
-import (
-	"sync"
-
-	"schedsim/internal/trace"
-)
-
 // SharedSystemPrompt is the prefix every conversation of the thrash episode carries.
 const SharedSystemPrompt = 11_584
 
@@ -38,28 +32,13 @@ type Scenario struct {
 	Seeds      []int64
 }
 
-var episodeOnce = sync.OnceValue(func() Episode {
-	steps, err := trace.Parse(trace.EmbeddedLog)
-	if err != nil {
-		panic("embedded log: " + err.Error())
-	}
-	ep, err := ExtractEpisode(steps, BaselineChunkSize)
-	if err != nil {
-		panic("embedded log episode: " + err.Error())
-	}
-	return ep
-})
-
-// EpisodeOf returns the logged episode, derived once from the embedded log.
-func EpisodeOf() Episode { return episodeOnce() }
-
-func ScenarioA() Scenario {
+// ScenarioA replays the episode ExtractEpisode read out of a log.
+func ScenarioA(ep Episode) Scenario {
 	return Scenario{
 		Name: "A: logged episode",
 		Key:  "A",
-		Note: "C1 430K cold, R2 follow-up at +1.3 s, R3/R4 cold behind it, then 4 agent streams to +300 s",
+		Note: "C1 " + itoa(ep.C1Len/1000) + "K cold, R2 follow-up at +1.3 s, R3/R4 cold behind it, then 4 agent streams to +300 s",
 		Build: func(seed int64, cost Cost) Workload {
-			ep := EpisodeOf()
 			m := NewMix(seed, cost, 0)
 			m.StopAt = 300
 			// Conversation X already holds R2's matched prefix.
@@ -146,9 +125,13 @@ func ScenarioThrash(hostMul, window float64) Scenario {
 }
 
 // BaseScenarios lists every scenario the comparison reports, in the order the
-// specification defines them.
-func BaseScenarios() []Scenario {
-	out := []Scenario{ScenarioA()}
+// specification defines them. Scenario A is in the list when ep, the episode
+// of the log the costs were calibrated on, is not nil.
+func BaseScenarios(ep *Episode) []Scenario {
+	var out []Scenario
+	if ep != nil {
+		out = append(out, ScenarioA(*ep))
+	}
 	for _, every := range []float64{1, 2, 5} {
 		out = append(out, ScenarioB(every))
 	}

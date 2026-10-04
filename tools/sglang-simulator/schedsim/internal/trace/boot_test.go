@@ -1,9 +1,13 @@
 package trace
 
 import (
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
+
+	"schedsim/internal/trace/tracetest"
 )
 
 const prodPrefill = `2026-09-27T00:15:24.123Z 5ylyr21v-rhkt6 INFO TP0] Prefill batch, #new-seq: 1, #new-token: 4096, #cached-token: 0, full token usage: 0.49, mamba usage: 0.33, #running-req: 4, #queue-req: 2, #pending-token: 118201, cuda graph: False, input throughput (token/s): 13874.93`
@@ -77,12 +81,13 @@ func TestParseServerArgs(t *testing.T) {
 	}
 }
 
-func TestEmbeddedLogIsOneBoot(t *testing.T) {
-	boots, err := ParseBoots(EmbeddedLog)
+func TestBareLogIsOneBoot(t *testing.T) {
+	text := tracetest.Incident(incident).String()
+	boots, err := ParseBoots(text)
 	if err != nil {
 		t.Fatal(err)
 	}
-	steps, _ := Parse(EmbeddedLog)
+	steps, _ := Parse(text)
 	if len(boots) != 1 || boots[0].ArgsKnown || len(boots[0].Steps) != len(steps) {
 		t.Fatalf("boots = %d, args known %v, steps %d vs %d", len(boots), boots[0].ArgsKnown, len(boots[0].Steps), len(steps))
 	}
@@ -102,85 +107,127 @@ func TestEmbeddedLogIsOneBoot(t *testing.T) {
 	}
 }
 
-func TestLog2Boots(t *testing.T) {
-	boots, err := ParseBoots(Log2())
+// corpus parses the generated multi-boot log, one boot per generated boot.
+func corpus(t *testing.T) ([]*tracetest.Traffic, []Boot) {
+	t.Helper()
+	gen := tracetest.Corpus()
+	boots, err := ParseBoots(tracetest.Text(gen))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(boots) != 11 {
-		t.Fatalf("boots = %d, want 11", len(boots))
+	if len(boots) != len(gen) {
+		t.Fatalf("boots = %d, the log was written with %d", len(boots), len(gen))
 	}
-	var crashes, drains []string
-	for _, b := range boots {
-		if !b.ArgsKnown || b.Args.PageSize != 64 {
-			t.Errorf("boot %d args %+v", b.Index, b.Args)
+	return gen, boots
+}
+
+// expectedRuns lists, per boot, the cold runs of at least minChunks chunks the
+// generator wrote, as chunk count and starting context.
+func expectedRuns(gen []*tracetest.Traffic, minChunks int) [][][2]int {
+	out := make([][][2]int, len(gen))
+	for i, g := range gen {
+		for _, p := range g.Prompts {
+			if n := p.ColdChunks(4096); n >= minChunks {
+				out[i] = append(out[i], [2]int{n, p.CtxStart(4096)})
+			}
 		}
-		switch b.EndedBy {
-		case "crash":
-			crashes = append(crashes, b.End.Format("01-02T15:04"))
-		case "sigterm":
-			drains = append(drains, b.Worker)
+	}
+	return out
+}
+
+func TestCorpusBoots(t *testing.T) {
+	gen, boots := corpus(t)
+	var ended []string
+	for i, b := range boots {
+		g := gen[i]
+		if !b.ArgsKnown || b.Args.PageSize != 64 || b.Worker != g.Worker || !b.Start.Equal(g.Spec.Start) {
+			t.Errorf("boot %d = %s from %v, args %+v; written as %s from %v", i, b.Worker, b.Start, b.Args, g.Worker, g.Spec.Start)
 		}
+		if b.Args.ContextLength != g.Spec.Args.ContextLength || b.Args.HierarchicalCache != g.Spec.Args.HierarchicalCache {
+			t.Errorf("boot %d context %d hicache %v, written with %d %v", i, b.Args.ContextLength, b.Args.HierarchicalCache,
+				g.Spec.Args.ContextLength, g.Spec.Args.HierarchicalCache)
+		}
+		if n := len(b.Completions); n != g.Turns {
+			t.Errorf("boot %d completions = %d, the log completed %d requests", i, n, g.Turns)
+		}
+		if n := len(b.JITCompiles); n != len(g.Spec.JIT) {
+			t.Errorf("boot %d logged %d JIT compiles, written with %d", i, n, len(g.Spec.JIT))
+		}
+		ended = append(ended, b.EndedBy)
 	}
-	if got, want := strings.Join(crashes, ","), "09-26T19:58,09-27T00:26,09-27T20:08"; got != want {
-		t.Errorf("crashes = %s, want %s", got, want)
+	if got, want := strings.Join(ended, ","), "crash,sigterm,sigterm,eof"; got != want {
+		t.Errorf("ended by %s, want %s", got, want)
 	}
-	if len(drains) != 5 {
-		t.Errorf("drains = %v, want 5", drains)
+	if !boots[0].End.Equal(gen[0].Now) {
+		t.Errorf("crash at %v, the log crashed at %v", boots[0].End, gen[0].Now)
 	}
-	if boots[2].Args.ContextLength != 262144 || boots[3].Args.ContextLength != 524288 {
-		t.Errorf("context lengths %d %d", boots[2].Args.ContextLength, boots[3].Args.ContextLength)
-	}
-	if boots[8].Worker != "0liw8vzv-75dvg" || !boots[8].Args.HierarchicalCache {
-		t.Errorf("boot 8 = %s hicache %v", boots[8].Worker, boots[8].Args.HierarchicalCache)
-	}
-	if n := len(boots[8].Completions); n < 4000 {
-		t.Errorf("boot 8 completions = %d", n)
-	}
-	if n := len(boots[2].JITCompiles); n == 0 {
-		t.Error("boot 2 logged no JIT compiles")
+	if j := boots[1].JITCompiles; len(j) != 2 || j[0].Seconds != 2.1 || j[0].Kernel != "_fwd_kernel" {
+		t.Errorf("boot 1 JIT compiles = %+v", j)
 	}
 }
 
-func TestLog2Stalls(t *testing.T) {
-	boots, _ := ParseBoots(Log2())
-	var all []Stall
-	for _, b := range boots {
-		all = append(all, b.Stalls(5)...)
-	}
-	if len(all) < 45 || len(all) > 55 {
-		t.Errorf("stalls >= 5 s: %d, want about 49", len(all))
-	}
-	longest := Stall{}
-	for _, s := range all {
-		if s.Seconds > longest.Seconds {
-			longest = s
+// Every prompt that held the GPU for a few seconds with requests running is
+// a stall, measured from its first chunk to the decode step after its last.
+func TestCorpusStalls(t *testing.T) {
+	gen, boots := corpus(t)
+	var longest, longestWant Stall
+	for i, b := range boots {
+		var want []tracetest.Prompt
+		for _, p := range gen[i].Prompts {
+			if p.Running >= 1 && p.Seconds >= 5 {
+				want = append(want, p)
+			}
+		}
+		got := b.Stalls(5)
+		if len(got) != len(want) {
+			t.Errorf("boot %d: %d stalls, the log holds %d prompts that stalled decode for 5 s", i, len(got), len(want))
+			continue
+		}
+		for k, s := range got {
+			p := want[k]
+			if !s.At.Equal(p.At) || math.Abs(s.Seconds-p.Seconds) > 1e-6 || s.RunningPeak != p.Running || s.ColdTokens != p.Tokens-chunkIfHit(p) {
+				t.Errorf("boot %d stall %d = %+v; the prompt at %v ran %.3f s behind %d running", i, k, s, p.At, p.Seconds, p.Running)
+			}
+			if s.Seconds > longest.Seconds {
+				longest = s
+			}
+			if p.Seconds > longestWant.Seconds {
+				longestWant = Stall{At: p.At, Seconds: p.Seconds}
+			}
 		}
 	}
-	if longest.Seconds < 140 || longest.Seconds > 155 {
-		t.Errorf("longest stall %.1f s, want about 149", longest.Seconds)
+	if longest.Seconds == 0 || !longest.At.Equal(longestWant.At) {
+		t.Errorf("longest stall %.1f s at %v, the longest prompt ran %.1f s at %v", longest.Seconds, longest.At, longestWant.Seconds, longestWant.At)
 	}
-	if got := longest.At.Format("2006-01-02T15:04"); got != "2026-09-27T00:15" {
-		t.Errorf("longest stall at %s", got)
+}
+
+// chunkIfHit is the part of a prompt that reused a prefix: its first chunk, when it hit one.
+func chunkIfHit(p tracetest.Prompt) int {
+	if p.Hit > 0 {
+		return 4096
 	}
-	if longest.RunningPeak < 10 {
-		t.Errorf("longest stall peaked at %d running", longest.RunningPeak)
-	}
+	return 0
 }
 
 func TestColdRunCarriesStartingContext(t *testing.T) {
-	boots, _ := ParseBoots(Log2())
+	gen, boots := corpus(t)
+	want := expectedRuns(gen, 8)
 	continued, fresh := 0, 0
-	for _, b := range boots {
+	for i, b := range boots {
+		var got [][2]int
 		for _, r := range b.ColdRunsAll(4096) {
 			if r.Chunks() < 8 {
 				continue
 			}
+			got = append(got, [2]int{r.Chunks(), r.CtxStart})
 			if r.CtxStart > 0 {
 				continued++
 			} else {
 				fresh++
 			}
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want[i]) {
+			t.Errorf("boot %d cold runs (chunks, ctx0) = %v, the log was written with %v", i, got, want[i])
 		}
 	}
 	if continued == 0 || fresh == 0 {
@@ -189,38 +236,72 @@ func TestColdRunCarriesStartingContext(t *testing.T) {
 }
 
 func TestCalibrateBootsHoldsOutEveryRun(t *testing.T) {
-	boots, _ := ParseBoots(Log2())
+	gen, boots := corpus(t)
 	c, rep := CalibrateBoots(boots, 4096, 64)
-	if rep.FitChunks < 100 {
-		t.Errorf("fit run has %d chunks; the corpus holds a 109-chunk prompt", rep.FitChunks)
+	runs, fitBoot, fitChunks := 0, -1, 0
+	for i, rs := range expectedRuns(gen, 8) {
+		for _, r := range rs {
+			runs++
+			if r[0] > fitChunks {
+				fitBoot, fitChunks = i, r[0]
+			}
+		}
 	}
-	if len(rep.Holdouts) < 100 {
-		t.Errorf("holdouts = %d", len(rep.Holdouts))
+	if rep.FitBoot != fitBoot || rep.FitChunks != fitChunks {
+		t.Errorf("fit on boot %d's %d-chunk run, the longest the log holds is boot %d's %d", rep.FitBoot, rep.FitChunks, fitBoot, fitChunks)
 	}
-	if rep.HoldoutMedian > 0.10 {
-		t.Errorf("median holdout error %.1f%%", 100*rep.HoldoutMedian)
+	if len(rep.Holdouts) != runs-1 {
+		t.Errorf("holdouts = %d, want every other run of 8+ chunks, %d", len(rep.Holdouts), runs-1)
 	}
-	if len(rep.Pools) < 5 {
-		t.Errorf("pools = %v", rep.Pools)
+	// The log priced every chunk with one model, so the fit predicts every run, cached prefix or not.
+	if rep.HoldoutMedian > 0.01 || c.Prefill.MaxErrHoldout > 0.01 {
+		t.Errorf("holdout error median %.2f%%, worst %.2f%%", 100*rep.HoldoutMedian, 100*c.Prefill.MaxErrHoldout)
 	}
-	if rep.WallSamples == 0 || rep.WallRatioMedian < 0.9 || rep.WallRatioMedian > 1.1 {
-		t.Errorf("wall check: %d samples, ratio %.2f", rep.WallSamples, rep.WallRatioMedian)
+	pool := tracetest.DefaultModel.Pool
+	if len(rep.Pools) != len(boots) {
+		t.Errorf("pools = %v, want one per boot", rep.Pools)
 	}
-	if c.DeviceTokens < 1_000_000 || c.Decode.Samples < 1000 {
-		t.Errorf("calibration %s", c)
+	for _, p := range rep.Pools {
+		if math.Abs(float64(p.Tokens-pool)) > 0.01*float64(pool) || p.Context != boots[p.Boot].Args.ContextLength {
+			t.Errorf("boot %d pool %d at context %d, the log printed against %d", p.Boot, p.Tokens, p.Context, pool)
+		}
+	}
+	if rep.WallSamples == 0 || rep.WallRatioMedian < 0.99 || rep.WallRatioMedian > 1.01 {
+		t.Errorf("wall check: %d samples, ratio %.3f", rep.WallSamples, rep.WallRatioMedian)
+	}
+	// Steady single-request decode lines pool across boots: the sum of what each boot alone gives.
+	steady := 0
+	for _, b := range boots {
+		steady += FitDecode(b.Steps).Samples
+	}
+	if c.Decode.Samples != steady || steady == 0 || math.Abs(float64(c.DeviceTokens-pool)) > 0.01*float64(pool) {
+		t.Errorf("calibration %s; %d steady lines across the boots", c, steady)
 	}
 	// A bare single-incident log still calibrates to what Calibrate gives.
-	one, _ := ParseBoots(EmbeddedLog)
+	text := tracetest.Incident(incident).String()
+	one, _ := ParseBoots(text)
 	c1, _ := CalibrateBoots(one, 4096, 64)
-	steps, _ := Parse(EmbeddedLog)
+	steps, _ := Parse(text)
 	c0 := Calibrate(steps, 4096, 64)
 	if c1.Prefill.PerToken != c0.Prefill.PerToken || c1.Decode.Base != c0.Decode.Base || c1.DeviceTokens != c0.DeviceTokens {
-		t.Errorf("embedded log: CalibrateBoots %s\n!= Calibrate %s", c1, c0)
+		t.Errorf("bare log: CalibrateBoots %s\n!= Calibrate %s", c1, c0)
 	}
 }
 
 func TestPrefillStretchesMatchStalls(t *testing.T) {
-	boots, _ := ParseBoots(Log2())
+	gen, boots := corpus(t)
+	wantStretches, wantMatched := 0, 0
+	for _, g := range gen {
+		for _, p := range g.Prompts {
+			if p.ColdChunks(4096) < 8 {
+				continue
+			}
+			wantStretches++
+			if p.Running >= 1 && p.Seconds >= 5 {
+				wantMatched++
+			}
+		}
+	}
 	var stretches, matched int
 	var ratios []float64
 	for _, b := range boots {
@@ -251,10 +332,10 @@ func TestPrefillStretchesMatchStalls(t *testing.T) {
 			}
 		}
 	}
-	if stretches < 60 || matched < 40 {
-		t.Errorf("stretches=%d matched stalls=%d", stretches, matched)
+	if stretches != wantStretches || matched != wantMatched {
+		t.Errorf("stretches=%d matched stalls=%d, the log holds %d and %d", stretches, matched, wantStretches, wantMatched)
 	}
-	if m := median(ratios); m < 0.9 || m > 1.2 {
+	if m := median(ratios); m < 0.99 || m > 1.01 {
 		t.Errorf("chunk-cost sum over measured stall: median %.2f", m)
 	}
 }

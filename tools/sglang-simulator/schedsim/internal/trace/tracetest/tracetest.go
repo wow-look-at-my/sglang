@@ -17,7 +17,11 @@ type Log struct {
 	Worker string
 	Level  string
 	Now    time.Time
-	lines  []string
+	// Bare writes every line in the bare format, with no timestamp, worker or level.
+	Bare bool
+	// Prompts lists every prompt Prompt wrote in more than one chunk.
+	Prompts []Prompt
+	lines   []string
 }
 
 // Start is the wall clock the canned logs begin at.
@@ -36,6 +40,9 @@ func (l *Log) Advance(seconds float64) *Log {
 
 // Line writes body behind the production prefix.
 func (l *Log) Line(body string) *Log {
+	if l.Bare {
+		return l.Raw(body)
+	}
 	l.lines = append(l.lines, fmt.Sprintf("%s %s %s %s", l.Now.Format(time.RFC3339Nano), l.Worker, l.Level, body))
 	return l
 }

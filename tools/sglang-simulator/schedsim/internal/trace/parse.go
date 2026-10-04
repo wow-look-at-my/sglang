@@ -4,53 +4,12 @@
 package trace
 
 import (
-	"bytes"
-	"compress/gzip"
-	_ "embed"
 	"fmt"
-	"io"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
-
-//go:embed live_log.txt
-var EmbeddedLog string
-
-//go:embed live_log2.txt.gz
-var embeddedLog2Gz []byte
-
-var (
-	log2Once sync.Once
-	log2Text string
-	log2Err  error
-)
-
-// Log2 is the decompressed second corpus. Decompression happens once, on
-// first use, and is cached: most tests and callers never touch it, so nothing
-// pays for a megabyte-plus gunzip unless it is needed.
-func Log2() string {
-	log2Once.Do(func() {
-		r, err := gzip.NewReader(bytes.NewReader(embeddedLog2Gz))
-		if err != nil {
-			log2Err = err
-			return
-		}
-		defer r.Close()
-		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, r); err != nil {
-			log2Err = err
-			return
-		}
-		log2Text = buf.String()
-	})
-	if log2Err != nil {
-		panic("trace: decompress live_log2.txt.gz: " + log2Err.Error())
-	}
-	return log2Text
-}
 
 const DecodeLogInterval = 40
 

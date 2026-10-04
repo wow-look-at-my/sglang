@@ -42,7 +42,13 @@ func printPolicies(w io.Writer, cal trace.Calibration, steps []trace.Step, pf *p
 	fmt.Fprintf(w, "Device pool %d tokens, chunk %d, page %d, %d drafts accepted to %.2f mean per step.\n\n",
 		cal.DeviceTokens, cal.ChunkSize, cal.Page, cal.Decode.NumDraft, cal.Decode.AcceptMean)
 
-	scs := sim.BaseScenarios()
+	var ep *sim.Episode
+	if e, err := sim.ExtractEpisode(steps, cal.ChunkSize); err != nil {
+		fmt.Fprintf(w, "Scenario A is not run: the log holds no episode to replay (%v).\n\n", err)
+	} else {
+		ep = &e
+	}
+	scs := sim.BaseScenarios(ep)
 	if pf.only != "" {
 		var kept []sim.Scenario
 		for _, sc := range scs {
@@ -68,7 +74,7 @@ func printPolicies(w io.Writer, cal trace.Calibration, steps []trace.Step, pf *p
 			seeds = seedList(pf.seeds)
 		}
 		fmt.Fprintln(w, strings.Repeat("=", 118))
-		sweep := sim.RunSweep(cost, linear, seeds, pf.aSeed, pf.workers)
+		sweep := sim.RunSweep(cost, linear, ep, seeds, pf.aSeed, pf.workers)
 		sim.WriteSweep(w, sweep)
 		fmt.Fprintln(w, "Cells where the contract does not hold are listed per variant above,")
 		fmt.Fprintln(w, "and the derivations for the provable ones live beside the scenario tests.")

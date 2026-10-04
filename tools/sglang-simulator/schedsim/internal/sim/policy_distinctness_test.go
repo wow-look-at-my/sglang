@@ -14,7 +14,7 @@ import (
 func TestPrevAndNewReportDifferentNumbers(t *testing.T) {
 	rows := suite(t)
 	var disagreeing, firstDetail []string
-	for _, sc := range BaseScenarios() {
+	for _, sc := range BaseScenarios(testEpisodePtr()) {
 		row, ok := rows[sc.Key]
 		if !ok {
 			t.Fatalf("no row for scenario %s", sc.Key)
@@ -41,7 +41,7 @@ func TestPrevAndNewReportDifferentNumbers(t *testing.T) {
 			"comparison against PREV is running against a copy of NEW")
 	}
 	t.Logf("PREV and NEW disagree on %d of %d scenario-metric cells, in %d scenarios:",
-		len(firstDetail), len(BaseScenarios())*len(ContractMetrics), len(disagreeing))
+		len(firstDetail), len(BaseScenarios(testEpisodePtr()))*len(ContractMetrics), len(disagreeing))
 	for _, d := range disagreeing {
 		t.Logf("  %s", d)
 	}

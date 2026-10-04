@@ -4,40 +4,43 @@ import (
 	"testing"
 
 	"schedsim/internal/trace"
+	"schedsim/internal/trace/tracetest"
 )
 
-func log2Boot(t *testing.T, index int) *trace.Boot {
+// corpusBoot is boot index of the generated multi-boot log, with what the generator wrote into it.
+func corpusBoot(t *testing.T, index int) (*trace.Boot, *tracetest.Traffic) {
 	t.Helper()
-	boots, err := trace.ParseBoots(trace.Log2())
+	gen := tracetest.Corpus()
+	boots, err := trace.ParseBoots(tracetest.Text(gen))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &boots[index]
+	return &boots[index], gen[index]
 }
 
-func TestLogReplayRebuildsBootFour(t *testing.T) {
-	b := log2Boot(t, 4)
+func TestLogReplayRebuildsABoot(t *testing.T) {
+	b, g := corpusBoot(t, 2)
 	l, err := BuildLogReplay(b, 4096, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Shared < 10000 || l.Shared > 14000 {
-		t.Errorf("shared prefix %d, want the ~12k-token system prompt", l.Shared)
+	if l.Shared != g.Spec.Shared {
+		t.Errorf("shared prefix %d, want the %d-token system prompt", l.Shared, g.Spec.Shared)
 	}
-	if len(l.Turns) < 800 || len(l.Turns) > 1000 {
-		t.Errorf("turns = %d; the boot completed 849 requests", len(l.Turns))
+	if len(l.Turns) != g.Turns {
+		t.Errorf("turns = %d; the boot completed %d requests", len(l.Turns), g.Turns)
 	}
-	if l.Convs < 40 || l.Convs > 120 {
-		t.Errorf("conversations = %d", l.Convs)
+	if l.Convs != g.Convs+g.FreshColds {
+		t.Errorf("conversations = %d, want %d plus %d fresh cold prompts", l.Convs, g.Convs, g.FreshColds)
 	}
-	if l.Returning < 10 {
-		t.Errorf("returning conversations = %d; the boot re-prefilled evicted prompts repeatedly", l.Returning)
+	if l.Returning != g.Returns {
+		t.Errorf("returning conversations = %d; the boot re-prefilled %d evicted prompts", l.Returning, g.Returns)
 	}
-	if m := l.MeasuredOuts(); m < len(l.Turns)*3/4 {
-		t.Errorf("reply length measured for %d of %d turns", m, len(l.Turns))
+	if m := l.MeasuredOuts(); m != g.Measured {
+		t.Errorf("reply length measured for %d of %d turns, a later turn followed %d", m, len(l.Turns), g.Measured)
 	}
-	if c := l.ColdTurns(); c < 20 {
-		t.Errorf("cold turns = %d", c)
+	if c := l.ColdTurns(); c != g.ColdTurns {
+		t.Errorf("cold turns = %d, want %d", c, g.ColdTurns)
 	}
 	for i, tn := range l.Turns {
 		if i > 0 && tn.At < l.Turns[i-1].At {
@@ -76,7 +79,7 @@ func TestLogReplayRebuildsBootFour(t *testing.T) {
 }
 
 func TestLogReplayRunsUnderEveryPolicy(t *testing.T) {
-	b := log2Boot(t, 4)
+	b, _ := corpusBoot(t, 2)
 	l, err := BuildLogReplay(b, 4096, 0, 300)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +87,7 @@ func TestLogReplayRunsUnderEveryPolicy(t *testing.T) {
 	cal, _ := trace.CalibrateBoots([]trace.Boot{*b}, 4096, 64)
 	cost := NewCost(cal)
 	sc := Scenario{
-		Name: "boot 4 first 300 s", Key: "boot4",
+		Name: "boot 2 first 300 s", Key: "boot2",
 		Build:    func(int64, Cost) Workload { return l.Reset() },
 		HardStop: l.Window + 120, Window: l.Window,
 		MaxRunning: b.Args.MaxRunningRequests, HostMul: 0, Seeds: []int64{1},
