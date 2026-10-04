@@ -1,6 +1,4 @@
 "use strict";
-// Visual scheduler simulator: the prefill-priority rule and the fork's
-// time-sharing balancer, side by side, fed the same traffic.
 const LOG_CALIBRATION = {
     chunk: 4096,
     prefillBase: 10e-3,
@@ -29,13 +27,6 @@ function decodeSeconds(c, batch, sumCtx) {
         return 0;
     return c.decodeBase + c.decodePerReq * (batch - 1) + c.decodePerTokenCtx * sumCtx;
 }
-// ---------------------------------------------------------------- balancer
-// PrefillDecodeBalancer: measured GPU seconds of prefill against decode while
-// both have work; prefill is deferred while it is ahead. Time is charged at
-// completion, from the completion, because the overlap scheduler picks batch
-// N+1 while N still runs. A burst of at most one chunk's tokens runs before
-// decode must catch up; a chunk continuing a long prompt is bounded in GPU
-// seconds at its marginal (context-inflated) rate.
 class Balancer {
     constructor(burstTokens, piggybackCredit) {
         this.burstTokens = burstTokens;
@@ -71,7 +62,6 @@ class Balancer {
             return false;
         }
         if (this.unsettledN > 0) {
-            // At most the last decode batch overshoots into the next decision.
             this.debt = Math.max(this.debt + this.unsettledPf - this.unsettledDc, -this.lastDecode);
             this.unsettledPf = this.unsettledDc = 0;
             this.unsettledN = 0;
@@ -127,11 +117,6 @@ class Balancer {
         this.unsettledN++;
     }
 }
-// ---------------------------------------------------------------- KV pool
-// The device pool holds running requests' reservations and finished
-// conversations' prefixes. Admission evicts the least recently used idle
-// prefixes, whole, when the free space is short; an optional host tier keeps
-// what was evicted, and a hit there is reloaded instead of recomputed.
 class Pool {
     constructor(devCap, hostCap) {
         this.devCap = devCap;
@@ -160,7 +145,6 @@ class Pool {
             return { dev: Math.min(e.dev, input - 1), host: 0 };
         return { dev: 0, host: Math.min(e.host, input - 1) };
     }
-    // Frees short tokens by evicting idle prefixes other than conv's own.
     evictFor(conv, short) {
         const cands = [...this.entries.entries()]
             .filter(([c, e]) => c !== conv && e.dev > 0)
@@ -183,10 +167,6 @@ class Pool {
         }
         return got >= short;
     }
-    // Takes conv's reservation. The resident prefix stays in device memory
-    // for the run (it moves from the cached total to the reservation), a host
-    // hit is reloaded into device memory, and the rest is computed: device
-    // space is needed for everything but the resident prefix.
     admit(conv, input, out, devHit, hostHit, now) {
         if (this.seen.has(conv) && 2 * (devHit + hostHit) < input) {
             this.recomputes++;
@@ -204,8 +184,6 @@ class Pool {
         }
         this.inflight += input + out;
     }
-    // Returns the reservation and keeps the whole context cached: it is the
-    // memory the request already held, now evictable.
     release(conv, ctx, reserved, now) {
         this.inflight -= reserved;
         const dev = Math.min(ctx, reserved);
@@ -238,7 +216,6 @@ class Engine {
         this.pool = new Pool(cfg.cal.poolTokens, Math.floor(cfg.cal.poolTokens * cfg.hostMul));
         this.bal = cfg.mode === "new" ? new Balancer(cfg.cal.chunk, true) : null;
     }
-    // Warms a conversation's prefix as if it had run before the clock started.
     warm(conv, tokens) {
         this.pool.release(conv, tokens, tokens, 0);
     }
@@ -252,13 +229,11 @@ class Engine {
         this.waiting.sort((a, b) => a.arrival - b.arrival || a.id - b.id);
         return r;
     }
-    // Runs batches until the clock reaches t.
     advanceTo(t) {
         let guard = 0;
         while (this.now < t && guard++ < 200000) {
             const b = this.nextBatch();
             if (!b) {
-                // Idle: jump to the next arrival.
                 const next = this.waiting.find((r) => r.arrival > this.now);
                 this.now = next ? Math.min(next.arrival, t) : t;
                 continue;
@@ -309,7 +284,6 @@ class Engine {
         if (this.chunked) {
             const r = this.chunked;
             if (this.cfg.cede) {
-                // Up to half the chunk goes to waiting requests that fit in it whole.
                 let reserve = Math.floor(cap / 2);
                 for (const w of this.arrived()) {
                     if (reserve <= 0 || this.running.length >= this.cfg.maxRunning)
@@ -373,7 +347,6 @@ class Engine {
         let cold = false;
         if (b.kind === "prefill") {
             const priced = b.items.map((it) => ({ tokens: it.tokens, midCtx: it.req.prefix + it.tokens / 2 }));
-            // Mixed chunk: each running request rides along as one extend token at the chunk's rate.
             for (const r of b.rows)
                 priced.push({ tokens: 1, midCtx: r.input + r.outDone });
             seconds = prefillSeconds(cal, priced);
@@ -438,8 +411,6 @@ class Engine {
             this.feed.onFinish(this, r, at);
         }
     }
-    // The longest wait an agent stream is in right now: since its last token,
-    // or since its turn arrived if it has had none.
     currentStall() {
         let worst = 0;
         for (const r of this.requests) {
@@ -450,7 +421,6 @@ class Engine {
         }
         return worst;
     }
-    // Tokens delivered to agent streams over the last w seconds.
     rateOver(w, conv) {
         const from = this.now - w;
         let n = 0;
@@ -464,8 +434,6 @@ class Engine {
         return n / w;
     }
 }
-// ---------------------------------------------------------------- traffic
-// Mulberry32: one seed gives both engines the same draws.
 function rng(seed) {
     let a = seed >>> 0;
     return () => {
@@ -476,10 +444,6 @@ function rng(seed) {
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
 }
-// Feed is one side's copy of the traffic. Each stream draws from its own
-// generator, so both engines see the same turn sizes and think times whatever
-// order they finish in; the random cold prompts are a precomputed schedule
-// both engines share.
 class Feed {
     constructor(p) {
         this.p = p;
@@ -503,7 +467,6 @@ class Feed {
     }
     seed(e) {
         for (const s of this.streams.values()) {
-            // The system prompt is part of every cached prefix.
             e.warm(s.conv, this.p.shared + s.ctx);
             this.turn(e, s, this.uni(s.draw, 0.2, 2));
         }
@@ -534,7 +497,6 @@ class Feed {
         if (s)
             this.turn(e, s, at);
     }
-    // A new conversation that then continues as an agent.
     injectNewAgent(e, at, input) {
         const conv = this.nextConv++;
         const s = { conv, ctx: input, draw: rng(this.p.seed * 7919 + conv), label: `agent ${this.streams.size + 1}` };
@@ -542,7 +504,6 @@ class Feed {
         e.add("cold", conv, at, this.p.shared + input, 300, "new conversation");
     }
 }
-// ---------------------------------------------------------------- side
 class Side {
     constructor(mode, traffic, cal, maxRunning, hostMul, mixed, cede) {
         this.mode = mode;
@@ -808,8 +769,6 @@ if (typeof document !== "undefined") {
         requestAnimationFrame(frame);
     });
 }
-// ---------------------------------------------------------------- exports
-// The tests load sim.js with require; the page gets none of this.
 if (typeof module !== "undefined" && module.exports) {
     module.exports = { LOG_CALIBRATION, prefillSeconds, decodeSeconds, Balancer, Pool, Engine, Feed, Side, rng };
 }
