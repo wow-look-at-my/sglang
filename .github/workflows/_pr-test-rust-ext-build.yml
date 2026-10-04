@@ -172,9 +172,7 @@ jobs:
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 60
     name: Build Rust Ext
-    # No crate sets abi3, so each interpreter in python_versions needs its own
-    # module set and target dir (PyO3's fingerprint tracks the interpreter);
-    # one matrix leg per interpreter.
+    # No crate sets abi3, so each interpreter in python_versions needs its own module set and target dir (PyO3's fingerprint tracks the interpreter); one matrix leg per interpreter.
     strategy:
       # Both legs run to completion, so a failure in one still leaves the other's
       # log to compare against.
