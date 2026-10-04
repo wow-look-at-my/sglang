@@ -66,6 +66,15 @@ class TestPromptChannelCarriesThePrompt(unittest.TestCase):
         self.addCleanup(client.close)
         client.on_request_queued(rid="prompt", token_ids=range(_PROMPT_TOKENS))
 
+    def test_the_policy_wrapper_sends_a_long_context_prompt(self):
+        name = self._serve()
+        context_len = 1 << 20
+        client = sched_policy.SchedPolicy(
+            name=name, rank=0, world=1, timeout=10.0, context_len=context_len
+        )
+        self.addCleanup(client.close)
+        client.on_request_queued(rid="long", token_ids=range(context_len))
+
     def test_go_ipcs_default_channel_rejects_the_same_prompt(self):
         name = self._serve()
         client = goipc.service.connect(name, timeout=5.0, messages=msg.MESSAGES)
