@@ -204,6 +204,13 @@ async function main(): Promise<void> {
     });
     core.info(`deleted ${version.tags.join(",") || version.name}: ${reason}`);
   }
+  const counts = new Map<string, number>();
+  for (const { reason } of keeps) {
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  for (const [reason, count] of [...counts].sort()) {
+    core.info(`kept ${count}: ${reason}`);
+  }
   core.info(
     `${deletions.length} ${dryRun ? "to delete" : "deleted"}, ${keeps.length} kept, ${versions.length} images`,
   );
