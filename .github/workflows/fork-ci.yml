@@ -21,8 +21,9 @@ on:
         default: ""
 
 concurrency:
-  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+  group: fork-ci-${{ github.event_name }}-${{ github.ref }}
+  # The kernel wheel build outlasts the gap between pushes, so a cancelled run never finished it; a newer run waits instead.
+  cancel-in-progress: false
 
 permissions:
   actions: read
@@ -50,6 +51,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PUSH_BEFORE: ${{ github.event.before }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
           KERNEL_VERSION=$(grep -Po '(?<=^version = ")[^"]*' python/sglang/kernels/aot/pyproject.toml)
@@ -98,8 +100,8 @@ jobs:
             BUILD_DOCKER=true
           fi
           SHORT_SHA="${GITHUB_SHA::7}"
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            IMAGE_TAGS="${{ inputs.image_tag }}"
+          if [ -n "$INPUT_IMAGE_TAG" ]; then
+            IMAGE_TAGS="${INPUT_IMAGE_TAG}"
           elif [ "$ON_DEFAULT" = true ]; then
             IMAGE_TAGS="dev dev-${SHORT_SHA}"
           else
