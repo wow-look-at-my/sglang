@@ -554,6 +554,8 @@ jobs:
           shopt -s nullglob
           WHEELS=(wheels/*.whl)
           if [ ${#WHEELS[@]} -eq 0 ]; then
+            echo "no sglang-kernel wheel was built" >&2
+            exit 1
           fi
           TAG="sglang-kernel-v${VERSION}"
           # Releases here are immutable once published, so a release is created
@@ -766,6 +768,8 @@ jobs:
               fi
             done
             if [ ${#SOURCES[@]} -eq 0 ]; then
+              echo "no per-arch image was pushed for ${TAG}" >&2
+              exit 1
             fi
             docker buildx imagetools create -t "${IMAGE}:${TAG}" "${SOURCES[@]}"
             echo "Published ${IMAGE}:${TAG} from ${SOURCES[*]}" >> "$GITHUB_STEP_SUMMARY"
