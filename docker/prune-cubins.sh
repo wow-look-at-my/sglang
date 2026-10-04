@@ -1,10 +1,12 @@
 #!/bin/sh
+# prune-cubins.sh DIR GPU_ARCHS [--modules] Deletes the files under DIR whose SM tag no arch in GPU_ARCHS can run.
 set -eu
 dir=$1
 archs=$2
+modules=${3:-}
 [ -n "$archs" ] || exit 0
 list=$(mktemp)
-find "$dir" -type f -printf '%s\t%p\n' | awk -F'\t' -v archs="$archs" -v out="$list" '
+find "$dir" -type f -printf '%s\t%p\n' | awk -F'\t' -v archs="$archs" -v modules="$modules" -v dir="$dir" -v out="$list" '
 BEGIN {
 	m = split(archs, t, ";")
 	n = 0
@@ -28,9 +30,11 @@ function runs(tag, sfx,    i, d) {
 }
 {
 	name = $2
+	if (modules != "") sub(/\/[^\/]*$/, "", name)
 	sub(/.*\//, "", name)
-	if (!match(name, /[Ss][Mm]_?[0-9]+[af]?/)) next
-	tag = substr(name, RSTART, RLENGTH)
+	if (match(name, /[Ss][Mm]_?[0-9]+[af]?/)) tag = substr(name, RSTART, RLENGTH)
+	else if (modules != "" && match(name, /_[0-9][0-9][0-9]?[af]?$/)) tag = substr(name, RSTART + 1)
+	else next
 	sfx = tag ~ /[af]$/ ? substr(tag, length(tag)) : ""
 	gsub(/[^0-9]/, "", tag)
 	if (runs(tag, sfx)) next
@@ -38,6 +42,6 @@ function runs(tag, sfx,    i, d) {
 	files++
 	bytes += $1
 }
-END { printf "prune-cubins: removing %d files (%d MB) that no arch in GPU_ARCHS=%s can run\n", files, bytes / 1048576, archs }'
+END { printf "prune-cubins: removing %d files (%d MB) under %s that no arch in GPU_ARCHS=%s can run\n", files, bytes / 1048576, dir, archs }'
 xargs -r -d '\n' rm -f < "$list"
 rm -f "$list"

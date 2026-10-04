@@ -35,13 +35,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
 
-# fclones (MIT) finds identical files for docker/dedup-layer.sh. Upstream ships x86_64 binaries only.
-FROM cuda_devel AS fclones
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    apt-get update && apt-get install -y --no-install-recommends curl \
+# The Rust toolchain lives in /opt/rust of this stage only. A RUN that compiles Rust
+# bind-mounts it read-write, so its writes and the toolchain stay out of every layer.
+FROM cuda_devel AS rust_toolchain
+ENV RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --no-modify-path --profile minimal \
-    && /root/.cargo/bin/cargo install --locked --root /usr/local fclones@0.35.0
+    && /opt/rust/cargo/bin/rustc --version && /opt/rust/cargo/bin/cargo --version \
+    && rm -rf /var/lib/apt/lists/*
+
+# fclones (MIT) finds identical files for docker/dedup-layer.sh. Upstream ships x86_64 binaries only.
+FROM rust_toolchain AS fclones
+RUN --mount=type=cache,target=/opt/rust/cargo/registry \
+    /opt/rust/cargo/bin/cargo install --locked --root /usr/local fclones@0.35.0
 
 FROM cuda_devel AS base
 
@@ -244,13 +251,6 @@ ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
-# Rust toolchain for setuptools-rust extensions (e.g. sglang-grpc). Inherited
-# by framework via FROM torch_deps.
-ENV PATH="/root/.cargo/bin:${PATH}"
-RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --no-modify-path --profile minimal \
-    && rustc --version && cargo --version
-
 # Install sgl-kernel (from pre-built wheel)
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,from=sgl_kernel_wheels,target=/tmp/sgl_kernel_wheels \
@@ -283,9 +283,12 @@ COPY proto                 /tmp/sglang_deps/proto
 
 # Install sglang dependencies (torch, transformers, etc.).
 # Generate constraints.txt to prevent reinstalling these deps in later stages.
+# setuptools-rust builds the Rust extensions (e.g. sglang-grpc) with the mounted toolchain.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=cache,target=/root/.cargo/registry \
-    dedup-layer --begin \
+    --mount=type=bind,from=rust_toolchain,source=/opt/rust,target=/opt/rust,rw \
+    --mount=type=cache,target=/opt/rust/cargo/registry \
+    export RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo PATH="/opt/rust/cargo/bin:${PATH}" \
+    && dedup-layer --begin \
     && case "$CUDA_VERSION" in \
         13.0.3) CUINDEX=130 ;; \
         *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
@@ -366,7 +369,8 @@ ARG GPU_ARCHS
 # Stage jit-cache/cubin artifacts into /flashinfer_jit_output for clean COPY later.
 # flashinfer-cubin is GBs of kernels named for the SM they target, nearly all
 # Blackwell; prune-cubins.sh drops those no GPU_ARCHS entry can run. flashinfer
-# downloads any cubin it cannot find, so an image run on another GPU still works.
+# downloads any cubin it cannot find, and JIT-builds any jit-cache module it cannot
+# find, so an image run on another GPU still works.
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,source=docker/prune-cubins.sh,target=/tmp/prune-cubins.sh \
     case "$CUDA_VERSION" in \
@@ -382,7 +386,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && if [ "$INSTALL_FLASHINFER_JIT_CACHE" = "1" ]; then \
         python3 -m pip install flashinfer-jit-cache==${FLASHINFER_VERSION} --index-url https://flashinfer.ai/whl/cu${CUINDEX} \
         && cp -r /opt/sglang/lib/python3.12/site-packages/flashinfer_jit_cache /flashinfer_jit_output/ \
-        && cp -r /opt/sglang/lib/python3.12/site-packages/flashinfer_jit_cache-*.dist-info /flashinfer_jit_output/ ; \
+        && cp -r /opt/sglang/lib/python3.12/site-packages/flashinfer_jit_cache-*.dist-info /flashinfer_jit_output/ \
+        && sh /tmp/prune-cubins.sh /flashinfer_jit_output/flashinfer_jit_cache "$GPU_ARCHS" --modules ; \
     fi
 
 FROM base AS devtools_builder
@@ -627,9 +632,17 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && dedup-layer /opt/sglang
 
 # Install the latest available AI Dynamo prerelease from NVIDIA's package index.
+# Its aisimulate dependency pulls jax, flax, optax and tfp. Only dynamo's planner, profiler,
+# mocker and replay tools import it, and only lazily, so the worker and frontend run without it.
 RUN --mount=type=cache,target=/root/.cache/pip \
     dedup-layer --begin \
-    && python3 -m pip install --pre --extra-index-url https://pypi.nvidia.com/ ai-dynamo \
+    && python3 -m pip install --pre --no-deps --extra-index-url https://pypi.nvidia.com/ ai-dynamo \
+    && python3 -c "from importlib.metadata import requires; from packaging.requirements import Requirement as R; print('\n'.join(str(r) for r in map(R, requires('ai-dynamo')) if r.name != 'aisimulate' and (r.marker is None or r.marker.evaluate({'extra': ''}))))" > /tmp/dynamo-deps.txt \
+    && cat /tmp/dynamo-deps.txt \
+    && python3 -m pip install --pre --extra-index-url https://pypi.nvidia.com/ -r /tmp/dynamo-deps.txt \
+    && rm /tmp/dynamo-deps.txt \
+    && ! python3 -c "import jax" 2>/dev/null \
+    && python3 -c "import dynamo.frontend.frontend_args, dynamo.sglang" \
     && dedup-layer /opt/sglang
 
 # Add yank script
@@ -708,7 +721,10 @@ RUN --mount=type=bind,from=local_src,source=/src,target=/tmp/local_src \
 # Clean up __pycache__/tests/pyc in same RUN to avoid writing ~28k files to layer
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,from=rust_ext_modules,target=/tmp/rust_ext_modules \
-    dedup-layer --begin \
+    --mount=type=bind,from=rust_toolchain,source=/opt/rust,target=/opt/rust,rw \
+    --mount=type=cache,target=/opt/rust/cargo/registry \
+    export RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo PATH="/opt/rust/cargo/bin:${PATH}" \
+    && dedup-layer --begin \
     && if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
     && cd /sgl-workspace/sglang \
     && PIP_BUILD_ARGS="" \

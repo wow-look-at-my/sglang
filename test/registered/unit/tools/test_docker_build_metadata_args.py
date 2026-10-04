@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,7 @@ CI_REGISTER_PATH = REPO_ROOT / "python" / "sglang" / "test" / "ci" / "ci_registe
 HELPER_PATH = REPO_ROOT / "scripts" / "ci" / "utils" / "docker_build_metadata_args.py"
 DOCKERFILE_PATH = REPO_ROOT / "docker" / "Dockerfile"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "_docker-build-and-publish.yml"
+PRUNE_CUBINS_PATH = REPO_ROOT / "docker" / "prune-cubins.sh"
 
 
 def _load_module(name, path):
@@ -192,6 +194,60 @@ class TestDockerBuildMetadataArgs(unittest.TestCase):
         self.assertIn("scripts/ci/utils/docker_build_metadata_args.py", workflow)
         self.assertIn("mapfile -t METADATA_ARGS", workflow)
         self.assertIn('"${METADATA_ARGS[@]}"', workflow)
+
+
+class TestPruneCubins(unittest.TestCase):
+    """A pruned kernel must be one no GPU_ARCHS entry can run; flashinfer rebuilds it on demand."""
+
+    def prune(self, *, names: list[str], archs: str, modules: bool) -> set[str]:
+        with tempfile.TemporaryDirectory() as root:
+            for name in names:
+                path = Path(root, name, f"{name}.so") if modules else Path(root, name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"x")
+            args = ["sh", str(PRUNE_CUBINS_PATH), root, archs]
+            subprocess.run(args + (["--modules"] if modules else []), check=True)
+            return {p.parent.name if modules else p.name for p in Path(root).rglob("*") if p.is_file()}
+
+    def test_jit_cache_modules_follow_their_directory_tag(self):
+        kept = self.prune(
+            archs="80;120a",
+            modules=True,
+            names=[
+                "fused_moe_90",
+                "fused_moe_100",
+                "fused_moe_103",
+                "fused_moe_120",
+                "fp4_quantization_120f",
+                "gemm_sm90",
+                "fmha_cutlass_sm100a",
+                "cute_sm120_mxfp8_groupwise",
+                "flash_kda_decode_d128_t1_precomputed_direct_split8_sm103a",
+                "batch_prefill_with_kv_cache_dtype_q_bf16_head_dim_qk_256_head_dim_vo_256_posenc_0_use_swa_True_f16qk_False",
+                "topk",
+            ],
+        )
+        self.assertEqual(
+            kept,
+            {
+                "fused_moe_120",
+                "fp4_quantization_120f",
+                "cute_sm120_mxfp8_groupwise",
+                "batch_prefill_with_kv_cache_dtype_q_bf16_head_dim_qk_256_head_dim_vo_256_posenc_0_use_swa_True_f16qk_False",
+                "topk",
+            },
+        )
+
+    def test_cubin_mode_ignores_bare_trailing_numbers(self):
+        names = ["gemm_tile_128.cubin", "fmha_sm100a.cubin", "fmha_sm80.cubin"]
+        self.assertEqual(
+            self.prune(names=names, archs="80;120a", modules=False),
+            {"gemm_tile_128.cubin", "fmha_sm80.cubin"},
+        )
+
+    def test_empty_gpu_archs_keeps_everything(self):
+        names = ["fused_moe_100", "gemm_sm90"]
+        self.assertEqual(self.prune(names=names, archs="", modules=True), set(names))
 
 
 if __name__ == "__main__":
