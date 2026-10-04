@@ -8,8 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"schedsim/internal/trace"
 )
 
@@ -41,8 +39,9 @@ func TestContractEveryScenarioEveryMetric(t *testing.T) {
 		sc := sc
 		t.Run(sc.Name, func(t *testing.T) {
 			r, ok := rows[sc.Key]
-			require.True(t, ok)
-
+			if !ok {
+				t.Fatalf("scenario %q (%s) was not measured", sc.Name, sc.Key)
+			}
 			logWindowCensus(t, r)
 			for _, k := range ContractMetrics {
 				for _, opp := range []struct {
@@ -58,8 +57,11 @@ func TestContractEveryScenarioEveryMetric(t *testing.T) {
 						continue
 					case VerdictLoss:
 						check := boundCell(sc, k, opp.name)
-						assert.NotNil(t, check)
-
+						if check == nil {
+							t.Errorf("%s vs %s: NEW is worse by %.1f%% (%s vs %s) and no derivation covers this cell",
+								k, opp.name, 100*gap, fmtVal(k, newv), fmtVal(k, oppv))
+							continue
+						}
 						if err := check(r, k, opp.name); err != nil {
 							t.Errorf("%s vs %s: the stated bound does not hold: %v", k, opp.name, err)
 						} else if ev, ok := boundEvidence(sc, k, opp.name, r); ok {

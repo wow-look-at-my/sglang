@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"schedsim/internal/sched"
 	"schedsim/internal/trace"
 	"schedsim/internal/trace/tracetest"
@@ -18,8 +16,9 @@ var incident = &Incident{BandLo: 8, BandHi: 20, SagFrom: 13874, SagTo: 4831}
 func embedded(t *testing.T) (trace.Metrics, sched.Workload) {
 	t.Helper()
 	steps, err := trace.Parse(tracetest.Incident(tracetest.DefaultIncident).String())
-	require.Nil(t, err)
-
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := trace.Summarize(steps, 4096)
 	return m, sched.WorkloadFromLog(steps, m, 4096)
 }
@@ -41,8 +40,9 @@ func TestWriteRendersEverySection(t *testing.T) {
 	s := out.String()
 	for _, want := range []string{"INPUT LOG", "test.log, 10 lines", "COST MODEL", "operator's ~8-20 tok/s band",
 		"WHERE EACH NUMBER COMES FROM", "[measured", "[NOT IN LOG", "one", "13,874 -> ~4,831"} {
-		assert.Contains(t, s, want)
-
+		if !strings.Contains(s, want) {
+			t.Errorf("report lacks %q", want)
+		}
 	}
 	// Without an incident the operator's words are left out.
 	in.Incident = nil
@@ -50,16 +50,18 @@ func TestWriteRendersEverySection(t *testing.T) {
 	in.Sweep, in.Revised = nil, nil
 	out.Reset()
 	Write(&out, in)
-	s = out.String()
-	assert.False(t, strings.Contains(s, "operator") || strings.Contains(s, "13,874"))
-
+	if s := out.String(); strings.Contains(s, "operator") || strings.Contains(s, "13,874") {
+		t.Errorf("no-incident report quotes the operator:\n%s", s)
+	}
 	out.Reset()
 	Summary(&out, old, new)
-	s = out.String()
-	assert.False(t, !strings.HasPrefix(s, "SUMMARY\n") || strings.Count(s, "decode steps") != 2)
-
-	assert.False(t, commas(1234567) != "1,234,567" || commas(999) != "999" || commas(1000) != "1,000")
-
-	assert.False(t, yn(true) != "yes" || yn(false) != "no")
-
+	if s := out.String(); !strings.HasPrefix(s, "SUMMARY\n") || strings.Count(s, "decode steps") != 2 {
+		t.Errorf("summary:\n%s", s)
+	}
+	if commas(1234567) != "1,234,567" || commas(999) != "999" || commas(1000) != "1,000" {
+		t.Error("commas")
+	}
+	if yn(true) != "yes" || yn(false) != "no" {
+		t.Error("yn")
+	}
 }

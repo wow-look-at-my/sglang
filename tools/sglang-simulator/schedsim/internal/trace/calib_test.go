@@ -1,8 +1,6 @@
 package trace
 
 import (
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"math"
 	"testing"
 )
@@ -10,8 +8,9 @@ import (
 func cal(t *testing.T) Calibration {
 	t.Helper()
 	c := Calibrate(mustParse(t), 4096, 64)
-	require.GreaterOrEqual(t, c.Prefill.Samples, 10)
-
+	if c.Prefill.Samples < 10 {
+		t.Fatalf("prefill fit has %d samples, want a logged cold run", c.Prefill.Samples)
+	}
 	return c
 }
 
@@ -22,11 +21,14 @@ func cal(t *testing.T) Calibration {
 func TestPrefillFitPredictsTheHeldOutRun(t *testing.T) {
 	steps := mustParse(t)
 	runs := ColdRuns(steps, 4096)
-	require.GreaterOrEqual(t, len(runs), 2)
-
+	if len(runs) < 2 {
+		t.Fatalf("the log must carry two isolated cold runs to fit and hold out, found %d", len(runs))
+	}
 	c := cal(t)
-	assert.False(t, c.Prefill.Samples != incident.C1Chunks-1 || c.Prefill.HoldoutSamples != incident.R3Chunks-1)
-
+	if c.Prefill.Samples != incident.C1Chunks-1 || c.Prefill.HoldoutSamples != incident.R3Chunks-1 {
+		t.Errorf("fit on %d chunks with %d held out, want C1's %d and R3's %d past their first",
+			c.Prefill.Samples, c.Prefill.HoldoutSamples, incident.C1Chunks-1, incident.R3Chunks-1)
+	}
 	// The log's chunks were priced by a known quadratic, so the fit recovers it.
 	want := incident.Model
 	for _, f := range []struct {
@@ -37,12 +39,16 @@ func TestPrefillFitPredictsTheHeldOutRun(t *testing.T) {
 		{"per token-ctx", c.Prefill.PerTokenCtx, want.PerTokenCtx},
 		{"per token-ctx^2", c.Prefill.PerTokenCtxSq, want.PerTokenCtxSq},
 	} {
-		assert.LessOrEqual(t, math.Abs(f.got-f.want), 0.01*f.want)
-
+		if math.Abs(f.got-f.want) > 0.01*f.want {
+			t.Errorf("fitted %s %.4g, the log was priced at %.4g", f.name, f.got, f.want)
+		}
 	}
-	assert.LessOrEqual(t, c.Prefill.RMSEHoldout, 0.03)
-
-	assert.LessOrEqual(t, c.Prefill.RMSEFit, 0.03)
+	if c.Prefill.RMSEHoldout > 0.03 {
+		t.Errorf("holdout relative RMSE %.4f, want under 3%%", c.Prefill.RMSEHoldout)
+	}
+	if c.Prefill.RMSEFit > 0.03 {
+		t.Errorf("fit relative RMSE %.4f, want under 3%%", c.Prefill.RMSEFit)
+	}
 
 	var xs, ys []float64
 	for k, i := range runs[0] {
@@ -66,8 +72,9 @@ func TestPrefillFitPredictsTheHeldOutRun(t *testing.T) {
 		n++
 	}
 	linRMSE := math.Sqrt(sum / n)
-	assert.Less(t, c.Prefill.RMSEHoldout*3, linRMSE)
-
+	if c.Prefill.RMSEHoldout*3 >= linRMSE {
+		t.Errorf("quadratic holdout %.4f is not 3x better than linear %.4f", c.Prefill.RMSEHoldout, linRMSE)
+	}
 }
 
 // A cost model that is not increasing in the work it prices cannot be a cost
@@ -77,21 +84,24 @@ func TestCostsRiseMonotonically(t *testing.T) {
 	lastTokens, lastCtx := 0.0, 0.0
 	for n := 64; n <= 8192; n *= 2 {
 		s := c.Prefill.PrefillSeconds([]ExtendItem{{Tokens: n, MidCtx: 100000}})
-		require.Greater(t, s, lastTokens)
-
+		if s <= lastTokens {
+			t.Fatalf("prefill seconds did not grow with tokens: %d -> %.6f after %.6f", n, s, lastTokens)
+		}
 		lastTokens = s
 	}
 	for m := 1000.0; m <= 500000; m *= 2 {
 		s := c.Prefill.PrefillSeconds([]ExtendItem{{Tokens: 4096, MidCtx: m}})
-		require.Greater(t, s, lastCtx)
-
+		if s <= lastCtx {
+			t.Fatalf("prefill seconds did not grow with context: %.0f -> %.6f after %.6f", m, s, lastCtx)
+		}
 		lastCtx = s
 	}
 	last := 0.0
 	for bs := 1; bs <= 16; bs *= 2 {
 		s := c.Decode.StepSeconds(bs, bs*200000)
-		require.Greater(t, s, last)
-
+		if s <= last {
+			t.Fatalf("decode step did not grow with batch: %d -> %.6f after %.6f", bs, s, last)
+		}
 		last = s
 	}
 }
@@ -104,13 +114,14 @@ func TestScaledCostIsExactProportional(t *testing.T) {
 	base := c.Prefill.PrefillSeconds(items)
 	for _, k := range []float64{0.5, 0.75, 1.33, 2} {
 		got := c.Prefill.Scaled(k).PrefillSeconds(items)
-		assert.LessOrEqual(t, math.Abs(got-base*k), 1e-12)
-
+		if math.Abs(got-base*k) > 1e-12 {
+			t.Errorf("Scaled(%v) gave %.9f, want %v x %.9f", k, got, k, base)
+		}
 	}
 	dbase := c.Decode.StepSeconds(5, 5*200000)
-	got := c.Decode.Scaled(1.4).StepSeconds(5, 5*200000)
-	assert.LessOrEqual(t, math.Abs(got-dbase*1.4), 1e-12)
-
+	if got := c.Decode.Scaled(1.4).StepSeconds(5, 5*200000); math.Abs(got-dbase*1.4) > 1e-12 {
+		t.Errorf("decode Scaled(1.4) gave %.9f, want %.9f", got, dbase*1.4)
+	}
 }
 
 // Every decode line reports both the tokens held and the share of the pool that
@@ -119,9 +130,9 @@ func TestScaledCostIsExactProportional(t *testing.T) {
 func TestDevicePoolRatioIsConsistentAcrossLines(t *testing.T) {
 	steps := mustParse(t)
 	capacity := DevicePoolTokens(steps)
-	pool := incident.Model.Pool
-	require.LessOrEqual(t, math.Abs(float64(capacity-pool)), 0.01*float64(pool))
-
+	if pool := incident.Model.Pool; math.Abs(float64(capacity-pool)) > 0.01*float64(pool) {
+		t.Fatalf("device pool %d tokens, the log's lines were printed against %d", capacity, pool)
+	}
 	var n int
 	for _, s := range steps {
 		if s.Kind != Decode || s.FullUsage <= 0 || s.FullTokens <= 0 {
@@ -129,11 +140,13 @@ func TestDevicePoolRatioIsConsistentAcrossLines(t *testing.T) {
 		}
 		n++
 		r := float64(s.FullTokens) / s.FullUsage
-		assert.LessOrEqual(t, math.Abs(r-float64(capacity))/float64(capacity), 0.05)
-
+		if math.Abs(r-float64(capacity))/float64(capacity) > 0.05 {
+			t.Errorf("line %d implies a pool of %.0f, %.1f%% off the median %d", s.Line, r, 100*math.Abs(r-float64(capacity))/float64(capacity), capacity)
+		}
 	}
-	require.GreaterOrEqual(t, n, 10)
-
+	if n < 10 {
+		t.Fatalf("only %d decode lines carry both counters", n)
+	}
 }
 
 // The decode base term is solved from the steady single-stream lines at their
@@ -141,10 +154,12 @@ func TestDevicePoolRatioIsConsistentAcrossLines(t *testing.T) {
 func TestDecodeModelReproducesSteadyLines(t *testing.T) {
 	steps := mustParse(t)
 	c := cal(t)
-	require.GreaterOrEqual(t, c.Decode.Samples, 10)
-
-	assert.GreaterOrEqual(t, c.Decode.NumDraft, 1)
-
+	if c.Decode.Samples < 10 {
+		t.Fatalf("only %d steady decode lines to fit", c.Decode.Samples)
+	}
+	if c.Decode.NumDraft < 1 {
+		t.Errorf("drafts %d, want at least one (MTP runs speculative decoding)", c.Decode.NumDraft)
+	}
 	var worst, n float64
 	for i, s := range steps {
 		if i == 0 || s.Kind != Decode || steps[i-1].Kind != Decode {
@@ -159,6 +174,7 @@ func TestDecodeModelReproducesSteadyLines(t *testing.T) {
 		worst = math.Max(worst, err)
 		n++
 	}
-	assert.LessOrEqual(t, worst, 0.05)
-
+	if worst > 0.05 {
+		t.Errorf("decode model is off by %.1f%% at its worst steady line", 100*worst)
+	}
 }

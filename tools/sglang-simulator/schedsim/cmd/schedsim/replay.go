@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wow-look-at-my/go-containers/set"
 	"schedsim/internal/sim"
 	"schedsim/internal/trace"
 )
@@ -44,11 +43,11 @@ func printReplay(w io.Writer, boots []trace.Boot, cost sim.Cost, chunkSize int, 
 	fmt.Fprintf(w, "evicts pages), so read recomputes and completed turns as directional and the stall\n")
 	fmt.Fprintf(w, "columns as the result; docs/replaying-a-serving-log.md has the derivation.\n\n")
 
-	want := set.New[int]()
+	want := map[int]bool{}
 	for _, f := range strings.Split(rf.boots, ",") {
 		var i int
 		if _, err := fmt.Sscanf(f, "%d", &i); err == nil {
-			want.Add(i)
+			want[i] = true
 		}
 	}
 	var scs []sim.Scenario
@@ -69,10 +68,10 @@ func printReplay(w io.Writer, boots []trace.Boot, cost sim.Cost, chunkSize int, 
 		if !b.Timestamped() || len(b.Steps) == 0 {
 			continue
 		}
-		if want.Len() > 0 && !want.Contains(bi) {
+		if len(want) > 0 && !want[bi] {
 			continue
 		}
-		if want.Len() == 0 && len(b.Stalls(5)) == 0 {
+		if len(want) == 0 && len(b.Stalls(5)) == 0 {
 			continue
 		}
 		// The window opens half an hour before the boot's first stall.

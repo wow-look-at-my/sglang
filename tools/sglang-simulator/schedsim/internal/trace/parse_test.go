@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"schedsim/internal/trace/tracetest"
 )
 
@@ -15,22 +14,27 @@ var incident = tracetest.DefaultIncident
 func mustParse(t *testing.T) []Step {
 	t.Helper()
 	steps, err := Parse(tracetest.Incident(incident).String())
-	require.Nil(t, err)
-
+	if err != nil {
+		t.Fatalf("parse incident log: %v", err)
+	}
 	return steps
 }
 
 func TestParseReadsEverySchedulerStep(t *testing.T) {
 	steps := mustParse(t)
-	require.NotEqual(t, 0, len(steps))
-
+	if len(steps) == 0 {
+		t.Fatal("no steps parsed")
+	}
 	for _, s := range steps {
-		require.Greater(t, s.Throughput, 0)
-
-		require.False(t, s.Kind == Prefill && s.NewTokens <= 0)
-
-		require.False(t, s.Kind == Decode && s.AcceptLen <= 0)
-
+		if s.Throughput <= 0 {
+			t.Fatalf("line %d: %s step has throughput %v", s.Line, s.Kind, s.Throughput)
+		}
+		if s.Kind == Prefill && s.NewTokens <= 0 {
+			t.Fatalf("line %d: prefill step has #new-token %d", s.Line, s.NewTokens)
+		}
+		if s.Kind == Decode && s.AcceptLen <= 0 {
+			t.Fatalf("line %d: decode step has accept len %v", s.Line, s.AcceptLen)
+		}
 	}
 }
 
@@ -44,11 +48,14 @@ func TestParseKeepsPrefillAndDecodeApart(t *testing.T) {
 		}
 		decodes++
 		// A decode line never carries prefill-only fields.
-		require.False(t, s.NewTokens != 0 || s.Pending != 0)
-
+		if s.NewTokens != 0 || s.Pending != 0 {
+			t.Fatalf("line %d: decode step has prefill fields (#new-token %d, #pending-token %d)",
+				s.Line, s.NewTokens, s.Pending)
+		}
 	}
-	require.False(t, prefills == 0 || decodes == 0)
-
+	if prefills == 0 || decodes == 0 {
+		t.Fatalf("expected both step kinds, got %d prefill and %d decode", prefills, decodes)
+	}
 }
 
 // The cold window must be the incident's C1: what its first chunk left
@@ -58,23 +65,30 @@ func TestColdPrefillIsTheReportedOne(t *testing.T) {
 	steps := mustParse(t)
 	m := Summarize(steps, 4096)
 
-	require.GreaterOrEqual(t, m.ColdStart, 0)
-
-	want := incident.C1Len() - incident.Chunk
-	require.Equal(t, want, m.PendingAtCold)
-
-	require.Equal(t, incident.C1Chunks, m.ColdChunks)
-
-	require.Equal(t, 0, m.RunningAtCold)
-
-	require.Equal(t, 0, m.DecodeInCold)
-
+	if m.ColdStart < 0 {
+		t.Fatal("no cold 4096-token prefill stretch found")
+	}
+	if want := incident.C1Len() - incident.Chunk; m.PendingAtCold != want {
+		t.Fatalf("#pending-token at the start of the cold prefill = %d, want C1's %d", m.PendingAtCold, want)
+	}
+	if m.ColdChunks != incident.C1Chunks {
+		t.Fatalf("cold prefill has %d chunks, want C1's %d", m.ColdChunks, incident.C1Chunks)
+	}
+	if m.RunningAtCold != 0 {
+		t.Fatalf("#running-req on the first cold chunk = %d, want 0 (nothing else running)", m.RunningAtCold)
+	}
+	if m.DecodeInCold != 0 {
+		t.Fatalf("log has %d decode steps inside the cold window, want 0", m.DecodeInCold)
+	}
 	for i := m.ColdStart; i < m.ColdEnd; i++ {
 		s := steps[i]
-		require.Equal(t, Prefill, s.Kind)
-
-		require.False(t, s.NewTokens != 4096 || s.HitTokens != 0)
-
+		if s.Kind != Prefill {
+			t.Fatalf("line %d: %s step inside the cold window", s.Line, s.Kind)
+		}
+		if s.NewTokens != 4096 || s.HitTokens != 0 {
+			t.Fatalf("line %d: chunk is %d new / %d cached, want 4096 new / 0 cached",
+				s.Line, s.NewTokens, s.HitTokens)
+		}
 	}
 }
 
@@ -84,14 +98,15 @@ func TestMeasuredSagMatchesTheReportedNumbers(t *testing.T) {
 	steps := mustParse(t)
 	m := Summarize(steps, 4096)
 
-	want := incident.C1ChunkTPS(1)
-	require.LessOrEqual(t, math.Abs(m.ColdSteadyTP-want), 0.01)
-
-	want := incident.C1ChunkTPS(incident.C1Chunks - 1)
-	require.LessOrEqual(t, math.Abs(m.ColdMinTP-want), 0.01)
-
-	require.Less(t, m.ColdMinTP, m.ColdSteadyTP)
-
+	if want := incident.C1ChunkTPS(1); math.Abs(m.ColdSteadyTP-want) > 0.01 {
+		t.Fatalf("steady cold-chunk throughput = %.2f, want the second chunk's %.2f", m.ColdSteadyTP, want)
+	}
+	if want := incident.C1ChunkTPS(incident.C1Chunks - 1); math.Abs(m.ColdMinTP-want) > 0.01 {
+		t.Fatalf("lowest cold-chunk throughput = %.2f, want the last chunk's %.2f", m.ColdMinTP, want)
+	}
+	if m.ColdMinTP >= m.ColdSteadyTP {
+		t.Fatalf("no sag: steady %.2f, bottom %.2f", m.ColdSteadyTP, m.ColdMinTP)
+	}
 }
 
 // Queue growth inside the window is the operator's "#queue-req climbs".
@@ -99,8 +114,10 @@ func TestQueueGrowsDuringTheColdPrefill(t *testing.T) {
 	steps := mustParse(t)
 	m := Summarize(steps, 4096)
 
-	require.Greater(t, m.QueuePeakInCold, m.QueueAtCold)
-
+	if m.QueuePeakInCold <= m.QueueAtCold {
+		t.Fatalf("#queue-req peaked at %d inside the window, started at %d; want growth",
+			m.QueuePeakInCold, m.QueueAtCold)
+	}
 }
 
 // Decode stat lines are emitted every DecodeLogInterval iterations, so the
@@ -110,18 +127,20 @@ func TestDecodeLineIntervalBoundsTheWindow(t *testing.T) {
 	steps := mustParse(t)
 	m := Summarize(steps, 4096)
 
-	require.False(t, m.DecodeStepSecs <= 0 || m.DecodeStepToks <= 0)
-
+	if m.DecodeStepSecs <= 0 || m.DecodeStepToks <= 0 {
+		t.Fatalf("decode step medians not derived: %.6f s, %.2f tokens", m.DecodeStepSecs, m.DecodeStepToks)
+	}
 	normal := m.NormalDecodeStepsInColdWindow()
 	bound := float64(MaxDecodeStepsInColdWindow())
-	require.Greater(t, normal, bound)
-
-	lo := m.GenRateForSteps(MaxDecodeStepsInColdWindow())
-	require.Less(t, lo, 8)
-
-	got := m.StepsForGenRate(8)
-	require.Greater(t, got, bound)
-
+	if normal <= bound {
+		t.Fatalf("normal decode over the window (%.0f steps) should far exceed the no-line bound (%v)", normal, bound)
+	}
+	if lo := m.GenRateForSteps(MaxDecodeStepsInColdWindow()); lo >= 8 {
+		t.Fatalf("log permits %.1f tok/s in the window, which would reach the reported 8-20 band", lo)
+	}
+	if got := m.StepsForGenRate(8); got <= bound {
+		t.Fatalf("8 tok/s needs %.0f steps, within the %v-step bound", got, bound)
+	}
 }
 
 // The collapsed rate reads back as a share of steps: the band the operator
@@ -132,26 +151,32 @@ func TestCollapseBandReadsBackAsADutyCycle(t *testing.T) {
 
 	lo := m.DecodeDutyCycleForRate(8)
 	hi := m.DecodeDutyCycleForRate(20)
-	require.False(t, lo <= 0 || hi <= lo)
-
-	require.Less(t, hi, 1)
-
+	if lo <= 0 || hi <= lo {
+		t.Fatalf("duty cycle for 8-20 tok/s = %.4f-%.4f, want a positive increasing pair", lo, hi)
+	}
+	if hi >= 1 {
+		t.Fatalf("20 tok/s would need %.0f%% of steps, which is not starvation", hi*100)
+	}
 	// A conversation getting the pre-collapse share of steps would run at the
 	// baseline rate; the band must be far below it.
-	require.GreaterOrEqual(t, m.DecodeDutyCycleForRate(m.BaselineGenTP), hi)
-
+	if m.DecodeDutyCycleForRate(m.BaselineGenTP) < hi {
+		t.Fatalf("baseline %.1f tok/s maps to a lower duty cycle than the 20 tok/s band",
+			m.BaselineGenTP)
+	}
 }
 
 func TestParseRejectsLogWithoutSteps(t *testing.T) {
-	_, err := Parse("nothing here\n")
-	require.NotNil(t, err)
-
+	if _, err := Parse("nothing here\n"); err == nil {
+		t.Fatal("expected an error for a log with no scheduler steps")
+	}
 }
 
 func TestParseReportsTheOffendingLine(t *testing.T) {
 	_, err := Parse("TP0] Prefill batch, #new-seq: 1, #new-token: 4096, #cached-token: 0, full token usage: 0.01, mamba usage: 0.04, #running-req: 0, #queue-req: 0, #pending-token: 8, cuda graph: False, input throughput (token/s): 0.00\n")
-	require.NotNil(t, err)
-
-	require.Contains(t, err.Error(), "line 1")
-
+	if err == nil {
+		t.Fatal("expected an error for a zero input throughput")
+	}
+	if !strings.Contains(err.Error(), "line 1") {
+		t.Fatalf("error should name the line, got %v", err)
+	}
 }

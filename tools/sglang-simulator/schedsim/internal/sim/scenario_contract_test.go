@@ -1,8 +1,6 @@
 package sim
 
 import (
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"math"
 	"testing"
 )
@@ -44,32 +42,49 @@ func TestScenarioBBalanceWinsAgainstPrev(t *testing.T) {
 				old.StreamDecodeTokSCold, prev.StreamDecodeTokSCold, neu.StreamDecodeTokSCold)
 			t.Logf("  output tok/s: %.1f / %.1f / %.1f",
 				old.OutputTokS, prev.OutputTokS, neu.OutputTokS)
-			assert.LessOrEqual(t, neu.LongestStall, prev.LongestStall)
-
-			assert.LessOrEqual(t, neu.StallFrac1s, prev.StallFrac1s)
-
-			assert.GreaterOrEqual(t, neu.OutputTokS, prev.OutputTokS)
-
-			assert.GreaterOrEqual(t, neu.StreamDecodeTokSCold, prev.StreamDecodeTokSCold)
-
-			assert.GreaterOrEqual(t, neu.PerAgentTokSCold, prev.PerAgentTokSCold)
+			if neu.LongestStall > prev.LongestStall {
+				t.Errorf("longest stall %s, worse than PREV %s",
+					seconds(neu.LongestStall), seconds(prev.LongestStall))
+			}
+			if neu.StallFrac1s > prev.StallFrac1s {
+				t.Errorf("stream time in stalls over 1 s %.2f%%, worse than PREV %.2f%%",
+					100*neu.StallFrac1s, 100*prev.StallFrac1s)
+			}
+			if neu.OutputTokS < prev.OutputTokS {
+				t.Errorf("output %.1f tok/s, worse than PREV %.1f",
+					neu.OutputTokS, prev.OutputTokS)
+			}
+			if neu.StreamDecodeTokSCold < prev.StreamDecodeTokSCold {
+				t.Errorf("stream decode %.1f tok/s in cold, worse than PREV %.1f",
+					neu.StreamDecodeTokSCold, prev.StreamDecodeTokSCold)
+			}
+			if neu.PerAgentTokSCold < prev.PerAgentTokSCold {
+				t.Errorf("per-agent %.1f tok/s in cold, worse than PREV %.1f",
+					neu.PerAgentTokSCold, prev.PerAgentTokSCold)
+			}
 
 			pooled := pooledTrace(row.Runs[ModeNew])
 			stats := deliveryClassStats(pooled)
 			decode := stats["decode"]
-			require.False(t, decode == nil || len(decode.PerToken) == 0)
-
+			if decode == nil || len(decode.PerToken) == 0 {
+				t.Fatal("no decode-class ITL samples to compare against")
+			}
 			decodeP99 := pct(decode.PerToken, 99)
 			t.Logf("  NEW decode-class p99 %s, mixed share %.2f%% (PREV ITL p99 %s)",
 				seconds(decodeP99), 100*mixedShare(pooled), seconds(prev.ITLp99))
-			assert.LessOrEqual(t, decodeP99, prev.ITLp99)
+			if decodeP99 > prev.ITLp99 {
+				t.Errorf("NEW's pure-decode per-token p99 %s, worse than PREV's ITL p99 %s",
+					seconds(decodeP99), seconds(prev.ITLp99))
+			}
 
 			// The bound holds per batch: at most one chunk of prefill tokens, plus the extend token each riding request adds.
 			limit := row.Runs[ModeNew][0].Cfg.ChunkSize + row.Runs[ModeNew][0].Agents
 			for _, r := range row.Runs[ModeNew] {
 				for _, b := range r.Batches {
-					require.False(t, b.IsPrefill && b.ExtendTokens > limit)
-
+					if b.IsPrefill && b.ExtendTokens > limit {
+						t.Fatalf("prefill batch carried %d tokens, over the %d allowed",
+							b.ExtendTokens, limit)
+					}
 				}
 			}
 		})
@@ -106,17 +121,27 @@ func TestMixedRideIsWhatDecidesTheP99Cell(t *testing.T) {
 		return Pool(runs, sc.Window)
 	}
 	prevOff, prevOn, newOn := off(ModePrev), on(ModePrev), on(ModeNew)
-	assert.Greater(t, prevOn.ITLp99, prevOff.ITLp99)
-
-	assert.Less(t, prevOn.LongestStall, prevOff.LongestStall)
-
-	assert.Greater(t, newOn.ITLp99, prevOn.ITLp99)
-
+	if prevOn.ITLp99 <= prevOff.ITLp99 {
+		t.Errorf("the ride did not raise PREV's ITL p99: %s with mixed chunk, %s without",
+			seconds(prevOn.ITLp99), seconds(prevOff.ITLp99))
+	}
+	if prevOn.LongestStall >= prevOff.LongestStall {
+		t.Errorf("the ride did not shorten PREV's longest stall: %s with mixed chunk, %s without",
+			seconds(prevOn.LongestStall), seconds(prevOff.LongestStall))
+	}
+	if newOn.ITLp99 <= prevOn.ITLp99 {
+		t.Errorf("NEW's p99 %s is not above PREV's with the same delivery form (%s), so the deficit is not the ride",
+			seconds(newOn.ITLp99), seconds(prevOn.ITLp99))
+	}
 	withoutRide := off(ModeNew)
-	assert.Less(t, withoutRide.ITLp99, prevOff.ITLp99)
-
-	assert.Less(t, withoutRide.StreamDecodeTokSCold, prevOff.StreamDecodeTokSCold)
-
+	if withoutRide.ITLp99 >= prevOff.ITLp99 {
+		t.Errorf("p99 without the ride %s did not beat PREV's %s",
+			seconds(withoutRide.ITLp99), seconds(prevOff.ITLp99))
+	}
+	if withoutRide.StreamDecodeTokSCold >= prevOff.StreamDecodeTokSCold {
+		t.Errorf("p99 came free without the ride: stream rate %.1f tok/s against PREV's %.1f",
+			withoutRide.StreamDecodeTokSCold, prevOff.StreamDecodeTokSCold)
+	}
 	// The table in docs/derivation-itl-percentiles-under-mixed-chunk.md is these
 	// rows; each is printed as PREV / NEW.
 	for _, r := range []struct {
@@ -154,8 +179,9 @@ func TestITLP99BandFollowsTheMixedShare(t *testing.T) {
 		pooled := pooledTrace(runs)
 		share := mixedShare(pooled)
 		decode := deliveryClassStats(pooled)["decode"]
-		require.False(t, decode == nil || len(decode.PerToken) == 0)
-
+		if decode == nil || len(decode.PerToken) == 0 {
+			t.Fatalf("%s: no decode-class samples", sc.Name)
+		}
 		m := Pool(runs, sc.Window)
 		decodeTop := pct(decode.PerToken, 99.9)
 		decodeP99 := pct(decode.PerToken, 99)
@@ -165,13 +191,17 @@ func TestITLP99BandFollowsTheMixedShare(t *testing.T) {
 		case tc.overLine && share <= 0.01:
 			t.Errorf("%s: mixed share %.2f%% fell under the 1%% line", sc.Name, 100*share)
 		case tc.overLine:
-			assert.Greater(t, m.ITLp99, decodeTop)
-
+			if m.ITLp99 <= decodeTop {
+				t.Errorf("%s: p99 %s is still inside the decode band (its p99.9 is %s) at a %.2f%% mixed share",
+					sc.Name, seconds(m.ITLp99), seconds(decodeTop), 100*share)
+			}
 		case share > 0.01:
 			t.Errorf("%s: mixed share %.2f%% rose over the 1%% line", sc.Name, 100*share)
 		default:
-			assert.LessOrEqual(t, math.Abs(m.ITLp99-decodeP99), 0.002)
-
+			if math.Abs(m.ITLp99-decodeP99) > 0.002 {
+				t.Errorf("%s: p99 %s is not the decode band's %s at a %.2f%% mixed share",
+					sc.Name, seconds(m.ITLp99), seconds(decodeP99), 100*share)
+			}
 		}
 	}
 }

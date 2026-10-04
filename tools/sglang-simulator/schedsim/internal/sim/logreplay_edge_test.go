@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"schedsim/internal/trace"
 	"schedsim/internal/trace/tracetest"
 )
@@ -13,29 +11,30 @@ import (
 func bootOf(t *testing.T, l *tracetest.Log) *trace.Boot {
 	t.Helper()
 	boots, err := trace.ParseBoots(l.String())
-	require.Nil(t, err)
-
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &boots[0]
 }
 
 func TestBuildLogReplayErrors(t *testing.T) {
 	bare, _ := trace.ParseBoots(tracetest.Incident(tracetest.DefaultIncident).String())
-	_, err := BuildLogReplay(&bare[0], 4096, 0, 0)
-	assert.False(t, err == nil || !strings.Contains(err.Error(), "no timestamps"))
-
+	if _, err := BuildLogReplay(&bare[0], 4096, 0, 0); err == nil || !strings.Contains(err.Error(), "no timestamps") {
+		t.Errorf("bare boot: %v", err)
+	}
 	decodeOnly := bootOf(t, tracetest.New("w", tracetest.Start).Steady(2, 1, 100))
-	_, err := BuildLogReplay(decodeOnly, 4096, 0, 0)
-	assert.False(t, err == nil || !strings.Contains(err.Error(), "no prefill step"))
-
+	if _, err := BuildLogReplay(decodeOnly, 4096, 0, 0); err == nil || !strings.Contains(err.Error(), "no prefill step") {
+		t.Errorf("decode-only boot: %v", err)
+	}
 	one := bootOf(t, tracetest.New("w", tracetest.Start).Prefill(tracetest.Prefill{NewTokens: 100}).Steady(1, 1, 100))
-	_, err := BuildLogReplay(one, 4096, 3600, 0)
-	assert.False(t, err == nil || !strings.Contains(err.Error(), "no requests in the window"))
-
+	if _, err := BuildLogReplay(one, 4096, 3600, 0); err == nil || !strings.Contains(err.Error(), "no requests in the window") {
+		t.Errorf("window past the log: %v", err)
+	}
 	// A request with no tokens at all is dropped, leaving nothing.
 	empty := bootOf(t, tracetest.New("w", tracetest.Start).Prefill(tracetest.Prefill{NewTokens: 0, TPS: 1}))
-	_, err := BuildLogReplay(empty, 4096, 0, 0)
-	assert.NotNil(t, err)
-
+	if _, err := BuildLogReplay(empty, 4096, 0, 0); err == nil {
+		t.Error("an empty request was replayed")
+	}
 }
 
 func TestBuildLogReplayReconstructsConversations(t *testing.T) {
@@ -76,78 +75,92 @@ func TestBuildLogReplayReconstructsConversations(t *testing.T) {
 	l.Steady(2, 3, 260000)
 	b := bootOf(t, l)
 	r, err := BuildLogReplay(b, chunk, 0, 0)
-	require.Nil(t, err)
-
-	assert.Equal(t, 12288, r.Shared)
-
-	assert.False(t, r.Convs != 5 || r.Returning != 1 || r.ColdTurns() != 2 || len(r.Turns) != 9)
-
-	assert.False(t, r.Agents() != r.Convs || r.SharedPrefix() != r.Shared)
-
-	first := r.Turns[0]
-	assert.False(t, !first.Measured || first.Out != 400 || first.Input != 13288)
-
-	second := r.Turns[1]
-	assert.False(t, second.Conv != 0 || second.Kind != KindAgent || second.Hit != 13688)
-
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Shared != 12288 {
+		t.Errorf("shared prefix %d", r.Shared)
+	}
+	if r.Convs != 5 || r.Returning != 1 || r.ColdTurns() != 2 || len(r.Turns) != 9 {
+		t.Errorf("convs %d returning %d cold %d turns %d", r.Convs, r.Returning, r.ColdTurns(), len(r.Turns))
+	}
+	if r.Agents() != r.Convs || r.SharedPrefix() != r.Shared {
+		t.Error("accessors")
+	}
+	if first := r.Turns[0]; !first.Measured || first.Out != 400 || first.Input != 13288 {
+		t.Errorf("first turn = %+v", first)
+	}
+	if second := r.Turns[1]; second.Conv != 0 || second.Kind != KindAgent || second.Hit != 13688 {
+		t.Errorf("follow-up = %+v", second)
+	}
 	f2, f1 := r.Turns[4], r.Turns[5]
-	assert.False(t, f2.Conv != 2 || f1.Conv != 1 || f2.Hit != 18288 || f1.Hit != 15288 || f2.Input != 18288+600)
-
+	if f2.Conv != 2 || f1.Conv != 1 || f2.Hit != 18288 || f1.Hit != 15288 || f2.Input != 18288+600 {
+		t.Errorf("follow-ups = %+v, %+v", f2, f1)
+	}
 	// The cold prompt's size is its own chunks, not the queue behind it.
 	cold := r.Turns[6]
-	assert.False(t, cold.Kind != KindCold || cold.Input != coldLen || cold.Conv != 3)
-
+	if cold.Kind != KindCold || cold.Input != coldLen || cold.Conv != 3 {
+		t.Errorf("cold turn = %+v", cold)
+	}
 	// The returning prompt is the cold conversation again, with its reply
 	// measured from the size difference.
-	queued := r.Turns[7]
-	assert.False(t, queued.Conv != 4 || queued.Kind != KindAgent || queued.Input != 15288)
-
+	if queued := r.Turns[7]; queued.Conv != 4 || queued.Kind != KindAgent || queued.Input != 15288 {
+		t.Errorf("queued request = %+v", queued)
+	}
 	back := r.Turns[8]
-	assert.False(t, !back.Returning || back.Conv != cold.Conv || !cold.Measured || cold.Out != 500)
-
-	m := r.MeasuredOuts()
-	assert.Equal(t, 2, m)
-
+	if !back.Returning || back.Conv != cold.Conv || !cold.Measured || cold.Out != 500 {
+		t.Errorf("returning turn = %+v, cold %+v", back, cold)
+	}
+	if m := r.MeasuredOuts(); m != 2 {
+		t.Errorf("measured replies = %d", m)
+	}
 	init := r.Initial()
-	assert.Equal(t, 5, len(init))
-
+	if len(init) != 5 {
+		t.Errorf("Initial released %d", len(init))
+	}
 	nxt := r.OnFinish(init[0], 0)
-	assert.False(t, len(nxt) != 1 || nxt[0].Conv != 0 || nxt[0].Arrival != r.Turns[1].At)
-
-	again := r.OnFinish(nxt[0], 0)
-	assert.Equal(t, 0, len(again))
-
-	late := r.OnFinish(init[1], 1e6)
-	assert.False(t, len(late) != 1 || late[0].Arrival != 1e6)
-
+	if len(nxt) != 1 || nxt[0].Conv != 0 || nxt[0].Arrival != r.Turns[1].At {
+		t.Errorf("OnFinish released %+v", nxt)
+	}
+	if again := r.OnFinish(nxt[0], 0); len(again) != 0 {
+		t.Errorf("a finished conversation released %+v", again)
+	}
+	if late := r.OnFinish(init[1], 1e6); len(late) != 1 || late[0].Arrival != 1e6 {
+		t.Errorf("a turn after a late reply released %+v", late)
+	}
 	fresh := r.Reset()
-	assert.False(t, len(fresh.Initial()) != 5 || len(r.next) == 0)
-
+	if len(fresh.Initial()) != 5 || len(r.next) == 0 {
+		t.Error("Reset did not start the cursors over")
+	}
 	// A window that starts after the first turns sees them as new, and a context cap clamps the prompt.
 	b.Args.ContextLength = 10000
 	late, err := BuildLogReplay(b, chunk, 3, 20)
-	require.Nil(t, err)
-
-	for _, tn := range late.Turns {
-		assert.False(t, tn.Input > 10000 || tn.At > 20)
-
+	if err != nil {
+		t.Fatal(err)
 	}
-	assert.LessOrEqual(t, late.Window, 20)
-
+	for _, tn := range late.Turns {
+		if tn.Input > 10000 || tn.At > 20 {
+			t.Errorf("turn %+v outside cap or window", tn)
+		}
+	}
+	if late.Window > 20 {
+		t.Errorf("window %v", late.Window)
+	}
 }
 
 func TestSharedPrefixNeedsThreeHits(t *testing.T) {
 	steps := []trace.Step{{Kind: trace.Prefill, HitTokens: 500}, {Kind: trace.Prefill, HitTokens: 500}}
-	got := sharedPrefix(steps)
-	assert.Equal(t, 0, got)
-
+	if got := sharedPrefix(steps); got != 0 {
+		t.Errorf("two hits gave %d", got)
+	}
 	steps = append(steps, trace.Step{Kind: trace.Prefill, HitTokens: 500}, trace.Step{Kind: trace.Prefill, HitTokens: 40000})
-	got := sharedPrefix(steps)
-	assert.Equal(t, 500, got)
-
-	assert.False(t, medianInt(nil, 7) != 7 || medianInt([]int{3, 1, 2}, 0) != 2)
-
-	got := chainTokens([]trace.Step{{NewTokens: 100}}, 0, 4096)
-	assert.Equal(t, 0, got)
-
+	if got := sharedPrefix(steps); got != 500 {
+		t.Errorf("three hits gave %d", got)
+	}
+	if medianInt(nil, 7) != 7 || medianInt([]int{3, 1, 2}, 0) != 2 {
+		t.Error("medianInt")
+	}
+	if got := chainTokens([]trace.Step{{NewTokens: 100}}, 0, 4096); got != 0 {
+		t.Errorf("chain of a whole request = %d", got)
+	}
 }

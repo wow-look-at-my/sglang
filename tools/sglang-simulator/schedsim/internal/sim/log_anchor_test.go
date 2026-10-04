@@ -6,8 +6,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"schedsim/internal/trace"
 )
 
@@ -31,23 +29,28 @@ func TestReplayReproducesTheLoggedBatch(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, found)
-
-	assert.Equal(t, 4000, found.Tokens)
-
-	assert.Equal(t, 248320, found.Hit)
-
+	if found == nil {
+		t.Fatalf("no prefill batch with #new-seq 3; the run logged %d prefill lines", len(res.PrefillLog))
+	}
+	if found.Tokens != 4000 {
+		t.Errorf("#new-token = %d, want the log's 4000", found.Tokens)
+	}
+	if found.Hit != 248320 {
+		t.Errorf("#cached-token = %d, want the log's 248320", found.Hit)
+	}
 	var got []int
 	for _, it := range found.Items {
 		got = append(got, it.Extend)
 	}
 	sort.Ints(got)
 	want := []int{263, 921, 2816}
-	require.Equal(t, len(want), len(got))
-
+	if len(got) != len(want) {
+		t.Fatalf("the batch carries %d items %v, want %v", len(got), got, want)
+	}
 	for i := range want {
-		require.Equal(t, want[i], got[i])
-
+		if got[i] != want[i] {
+			t.Fatalf("item %d = %d, want %d (batch %v)", i, got[i], want[i], got)
+		}
 	}
 }
 
@@ -63,17 +66,23 @@ func TestOldRunsNoDecodeDuringTheColdPrefills(t *testing.T) {
 			break
 		}
 	}
-	require.GreaterOrEqual(t, start, 0)
-
+	if start < 0 {
+		t.Fatal("the log has no cold run over 400K pending tokens")
+	}
 	chunks := 0
 	for _, s := range steps[start:] {
-		require.NotEqual(t, trace.Decode, s.Kind)
-
+		if s.Kind == trace.Decode {
+			t.Fatalf("the log shows a decode line (%d) after %d of C1's chunks", s.Line, chunks)
+		}
 		if s.NewTokens != BaselineChunkSize {
-			require.Equal(t, 105, chunks)
-
-			require.False(t, s.NewSeq != 3 || s.NewTokens != 4000 || s.HitTokens != 248320)
-
+			if chunks != 105 {
+				t.Fatalf("C1's cold run is %d full chunks, want 105 (stopped at #new-token %d)",
+					chunks, s.NewTokens)
+			}
+			if s.NewSeq != 3 || s.NewTokens != 4000 || s.HitTokens != 248320 {
+				t.Fatalf("the batch after C1's chunks is #new-seq %d, #new-token %d, #cached-token %d,"+
+					" want 3, 4000, 248320", s.NewSeq, s.NewTokens, s.HitTokens)
+			}
 			break
 		}
 		chunks++
@@ -83,16 +92,18 @@ func TestOldRunsNoDecodeDuringTheColdPrefills(t *testing.T) {
 	cost := NewCost(calib(t))
 	res := Run(sc, DefaultConfig(ModeOld, cost), sc.Seeds[0])
 	c1 := FindTag(res, "C1")
-	require.NotNil(t, c1)
-
+	if c1 == nil {
+		t.Fatal("scenario A produced no C1")
+	}
 	n := 0
 	for _, b := range res.Batches {
 		if !b.IsPrefill && b.Start < c1.FirstTok {
 			n++
 		}
 	}
-	assert.Equal(t, 0, n)
-
+	if n != 0 {
+		t.Errorf("OLD launched %d decode batches before C1's first token, want 0", n)
+	}
 }
 
 // TestDecodeRateMatchesTheLog checks the decode model against the lines FitDecode
@@ -119,8 +130,9 @@ func TestDecodeRateMatchesTheLog(t *testing.T) {
 		}
 		otherRel = append(otherRel, rel)
 	}
-	require.Equal(t, d.Samples, len(steadyRel))
-
+	if len(steadyRel) != d.Samples {
+		t.Fatalf("checked %d steady decode lines, the fit used %d", len(steadyRel), d.Samples)
+	}
 	sort.Float64s(steadyRel)
 	sort.Float64s(otherRel)
 	mean := 0.0
@@ -132,10 +144,12 @@ func TestDecodeRateMatchesTheLog(t *testing.T) {
 		len(steadyRel), 100*steadyRel[len(steadyRel)/2], 100*mean, 100*steadyRel[len(steadyRel)-1])
 	t.Logf("lines whose throughput window holds a prefill: n=%d median %.2f%% max %.2f%% (excluded by FitDecode)",
 		len(otherRel), 100*otherRel[len(otherRel)/2], 100*otherRel[len(otherRel)-1])
-	assert.LessOrEqual(t, steadyRel[len(steadyRel)-1], 0.05)
-
-	assert.LessOrEqual(t, mean, 0.01)
-
+	if steadyRel[len(steadyRel)-1] > 0.05 {
+		t.Errorf("the decode model misses a steady line by %.1f%%", 100*steadyRel[len(steadyRel)-1])
+	}
+	if mean > 0.01 {
+		t.Errorf("the decode model misses the steady lines by %.1f%% on average", 100*mean)
+	}
 }
 
 // TestRunIsDeterministic pins the entry point's promise: the same scenario, policy and
@@ -153,8 +167,9 @@ func TestRunIsDeterministic(t *testing.T) {
 			first = buf.Bytes()
 			continue
 		}
-		assert.True(t, bytes.Equal(first, buf.Bytes()))
-
+		if !bytes.Equal(first, buf.Bytes()) {
+			t.Errorf("the second suite run differs from the first (1 worker vs %d)", workers)
+		}
 	}
 }
 
