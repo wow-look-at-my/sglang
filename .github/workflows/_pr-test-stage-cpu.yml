@@ -93,7 +93,7 @@ jobs:
 
       # This stage compiled the workspace too - 7+ minutes per partition on
       # billable hosted minutes. rust-ext-build's modules need an older glibc than
-      # this runner has, which is the safe direction, and both pin Python 3.12.
+      # this runner has, which is the safe direction, and both pin Python 3.10.
       - uses: ./.github/actions/download-rust-ext
         id: rust_ext
         with:
