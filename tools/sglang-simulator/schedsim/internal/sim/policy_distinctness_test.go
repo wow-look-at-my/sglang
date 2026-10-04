@@ -1,6 +1,7 @@
 package sim
 
 import (
+	"github.com/stretchr/testify/require"
 	"math"
 	"strings"
 	"testing"
@@ -16,9 +17,8 @@ func TestPrevAndNewReportDifferentNumbers(t *testing.T) {
 	var disagreeing, firstDetail []string
 	for _, sc := range BaseScenarios(testEpisodePtr()) {
 		row, ok := rows[sc.Key]
-		if !ok {
-			t.Fatalf("no row for scenario %s", sc.Key)
-		}
+		require.True(t, ok)
+
 		prev, neu := row.Metrics[PolicyIndex(ModePrev)], row.Metrics[PolicyIndex(ModeNew)]
 		var cells []string
 		for _, k := range ContractMetrics {
@@ -36,10 +36,8 @@ func TestPrevAndNewReportDifferentNumbers(t *testing.T) {
 			disagreeing = append(disagreeing, sc.Key+": "+strings.Join(cells, ", "))
 		}
 	}
-	if len(disagreeing) == 0 {
-		t.Fatal("PREV and NEW report the same number for every metric of every scenario, so the " +
-			"comparison against PREV is running against a copy of NEW")
-	}
+	require.NotEqual(t, 0, len(disagreeing))
+
 	t.Logf("PREV and NEW disagree on %d of %d scenario-metric cells, in %d scenarios:",
 		len(firstDetail), len(BaseScenarios(testEpisodePtr()))*len(ContractMetrics), len(disagreeing))
 	for _, d := range disagreeing {

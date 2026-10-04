@@ -3,6 +3,8 @@ package sim
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"schedsim/internal/trace"
 )
 
@@ -26,9 +28,8 @@ func TestCostScaleMovesTheReportedMetrics(t *testing.T) {
 		cost := NewCost(cal)
 		cost.Cal.Prefill = cost.Cal.Prefill.Scaled(k)
 		rows := RunSuite([]Scenario{sc}, cost, DefaultConfig, 0)
-		if len(rows) != 1 {
-			t.Fatalf("scaled %v: %d rows, want 1", k, len(rows))
-		}
+		require.Equal(t, 1, len(rows))
+
 		newm := rows[0].Metrics[PolicyIndex(ModeNew)]
 		oldm := rows[0].Metrics[PolicyIndex(ModeOld)]
 		ttft = append(ttft, newm.Value(MColdTTFT))
@@ -43,23 +44,16 @@ func TestCostScaleMovesTheReportedMetrics(t *testing.T) {
 	// prefill cost. OLD is the cleaner case: it runs prefill whenever one can be
 	// formed, so its stall is prefill seconds with no feedback loop to argue with.
 	for i := 1; i < len(ttft); i++ {
-		if !(ttft[i] > ttft[i-1]) {
-			t.Errorf("cold TTFT did not grow with the prefill cost: %.3f s then %.3f s", ttft[i-1], ttft[i])
-		}
-		if !(stallOld[i] > stallOld[i-1]) {
-			t.Errorf("OLD's longest stall did not grow with the prefill cost: %.3f s then %.3f s",
-				stallOld[i-1], stallOld[i])
-		}
-		if !(stall[i] >= stall[i-1]) {
-			t.Errorf("NEW's longest stall fell as the prefill cost grew: %.3f s then %.3f s",
-				stall[i-1], stall[i])
-		}
+		assert.Greater(t, (ttft[i] > ttft[i-1]))
+
+		assert.Greater(t, (stallOld[i] > stallOld[i-1]))
+
+		assert.GreaterOrEqual(t, (stall[i] >= stall[i-1]))
+
 	}
 
 	// The factor has to reach the metrics at the rate it is applied, not merely
 	// agree in sign.
-	if !(stallOld[2] > 1.5*stallOld[1]) {
-		t.Errorf("doubling the prefill cost moved OLD's longest stall from %.2f s to only %.2f s",
-			stallOld[1], stallOld[2])
-	}
+	assert.Greater(t, (stallOld[2] > 1.5*stallOld[1]))
+
 }

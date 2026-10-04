@@ -1,6 +1,8 @@
 package sim
 
 import (
+	"github.com/stretchr/testify/assert"
+	"github.com/wow-look-at-my/go-containers/set"
 	"os"
 	"strings"
 	"testing"
@@ -23,13 +25,10 @@ var derivationDocs = map[string]string{
 func TestEveryBoundNamesACommittedDerivation(t *testing.T) {
 	for name, path := range derivationDocs {
 		body, err := os.ReadFile(path)
-		if err != nil {
-			t.Errorf("bound %q cites %s: %v", name, path, err)
-			continue
-		}
-		if !strings.Contains(strings.ToLower(string(body)), strings.ToLower(name)) {
-			t.Errorf("%s does not name the bound it is cited for, %q", path, name)
-		}
+		assert.Nil(t, err)
+
+		assert.Contains(t, strings.ToLower(string(body)), strings.ToLower(name))
+
 	}
 }
 
@@ -38,24 +37,23 @@ func TestEveryBoundNamesACommittedDerivation(t *testing.T) {
 // run. A bound name with no document would excuse a loss with nothing behind it,
 // and a document no name returns is an argument nothing reads.
 func TestBoundTableAndDocumentsCoverEachOther(t *testing.T) {
-	claimed := map[string]bool{}
+	claimed := set.New[string]()
 	for _, sc := range BaseScenarios(testEpisodePtr()) {
 		for _, opp := range []string{"OLD", "PREV"} {
 			for _, k := range ContractMetrics {
 				if name := boundName(sc, k, opp); name != "" {
-					claimed[name] = true
+					claimed.Add(name)
 				}
 			}
 		}
 	}
-	for name := range claimed {
-		if _, ok := derivationDocs[name]; !ok {
-			t.Errorf("boundName returns %q for a measured scenario, but no derivation document is registered for it", name)
-		}
+	for name := range claimed.All() {
+		_, ok := derivationDocs[name]
+		assert.True(t, ok)
+
 	}
-	for name, path := range derivationDocs {
-		if !claimed[name] {
-			t.Errorf("%s is registered for bound %q, which the table never returns", path, name)
-		}
+	for name, _ := range derivationDocs {
+		assert.True(t, claimed.Contains(name))
+
 	}
 }

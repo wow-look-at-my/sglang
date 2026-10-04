@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"schedsim/internal/trace"
 	"schedsim/internal/trace/tracetest"
 )
@@ -147,10 +148,8 @@ func TestMergedTraceAttributesEverySeed(t *testing.T) {
 		}
 		got := deliveryClassStats(pooledTrace(runs))
 		for label, n := range want {
-			if got[label] == nil || got[label].Copies != n {
-				t.Errorf("%s / %s: merged trace has %s samples, the seeds summed to %d",
-					sc.Name, label, countText(got[label]), n)
-			}
+			assert.False(t, got[label] == nil || got[label].Copies != n)
+
 		}
 	}
 }

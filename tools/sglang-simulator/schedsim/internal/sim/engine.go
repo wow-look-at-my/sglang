@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"sort"
 
+	"github.com/wow-look-at-my/go-containers/set"
 	"schedsim/internal/kv"
 	"schedsim/internal/trace"
 )
@@ -757,13 +758,13 @@ func (e *engine) reserveCeded(chunked *Request, budget, maxReserved, maxNewReqs 
 		return -1
 	}
 	e.cededToks += reserved
-	chosen := map[int]bool{}
+	chosen := set.New[int]()
 	for _, r := range shorter {
-		chosen[r.ID] = true
+		chosen.Add(r.ID)
 	}
 	nq := append([]*Request(nil), shorter...)
 	for _, r := range e.waiting {
-		if !chosen[r.ID] {
+		if !chosen.Contains(r.ID) {
 			nq = append(nq, r)
 		}
 	}

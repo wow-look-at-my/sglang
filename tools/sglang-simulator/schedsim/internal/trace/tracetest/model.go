@@ -12,7 +12,7 @@ type Model struct {
 // DefaultModel is the cost of the long-context deployment the scenarios describe.
 var DefaultModel = Model{
 	PrefillBase: 10e-3, PerToken: 68.403e-6, PerTokenCtx: 4.72e-11, PerTokenCtxSq: 6.05e-16,
-	DecodeBase: 13e-3, DecodePerReq: 1.5e-3, DecodePerTokenCtx: 6e-9,
+	DecodeBase: 13.269e-3, DecodePerReq: 1.5e-3, DecodePerTokenCtx: 6e-9,
 	Pool: 1_406_118,
 }
 

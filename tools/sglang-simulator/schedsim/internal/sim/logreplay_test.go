@@ -3,6 +3,8 @@ package sim
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"schedsim/internal/trace"
 	"schedsim/internal/trace/tracetest"
 )
@@ -12,67 +14,55 @@ func corpusBoot(t *testing.T, index int) (*trace.Boot, *tracetest.Traffic) {
 	t.Helper()
 	gen := tracetest.Corpus()
 	boots, err := trace.ParseBoots(tracetest.Text(gen))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.Nil(t, err)
+
 	return &boots[index], gen[index]
 }
 
 func TestLogReplayRebuildsABoot(t *testing.T) {
 	b, g := corpusBoot(t, 2)
 	l, err := BuildLogReplay(b, 4096, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l.Shared != g.Spec.Shared {
-		t.Errorf("shared prefix %d, want the %d-token system prompt", l.Shared, g.Spec.Shared)
-	}
-	if len(l.Turns) != g.Turns {
-		t.Errorf("turns = %d; the boot completed %d requests", len(l.Turns), g.Turns)
-	}
-	if l.Convs != g.Convs+g.FreshColds {
-		t.Errorf("conversations = %d, want %d plus %d fresh cold prompts", l.Convs, g.Convs, g.FreshColds)
-	}
-	if l.Returning != g.Returns {
-		t.Errorf("returning conversations = %d; the boot re-prefilled %d evicted prompts", l.Returning, g.Returns)
-	}
-	if m := l.MeasuredOuts(); m != g.Measured {
-		t.Errorf("reply length measured for %d of %d turns, a later turn followed %d", m, len(l.Turns), g.Measured)
-	}
-	if c := l.ColdTurns(); c != g.ColdTurns {
-		t.Errorf("cold turns = %d, want %d", c, g.ColdTurns)
-	}
+	require.Nil(t, err)
+
+	assert.Equal(t, g.Spec.Shared, l.Shared)
+
+	assert.Equal(t, g.Turns, len(l.Turns))
+
+	assert.Equal(t, g.Convs+g.FreshColds, l.Convs)
+
+	assert.Equal(t, g.Returns, l.Returning)
+
+	m := l.MeasuredOuts()
+	assert.Equal(t, g.Measured, m)
+
+	c := l.ColdTurns()
+	assert.Equal(t, g.ColdTurns, c)
+
 	for i, tn := range l.Turns {
-		if i > 0 && tn.At < l.Turns[i-1].At {
-			t.Fatalf("turn %d arrives before turn %d", i, i-1)
-		}
-		if tn.Input <= 0 || tn.Input > 524288 || tn.Out <= 0 || tn.Out > maxReply {
-			t.Errorf("turn %d: input %d out %d", i, tn.Input, tn.Out)
-		}
-		if tn.Hit > tn.Input {
-			t.Errorf("turn %d: hit %d over input %d", i, tn.Hit, tn.Input)
-		}
+		require.False(t, i > 0 && tn.At < l.Turns[i-1].At)
+
+		assert.False(t, tn.Input <= 0 || tn.Input > 524288 || tn.Out <= 0 || tn.Out > maxReply)
+
+		assert.LessOrEqual(t, tn.Hit, tn.Input)
+
 	}
 	// Every conversation's turns grow: the next prompt carries the last.
-	for conv, idx := range l.byConv {
+	for _, idx := range l.byConv {
 		for k := 1; k < len(idx); k++ {
 			prev, cur := l.Turns[idx[k-1]], l.Turns[idx[k]]
-			if cur.Kind == KindAgent && cur.Hit < prev.Input {
-				t.Errorf("conv %d turn %d hit %d below the previous prompt %d", conv, k, cur.Hit, prev.Input)
-			}
+			assert.False(t, cur.Kind == KindAgent && cur.Hit < prev.Input)
+
 		}
 	}
 	// Initial releases one turn per conversation, and OnFinish walks the rest in order, never earlier than logged.
 	init := l.Initial()
-	if len(init) != l.Convs {
-		t.Errorf("Initial released %d, want %d", len(init), l.Convs)
-	}
+	assert.Equal(t, l.Convs, len(init))
+
 	r := init[0]
 	next := l.OnFinish(r, r.Arrival+1000)
 	if len(l.byConv[r.Conv]) > 1 {
-		if len(next) != 1 || next[0].Arrival < r.Arrival+1000 {
-			t.Errorf("OnFinish released %v", next)
-		}
+		assert.False(t, len(next) != 1 || next[0].Arrival < r.Arrival+1000)
+
 	} else if len(next) != 0 {
 		t.Errorf("a one-turn conversation released %v", next)
 	}
@@ -81,9 +71,8 @@ func TestLogReplayRebuildsABoot(t *testing.T) {
 func TestLogReplayRunsUnderEveryPolicy(t *testing.T) {
 	b, _ := corpusBoot(t, 2)
 	l, err := BuildLogReplay(b, 4096, 0, 300)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.Nil(t, err)
+
 	cal, _ := trace.CalibrateBoots([]trace.Boot{*b}, 4096, 64)
 	cost := NewCost(cal)
 	sc := Scenario{
@@ -93,19 +82,16 @@ func TestLogReplayRunsUnderEveryPolicy(t *testing.T) {
 		MaxRunning: b.Args.MaxRunningRequests, HostMul: 0, Seeds: []int64{1},
 	}
 	rows := RunSuite([]Scenario{sc}, cost, DefaultConfig, 3)
-	for i, mode := range Modes {
+	for i, _ := range Modes {
 		m := rows[0].Metrics[i]
-		if m.CompletedTurns == 0 {
-			t.Errorf("%s completed no turns", mode)
-		}
-		if m.LongestStall <= 0 {
-			t.Errorf("%s reports no stall at all", mode)
-		}
+		assert.NotEqual(t, 0, m.CompletedTurns)
+
+		assert.Greater(t, m.LongestStall, 0)
+
 	}
 	old, new := rows[0].Metrics[0], rows[0].Metrics[2]
-	if new.LongestStall >= old.LongestStall {
-		t.Errorf("longest stall OLD %.1f s, NEW %.1f s", old.LongestStall, new.LongestStall)
-	}
+	assert.Less(t, new.LongestStall, old.LongestStall)
+
 }
 
 func TestChainTokensStopsAtThePartialChunk(t *testing.T) {
@@ -113,24 +99,22 @@ func TestChainTokensStopsAtThePartialChunk(t *testing.T) {
 		return trace.Step{Kind: trace.Prefill, NewSeq: 1, NewTokens: 4096, Pending: pending}
 	}
 	prefill := []trace.Step{full(305904), full(301808), {Kind: trace.Prefill, NewSeq: 1, NewTokens: 1808, Pending: 300000}, full(295904)}
-	if got := chainTokens(prefill, 0, 4096); got != 4096+1808 {
-		t.Errorf("chain = %d, want 5904 (pending counted the queue)", got)
-	}
+	got := chainTokens(prefill, 0, 4096)
+	assert.Equal(t, 4096+1808, got)
+
 }
 
 func TestSplitArrivalsSharesALineAmongItsRequests(t *testing.T) {
 	one := trace.Step{Kind: trace.Prefill, NewSeq: 1, NewTokens: 4096, HitTokens: 12288, Pending: 400000}
-	if got := splitArrivals(one, 4096, 400000); len(got) != 1 || got[0].hit+got[0].nw+got[0].pending != 416384 {
-		t.Errorf("one request: %+v", got)
-	}
+	got := splitArrivals(one, 4096, 400000)
+	assert.False(t, len(got) != 1 || got[0].hit+got[0].nw+got[0].pending != 416384)
+
 	two := trace.Step{Kind: trace.Prefill, NewSeq: 2, NewTokens: 4037, HitTokens: 12288, Pending: 402160}
 	got := splitArrivals(two, 4096, 402160)
-	if len(got) != 2 || got[0].pending != 402160 || got[0].nw != 4037 || got[1].hit != 12288 {
-		t.Errorf("chunked prompt plus follow-up: %+v", got)
-	}
+	assert.False(t, len(got) != 2 || got[0].pending != 402160 || got[0].nw != 4037 || got[1].hit != 12288)
+
 	three := trace.Step{Kind: trace.Prefill, NewSeq: 3, NewTokens: 4000, HitTokens: 248320}
 	got = splitArrivals(three, 4096, 0)
-	if len(got) != 3 || got[1].hit != 248320/3 {
-		t.Errorf("three follow-ups: %+v", got)
-	}
+	assert.False(t, len(got) != 3 || got[1].hit != 248320/3)
+
 }

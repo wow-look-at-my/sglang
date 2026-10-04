@@ -3,6 +3,8 @@ package sim
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"schedsim/internal/trace"
 )
 
@@ -16,22 +18,18 @@ func TestSweepCoversThePerturbations(t *testing.T) {
 	cost := NewCost(calib(t))
 	linear := trace.FitPrefillLinear(steps, BaselineChunkSize)
 	variants := SweepVariants(linear)
-	if len(variants) < 21 {
-		t.Fatalf("the sweep has %d variants, want at least 21", len(variants))
-	}
-	if variants[0].Cost != nil || variants[0].B != nil || variants[0].Cfg != nil {
-		t.Errorf("the sweep's first variant %q is not the untouched reference", variants[0].Name)
-	}
+	require.GreaterOrEqual(t, len(variants), 21)
+
+	assert.False(t, variants[0].Cost != nil || variants[0].B != nil || variants[0].Cfg != nil)
+
 	for _, v := range variants[1:] {
-		if v.Cost == nil && v.B == nil && v.Cfg == nil {
-			t.Errorf("variant %q perturbs nothing", v.Name)
-		}
+		assert.False(t, v.Cost == nil && v.B == nil && v.Cfg == nil)
+
 	}
 
 	rows := RunSweep(cost, linear, testEpisodePtr(), []int64{1, 2, 3}, 7, 0)
-	if len(rows) != len(variants) {
-		t.Fatalf("%d rows for %d variants", len(rows), len(variants))
-	}
+	require.Equal(t, len(variants), len(rows))
+
 	var swept, broken int
 	for i, r := range rows {
 		if r.SweptA {
@@ -41,16 +39,13 @@ func TestSweepCoversThePerturbations(t *testing.T) {
 			broken++
 		}
 		t.Logf("%-44s %s", r.Name, ifElse(len(r.Breaks) > 0, "breaks: "+joinBreaks(r.Breaks), "no contract break"))
-		if r.Name != variants[i].Name {
-			t.Errorf("row %d is named %q, want %q", i, r.Name, variants[i].Name)
-		}
-		if r.B[PolicyIndex(ModeNew)] == (Metrics{}) || r.B[PolicyIndex(ModeOld)] == (Metrics{}) {
-			t.Errorf("variant %q measured no metrics on scenario B", r.Name)
-		}
+		assert.Equal(t, variants[i].Name, r.Name)
+
+		assert.False(t, r.B[PolicyIndex(ModeNew)] == (Metrics{}) || r.B[PolicyIndex(ModeOld)] == (Metrics{}))
+
 	}
-	if swept == 0 {
-		t.Error("no variant reported scenario A, so the episode's numbers are untested")
-	}
+	assert.NotEqual(t, 0, swept)
+
 	t.Logf("sweep: %d variants, %d also on scenario A, %d where the contract does not hold",
 		len(rows), swept, broken)
 }

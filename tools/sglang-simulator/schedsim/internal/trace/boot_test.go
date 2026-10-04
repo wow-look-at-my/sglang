@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"schedsim/internal/trace/tracetest"
 )
 
@@ -16,84 +18,68 @@ const bareDecode = `TP0] Decode batch, #running-req: 1, #full token: 1000, full 
 
 func TestParseProductionFormat(t *testing.T) {
 	steps, err := Parse(prodPrefill + "\n" + prodDecode + "\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(steps) != 2 {
-		t.Fatalf("steps = %d, want 2", len(steps))
-	}
+	require.Nil(t, err)
+
+	require.Equal(t, 2, len(steps))
+
 	p := steps[0]
-	if p.Kind != Prefill || p.NewTokens != 4096 || p.HitTokens != 0 || p.RunningReq != 4 || p.QueueReq != 2 || p.Pending != 118201 {
-		t.Errorf("prefill fields = %+v", p)
-	}
-	if p.Worker != "5ylyr21v-rhkt6" || p.Rank != 0 {
-		t.Errorf("worker/rank = %q/%d", p.Worker, p.Rank)
-	}
+	assert.False(t, p.Kind != Prefill || p.NewTokens != 4096 || p.HitTokens != 0 || p.RunningReq != 4 || p.QueueReq != 2 || p.Pending != 118201)
+
+	assert.False(t, p.Worker != "5ylyr21v-rhkt6" || p.Rank != 0)
+
 	want := time.Date(2026, 9, 27, 0, 15, 24, 123e6, time.UTC)
-	if !p.At.Equal(want) {
-		t.Errorf("At = %v, want %v", p.At, want)
-	}
+	assert.True(t, p.At.Equal(want))
+
 	d := steps[1]
-	if d.Kind != Decode || d.RunningReq != 10 || d.AcceptLen != 2.77 || d.Throughput != 8.44 {
-		t.Errorf("decode fields = %+v", d)
-	}
-	if gap, ok := StepGap(p, d); !ok || gap < 1.376 || gap > 1.378 {
-		t.Errorf("StepGap = %v, %v", gap, ok)
-	}
+	assert.False(t, d.Kind != Decode || d.RunningReq != 10 || d.AcceptLen != 2.77 || d.Throughput != 8.44)
+
+	gap, ok := StepGap(p, d)
+	assert.False(t, !ok || gap < 1.376 || gap > 1.378)
+
 }
 
 func TestParseKeepsOnlyRankZero(t *testing.T) {
 	tp1 := strings.Replace(prodPrefill, "TP0]", "TP1]", 1)
 	steps, err := Parse(prodPrefill + "\n" + tp1 + "\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(steps) != 1 {
-		t.Fatalf("steps = %d, want the rank-0 line only", len(steps))
-	}
+	require.Nil(t, err)
+
+	require.Equal(t, 1, len(steps))
+
 }
 
 func TestBareFormatHasNoTimestamp(t *testing.T) {
 	steps, err := Parse(bareDecode + "\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !steps[0].At.IsZero() || steps[0].Worker != "" {
-		t.Errorf("bare line carried %v %q", steps[0].At, steps[0].Worker)
-	}
-	if _, ok := StepGap(steps[0], steps[0]); ok {
-		t.Error("StepGap reported ok without timestamps")
-	}
+	require.Nil(t, err)
+
+	assert.False(t, !steps[0].At.IsZero() || steps[0].Worker != "")
+
+	_, ok := StepGap(steps[0], steps[0])
+	assert.False(t, ok)
+
 }
 
 func TestParseServerArgs(t *testing.T) {
 	line := `2026-09-26T19:55:58.468Z zw21lesh-67pt5 INFO server_args={'model_path': '/repository', 'context_length': 262144, 'page_size': 64, 'chunked_prefill_size': 4096, 'decode_log_interval': 40, 'max_running_requests': 16, 'max_mamba_cache_size': 48, 'enable_hierarchical_cache': False, 'enable_mixed_chunk': True}`
 	a, ok := ParseServerArgs(line)
-	if !ok {
-		t.Fatal("not recognised")
-	}
-	if a.PageSize != 64 || a.ContextLength != 262144 || a.ChunkedPrefillSize != 4096 || a.DecodeLogInterval != 40 ||
-		a.MaxRunningRequests != 16 || a.MaxMambaCacheSize != 48 || a.HierarchicalCache || !a.MixedChunk {
-		t.Errorf("args = %+v", a)
-	}
-	if _, ok := ParseServerArgs(prodPrefill); ok {
-		t.Error("a batch line parsed as server args")
-	}
+	require.True(t, ok)
+
+	assert.False(t, a.PageSize != 64 || a.ContextLength != 262144 || a.ChunkedPrefillSize != 4096 || a.DecodeLogInterval != 40 || a.MaxRunningRequests != 16 || a.MaxMambaCacheSize != 48 || a.HierarchicalCache || !a.MixedChunk)
+
+	_, ok = ParseServerArgs(prodPrefill)
+	assert.False(t, ok)
+
 }
 
 func TestBareLogIsOneBoot(t *testing.T) {
 	text := tracetest.Incident(incident).String()
 	boots, err := ParseBoots(text)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.Nil(t, err)
+
 	steps, _ := Parse(text)
-	if len(boots) != 1 || boots[0].ArgsKnown || len(boots[0].Steps) != len(steps) {
-		t.Fatalf("boots = %d, args known %v, steps %d vs %d", len(boots), boots[0].ArgsKnown, len(boots[0].Steps), len(steps))
-	}
-	if boots[0].Timestamped() || boots[0].Stalls(1) != nil {
-		t.Error("bare log reported timestamps")
-	}
+	require.False(t, len(boots) != 1 || boots[0].ArgsKnown || len(boots[0].Steps) != len(steps))
+
+	assert.False(t, boots[0].Timestamped() || boots[0].Stalls(1) != nil)
+
 	runs := boots[0].ColdRunsAll(4096)
 	longest := ColdRun{}
 	for _, r := range runs {
@@ -102,9 +88,8 @@ func TestBareLogIsOneBoot(t *testing.T) {
 		}
 	}
 	start, end := coldWindow(steps, 4096)
-	if longest.Start != start || longest.End != end {
-		t.Errorf("longest run [%d,%d) != coldWindow [%d,%d)", longest.Start, longest.End, start, end)
-	}
+	assert.False(t, longest.Start != start || longest.End != end)
+
 }
 
 // corpus parses the generated multi-boot log, one boot per generated boot.
@@ -112,12 +97,10 @@ func corpus(t *testing.T) ([]*tracetest.Traffic, []Boot) {
 	t.Helper()
 	gen := tracetest.Corpus()
 	boots, err := ParseBoots(tracetest.Text(gen))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(boots) != len(gen) {
-		t.Fatalf("boots = %d, the log was written with %d", len(boots), len(gen))
-	}
+	require.Nil(t, err)
+
+	require.Equal(t, len(gen), len(boots))
+
 	return gen, boots
 }
 
@@ -140,30 +123,26 @@ func TestCorpusBoots(t *testing.T) {
 	var ended []string
 	for i, b := range boots {
 		g := gen[i]
-		if !b.ArgsKnown || b.Args.PageSize != 64 || b.Worker != g.Worker || !b.Start.Equal(g.Spec.Start) {
-			t.Errorf("boot %d = %s from %v, args %+v; written as %s from %v", i, b.Worker, b.Start, b.Args, g.Worker, g.Spec.Start)
-		}
-		if b.Args.ContextLength != g.Spec.Args.ContextLength || b.Args.HierarchicalCache != g.Spec.Args.HierarchicalCache {
-			t.Errorf("boot %d context %d hicache %v, written with %d %v", i, b.Args.ContextLength, b.Args.HierarchicalCache,
-				g.Spec.Args.ContextLength, g.Spec.Args.HierarchicalCache)
-		}
-		if n := len(b.Completions); n != g.Turns {
-			t.Errorf("boot %d completions = %d, the log completed %d requests", i, n, g.Turns)
-		}
-		if n := len(b.JITCompiles); n != len(g.Spec.JIT) {
-			t.Errorf("boot %d logged %d JIT compiles, written with %d", i, n, len(g.Spec.JIT))
-		}
+		assert.False(t, !b.ArgsKnown || b.Args.PageSize != 64 || b.Worker != g.Worker || !b.Start.Equal(g.Spec.Start))
+
+		assert.False(t, b.Args.ContextLength != g.Spec.Args.ContextLength || b.Args.HierarchicalCache != g.Spec.Args.HierarchicalCache)
+
+		n := len(b.Completions)
+		assert.Equal(t, g.Turns, n)
+
+		n := len(b.JITCompiles)
+		assert.Equal(t, len(g.Spec.JIT), n)
+
 		ended = append(ended, b.EndedBy)
 	}
-	if got, want := strings.Join(ended, ","), "crash,sigterm,sigterm,eof"; got != want {
-		t.Errorf("ended by %s, want %s", got, want)
-	}
-	if !boots[0].End.Equal(gen[0].Now) {
-		t.Errorf("crash at %v, the log crashed at %v", boots[0].End, gen[0].Now)
-	}
-	if j := boots[1].JITCompiles; len(j) != 2 || j[0].Seconds != 2.1 || j[0].Kernel != "_fwd_kernel" {
-		t.Errorf("boot 1 JIT compiles = %+v", j)
-	}
+	got, want := strings.Join(ended, ","), "crash,sigterm,sigterm,eof"
+	assert.Equal(t, want, got)
+
+	assert.True(t, boots[0].End.Equal(gen[0].Now))
+
+	j := boots[1].JITCompiles
+	assert.False(t, len(j) != 2 || j[0].Seconds != 2.1 || j[0].Kernel != "_fwd_kernel")
+
 }
 
 // Every prompt that held the GPU for a few seconds with requests running is
@@ -179,15 +158,12 @@ func TestCorpusStalls(t *testing.T) {
 			}
 		}
 		got := b.Stalls(5)
-		if len(got) != len(want) {
-			t.Errorf("boot %d: %d stalls, the log holds %d prompts that stalled decode for 5 s", i, len(got), len(want))
-			continue
-		}
+		assert.Equal(t, len(want), len(got))
+
 		for k, s := range got {
 			p := want[k]
-			if !s.At.Equal(p.At) || math.Abs(s.Seconds-p.Seconds) > 1e-6 || s.RunningPeak != p.Running || s.ColdTokens != p.Tokens-chunkIfHit(p) {
-				t.Errorf("boot %d stall %d = %+v; the prompt at %v ran %.3f s behind %d running", i, k, s, p.At, p.Seconds, p.Running)
-			}
+			assert.False(t, !s.At.Equal(p.At) || math.Abs(s.Seconds-p.Seconds) > 1e-6 || s.RunningPeak != p.Running || s.ColdTokens != p.Tokens-chunkIfHit(p))
+
 			if s.Seconds > longest.Seconds {
 				longest = s
 			}
@@ -196,9 +172,8 @@ func TestCorpusStalls(t *testing.T) {
 			}
 		}
 	}
-	if longest.Seconds == 0 || !longest.At.Equal(longestWant.At) {
-		t.Errorf("longest stall %.1f s at %v, the longest prompt ran %.1f s at %v", longest.Seconds, longest.At, longestWant.Seconds, longestWant.At)
-	}
+	assert.False(t, longest.Seconds == 0 || !longest.At.Equal(longestWant.At))
+
 }
 
 // chunkIfHit is the part of a prompt that reused a prefix: its first chunk, when it hit one.
@@ -226,13 +201,11 @@ func TestColdRunCarriesStartingContext(t *testing.T) {
 				fresh++
 			}
 		}
-		if fmt.Sprint(got) != fmt.Sprint(want[i]) {
-			t.Errorf("boot %d cold runs (chunks, ctx0) = %v, the log was written with %v", i, got, want[i])
-		}
+		assert.Equal(t, fmt.Sprint(want[i]), fmt.Sprint(got))
+
 	}
-	if continued == 0 || fresh == 0 {
-		t.Errorf("continued=%d fresh=%d; the corpus has both", continued, fresh)
-	}
+	assert.False(t, continued == 0 || fresh == 0)
+
 }
 
 func TestCalibrateBootsHoldsOutEveryRun(t *testing.T) {
@@ -247,45 +220,37 @@ func TestCalibrateBootsHoldsOutEveryRun(t *testing.T) {
 			}
 		}
 	}
-	if rep.FitBoot != fitBoot || rep.FitChunks != fitChunks {
-		t.Errorf("fit on boot %d's %d-chunk run, the longest the log holds is boot %d's %d", rep.FitBoot, rep.FitChunks, fitBoot, fitChunks)
-	}
-	if len(rep.Holdouts) != runs-1 {
-		t.Errorf("holdouts = %d, want every other run of 8+ chunks, %d", len(rep.Holdouts), runs-1)
-	}
+	assert.False(t, rep.FitBoot != fitBoot || rep.FitChunks != fitChunks)
+
+	assert.Equal(t, runs-1, len(rep.Holdouts))
+
 	// The log priced every chunk with one model, so the fit predicts every run, cached prefix or not.
-	if rep.HoldoutMedian > 0.01 || c.Prefill.MaxErrHoldout > 0.01 {
-		t.Errorf("holdout error median %.2f%%, worst %.2f%%", 100*rep.HoldoutMedian, 100*c.Prefill.MaxErrHoldout)
-	}
+	assert.False(t, rep.HoldoutMedian > 0.01 || c.Prefill.MaxErrHoldout > 0.01)
+
 	pool := tracetest.DefaultModel.Pool
-	if len(rep.Pools) != len(boots) {
-		t.Errorf("pools = %v, want one per boot", rep.Pools)
-	}
+	assert.Equal(t, len(boots), len(rep.Pools))
+
 	for _, p := range rep.Pools {
-		if math.Abs(float64(p.Tokens-pool)) > 0.01*float64(pool) || p.Context != boots[p.Boot].Args.ContextLength {
-			t.Errorf("boot %d pool %d at context %d, the log printed against %d", p.Boot, p.Tokens, p.Context, pool)
-		}
+		assert.False(t, math.Abs(float64(p.Tokens-pool)) > 0.01*float64(pool) || p.Context != boots[p.Boot].Args.ContextLength)
+
 	}
-	if rep.WallSamples == 0 || rep.WallRatioMedian < 0.99 || rep.WallRatioMedian > 1.01 {
-		t.Errorf("wall check: %d samples, ratio %.3f", rep.WallSamples, rep.WallRatioMedian)
-	}
+	assert.False(t, rep.WallSamples == 0 || rep.WallRatioMedian < 0.99 || rep.WallRatioMedian > 1.01)
+
 	// Steady single-request decode lines pool across boots: the sum of what each boot alone gives.
 	steady := 0
 	for _, b := range boots {
 		steady += FitDecode(b.Steps).Samples
 	}
-	if c.Decode.Samples != steady || steady == 0 || math.Abs(float64(c.DeviceTokens-pool)) > 0.01*float64(pool) {
-		t.Errorf("calibration %s; %d steady lines across the boots", c, steady)
-	}
+	assert.False(t, c.Decode.Samples != steady || steady == 0 || math.Abs(float64(c.DeviceTokens-pool)) > 0.01*float64(pool))
+
 	// A bare single-incident log still calibrates to what Calibrate gives.
 	text := tracetest.Incident(incident).String()
 	one, _ := ParseBoots(text)
 	c1, _ := CalibrateBoots(one, 4096, 64)
 	steps, _ := Parse(text)
 	c0 := Calibrate(steps, 4096, 64)
-	if c1.Prefill.PerToken != c0.Prefill.PerToken || c1.Decode.Base != c0.Decode.Base || c1.DeviceTokens != c0.DeviceTokens {
-		t.Errorf("bare log: CalibrateBoots %s\n!= Calibrate %s", c1, c0)
-	}
+	assert.False(t, c1.Prefill.PerToken != c0.Prefill.PerToken || c1.Decode.Base != c0.Decode.Base || c1.DeviceTokens != c0.DeviceTokens)
+
 }
 
 func TestPrefillStretchesMatchStalls(t *testing.T) {
@@ -308,17 +273,14 @@ func TestPrefillStretchesMatchStalls(t *testing.T) {
 		stalls := b.Stalls(5)
 		for _, r := range b.PrefillStretches(4096, 8) {
 			stretches++
-			if r.ColdChunks < 8 || r.ColdChunks > r.Chunks() {
-				t.Errorf("stretch %+v has %d cold chunks over %d steps", r, r.ColdChunks, r.Chunks())
-			}
+			assert.False(t, r.ColdChunks < 8 || r.ColdChunks > r.Chunks())
+
 			for k := r.Start; k < r.End; k++ {
-				if b.Steps[k].Kind != Prefill {
-					t.Fatalf("stretch [%d,%d) holds a decode step at %d", r.Start, r.End, k)
-				}
+				require.Equal(t, Prefill, b.Steps[k].Kind)
+
 			}
-			if r.RunningAtStart > 0 && b.Steps[r.Start].RunningReq != r.RunningAtStart {
-				t.Errorf("stretch starts at a step with %d running, recorded %d", b.Steps[r.Start].RunningReq, r.RunningAtStart)
-			}
+			assert.False(t, r.RunningAtStart > 0 && b.Steps[r.Start].RunningReq != r.RunningAtStart)
+
 			for _, st := range stalls {
 				if st.Start == r.Start {
 					matched++
@@ -332,10 +294,9 @@ func TestPrefillStretchesMatchStalls(t *testing.T) {
 			}
 		}
 	}
-	if stretches != wantStretches || matched != wantMatched {
-		t.Errorf("stretches=%d matched stalls=%d, the log holds %d and %d", stretches, matched, wantStretches, wantMatched)
-	}
-	if m := median(ratios); m < 0.99 || m > 1.01 {
-		t.Errorf("chunk-cost sum over measured stall: median %.2f", m)
-	}
+	assert.False(t, stretches != wantStretches || matched != wantMatched)
+
+	m := median(ratios)
+	assert.False(t, m < 0.99 || m > 1.01)
+
 }

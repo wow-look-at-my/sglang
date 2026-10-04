@@ -1,6 +1,10 @@
 package kv
 
-import "testing"
+import (
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
 
 // A pool with no host tier loses an evicted prefix outright, so the next turn
 // of that conversation recomputes its whole input; a host tier that can hold it
@@ -39,16 +43,13 @@ func TestEvictionWithAndWithoutHostTier(t *testing.T) {
 			for _, n := range p.Recomputes {
 				recomputes += n
 			}
-			if tc.wantRecomp && recomputes == 0 {
-				t.Fatalf("with no host tier nothing was recomputed; evicted prefixes must be lost")
-			}
+			require.False(t, tc.wantRecomp && recomputes == 0)
+
 			if !tc.wantRecomp {
-				if recomputes != 0 {
-					t.Fatalf("%d full-prefix recomputes with a host tier that holds the working set", recomputes)
-				}
-				if p.ReloadTokens == 0 {
-					t.Fatalf("no host reloads; the evicted prefixes never came back")
-				}
+				require.Equal(t, 0, recomputes)
+
+				require.NotEqual(t, 0, p.ReloadTokens)
+
 			}
 		})
 	}
@@ -68,39 +69,35 @@ func TestRebuildSecondsPricesHostAndRecompute(t *testing.T) {
 		p := New(ctxLen*2, ctxLen*4)
 		p.Warm(1, ctxLen, 0)
 		evs := admit(p)
-		if len(evs) != 1 || !evs[0].ToHost {
-			t.Fatalf("evictions %+v, want the one prefix spilled to host", evs)
-		}
+		require.False(t, len(evs) != 1 || !evs[0].ToHost)
+
 		got := p.RebuildSeconds(evs, recompute)
 		want := float64(ctxLen) * ReloadSecondsPerToken
-		if got < want*0.99 || got > want*1.01 {
-			t.Errorf("rebuild %.3f s, want the %.3f s reload", got, want)
-		}
-		if recompute*ctxLen <= got {
-			t.Errorf("reload costs as much as a recompute; the host tier saves nothing")
-		}
+		assert.False(t, got < want*0.99 || got > want*1.01)
+
+		assert.Greater(t, recompute*ctxLen, got)
+
 	})
 	t.Run("no host tier", func(t *testing.T) {
 		p := New(ctxLen*2, 0)
 		p.Warm(1, ctxLen, 0)
 		evs := admit(p)
-		if len(evs) != 1 || evs[0].ToHost {
-			t.Fatalf("evictions %+v, want the one prefix lost outright", evs)
-		}
+		require.False(t, len(evs) != 1 || evs[0].ToHost)
+
 		got := p.RebuildSeconds(evs, recompute)
-		if want := float64(ctxLen) * recompute; got < want*0.99 || got > want*1.01 {
-			t.Errorf("rebuild %.3f s, want the %.3f s recompute", got, want)
-		}
+		want := float64(ctxLen) * recompute
+		assert.False(t, got < want*0.99 || got > want*1.01)
+
 	})
 }
 
 // Capacity is the larger tier, because write-through mirrors every cached
 // prefix there; the throttle sizes the live set against it.
 func TestCapacityIsTheLargerTier(t *testing.T) {
-	if got := New(100, 400).Capacity(); got != 400 {
-		t.Errorf("Capacity() = %d with a larger host tier, want 400", got)
-	}
-	if got := New(400, 100).Capacity(); got != 400 {
-		t.Errorf("Capacity() = %d with a smaller host tier, want 400", got)
-	}
+	got := New(100, 400).Capacity()
+	assert.Equal(t, 400, got)
+
+	got := New(400, 100).Capacity()
+	assert.Equal(t, 400, got)
+
 }
