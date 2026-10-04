@@ -32,6 +32,14 @@ on:
         description: 'Artifact of prebuilt Rust extension modules, from rust-ext-build. Empty, or a download that fails, falls back to the cache; a miss there compiles during install.'
         type: string
         default: ''
+      sched_policy_handoff:
+        description: 'cache-upload name of the sched-policy build/ (Fork CI sched-policy-build). The install step fails when it is empty or missing.'
+        type: string
+        default: ''
+      goipc_handoff:
+        description: 'cache-upload name of libgoipc.so (Fork CI sched-policy-build). The install step fails when it is empty or missing.'
+        type: string
+        default: ''
 
 # Reusable workflows do NOT inherit the caller's workflow-level env across the workflow_call boundary, so pr-test.yml's env is redeclared here -- minus the CUDA-only entries it also sets, which have no consumer on a hosted CPU runner.
 env:
@@ -134,15 +142,19 @@ jobs:
           curl --fail --silent --show-error --max-time 15 --retry 3 --retry-delay 2 \
             "$URL" -o /tmp/partition-model.json
 
-      # Exports GO_BUILDCACHE_CONFIG, which go-toolchain requires in CI.
-      - uses: wow-look-at-my/actions@secret-server#latest
-
       # Every scheduler spawns the Go policy process and reaches it over goipc.
-      - name: Build the policy process and libgoipc
-        timeout-minutes: 20
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/utils/install_sched_policy_runtime.sh
+      - uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ${{ inputs.sched_policy_handoff }}
+          path: ${{ runner.temp }}/sched-policy
+
+      - uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ${{ inputs.goipc_handoff }}
+          path: ${{ runner.temp }}/libgoipc
+
+      - name: Install the policy process and libgoipc
+        run: bash scripts/ci/utils/install_sched_policy_runtime.sh install "${{ runner.temp }}/sched-policy" "${{ runner.temp }}/libgoipc"
 
       - name: Run test
         timeout-minutes: ${{ fromJson(inputs.run_timeout_minutes) }}

@@ -150,16 +150,25 @@ jobs:
       deployments: write
       artifact-metadata: write
     runs-on: ubuntu-latest
+    outputs:
+      policy_handoff: go-build-sched-policy-build.btools-sched-policy
+      goipc_handoff: sched-policy-libgoipc
     steps:
       - uses: actions/checkout@v4
       - uses: wow-look-at-my/go-toolchain@master
         with:
           working-directory: tools/sched-policy
+      - name: Build libgoipc
+        run: bash scripts/ci/utils/install_sched_policy_runtime.sh build-goipc "${{ runner.temp }}/libgoipc"
+      - uses: wow-look-at-my/actions@cache-upload#latest
+        with:
+          name: sched-policy-libgoipc
+          path: ${{ runner.temp }}/libgoipc
 
   base-a-test-cpu:
-    needs: [fork-check-changes, fork-rust-ext-build]
+    needs: [fork-check-changes, fork-rust-ext-build, sched-policy-build]
     permissions: {actions: read, contents: write, issues: read, pull-requests: read, id-token: write}
-    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' }}
+    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' && needs.sched-policy-build.result == 'success' }}
     uses: ./.github/workflows/_pr-test-stage-cpu.yml
     with:
       self_name: base-a-test-cpu
@@ -168,6 +177,20 @@ jobs:
       partitions: ${{ needs.fork-check-changes.outputs.partitions }}
       run_timeout_minutes: '30'
       rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
+      sched_policy_handoff: ${{ needs.sched-policy-build.outputs.policy_handoff }}
+      goipc_handoff: ${{ needs.sched-policy-build.outputs.goipc_handoff }}
+
+  simulator-test-cpu:
+    needs: [fork-check-changes, fork-rust-ext-build, sched-policy-build]
+    permissions: {actions: read, contents: write, issues: read, pull-requests: read, id-token: write}
+    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' && needs.sched-policy-build.result == 'success' }}
+    uses: ./.github/workflows/_pr-test-simulator-cpu.yml
+    with:
+      check_changes: ${{ toJson(needs.fork-check-changes.outputs) }}
+      caller_inputs: '{"skip_pr_test_health_check": true}'
+      rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
+      sched_policy_handoff: ${{ needs.sched-policy-build.outputs.policy_handoff }}
+      goipc_handoff: ${{ needs.sched-policy-build.outputs.goipc_handoff }}
 
   # ------------------------------------------------------ constructor order Fails when an __init__ step reads a self field before an earlier step sets it, or when a method creates a field the constructor never initializes.
   fork-init-order-check:
