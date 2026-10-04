@@ -5,7 +5,7 @@ export const POINTER_TAG = "dev";
 export const SHORT_SHA_LENGTH = 7;
 /** Never delete an image younger than this, whatever the other rules say. */
 export const MIN_AGE_DAYS = 7;
-/** Default-branch images to keep: the HEAD image plus more. */
+/** Default-branch images to keep, the HEAD image counted among them. */
 export const MASTER_RETENTION = 5;
 
 export interface ImageVersion {
@@ -39,6 +39,8 @@ export interface PlanInput {
   now: Date;
   minAgeDays?: number;
   masterRetention?: number;
+  /** Digests reachable from a tag that survives. */
+  reachableDigests?: ReadonlySet<string>;
 }
 
 /** The tag without the per-arch suffix Fork CI appends. */
@@ -54,6 +56,11 @@ export function isManagedTag(tag: string): boolean {
 
 export function isShortSha(text: string): boolean {
   return text.length === SHORT_SHA_LENGTH && /^[0-9a-f]+$/.test(text);
+}
+
+/** Whether a version's name is a manifest digest the registry can be asked about. */
+export function isDigest(name: string): boolean {
+  return /^sha256:[0-9a-f]{64}$/.test(name);
 }
 
 /** The branch name as it appears in a tag, matching fork-ci.yml's `tr`. */
@@ -104,6 +111,7 @@ export function planDeletions(input: PlanInput): Decision {
   const deletions: Verdict[] = [];
   const keeps: Verdict[] = [];
   const master = new Map<string, ImageVersion[]>();
+  let pointerVersions = 0;
   const tooYoung = (version: ImageVersion) =>
     ageDays(version, input.now) < minAgeDays;
 
@@ -114,11 +122,22 @@ export function planDeletions(input: PlanInput): Decision {
       continue;
     }
     if (managed.length === 0) {
-      keeps.push({ version, reason: "untagged" });
+      // A version whose name is no digest cannot be matched against the
+      // references, so nothing about it is safe to conclude.
+      if (input.reachableDigests === undefined || !isDigest(version.name)) {
+        keeps.push({ version, reason: "untagged" });
+      } else if (input.reachableDigests.has(version.name)) {
+        keeps.push({ version, reason: "untagged, but a published tag references it" });
+      } else if (tooYoung(version)) {
+        keeps.push({ version, reason: `younger than ${minAgeDays} days` });
+      } else {
+        deletions.push({ version, reason: "untagged image no tag references" });
+      }
       continue;
     }
     if (managed.some((tag) => baseTag(tag) === POINTER_TAG)) {
       keeps.push({ version, reason: `${input.defaultBranch} pointer` });
+      pointerVersions += 1;
       continue;
     }
     const commit = masterCommit(version);
@@ -154,9 +173,10 @@ export function planDeletions(input: PlanInput): Decision {
       Math.min(...group.map((version) => ageDays(version, input.now)));
     return newest(left[1]) - newest(right[1]);
   });
+  const groupSlots = Math.max(masterRetention - pointerVersions, 0);
   ranked.forEach(([, images], index) => {
     for (const version of images) {
-      if (index < masterRetention) {
+      if (index < groupSlots) {
         keeps.push({
           version,
           reason: `one of ${masterRetention} latest ${input.defaultBranch} images`,

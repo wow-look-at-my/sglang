@@ -21,7 +21,7 @@ function version(
   const created = new Date(NOW.getTime() - ageDays * 86_400_000);
   const image: ImageVersion = {
     id,
-    name: `sha256:${id}`,
+    name: `sha256:${id.toString(16).padStart(64, "0")}`,
     tags,
     createdAt: created.toISOString().replace(/\.\d{3}Z$/, "Z"),
   };
@@ -35,6 +35,7 @@ function plan(
     live?: string[];
     retired?: string[];
     masterRetention?: number;
+    reachable?: string[];
   } = {},
 ): Decision {
   return planDeletions({
@@ -44,6 +45,7 @@ function plan(
     retiredBranches: options.retired ?? [],
     now: NOW,
     masterRetention: options.masterRetention,
+    reachableDigests: options.reachable ? new Set(options.reachable) : undefined,
   });
 }
 
@@ -73,7 +75,7 @@ test("a young default-branch image holds a retention slot", () => {
   assert.deepEqual(ids(keeps), [0, 1, 2, 3, 4]);
 });
 
-test("the dev pointer does not use up a retention slot", () => {
+test("the dev pointer is one of the default-branch images kept", () => {
   const versions = [
     version(99, ["dev"], 400),
     ...[8, 9, 10, 11, 12, 13].map((age, index) =>
@@ -83,8 +85,8 @@ test("the dev pointer does not use up a retention slot", () => {
 
   const { deletions, keeps } = plan(versions);
 
-  assert.deepEqual(ids(deletions), [5]);
-  assert.deepEqual(ids(keeps), [0, 1, 2, 3, 4, 99]);
+  assert.deepEqual(ids(deletions), [4, 5]);
+  assert.deepEqual(ids(keeps), [0, 1, 2, 3, 99]);
 });
 
 test("a live branch keeps its HEAD image", () => {
@@ -151,6 +153,49 @@ test("cache and kernel wheel tags are never deleted", () => {
 });
 
 test("untagged images are never deleted", () => {
+  const { deletions, keeps } = plan([version(1, [], 365)]);
+
+  assert.deepEqual(deletions, []);
+  assert.deepEqual(ids(keeps), [1]);
+});
+
+test("an untagged image no surviving tag references is deleted once it is old", () => {
+  const orphan = version(1, [], 30);
+
+  const { deletions, keeps } = plan([orphan], { reachable: [] });
+
+  assert.deepEqual(ids(deletions), [1]);
+  assert.deepEqual(keeps, []);
+});
+
+test("an untagged image a surviving tag references is kept", () => {
+  const referenced = version(1, [], 30);
+
+  const { deletions, keeps } = plan([referenced], {
+    reachable: [referenced.name],
+  });
+
+  assert.deepEqual(deletions, []);
+  assert.deepEqual(ids(keeps), [1]);
+});
+
+test("an untagged image whose name is no digest is kept", () => {
+  const odd = { ...version(1, [], 365), name: "some-version-name" };
+
+  const { deletions, keeps } = plan([odd], { reachable: [] });
+
+  assert.deepEqual(deletions, []);
+  assert.deepEqual(ids(keeps), [1]);
+});
+
+test("an unreferenced untagged image younger than the guard is kept", () => {
+  const { deletions, keeps } = plan([version(1, [], 6)], { reachable: [] });
+
+  assert.deepEqual(deletions, []);
+  assert.deepEqual(ids(keeps), [1]);
+});
+
+test("untagged images stay when the references could not be resolved", () => {
   const { deletions, keeps } = plan([version(1, [], 365)]);
 
   assert.deepEqual(deletions, []);

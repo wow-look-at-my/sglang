@@ -130,6 +130,41 @@ async function recordedBranch(
 }
 
 /**
+ * Every digest a surviving tag reaches: the tag's own manifest and the
+ * manifests below it. An untagged image outside this set cannot be pulled.
+ */
+async function reachableDigests(
+  repoPath: string,
+  tags: string[],
+  token: string,
+): Promise<Set<string>> {
+  const reachable = new Set<string>();
+  const pending = [...tags];
+  const seen = new Set<string>();
+  let budget = 500;
+  while (pending.length > 0 && budget > 0) {
+    const reference = pending.shift() as string;
+    if (seen.has(reference)) continue;
+    seen.add(reference);
+    budget -= 1;
+    const response = await fetch(`${REGISTRY}/v2/${repoPath}/manifests/${reference}`, {
+      headers: { authorization: `Bearer ${token}`, accept: MANIFEST_ACCEPT },
+    });
+    if (!response.ok) {
+      throw new Error(`${response.status} from the manifest of ${reference}`);
+    }
+    const digest = response.headers.get("docker-content-digest");
+    if (digest) reachable.add(digest);
+    const manifest = (await response.json()) as Manifest;
+    for (const child of manifest.manifests ?? []) {
+      reachable.add(child.digest);
+      pending.push(child.digest);
+    }
+  }
+  return reachable;
+}
+
+/**
  * Read the recorded branch for images whose tag cannot name a live branch,
  * so an image of a live branch is never taken for an image of a dead one.
  */
@@ -137,8 +172,8 @@ async function attachRecordedBranches(
   versions: ImageVersion[],
   repoPath: string,
   liveTagNames: Set<string>,
+  getToken: () => Promise<string>,
 ): Promise<void> {
-  let token: string | undefined;
   for (const version of versions) {
     const managed = version.tags.filter(isManagedTag);
     if (managed.length !== version.tags.length || managed.length === 0) continue;
@@ -146,8 +181,7 @@ async function attachRecordedBranches(
     if (base === POINTER_TAG || masterCommit(version)) continue;
     if (liveTagNames.has(base.slice(POINTER_TAG.length + 1))) continue;
     try {
-      token ??= await pullToken(repoPath);
-      const branch = await recordedBranch(repoPath, managed[0], token);
+      const branch = await recordedBranch(repoPath, managed[0], await getToken());
       if (branch) version.branch = branch;
     } catch (error) {
       core.warning(`could not read the branch of ${managed[0]}: ${error}`);
@@ -164,7 +198,9 @@ async function main(): Promise<void> {
     ref?: string;
     repository?: { default_branch?: string };
   };
-  const dryRun = String(payload.inputs?.dry_run ?? "") === "true";
+  const dryRun =
+    context.eventName === "push" ||
+    String(payload.inputs?.dry_run ?? "") === "true";
   const packageArgs = {
     org: owner,
     package_type: "container" as const,
@@ -200,18 +236,44 @@ async function main(): Promise<void> {
     retiredBranches.push(String(payload.ref).slice("refs/heads/".length));
   }
 
+  let pullTokenPromise: Promise<string> | undefined;
+  const getToken = (): Promise<string> =>
+    (pullTokenPromise ??= pullToken(repoPath));
   await attachRecordedBranches(
     versions,
     repoPath,
     new Set(liveBranches.map(tagSanitize)),
+    getToken,
   );
 
-  const { deletions, keeps } = planDeletions({
+  const plan = {
     versions,
     defaultBranch: payload.repository?.default_branch ?? "master",
     liveBranches,
     retiredBranches,
     now: new Date(),
+  };
+  // A tag that survives is what makes an untagged image reachable, and which
+  // tags survive is the first pass's answer.
+  const doomedIds = new Set(
+    planDeletions(plan).deletions.map(({ version }) => version.id),
+  );
+  let reachableDigestsSet: ReadonlySet<string> | undefined;
+  try {
+    reachableDigestsSet = await reachableDigests(
+      repoPath,
+      versions
+        .filter((version) => !doomedIds.has(version.id))
+        .flatMap((version) => version.tags),
+      await getToken(),
+    );
+  } catch (error) {
+    core.warning(`could not resolve what the surviving tags reference: ${error}`);
+  }
+
+  const { deletions, keeps } = planDeletions({
+    ...plan,
+    reachableDigests: reachableDigestsSet,
   });
 
   for (const { version, reason } of deletions) {
