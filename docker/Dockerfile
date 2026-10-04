@@ -35,6 +35,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
 
+# fclones (MIT) finds identical files for docker/dedup-layer.sh. Upstream ships x86_64 binaries only.
+FROM cuda_devel AS fclones
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    apt-get update && apt-get install -y --no-install-recommends curl \
+    && curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal \
+    && /root/.cargo/bin/cargo install --locked --root /usr/local fclones@0.35.0
+
 FROM cuda_devel AS base
 
 ARG TARGETARCH
@@ -65,6 +73,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Add GKE default lib and bin locations
 ENV PATH="${PATH}:/usr/local/nvidia/bin" \
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+
+# Every RUN that installs files ends with dedup-layer, which hardlinks the identical files it wrote.
+COPY --from=fclones /usr/local/bin/fclones /usr/local/bin/fclones
+COPY --chmod=755 docker/dedup-layer.sh /usr/local/bin/dedup-layer
 
 # Replace Ubuntu sources if specified
 RUN if [ -n "$UBUNTU_MIRROR" ]; then \
@@ -108,7 +120,8 @@ ENV PATH="/opt/sglang/bin:${PATH}"
 
 # Install system dependencies (organized by category for better caching)
 RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
-    apt-retry update && apt-get install -y --no-install-recommends \
+    dedup-layer --begin \
+    && apt-retry update && apt-get install -y --no-install-recommends \
     # Core system utilities
     ca-certificates \
     software-properties-common \
@@ -164,7 +177,8 @@ RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
     libsubunit-dev \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && apt-get clean \
+    && dedup-layer /usr /etc /opt
 
 # Replace pip global cache if specified
 RUN if [ -n "${PIP_DEFAULT_INDEX}" ]; then \
@@ -271,7 +285,8 @@ COPY proto                 /tmp/sglang_deps/proto
 # Generate constraints.txt to prevent reinstalling these deps in later stages.
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=cache,target=/root/.cargo/registry \
-    case "$CUDA_VERSION" in \
+    dedup-layer --begin \
+    && case "$CUDA_VERSION" in \
         13.0.3) CUINDEX=130 ;; \
         *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
@@ -292,7 +307,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
            fi; \
        done \
     && echo "Linked ${n} pip CUDA libraries (${mb} MB) to their identical /usr/local/cuda copies" \
-    && hardlink -t -s 1M /opt/sglang/lib/python3.12/site-packages \
+    && dedup-layer /opt/sglang \
     && cd /sgl-workspace \
     && rm -rf /tmp/sglang_deps \
     && pip freeze | grep -v "^sglang==" > /sgl-workspace/constraints.txt
@@ -487,7 +502,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     fi
 
 # Copy flashinfer cubin (always) and jit-cache (if installed) packages
-COPY --from=flashinfer_cache /flashinfer_jit_output/ /opt/sglang/lib/python3.12/site-packages/
+RUN --mount=type=bind,from=flashinfer_cache,source=/flashinfer_jit_output,target=/tmp/flashinfer_jit_output \
+    dedup-layer --begin \
+    && cp -a /tmp/flashinfer_jit_output/. /opt/sglang/lib/python3.12/site-packages/ \
+    && dedup-layer /opt/sglang
 
 # Copy dev tools
 COPY --from=devtools_builder /tools/diff-so-fancy /usr/local/bin/
@@ -503,7 +521,8 @@ COPY --from=devtools_builder /root/.oh-my-zsh /root/.oh-my-zsh
 
 # Install dev apt packages (need to re-run since we're in a different stage)
 RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
-    apt-retry update && apt-get install -y --no-install-recommends \
+    dedup-layer --begin \
+    && apt-retry update && apt-get install -y --no-install-recommends \
     gdb \
     ninja-build \
     vim \
@@ -528,17 +547,20 @@ RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
     libnl-route-3-200 \
     librdmacm1 \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && apt-get clean \
+    && dedup-layer /usr /etc
 
 # Install NVIDIA development tools
 RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
-    apt-retry update -y \
+    dedup-layer --begin \
+    && apt-retry update -y \
     && apt install -y --no-install-recommends gnupg \
     && echo "deb http://developer.download.nvidia.com/devtools/repos/ubuntu2004/$(if [ "$(uname -m)" = "aarch64" ]; then echo "arm64"; else echo "amd64"; fi) /" | tee /etc/apt/sources.list.d/nvidia-devtools.list \
     && apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/$(if [ "$(uname -m)" = "aarch64" ]; then echo "arm64"; else echo "x86_64"; fi)/7fa2af80.pub \
     && apt-retry update -y \
     && apt install -y --no-install-recommends nsight-systems-cli \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && dedup-layer /opt /usr
 
 # =============================================================================
 # Python packages and tools (before source copy for better caching)
@@ -546,11 +568,14 @@ RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
 
 # Install Mooncake
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install mooncake-transfer-engine-cuda13==${MOONCAKE_VERSION}
+    dedup-layer --begin \
+    && python3 -m pip install mooncake-transfer-engine-cuda13==${MOONCAKE_VERSION} \
+    && dedup-layer /opt/sglang
 
 # Install MSCCL++ Python dependencies and package (builds extension via CMake through pip)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ -n "$BUILD_JOBS" ]; then export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"; fi \
+    dedup-layer --begin \
+    && if [ -n "$BUILD_JOBS" ]; then export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"; fi \
     && git clone --depth=1 --branch ${MSCCLPP_VERSION} https://${GITHUB_ARTIFACTORY}/microsoft/mscclpp.git /tmp/mscclpp \
     && case "${CUDA_VERSION}" in \
            13.*) \
@@ -563,11 +588,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
        esac \
     && rm -rf /tmp/mscclpp \
     # A wheel holds no symlinks, so every libmscclpp*.so name is a full copy.
-    && hardlink -t /opt/sglang/lib/python3.12/site-packages/mscclpp
+    && dedup-layer /opt/sglang
 
 # Install essential Python packages (use constraints to prevent conflicts)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install -c /sgl-workspace/constraints.txt \
+    dedup-layer --begin \
+    && python3 -m pip install -c /sgl-workspace/constraints.txt \
     datamodel_code_generator \
     pre-commit \
     pytest \
@@ -584,7 +610,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     matplotlib \
     tabulate \
     termplotlib \
-    "runai-model-streamer[s3,gcs,azure]>=0.15.7"
+    "runai-model-streamer[s3,gcs,azure]>=0.15.7" \
+    && dedup-layer /opt/sglang
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --force-reinstall --no-deps \
@@ -594,12 +621,16 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # unconditionally requires nixl-cu12, so install it with --no-deps and pair it
 # with the nixl-cu13 binary to avoid shipping wrong-CUDA libs.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install nixl nixl-cu13 --no-deps \
-    && python3 -m pip install "cuda-python>=13,<14"
+    dedup-layer --begin \
+    && python3 -m pip install nixl nixl-cu13 --no-deps \
+    && python3 -m pip install "cuda-python>=13,<14" \
+    && dedup-layer /opt/sglang
 
 # Install the latest available AI Dynamo prerelease from NVIDIA's package index.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install --pre --extra-index-url https://pypi.nvidia.com/ ai-dynamo
+    dedup-layer --begin \
+    && python3 -m pip install --pre --extra-index-url https://pypi.nvidia.com/ ai-dynamo \
+    && dedup-layer /opt/sglang
 
 # Add yank script
 COPY --chown=root:root --chmod=755 docker/configs/yank /usr/local/bin/yank
@@ -677,7 +708,8 @@ RUN --mount=type=bind,from=local_src,source=/src,target=/tmp/local_src \
 # Clean up __pycache__/tests/pyc in same RUN to avoid writing ~28k files to layer
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,from=rust_ext_modules,target=/tmp/rust_ext_modules \
-    if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
+    dedup-layer --begin \
+    && if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
     && cd /sgl-workspace/sglang \
     && PIP_BUILD_ARGS="" \
     # Prebuilt modules leave nothing to compile, so the build needs no isolated env holding torch.
@@ -717,7 +749,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
          [ "$success" = "1" ] ) \
     && mkdir -p /root/.cache/huggingface /root/.cache/sglang \
     && ( if [ -f python/kernels.lock ]; then mv python/kernels.lock /root/.cache/sglang/; fi ) \
-    && ( find /opt/sglang/lib/python3.12/site-packages -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true )
+    && ( find /opt/sglang/lib/python3.12/site-packages -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true ) \
+    && dedup-layer /opt/sglang /sgl-workspace /root/.cache
 
 ENV SGLANG_RUST_BUILD_MODE=never
 
