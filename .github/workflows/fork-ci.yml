@@ -5,20 +5,6 @@ name: Fork CI
 on:
   push:
     branches: ["**"]
-  workflow_dispatch:
-    inputs:
-      build_kernel:
-        description: "Build the sglang-kernel wheels even if python/sglang/kernels/aot is unchanged"
-        type: boolean
-        default: false
-      build_docker:
-        description: "Build and push the serving image to ghcr.io"
-        type: boolean
-        default: false
-      image_tag:
-        description: "Image tag for build_docker (default: dev-<branch>)"
-        type: string
-        default: ""
 
 concurrency:
   group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
@@ -50,7 +36,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PUSH_BEFORE: ${{ github.event.before }}
-          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
           KERNEL_VERSION=$(grep -Po '(?<=^version = ")[^"]*' python/sglang/kernels/aot/pyproject.toml)
@@ -89,19 +74,16 @@ jobs:
           fi
 
           BUILD_KERNEL=false
-          if [ "$KERNEL_CHANGED" = true ] || [ "${{ inputs.build_kernel }}" = true ] \
-             || { [ "$ON_DEFAULT" = true ] && [ "$KERNEL_AVAILABLE" = false ]; }; then
+          if [ "$KERNEL_CHANGED" = true ] || { [ "$ON_DEFAULT" = true ] && [ "$KERNEL_AVAILABLE" = false ]; }; then
             BUILD_KERNEL=true
           fi
 
           BUILD_DOCKER=false
-          if [ "$ON_DEFAULT" = true ] && [ "${{ github.event_name }}" = push ] || [ "${{ inputs.build_docker }}" = true ]; then
+          if [ "$ON_DEFAULT" = true ] && [ "${{ github.event_name }}" = push ]; then
             BUILD_DOCKER=true
           fi
           SHORT_SHA="${GITHUB_SHA::7}"
-          if [ -n "$INPUT_IMAGE_TAG" ]; then
-            IMAGE_TAGS="${INPUT_IMAGE_TAG}"
-          elif [ "$ON_DEFAULT" = true ]; then
+          if [ "$ON_DEFAULT" = true ]; then
             IMAGE_TAGS="dev dev-${SHORT_SHA}"
           else
             IMAGE_TAGS="dev-$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-100)"
@@ -179,6 +161,56 @@ jobs:
       rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
       sched_policy_handoff: ${{ needs.sched-policy-build.outputs.policy_handoff }}
       goipc_handoff: ${{ needs.sched-policy-build.outputs.goipc_handoff }}
+      coverage_artifact: engine-coverage
+
+  fork-engine-coverage:
+    needs: [fork-check-changes, base-a-test-cpu]
+    if: ${{ !cancelled() && needs.base-a-test-cpu.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the measured code
+        uses: actions/checkout@v4
+
+      - name: Checkout CI scripts
+        uses: actions/checkout@v4
+        with:
+          path: .ci-tooling
+          sparse-checkout: scripts/ci/utils
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install coverage
+        run: pip install "coverage>=7.10"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: engine-coverage-*
+          path: ${{ runner.temp }}/engine-coverage
+
+      - name: Combine partitions and report
+        run: |
+          set -euo pipefail
+          RC="$GITHUB_WORKSPACE/.ci-tooling/scripts/ci/utils/engine-coverage.toml"
+          shopt -s nullglob dotglob
+          PARTS=("${{ runner.temp }}"/engine-coverage/*/.coverage)
+          if [ "${#PARTS[@]}" -ne "${{ fromJson(needs.fork-check-changes.outputs.partitions)['base-a-test-cpu'].size }}" ]; then
+            echo "::error::expected ${{ fromJson(needs.fork-check-changes.outputs.partitions)['base-a-test-cpu'].size }} partition coverage files, found ${#PARTS[@]}"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/.coverage-engine"
+          python3 -m coverage combine --rcfile="$RC" "${PARTS[@]}"
+          python3 -m coverage json --rcfile="$RC" -o "${{ runner.temp }}/engine-coverage.json"
+          echo "Measured commit: $(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          jq -r -f .ci-tooling/scripts/ci/utils/coverage_package_table.jq "${{ runner.temp }}/engine-coverage.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: combined-engine-coverage
+          path: ${{ runner.temp }}/engine-coverage.json
+          if-no-files-found: error
 
   simulator-test-cpu:
     needs: [fork-check-changes, fork-rust-ext-build, sched-policy-build]
