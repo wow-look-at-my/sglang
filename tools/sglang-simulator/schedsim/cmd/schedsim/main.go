@@ -4,8 +4,8 @@
 // Usage:
 //
 //	go run ./cmd/schedsim -log FILE       # a serving log, bare or production format
-//	go run ./cmd/schedsim -log FILE -chunk-size -prefill-share.5
-//	go run ./cmd/schedsim -log FILE -replay-boots -replay-seconds
+//	go run ./cmd/schedsim -log FILE -chunk-size 2048 -prefill-share 0.5
+//	go run ./cmd/schedsim -log FILE -replay-boots 4 -replay-seconds 0
 //
 // A production log (timestamped lines, several boots) adds sections: the
 // boots it holds, every cold prompt with its measured stall beside the
