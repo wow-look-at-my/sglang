@@ -150,6 +150,48 @@ jobs:
       partitions: ${{ needs.fork-check-changes.outputs.partitions }}
       run_timeout_minutes: '30'
       rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
+      coverage_artifact: engine-coverage
+
+  fork-engine-coverage:
+    needs: [fork-check-changes, base-a-test-cpu]
+    if: ${{ !cancelled() && needs.base-a-test-cpu.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install coverage
+        run: pip install "coverage>=7.10"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: engine-coverage-*
+          path: ${{ runner.temp }}/engine-coverage
+
+      - name: Combine partitions and report
+        run: |
+          set -euo pipefail
+          RC="$GITHUB_WORKSPACE/scripts/ci/utils/engine-coverage.toml"
+          shopt -s nullglob dotglob
+          PARTS=("${{ runner.temp }}"/engine-coverage/*/.coverage)
+          if [ "${#PARTS[@]}" -ne "${{ fromJson(needs.fork-check-changes.outputs.partitions)['base-a-test-cpu'].size }}" ]; then
+            echo "::error::expected ${{ fromJson(needs.fork-check-changes.outputs.partitions)['base-a-test-cpu'].size }} partition coverage files, found ${#PARTS[@]}"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/.coverage-engine"
+          python3 -m coverage combine --rcfile="$RC" "${PARTS[@]}"
+          python3 -m coverage json --rcfile="$RC" -o "${{ runner.temp }}/engine-coverage.json"
+          jq -r -f scripts/ci/utils/coverage_package_table.jq "${{ runner.temp }}/engine-coverage.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: combined-engine-coverage
+          path: ${{ runner.temp }}/engine-coverage.json
+          if-no-files-found: error
 
   # ------------------------------------------------------ constructor order Fails when an __init__ step reads a self field before an earlier step sets it, or when a method creates a field the constructor never initializes.
   fork-init-order-check:

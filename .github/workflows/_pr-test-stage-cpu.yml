@@ -36,6 +36,10 @@ on:
         description: 'Artifact of prebuilt Rust extension modules, from rust-ext-build. Empty, or a download that fails, falls back to the cache; a miss there compiles during install.'
         type: string
         default: ''
+      coverage_artifact:
+        description: 'Non-empty measures python/sglang line coverage (scripts/ci/utils/engine-coverage.toml) and uploads each partition as <name>-<partition>.'
+        type: string
+        default: ''
 
 # Reusable workflows do NOT inherit the caller's workflow-level env across the
 # workflow_call boundary, so pr-test.yml's env is redeclared here -- minus the
@@ -123,7 +127,7 @@ jobs:
           UV_SYSTEM_PYTHON: "1"
         run: |
           OVERRIDE_ARGS=$(bash scripts/ci/utils/uv_kernel_pin_override.sh)
-          uv pip install -e "python[dev]" --index-strategy unsafe-best-match --prerelease allow $OVERRIDE_ARGS
+          uv pip install -e "python[dev]" "coverage>=7.10" --index-strategy unsafe-best-match --prerelease allow $OVERRIDE_ARGS
 
       # Hosted runners are ephemeral, so models are re-fetched every run and the
       # Hub occasionally returns 429s. Persist the HF cache in GitHub's cache
@@ -159,9 +163,29 @@ jobs:
           # Normalized to a literal true/false: EnvBool rejects an empty string,
           # which is what a missing check-changes output would expand to.
           SGLANG_SKIP_RUST_TESTS: ${{ fromJson(inputs.check_changes).rust_workspace == 'true' && 'false' || 'true' }}
+          COVERAGE_ARTIFACT: ${{ inputs.coverage_artifact }}
         run: |
           cd test/
-          python3 run_suite.py --hw cpu --suite ${{ inputs.self_name }} --auto-partition-id ${{ matrix.partition }} --auto-partition-size ${{ fromJson(inputs.partitions)[inputs.self_name].size }} --partition-model-file /tmp/partition-model.json --fork-worker-batch-size 20 $CONTINUE_ON_ERROR_FLAG
+          SUITE_PYTHON=(python3)
+          if [ -n "$COVERAGE_ARTIFACT" ]; then
+            mkdir -p "$GITHUB_WORKSPACE/.coverage-engine"
+            SUITE_PYTHON=(python3 -m coverage run --rcfile="$GITHUB_WORKSPACE/scripts/ci/utils/engine-coverage.toml")
+          fi
+          "${SUITE_PYTHON[@]}" run_suite.py --hw cpu --suite ${{ inputs.self_name }} --auto-partition-id ${{ matrix.partition }} --auto-partition-size ${{ fromJson(inputs.partitions)[inputs.self_name].size }} --partition-model-file /tmp/partition-model.json --fork-worker-batch-size 20 $CONTINUE_ON_ERROR_FLAG
+
+      - name: Combine partition coverage
+        if: ${{ !cancelled() && inputs.coverage_artifact != '' }}
+        run: python3 -m coverage combine --rcfile="$GITHUB_WORKSPACE/scripts/ci/utils/engine-coverage.toml"
+
+      - name: Upload partition coverage
+        if: ${{ !cancelled() && inputs.coverage_artifact != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.coverage_artifact }}-${{ matrix.partition }}
+          path: .coverage-engine/.coverage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
 
       # PRs save only what the base lacks; the implicit if: success() keeps a
       # half-downloaded cache unpublished.
