@@ -171,9 +171,7 @@ async function main(): Promise<void> {
     ref?: string;
     repository?: { default_branch?: string };
   };
-  const dryRun =
-    context.eventName === "push" ||
-    String(payload.inputs?.dry_run ?? "") === "true";
+  const dryRun = String(payload.inputs?.dry_run ?? "") === "true";
   const packageArgs = {
     org: owner,
     package_type: "container" as const,
