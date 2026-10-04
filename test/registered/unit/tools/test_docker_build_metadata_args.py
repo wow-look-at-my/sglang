@@ -164,12 +164,8 @@ class TestDockerBuildMetadataArgs(unittest.TestCase):
         dockerfile = DOCKERFILE_PATH.read_text()
         framework_stage = dockerfile.split("FROM framework AS framework_final", 1)[
             1
-        ].split("FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS runtime")[
-            0
-        ]
-        runtime_stage = dockerfile.split(
-            "FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS runtime", 1
-        )[1]
+        ].split("FROM cuda_devel AS runtime")[0]
+        runtime_stage = dockerfile.split("FROM cuda_devel AS runtime", 1)[1]
 
         for stage in (framework_stage, runtime_stage):
             for expected in (
