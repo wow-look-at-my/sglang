@@ -6,15 +6,44 @@
  * retention rules themselves live in ghcr-image-retention.ts.
  */
 
-import {
-  type ImageVersion,
-  POINTER_TAG,
-  baseTag,
-  isManagedTag,
-  masterCommit,
-  planDeletions,
-  tagSanitize,
-} from "./ghcr-image-retention.ts";
+/** An image as the packages API describes one. */
+interface ImageVersion {
+  id: number;
+  name: string;
+  tags: string[];
+  createdAt: string;
+  branch?: string;
+}
+
+interface Verdict {
+  version: ImageVersion;
+  reason: string;
+}
+
+/** The rules module, which is loaded by path rather than imported. */
+interface RetentionRules {
+  planDeletions: (input: {
+    versions: ImageVersion[];
+    defaultBranch: string;
+    liveBranches: string[];
+    retiredBranches: string[];
+    now: Date;
+  }) => { deletions: Verdict[]; keeps: Verdict[] };
+  isManagedTag: (tag: string) => boolean;
+  baseTag: (tag: string) => string;
+  masterCommit: (version: ImageVersion) => string | null;
+  tagSanitize: (branch: string) => string;
+  POINTER_TAG: string;
+}
+
+// The action type-checks the script as one virtual file beside its own globals,
+// so a relative import has nothing to resolve to. require() is what the action
+// itself resolves at run time, against the script's own directory.
+const rules: RetentionRules = require(
+  path.join(__dirname, "ghcr-image-retention.ts"),
+);
+const { POINTER_TAG, baseTag, isManagedTag, masterCommit, planDeletions, tagSanitize } =
+  rules;
 
 const PACKAGE_NAME = "sglang";
 const REGISTRY = "https://ghcr.io";
@@ -25,11 +54,21 @@ const MANIFEST_ACCEPT = [
   "application/vnd.docker.distribution.manifest.v2+json",
 ].join(", ");
 
-interface PackageVersion {
+/** One image as the packages API lists it: tags live under metadata.container. */
+function toImageVersion(raw: {
   id: number;
   name: string;
   created_at: string;
-  metadata?: { container?: { tags?: string[] } };
+  metadata?: unknown;
+}): ImageVersion {
+  const container = (raw.metadata as { container?: { tags?: string[] } } | undefined)
+    ?.container;
+  return {
+    id: raw.id,
+    name: raw.name,
+    tags: container?.tags ?? [],
+    createdAt: raw.created_at,
+  };
 }
 
 interface ManifestChild {
@@ -43,15 +82,6 @@ interface Manifest {
 
 interface ImageConfig {
   config?: { Labels?: Record<string, string> };
-}
-
-function toImageVersion(raw: PackageVersion): ImageVersion {
-  return {
-    id: raw.id,
-    name: raw.name,
-    tags: raw.metadata?.container?.tags ?? [],
-    createdAt: raw.created_at,
-  };
 }
 
 async function registryGet<T>(url: string, token: string, accept: string): Promise<T> {
@@ -151,7 +181,7 @@ async function main(): Promise<void> {
   };
 
   const rawVersions = await octokit.paginate(
-    octokit.rest.packages.listPackageVersionsForOrg,
+    octokit.rest.packages.getAllPackageVersionsForPackageOwnedByOrg,
     { ...packageArgs, per_page: 100 },
   );
   const versions = rawVersions.map(toImageVersion);
