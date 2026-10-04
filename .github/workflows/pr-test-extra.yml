@@ -9,9 +9,6 @@ name: PR Test Extra
 # read the frozen event payload, which never updates on rerun). The same
 # job graph runs unconditionally on workflow_dispatch / workflow_call so it
 # can be triggered manually or chained from another workflow.
-#
-# Stages: extra-a (1-/2-gpu) and extra-b (4-/8-gpu) caller stubs reuse
-# `_pr-test-stage.yml` and `_pr-test-check-changes.yml` from pr-test.yml.
 
 on:
   pull_request:
@@ -56,7 +53,7 @@ on:
         default: false
 
 concurrency:
-  # Keys on the PR number: two forks can share a head_ref and would cancel each other.
+  # Keys on the PR number: forks can share a head_ref and would cancel each other.
   group: pr-test-extra-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name || 'default' }}-${{ inputs.git_ref || 'all' }}
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 
@@ -137,7 +134,7 @@ jobs:
 
   # Own build job because artifacts are per-run: a standalone `run-ci-extra` run
   # cannot reach the base run's. Only artifact_name is suffixed; the cache prefix
-  # stays at the default so the two workflows share one cache entry.
+  # stays at the default so both workflows share one cache entry.
   rust-ext-build:
     needs: [check-changes, call-gate]
     if: |

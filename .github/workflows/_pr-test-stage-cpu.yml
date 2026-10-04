@@ -99,9 +99,6 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      # This stage compiled the workspace too - 7+ minutes per partition on
-      # billable hosted minutes. rust-ext-build's modules need an older glibc than
-      # this runner has, which is the safe direction, and both pin Python 3.12.
       - uses: ./.github/actions/download-rust-ext
         id: rust_ext
         with:
@@ -109,8 +106,7 @@ jobs:
 
       # Both only serve the fallback where this stage compiles the extensions
       # itself, so they follow whether the modules arrived, not the producer job's
-      # output. Otherwise rust-cache restores ~1 GB per partition for nothing, on
-      # an over-quota cache.
+      # output.
       - name: Install protoc + Rust toolchain
         if: ${{ steps.rust_ext.outputs.hit != 'true' }}
         timeout-minutes: 10
