@@ -3,10 +3,10 @@
  *
  * Every push publishes one image. The default branch tags it `dev-<commit>`
  * and moves `dev`; any other branch tags it `dev-<branch>`. The newest image
- * of a live branch is that branch's HEAD and stays. Superseded images of a
- * live branch, every image of a branch that merged or was deleted, and
- * default-branch images past the retention count are removable once they are
- * older than MIN_AGE_DAYS.
+ * of a live branch is that branch's HEAD and stays, and the default branch
+ * keeps its newest MASTER_RETENTION images. Everything else goes once it is
+ * older than MIN_AGE_DAYS: a superseded image of a live branch, every image of
+ * a branch that merged or was deleted, and older default-branch images.
  *
  * `planDeletions` reads no registry and writes nothing, so the rules are
  * tested directly; `prune-ghcr-images.ts` does the registry work.
@@ -116,6 +116,8 @@ export function planDeletions(input: PlanInput): Decision {
   const deletions: Verdict[] = [];
   const keeps: Verdict[] = [];
   const master = new Map<string, ImageVersion[]>();
+  const tooYoung = (version: ImageVersion) =>
+    ageDays(version, input.now) < minAgeDays;
 
   for (const version of input.versions) {
     const managed = version.tags.filter(isManagedTag);
@@ -125,10 +127,6 @@ export function planDeletions(input: PlanInput): Decision {
     }
     if (managed.length === 0) {
       keeps.push({ version, reason: "untagged" });
-      continue;
-    }
-    if (ageDays(version, input.now) < minAgeDays) {
-      keeps.push({ version, reason: `younger than ${minAgeDays} days` });
       continue;
     }
     if (managed.some((tag) => baseTag(tag) === POINTER_TAG)) {
@@ -145,17 +143,28 @@ export function planDeletions(input: PlanInput): Decision {
     const branch = versionBranch(version, input.defaultBranch);
     if (live.has(branch) || (liveTagNames.has(branch) && !retiredTagNames.has(branch))) {
       keeps.push({ version, reason: `HEAD of live branch ${branch}` });
-    } else if (retired.has(branch) || retiredTagNames.has(branch)) {
-      deletions.push({ version, reason: `branch ${branch} merged or was deleted` });
-    } else {
-      deletions.push({ version, reason: `no branch named ${branch} on the remote` });
+      continue;
     }
+    if (tooYoung(version)) {
+      keeps.push({ version, reason: `younger than ${minAgeDays} days` });
+      continue;
+    }
+    deletions.push({
+      version,
+      reason:
+        retired.has(branch) || retiredTagNames.has(branch)
+          ? `branch ${branch} merged or was deleted`
+          : `no branch named ${branch} on the remote`,
+    });
   }
 
+  // Ranked over every default-branch image, so the retention count is what
+  // bounds the history: an image a week old does not hold a slot that then
+  // falls to the newest of the images the age guard has already spared.
   const ranked = [...master.entries()].sort((left, right) => {
-    const oldest = (group: ImageVersion[]) =>
+    const newest = (group: ImageVersion[]) =>
       Math.min(...group.map((version) => ageDays(version, input.now)));
-    return oldest(left[1]) - oldest(right[1]);
+    return newest(left[1]) - newest(right[1]);
   });
   ranked.forEach(([, images], index) => {
     for (const version of images) {
@@ -164,6 +173,8 @@ export function planDeletions(input: PlanInput): Decision {
           version,
           reason: `one of ${masterRetention} latest ${input.defaultBranch} images`,
         });
+      } else if (tooYoung(version)) {
+        keeps.push({ version, reason: `younger than ${minAgeDays} days` });
       } else {
         deletions.push({ version, reason: "superseded default-branch image" });
       }

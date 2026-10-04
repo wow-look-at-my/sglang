@@ -62,6 +62,17 @@ test("the default branch keeps its HEAD image and four more", () => {
   assert.deepEqual(ids(keeps), [0, 1, 2, 3, 4]);
 });
 
+test("a young default-branch image holds a retention slot", () => {
+  const versions = [1, 8, 9, 10, 11, 12].map((age, index) =>
+    version(index, [`dev-${index.toString(16).padStart(7, "0")}`], age),
+  );
+
+  const { deletions, keeps } = plan(versions);
+
+  assert.deepEqual(ids(deletions), [5]);
+  assert.deepEqual(ids(keeps), [0, 1, 2, 3, 4]);
+});
+
 test("the dev pointer does not use up a retention slot", () => {
   const versions = [
     version(99, ["dev"], 400),
