@@ -6,7 +6,6 @@ ARG SGL_KERNEL_VERSION=0.4.10
 ARG GPU_ARCHS=
 # Compile jobs per native build step; empty keeps each tool's own default.
 ARG BUILD_JOBS=
-# 0 leaves sgl-model-gateway (the Rust router binary and sglang-router wheel) out.
 ARG INSTALL_GATEWAY=1
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
 
@@ -427,7 +426,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && cp target/release/sgl-model-gateway /build/gateway_bin/sgl-model-gateway \
     && rm -rf /root/.cargo /root/.rustup /build/sgl-model-gateway/target /build/sgl-model-gateway/bindings/python/target
 
-# INSTALL_GATEWAY picks the gateway artifacts: the build above, or two empty
+# INSTALL_GATEWAY picks the gateway artifacts: the build above, or empty
 # directories, in which case BuildKit never runs gateway_builder at all.
 FROM base AS gateway_artifacts_0
 RUN mkdir -p /build/gateway_wheels /build/gateway_bin

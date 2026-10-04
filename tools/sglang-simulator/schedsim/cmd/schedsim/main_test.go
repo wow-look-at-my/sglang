@@ -12,9 +12,6 @@ import (
 	"schedsim/internal/trace/tracetest"
 )
 
-// stalledLog writes a two-boot production log to a temp file: one boot with
-// a 24-chunk cold prompt behind four decoding conversations, then a restart
-// with a 20-chunk one, so every timestamped section has something to print.
 func stalledLog(t *testing.T) string {
 	t.Helper()
 	first := tracetest.Stalled("w1-first", 24).String()
