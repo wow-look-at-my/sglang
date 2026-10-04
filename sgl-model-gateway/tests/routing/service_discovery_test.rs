@@ -58,6 +58,7 @@ mod service_discovery_tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
+        // Endpoint might return OK with worker list or 404 if not implemented
         assert!(
             resp.status() == StatusCode::OK || resp.status() == StatusCode::NOT_FOUND,
             "Workers endpoint should respond, got {}",

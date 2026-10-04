@@ -10,6 +10,11 @@
 //                    tags, "Open" button. No prose; the tags carry the pitch.
 //
 // Rotation pauses on hover/focus and is skipped under prefers-reduced-motion.
+//
+// One export for both shapes: Mintlify evaluates each exported component on its
+// own at hydration, so anything two components would share (rotation state, the
+// timer, the control cluster) has to sit inside one — module-level helpers are
+// out of scope by the time this runs.
 
 export const PopularModels = ({
   models = [],
@@ -111,7 +116,7 @@ export const PopularModels = ({
       </span>
     ) : null;
 
-  // Only the active slide is opaque: mid-slide, a visible neighbour reads as
+  // Only the active slide is opaque: mid-slide, a visible neighbour reads as two
   // half-drawn cards rather than as motion.
   const slideStyle = (i) => ({
     flex: "0 0 100%",

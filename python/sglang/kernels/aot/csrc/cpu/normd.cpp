@@ -2,14 +2,21 @@
 #include "vec.h"
 
 /*
-* [Note]: Fused norm kernels for diffusion models * * This file contains CPU
-kernels for fused normalization and modulation * operations used by diffusion
-models: * * - fused_scale_shift_cpu: * Applies scale-shift modulation: *
-output = input * (scale_constant + scale) + shift. * * -
-fused_norm_scale_shift_cpu: * Applies RMSNorm or LayerNorm followed by
-scale-shift modulation. * * - fused_scale_residual_norm_scale_shift_cpu: *
-Fuses optional gated residual accumulation, normalization, and * scale-shift
-modulation.
+ * [Note]: Fused norm kernels for diffusion models
+ *
+ * This file contains CPU kernels for fused normalization and modulation
+ * operations used by diffusion models:
+ *
+ *   - fused_scale_shift_cpu:
+ *       Applies scale-shift modulation:
+ *         output = input * (scale_constant + scale) + shift.
+ *
+ *   - fused_norm_scale_shift_cpu:
+ *       Applies RMSNorm or LayerNorm followed by scale-shift modulation.
+ *
+ *   - fused_scale_residual_norm_scale_shift_cpu:
+ *       Fuses optional gated residual accumulation, normalization, and
+ *       scale-shift modulation.
  */
 
 namespace {
@@ -194,7 +201,8 @@ inline void apply_norm_modulate_row(
       }
     }
 
-    // Match CUDA/CuTe activation-dtype boundary: norm FP32 -> activation dtype -> scale/shift.
+    // Match CUDA/CuTe activation-dtype boundary:
+    // norm FP32 -> activation dtype -> scale/shift.
     const bVec norm_value = convert_from_float_ext<scalar_t>(x0, x1);
     std::tie(x0, x1) = at::vec::convert_to_float(norm_value);
 
@@ -349,7 +357,8 @@ inline void fused_scale_residual_norm_scale_shift_row(
 
     apply_residual_gate_vec(x0, x1, r0, r1, residual_gate, residual_gate_fp32, gate_stride_c, d);
 
-    // Match CUDA: residual + gate * input is rounded to activation dtype before normalization.
+    // Match CUDA: residual + gate * input is rounded to activation dtype
+    // before normalization.
     const bVec residual_value = convert_from_float_ext<scalar_t>(x0, x1);
 
     residual_value.store(residual_output + d);

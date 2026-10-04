@@ -1,4 +1,7 @@
-//! Abort-on-disconnect guard for in-flight requests.
+//! Abort-on-disconnect guard for in-flight requests. Handlers arm a guard per
+//! submitted rid; axum dropping the handler/SSE stream (client disconnected)
+//! drops the guard, which aborts whatever wasn't disarmed (mirrors Python's
+//! `is_disconnected` abort).
 
 use std::collections::HashSet;
 
@@ -9,7 +12,17 @@ use crate::tokenizer_manager::wiring::{AbortSource, Senders};
 /// whatever remains at drop is aborted.
 pub(super) struct AbortGuard {
     senders: Senders,
-    /// Rids still in flight.
+    /// Rids still in flight. `Rid` carries its own partition key, so there is no
+    /// separate routing value to keep alongside it.
+    ///
+    /// A set, not a `Vec`: `disarm` runs once per request that finishes, and over a
+    /// batch a linear scan makes the guard quadratic in the batch size — measured
+    /// 13.3 ms for a 4096-item batch, more than all of that batch's real transform
+    /// work combined. `Rid`'s identity is its id string, so set membership is the
+    /// same relation `retain` was testing. The cost is two hashes of a ~40-byte
+    /// string on the single-request path (~80 ns against a ~40 µs request), which
+    /// is why the trade is worth making rather than threading slot indices in from
+    /// the batch call sites.
     rids: HashSet<Rid>,
 }
 
@@ -21,7 +34,8 @@ impl AbortGuard {
         }
     }
 
-    /// Guard covering no rids yet — a batch arms each as it is submitted.
+    /// Guard covering no rids yet — a batch arms each as it's submitted so a
+    /// mid-fan-out disconnect aborts every request already handed to the scheduler.
     pub(super) fn new_empty(senders: Senders) -> Self {
         Self {
             senders,
@@ -42,7 +56,13 @@ impl AbortGuard {
 
 impl Drop for AbortGuard {
     fn drop(&mut self) {
-        // Report the abort and nothing more.
+        // Report the abort and nothing more. There is no in-flight rid registry to
+        // release from: `Rid::from_client` makes each client rid internally unique,
+        // so a resubmit of the "same" rid is a different `Rid` and cannot be caught
+        // up in this abort. That removes the ordering hazard split ownership created.
+        //
+        // The lane is unbounded, so this send only fails at shutdown, when the loop
+        // is gone and nothing is generating anyway.
         for rid in self.rids.drain() {
             let _ = self.senders.abort_tx.send(AbortSource::Guard(rid));
         }
@@ -62,7 +82,8 @@ mod tests {
         }
     }
 
-    /// A batch guard aborts exactly the rids still armed at drop — the ones whose requests never reached a terminal —.
+    /// A batch guard aborts exactly the rids still armed at drop — the ones whose
+    /// requests never reached a terminal — and leaves the finished ones alone.
     #[test]
     fn guard_aborts_only_the_rids_still_armed() {
         let (abort_tx, abort_rx) = flume::unbounded();
@@ -81,7 +102,10 @@ mod tests {
         );
     }
 
-    /// An armed guard aborts its rid on drop — exactly the cleanup a busy-skipped `/health_generate` probe relies on.
+    /// An armed guard aborts its rid on drop — exactly the cleanup a busy-skipped
+    /// `/health_generate` probe relies on. It never sees a terminal frame here, so
+    /// dropping the guard is the only path that deregisters its detok sink (via the
+    /// request `on_abort`). Regression for the detok-entry leak per health probe.
     #[test]
     fn armed_guard_aborts_on_drop() {
         let (tm_tx, tm_rx) = flume::unbounded();

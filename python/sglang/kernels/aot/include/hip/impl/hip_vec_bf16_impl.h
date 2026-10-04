@@ -19,6 +19,7 @@ __BF16_HOST_DEVICE_STATIC__ __hip_bfloat162 make_bfloat162(const __hip_bfloat16 
 
 namespace sgl_hip {
 
+// nv_bfloat16 x 1
 template <>
 struct vec_t<nv_bfloat16, 1> {
   nv_bfloat16 data;
@@ -55,6 +56,7 @@ SGL_HIP_INLINE void vec_t<nv_bfloat16, 1>::store(nv_bfloat16* ptr) const {
   *ptr = data;
 }
 
+// nv_bfloat16 x 2
 template <>
 struct vec_t<nv_bfloat16, 2> {
   nv_bfloat162 data;
@@ -129,6 +131,7 @@ SGL_HIP_INLINE void vec_t<nv_bfloat16, 4>::store(nv_bfloat16* ptr) const {
   *((uint2*)ptr) = data;
 }
 
+// nv_bfloat16 x 8 or more
 
 template <size_t vec_size>
 struct vec_t<nv_bfloat16, vec_size> {

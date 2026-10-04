@@ -1,5 +1,13 @@
 #!/bin/bash
 # Install flashinfer-jit-cache with caching and retry logic (flashinfer.ai can have transient DNS issues).
+# The jit-cache wheel is 1.2+ GB, so we skip the download entirely if already installed.
+#
+# Required environment (caller must export or set):
+#   UNINSTALL_JIT_CACHE          — literal true/false (skip download when false)
+#   FLASHINFER_PYTHON_REQUIRED   — e.g. from python/pyproject.toml (flashinfer_python)
+#   CU_VERSION                   — e.g. cu130
+#   PIP_CMD                      — e.g. "pip" or "uv pip"
+#   PIP_INSTALL_SUFFIX           — extra pip args for this runner
 set -euxo pipefail
 
 : "${UNINSTALL_JIT_CACHE:?must be set}"

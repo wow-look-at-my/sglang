@@ -1,4 +1,10 @@
 //! Reusable image transform primitives.
+//!
+//! Model-specific processors compose these to build their preprocessing
+//! pipelines. All functions operate on flat RGB byte arrays (HWC layout).
+//!
+//! Not every primitive is wired into a compiled-in processor yet; they are
+//! kept available for upcoming model integrations.
 #![allow(dead_code)]
 
 /// Normalize u8 RGB pixels to f32 in a single pass: `(pixel/255 - mean) / std`.

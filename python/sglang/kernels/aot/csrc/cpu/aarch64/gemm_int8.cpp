@@ -9,9 +9,9 @@ void int8_scaled_mm_impl(
     scalar_t* __restrict__ out,         // [M, N], row major
     const int8_t* __restrict__ mat1,    // [M, K], row major
     const int8_t* __restrict__ mat2,    // [K, N], column major
-    const float* __restrict__ scales1,
-    const float* __restrict__ scales2,
-    const float* __restrict__ bias,
+    const float* __restrict__ scales1,  // [M, 1], mat1 scales
+    const float* __restrict__ scales2,  // [1, N], mat2 scales
+    const float* __restrict__ bias,     // [1, N]
     int64_t M,
     int64_t N,
     int64_t K) {
@@ -73,10 +73,15 @@ at::Tensor int8_scaled_mm_cpu(
   return at::Tensor();
 }
 
-// Weight: static, per-channel, symmetric activation: dynamic, per-token,
-// symmetric
+// weight     :  static, per-channel, symmetric
+// activation : dynamic,   per-token, symmetric
 //
-// Mat1: [M, K] mat2: [N, K] scales1: [M] scales2: [N] bias: [N] out: [M, N]
+// mat1    : [M, K]
+// mat2    : [N, K]
+// scales1 : [M]
+// scales2 : [N]
+// bias    : [N]
+// out     : [M, N]
 //
 // fused activation quantization and matmul
 at::Tensor int8_scaled_mm_with_quant(

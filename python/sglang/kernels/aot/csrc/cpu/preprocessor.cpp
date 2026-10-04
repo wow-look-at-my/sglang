@@ -1,20 +1,34 @@
-/*All rights reserved. Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer. Redistributions in binary
- * form must reproduce the above copyright notice, this list of conditions and the
- * following disclaimer in the documentation and/or other materials provided with the
- * distribution. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from this software
- * without specific prior written permission. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT
- * NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
- * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * ************************************************************************************** */
+/*****************************************************************************************
+ * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ ****************************************************************************************/
 #include "common.h"
 #include "vec.h"
 
@@ -26,6 +40,7 @@
 //
 //   ref: https://github.com/huggingface/transformers/blob/main/src/transformers
 //       /models/qwen2_vl/image_processing_qwen2_vl_fast.py
+//
 namespace {
 
 template <typename scalar_t>
@@ -59,7 +74,7 @@ inline void normalize<float>(
   // we do vectorization on patch_size dim
   assert(patch_size == 16);
 
-  // loop last dimensions:
+  // loop last 4 dimensions:
   //  {channel, patch_t(repeated), patch_h, patch_w}
   for (int64_t c = 0; c < channel; ++c) {
     __m512 vmean = _mm512_set1_ps(image_mean[c]);
@@ -94,7 +109,7 @@ inline void normalize<at::BFloat16>(
   // we do vectorization on patch_size dim
   assert(patch_size == 16);
 
-  // loop last dimensions:
+  // loop last 4 dimensions:
   //  {channel, patch_t(repeated), patch_h, patch_w}
   for (int64_t c = 0; c < channel; ++c) {
     __m512 vmean = _mm512_set1_ps(image_mean[c]);
@@ -129,7 +144,11 @@ void rescale_and_normalize_kernel_impl(
     int64_t channel,
     int64_t temporal_patch_size,
     int64_t patch_size) {
-  // [NOTE]: temporal patching uses repeat on last image input: {grid_t, patch_t, channel, grid_h, merge_h, patch_h, grid_w.
+  // [NOTE]: temporal patching uses repeat on last image
+  //
+  //  input : {grid_t, patch_t, channel,  grid_h, merge_h, patch_h,  grid_w, merge_w, patch_w}
+  //    out : {grid_t,  grid_h,  grid_w, merge_h, merge_w, channel, patch_t, patch_h, patch_w}
+  //
   int64_t height = grid_h * merge_size * patch_size;
   int64_t width = grid_w * merge_size * patch_size;
 
@@ -143,7 +162,7 @@ void rescale_and_normalize_kernel_impl(
   int64_t stride_ph = width;
   int64_t stride_grid = channel * temporal_patch_size * patch_size * patch_size;
 
-  // parallel on first dims, aka, grids
+  // parallel on first 5 dims, aka, grids
   at::parallel_for(0, grid_t * grid_h * grid_w * merge_size * merge_size, 0, [&](int64_t begin, int64_t end) {
     int64_t gt{0}, gh{0}, gw{0}, mh{0}, mw{0};
     data_index_init(begin, gt, grid_t, gh, grid_h, gw, grid_w, mh, merge_size, mw, merge_size);
@@ -206,7 +225,8 @@ smart_resize(int64_t height, int64_t width, int64_t factor, int64_t min_pixels, 
   return {h_bar, w_bar};
 }
 
-// do rescale and normalize from `resized_image` to `pixel_values`
+// do rescale and normalize
+// from `resized_image` to `pixel_values`
 void rescale_and_normalize_image(
     at::Tensor& pixel_values,
     const at::Tensor& image,
@@ -290,6 +310,7 @@ std::tuple<at::Tensor, at::Tensor> image_preprocess_cpu(
   std::vector<std::pair<int64_t, int64_t>> image_sizes(batch_size);
   std::vector<int64_t> grid_offsets(batch_size + 1, 0);
 
+  // Stage 1: compute resized shapes and fill in `image_grid_thw`
   for (int64_t idx = 0; idx < batch_size; ++idx) {
     const auto& image = images[idx];
     check_input_image(image);
@@ -299,6 +320,7 @@ std::tuple<at::Tensor, at::Tensor> image_preprocess_cpu(
 
     image_sizes[idx] = {resized_h, resized_w};
 
+    // temporal dimension for image is 1
     int64_t grid_t = div_up((int64_t)1, temporal_patch_size);
     int64_t grid_h = div_up(resized_h, patch_size);
     int64_t grid_w = div_up(resized_w, patch_size);
@@ -318,6 +340,7 @@ std::tuple<at::Tensor, at::Tensor> image_preprocess_cpu(
   // allocate memory
   pixel_values.resize_({grid_size, grid_stride});
 
+  // Stage 2: compute `pixel_values`
   for (int64_t idx = 0; idx < batch_size; ++idx) {
     const auto& image = images[idx];
     int64_t resized_h = image_sizes[idx].first;

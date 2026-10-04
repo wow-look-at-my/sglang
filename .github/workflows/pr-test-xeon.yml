@@ -86,13 +86,20 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          # GNR runs only the TP suite (needs >=6 NUMA nodes for --tp 6), full machine, no partitioning. 4 files: 3 TP + autoround.
+          # GNR runs only the TP suite (needs >=6 NUMA nodes for --tp 6),
+          # full machine, no partitioning. 4 files: 3 TP + autoround.
           - runner: xeon-gnr
             role: gnr
             suite: "stage-a-tp-test-cpu-intel"
             name: gnr
 
-          # Three SPR boxes each run ONE full-machine container taking one partition of a 3-way split over the merged non-TP pool (base-b non-TP + base-c). Single container per box (no socket split): sglang auto-computes mem_fraction_static from host memory and does not honor cgroup limits, so two parallel containers on one box exhaust host RAM and OOM (tracked upstream). One container per box keeps each server within the box's memory budget.
+          # Three SPR boxes each run ONE full-machine container taking one
+          # partition of a 3-way split over the merged non-TP pool
+          # (base-b non-TP + base-c). Single container per box (no socket
+          # split): sglang auto-computes mem_fraction_static from host memory
+          # and does not honor cgroup limits, so two parallel containers on
+          # one box exhaust host RAM and OOM (tracked upstream). One container
+          # per box keeps each server within the box's memory budget.
           - runner: xeon-spr
             role: spr
             suite: "stage-a-test-cpu-intel,stage-b-test-cpu-intel"

@@ -1,8 +1,10 @@
 #!/bin/bash
 
-# Streaming example runner Usage: ./run.sh [tokenizer_path] [endpoint]
+# Streaming example runner
+# Usage: ./run.sh [tokenizer_path] [endpoint]
 
-# Set library path for Rust FFI library The library should be in ./lib directory (created by 'make lib')
+# Set library path for Rust FFI library
+# The library should be in ./lib directory (created by 'make lib')
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
 
@@ -26,7 +28,8 @@ else
     export LD_LIBRARY_PATH="${LIB_DIR}:${LD_LIBRARY_PATH}"
 fi
 
-# Default configuration (can be overridden by environment variables or command line arguments) Tokenizer path.
+# Default configuration (can be overridden by environment variables or command line arguments)
+# Tokenizer path: ../tokenizer (relative to this script)
 DEFAULT_TOKENIZER_PATH="${SGL_TOKENIZER_PATH:-../tokenizer}"
 DEFAULT_ENDPOINT="${SGL_GRPC_ENDPOINT:-grpc://localhost:20000}"
 

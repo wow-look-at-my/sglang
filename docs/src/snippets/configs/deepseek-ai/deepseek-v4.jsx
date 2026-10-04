@@ -9,15 +9,18 @@ export const config = {
   supportedHardware: [
     "h100", "h200", "b200", "b300", "gb200", "gb300",
     "rtx6000", "rtx5090",
-    // NVIDIA DGX Spark (GB10, SM121) — Flash Official FP4 only, as a 2-node TP=2 pair over ConnectX-7 RoCE.
+    // NVIDIA DGX Spark (GB10, SM121) — Flash Official FP4 only, as a 2-node
+    // TP=2 pair over ConnectX-7 RoCE; the shared HARDWARE_CATALOG carries the
+    // entry and its multi-node Docker flags.
     "dgx-spark",
     // AMD ROCm — MI300X (Flash FP8) + MI355X (Flash/Pro, FP4/FP8).
     "mi300x", "mi355x",
   ],
 
-  // Model-specific GPUs the shared HARDWARE_CATALOG doesn't carry — the
-  // engine merges these in, so a model-specific GPU is config data, not an
-  // engine edit.
+  // Model-specific GPUs the shared HARDWARE_CATALOG doesn't carry — the engine
+  // merges these in, so a model-specific GPU is config data, not an engine edit.
+  // RTX PRO 6000 and RTX 5090 (SM120 / Blackwell Desktop) are workstation and
+  // consumer cards, not datacenter GPUs.
   hardware: [
     { id: "rtx6000", label: "RTX PRO 6000", vram: "96GB", vendor: "blackwell" },
     { id: "rtx5090", label: "RTX 5090", vram: "32GB", vendor: "blackwell" },
@@ -189,11 +192,23 @@ sgl-eval run mmmu_pro \\
   },
 
   dockerImages: {
+    // Flash Vision (Exp) support has not shipped in a release yet
+    // (sgl-project/sglang#37253) — until it does, the variant needs this
+    // preview build on every hardware.
     "flash-vision|fp4": "lmsysorg/sglang:dev-dsv4-flash-vision",
-    // DGX Spark ONLY.
+    // DGX Spark ONLY. A dedicated preview build for the 2x GB10 pair: it bakes
+    // in the SM12x b12x MoE/attention kernels (sgl-project/sglang#34878,
+    // #35899, #34018), the b12x dual-cache image-prefill fix that makes Flash
+    // Vision serve images on SM12x, the NVFP4 MTP-layer dispatch fix, and the
+    // CuTeDSL/NCCL pins the GB10 recipe needs — none of which are in `latest`.
+    // v2 = branch b12x-vision @ 452239a74f. It is not built for, and must not
+    // be used on, any other hardware — every other row keeps its own image.
     "dgx-spark|flash-official|fp4":   "lmsysorg/sglang:dev-v4f-2dgx-v2",
     "dgx-spark|flash-official|nvfp4": "lmsysorg/sglang:dev-v4f-2dgx-v2",
     "dgx-spark|flash-vision|fp4":     "lmsysorg/sglang:dev-v4f-2dgx-v2",
+    // NVFP4 checkpoints crash at weight load on v0.5.18 (the MXFP4-packed MTP
+    // layer's FP8 delegate needs the #36275 guard, merged 2026-08-26) — route
+    // every NVFP4 cell to the nightly until a release contains that fix.
     "b200|nvfp4":  "lmsysorg/sglang:dev",
     "b300|nvfp4":  "lmsysorg/sglang:dev",
     "gb200|nvfp4": "lmsysorg/sglang:dev",
@@ -204,7 +219,9 @@ sgl-eval run mmmu_pro \\
     b300:  "lmsysorg/sglang:latest",
     gb200: "lmsysorg/sglang:latest",
     gb300: "lmsysorg/sglang:latest",
-    // AMD daily-updated lmsysorg/sglang-rocm images. Bump the dated tag when you re-verify on a newer build.
+    // AMD daily-updated lmsysorg/sglang-rocm images. Bump the dated tag when you
+    // re-verify on a newer build.
+    // Pro Official's DSpark PD + UMBP pairs ran end-to-end on this build.
     "mi355x|pro-official|fp4": "lmsysorg/sglang-rocm:v0.5.20-rocm720-mi35x-20260923",
     mi300x: "lmsysorg/sglang-rocm:v0.5.19-rocm720-mi30x-20260914",
     mi355x: "lmsysorg/sglang-rocm:v0.5.19-rocm720-mi35x-20260914",
@@ -217,12 +234,14 @@ sgl-eval run mmmu_pro \\
 
   playgroundFeatures: {
 
+    // ----- Card 1: "Attention Parallelism" -----
+    // DP-Attention is a combined knob: value is the DP degree AND toggles `--enable-dp-attention`.
     // CP sizes auto-gate in the engine to the runtime derivation
-    // attn_cp_size = tp/dp (a user-passed --attn-cp-size is overridden). CP
-    // is single-machine only (tp_size <= 8). Interleave CP + DP-Attention
-    // fails the runtime's dp_size == 1 assert but is allowed here with a
-    // warning (combined support is planned upstream). No `cpStrategy` knob:
-    // DeepSeek-V4 supports only interleave (the runtime rejects zigzag).
+    // attn_cp_size = tp/dp (a user-passed --attn-cp-size is overridden).
+    // CP is single-machine only (tp_size <= 8). Interleave CP + DP-Attention
+    // currently fails the runtime's dp_size == 1 assert but is allowed here
+    // with a warning (combined support is planned upstream). No `cpStrategy`
+    // knob: DeepSeek-V4 supports only interleave (the runtime rejects zigzag).
     attention: {
       knobs: [
         { id: "tp", label: "TP", values: [
@@ -241,7 +260,15 @@ sgl-eval run mmmu_pro \\
               reason: "Prefill Context Parallel is single-machine only (SGLang asserts tp_size <= 8; cross-machine CP has precision issues)." },
           ] },
         { id: "dpAttn", label: "DP-Attention",
-          // The low-latency and balanced PD roles run TP-only.
+          // The low-latency and balanced PD roles run TP-only. That is what lets
+          // their decode ladders run to the full ceiling (8, 32 on Pro Official
+          // low-latency, and 96): the ceiling
+          // is server-wide and floor-divided by attn_dp_size, so only at dp_size
+          // 1 is it also the per-rank batch. Forced rather than left to the
+          // reader, because switching DP on would cut the slots per rank without
+          // changing either flag in the command — the ladder would still read 96
+          // while the role could only ever fill 12. High-throughput is the DP
+          // point and is deliberately absent here.
           forceOff: [
             { when: { hw: ["mi355x"], strategy: ["low-latency", "balanced"],
                       pdMode: ["prefill", "decode"] },
@@ -265,14 +292,15 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
+    // ----- Card 2: "MoE Parallelism" -----
     moe: {
       backend: {
         options: [
           { id: null,                label: "Inherited" },
           { id: "deepep",            label: "DeepEP",
             flags: ["--moe-a2a-backend deepep"] },
-          // Blackwell-only; no strategy gate — the Playground allows
-          // MegaMoE on any strategy for experimentation.
+          // Blackwell-only; no strategy gate — the Playground allows MegaMoE on any
+          // strategy for experimentation (docs recommend it on high-throughput).
           { id: "megamoe",           label: "MegaMoE",
             flags: ["--moe-a2a-backend megamoe"],
             requiresHw: ["b200", "b300", "gb200", "gb300"] },
@@ -303,6 +331,7 @@ sgl-eval run mmmu_pro \\
       ]},
     },
 
+    // ----- Card 3: "Parsers" -----
     parsers: {
       items: [
         { id: "reasoning", label: "Reasoning Parser", flag: "--reasoning-parser deepseek-v4" },
@@ -310,10 +339,15 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
+    // ----- Card 4: "Speculative Decoding" -----
     speculative: {
       options: [
         { id: "current",    label: "Inherited from base" },
         { id: "off",        label: "Off (greedy)" },
+        // Shown on pro-official as well as the originals: the 0813 checkpoint
+        // bundles a DSpark head but keeps its MTP head, so this shape stays
+        // available as the MTP fallback. The 1-1-2 shape stays hidden there —
+        // DSpark is the better pick, so only one fallback is offered.
         { id: "mtp-314",    label: "EAGLE / MTP 3-1-4",
           flags: ["--speculative-algorithm EAGLE", "--speculative-num-steps 3",
                   "--speculative-eagle-topk 1", "--speculative-num-draft-tokens 4"],
@@ -342,15 +376,16 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
+    // ----- Card 5: "PD Disaggregation" -----
     pdDisagg: {
       modes: [
         { id: "off",     label: "Off" },
-        // The AMD role flags are the MI355X 1P x 1D agentic recipe. Both roles are
-        // gated by `when` because the sizing is ROCm-specific, and they differ in
-        // places: the prefill worker runs eager (the dsv4 indexer's prefill path
-        // is not graph-captured) and dispatches whole chunked-prefill batches over
-        // MORI, while the decode worker captures graphs for its small batch ladder
-        // and dispatches at most a step's worth of tokens.
+        // The AMD role flags are the MI355X 1P x 1D agentic recipe. Both roles
+        // are gated by `when` because the sizing is ROCm-specific, and they
+        // differ in two places: the prefill worker runs eager (the dsv4 indexer's
+        // prefill path is not graph-captured) and dispatches whole chunked-prefill
+        // batches over MORI, while the decode worker captures graphs for its
+        // small batch ladder and dispatches at most a step's worth of tokens.
         { id: "prefill", label: "Prefill role",
           when: { hw: ["mi355x"], strategy: ["low-latency"] },
           env: ["SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK=16384"],
@@ -405,11 +440,11 @@ sgl-eval run mmmu_pro \\
           ],
           envWhen: { hw: ["mi300x", "mi355x"] } },
       ],
-      // `auto` is a sentinel (emits no --disaggregation-ib-device flag). The
-      // mlx5 names are ConnectX; ROCm nodes enumerate their NICs as rdmaN, so
-      // both families are mutually hidden. The AMD entry is the full 8-NIC
-      // list in one value because --disaggregation-ib-device takes a comma
-      // list, and the order is the MI355X NUMA-local pairing.
+      // `auto` is a sentinel (emits no --disaggregation-ib-device flag).
+      // The mlx5 names are ConnectX; ROCm nodes enumerate their NICs as rdmaN,
+      // so the two families are mutually hidden. The AMD entry is the full
+      // 8-NIC list in one value because --disaggregation-ib-device takes a
+      // comma list, and the order is the MI355X NUMA-local pairing.
       ibDevices: [
         { id: "auto", label: "Auto" },
         { id: "mlx5_0", label: "mlx5_0", hide: { hw: ["mi300x", "mi355x"] } },
@@ -431,15 +466,27 @@ sgl-eval run mmmu_pro \\
   --disable-circuit-breaker \\
   --health-check-interval-secs 999999`,
       },
-      // The MI355X roles above size for low latency: TP-only, a
-      // running-request ceiling in the single digits, and a MORI dispatch
-      // budget per role. The high-throughput point is the same roles re-sized
-      // against the DP base cell — TP8/DP8 and the wider batch come from
-      // that cell, so these only carry what the operating point itself
-      // changes. The balanced point sits between both: TP-only like
-      // low-latency, but with a 96-request ceiling and a HiCache tier under
-      // the prefill role (see the hicache roleOverride below) instead of
-      // low-latency's bare KV pool or high-throughput's UMBP.
+      // The MI355X roles above size for low latency: TP-only, a running-request
+      // ceiling in the single digits, and a MORI dispatch budget per role. The
+      // high-throughput point is the same two roles re-sized against the DP
+      // base cell — TP8/DP8 and the wider batch come from that cell, so these
+      // only carry what the operating point itself changes. The decode graph
+      // ladder grows to 32 to cover the larger steady-state batch, and
+      // --enable-cache-report surfaces the prefix hit rate that decides whether
+      // the offload tier is paying for itself at this concurrency.
+      // The balanced point sits between the two: TP-only like low-latency, but
+      // with a 96-request ceiling and a HiCache tier under the prefill role
+      // (see the hicache roleOverride below) instead of low-latency's bare KV
+      // pool or high-throughput's UMBP. It re-sizes more of the base cell than
+      // the other two because the balanced cell is a DP recipe for aggregated
+      // serving — its 0.90 / 0.15 / 65536 sizing does not carry over.
+      // Low-latency on Pro Official (0813) is its own pair: an asymmetric TP4
+      // prefill / TP8 decode that keeps the bundled DSpark head on both roles
+      // (gamma 6; steps / topk / draft tokens are derived from it), with a
+      // 32-request ceiling and a UMBP tier under the prefill role (see the umbp
+      // roleOverride below). The base cell's --prefill-decode-interval and the
+      // decode role's --chunked-prefill-size are aggregated-serving knobs, so
+      // the roles drop them.
       roleOverrides: [
         { mode: "prefill",
           when: { hw: ["mi355x"], variant: ["pro-official"], quant: ["fp4"],
@@ -481,8 +528,10 @@ sgl-eval run mmmu_pro \\
             "--watchdog-timeout 3600",
             "--enable-metrics",
           ] },
-        // The balanced base cell is a target-only DP recipe, so the roles add
-        // DSpark back.
+        // Balanced on Pro Official is the same asymmetric TP4 / TP8 DSpark pair
+        // re-sized for a 96-request ceiling, at gamma 3 rather than 6: the
+        // larger batch leaves less verify headroom per request. The balanced
+        // base cell is a target-only DP recipe, so the roles add DSpark back.
         { mode: "prefill",
           when: { hw: ["mi355x"], variant: ["pro-official"], quant: ["fp4"],
                   strategy: ["balanced"] },
@@ -535,6 +584,8 @@ sgl-eval run mmmu_pro \\
             "--watchdog-timeout 3600",
             "--enable-metrics",
           ] },
+        // TP-only, so the server-wide ceiling is also the per-rank batch and
+        // the graph ladder runs all the way to 96.
         { mode: "decode",
           when: { hw: ["mi355x"], strategy: ["balanced"] },
           env: ["SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK=128"],
@@ -548,6 +599,9 @@ sgl-eval run mmmu_pro \\
             "--watchdog-timeout 3600",
             "--enable-metrics",
           ] },
+        // High-throughput on Pro Official keeps the base cell's TP8 / DP8 on both
+        // roles and adds DSpark at gamma 3, as balanced does. A 512-request
+        // ceiling is 64 per DP rank, which is where the decode ladder stops.
         { mode: "prefill",
           when: { hw: ["mi355x"], variant: ["pro-official"], quant: ["fp4"],
                   strategy: ["high-throughput"] },
@@ -610,12 +664,15 @@ sgl-eval run mmmu_pro \\
             "--enable-metrics",
           ] },
       ],
-      // MI355X fronts the 1P x 1D agentic pair with a cache-aware router
-      // rather than the default round-robin: consistent_hashing keeps a
-      // conversation on the prefill worker that already holds its prefix
-      // (decode holds no reusable prefix, so it stays round-robin), and the
-      // tight balance thresholds stop that affinity from starving the peer at
-      // the small running-request ceiling the roles above use.
+      // MI355X fronts the 1P x 1D agentic pair with a cache-aware router rather
+      // than the default round-robin: consistent_hashing keeps a conversation on
+      // the prefill worker that already holds its prefix (decode holds no
+      // reusable prefix, so it stays round-robin), and the tight balance
+      // thresholds stop that affinity from starving the peer at the small
+      // running-request ceiling the roles above use. Health checking stays
+      // enabled here (unlike the default's 999999s interval) because a long
+      // agentic run should notice a wedged worker, but it is slack enough that
+      // a multi-minute prefill is not mistaken for a failure.
       routerOverrides: [
         { when: { hw: ["mi355x"] },
           command:
@@ -633,6 +690,7 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
+    // ----- Card 6: "Hierarchical KV Cache" -----
     hicache: {
       excludesHw: ["rtx6000"],
       // AMD ROCm (MI300X/MI325X/MI350X/MI355X): page_first_direct + direct io.
@@ -651,7 +709,11 @@ sgl-eval run mmmu_pro \\
           writePolicy: "write_through",
           prefetchPolicy: "best_effort",
         },
-        // Balanced on Pro Official: the same shape at a smaller ratio.
+        // Balanced on Pro Official: the same shape at a smaller ratio. 2.5 is
+        // what the 96-request ceiling leaves room for once mem-fraction-static
+        // drops to 0.86 — the host tier competes with the KV pool for the
+        // headroom the prefill role gives up. The role defaults to UMBP
+        // instead; this applies once the UMBP card is switched off.
         {
           when: {
             hw: ["mi355x"], variant: ["pro-official"], quant: ["fp4"],
@@ -705,20 +767,26 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
-    // HiCache is a tiered cache (GPU -> pinned host -> optional storage);
-    // UMBP links the unified radix tree DIRECTLY to an external store with no
-    // host tier at all, so both are alternatives and sglang rejects them
-    // together. Enabling this card therefore strips the HiCache family from
-    // the command.
+    // ----- Card 7: "UMBP" (unified cache external linker) -----
+    // Sits beside HiCache rather than inside it. HiCache is a tiered cache
+    // (GPU -> pinned host -> optional storage); UMBP links the unified radix
+    // tree DIRECTLY to an external store with no host tier at all, so the two
+    // are alternatives and sglang rejects them together. Enabling this card
+    // therefore strips the HiCache family from the command.
     //
     // ROCm-only in practice: the store is MORI's buffer pool, the same
     // transport the PD roles use, and there is no CUDA recipe for it yet.
     umbp: {
       onlyHw: ["mi300x", "mi355x"],
-      // Under pure TP the linker keys by rank, so an 8-rank prefill worker opens keyspaces and the pool holds copies of the same MLA KV.
+      // Under pure TP the linker keys by rank, so an 8-rank prefill worker
+      // opens eight keyspaces and the pool holds eight copies of the same MLA
+      // KV — a tier an eighth the size its byte budget suggests. DP attention
+      // collapses the keys onto one shared keyspace.
       requiresDpAttention: true,
-      // The Pro Official prefill roles ship with UMBP on. The tier lives in
-      // a standalone umbp_standalone_server on the prefill node (cookbook
+      // The Pro Official prefill roles ship with UMBP on. Low-latency and
+      // balanced are TP-only: at TP4 the store holds four copies rather than
+      // eight, and that shape is the one that ran end-to-end. The tier lives
+      // in a standalone umbp_standalone_server on the prefill node (cookbook
       // §3.9), reached over the socket in UMBP_STANDALONE_ADDRESS.
       roleOverrides: [
         { mode: "prefill",
@@ -737,6 +805,8 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
+    // ----- Card 8: "HiSparse" -----
+    // Decode-only: shown/emitted only when the live PD-Disagg mode is `decode`.
     hisparse: {
       requiredFlags: [
         "--disable-radix-cache",
@@ -1168,6 +1238,13 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
+    // ====================================================================
+    // B200 + NVFP4 — Official (0731 / 0813)
+    // Mirrors the Flash/Pro NVFP4 cells; the official checkpoints bundle a
+    // DSpark draft head, so low-latency uses `--speculative-algorithm DSPARK`
+    // instead of the EAGLE shape flags. Verified on 8xB200 (GSM8K + AIME25,
+    // sgl-eval; see the benchmarks entries).
+    // ====================================================================
     {
       match: { hw: "b200", variant: "flash-official", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
       verified: true,
@@ -1244,7 +1321,11 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
-    // NOT yet run end-to-end on this hardware.
+    // ====================================================================
+    // B300 + NVFP4 — Official (0731 / 0813)
+    // Mirrors the Flash/Pro NVFP4 cells; the official checkpoints bundle a
+    // DSpark draft head, so low-latency uses `--speculative-algorithm DSPARK`
+    // instead of the EAGLE shape flags. NOT yet run end-to-end on this hardware.
     // ====================================================================
     {
       match: { hw: "b300", variant: "flash-official", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
@@ -1506,7 +1587,11 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
-    // NOT yet run end-to-end on this hardware.
+    // ====================================================================
+    // GB200 + NVFP4 — Official (0731 / 0813)
+    // Mirrors the Flash/Pro NVFP4 cells; the official checkpoints bundle a
+    // DSpark draft head, so low-latency uses `--speculative-algorithm DSPARK`
+    // instead of the EAGLE shape flags. NOT yet run end-to-end on this hardware.
     // ====================================================================
     {
       match: { hw: "gb200", variant: "flash-official", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
@@ -1714,9 +1799,13 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
+    // ====================================================================
+    // GB300 + FP4 — Pro Official (0813)
     //
-    // EAGLE loads on this checkpoint without erroring but accepts no draft
-    // tokens.
+    // The 0813 checkpoint bundles a DSpark draft head, so the low-latency
+    // recipe uses `--speculative-algorithm DSPARK` and omits the EAGLE shape
+    // flags (SGLang reads gamma from the checkpoint). EAGLE loads on this
+    // checkpoint without erroring but accepts no draft tokens.
     // ====================================================================
     {
       match: { hw: "gb300", variant: "pro-official", quant: "fp4", strategy: "low-latency", nodes: "single" },
@@ -1753,7 +1842,10 @@ sgl-eval run mmmu_pro \\
       ],
     },
     {
-      // --max-running-requests is server-wide and floor-divided by attn_dp_size.
+      // --max-running-requests is server-wide and floor-divided by attn_dp_size,
+      // so 512 gives 128 running slots per DP rank. That is the point where both
+      // the slot budget and the KV pool run full on this topology; the three
+      // memory flags together are what keep the KV pool large enough to reach it.
       match: { hw: "gb300", variant: "pro-official", quant: "fp4", strategy: "high-throughput", nodes: "single" },
       verified: true,
       env: [
@@ -1774,7 +1866,10 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
-    // NOT yet run end-to-end on this hardware.
+    // ====================================================================
+    // B200 + FP4 — Pro Official (0813)
+    // Mirrors the verified Pro cells; speculative decoding re-fitted to the
+    // bundled DSpark head. NOT yet run end-to-end on this hardware.
     // ====================================================================
     {
       match: { hw: "b200", variant: "pro-official", quant: "fp4", strategy: "low-latency", nodes: "single" },
@@ -1835,7 +1930,10 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
-    // NOT yet run end-to-end on this hardware.
+    // ====================================================================
+    // B300 + FP4 — Pro Official (0813)
+    // Mirrors the verified Pro cells; speculative decoding re-fitted to the
+    // bundled DSpark head. NOT yet run end-to-end on this hardware.
     // ====================================================================
     {
       match: { hw: "b300", variant: "pro-official", quant: "fp4", strategy: "low-latency", nodes: "single" },
@@ -1898,7 +1996,10 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
-    // NOT yet run end-to-end on this hardware.
+    // ====================================================================
+    // GB200 + FP4 — Pro Official (0813)
+    // Mirrors the verified Pro cells; speculative decoding re-fitted to the
+    // bundled DSpark head. NOT yet run end-to-end on this hardware.
     // ====================================================================
     {
       match: { hw: "gb200", variant: "pro-official", quant: "fp4", strategy: "low-latency", nodes: "multi-2" },
@@ -1955,7 +2056,10 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
-    // NOT yet run end-to-end on this hardware.
+    // ====================================================================
+    // H200 + FP4 — Pro Official (0813)
+    // Mirrors the verified Pro cells; speculative decoding re-fitted to the
+    // bundled DSpark head. NOT yet run end-to-end on this hardware.
     // ====================================================================
     {
       match: { hw: "h200", variant: "pro-official", quant: "fp4", strategy: "low-latency", nodes: "single" },
@@ -2001,7 +2105,10 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
-    // NOT yet run end-to-end on this hardware.
+    // ====================================================================
+    // H100 + FP4 — Pro Official (0813)
+    // Mirrors the verified Pro cells; speculative decoding re-fitted to the
+    // bundled DSpark head. NOT yet run end-to-end on this hardware.
     // ====================================================================
     {
       match: { hw: "h100", variant: "pro-official", quant: "fp4", strategy: "low-latency", nodes: "multi-2" },
@@ -2051,9 +2158,11 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
-    // Low-latency is TP-only + DSPARK; balanced / high-throughput stay
-    // target-only in the Deploy panel (DP Attention). The DP + DSpark
-    // agentic path is documented in cookbook §3.7.
+    // ====================================================================
+    // MI355X + FP4 — Pro Official (0813)
+    // Bundled DSpark head. Low-latency is TP-only + DSPARK; balanced /
+    // high-throughput stay target-only in the Deploy panel (DP Attention).
+    // The DP + DSpark agentic path is documented in cookbook §3.7.
     // ====================================================================
     {
       match: { hw: "mi355x", variant: "pro-official", quant: "fp4", strategy: "low-latency", nodes: "single" },
@@ -2105,7 +2214,8 @@ sgl-eval run mmmu_pro \\
       ],
     },
     {
-      // DSpark + DP Attention is documented in cookbook §3.7 and in the PD roles above (§3.8), not this cell.
+      // DSpark + DP Attention is documented in cookbook §3.7 and in the PD roles
+      // above (§3.8), not this cell.
       match: { hw: "mi355x", variant: "pro-official", quant: "fp4", strategy: "high-throughput", nodes: "single" },
       verified: false,
       env: ["SGLANG_USE_ROCM700A=0", "TORCH_BLAS_PREFER_HIPBLASLT=1", "SGLANG_SHARED_EXPERT_TP1=1", "SGLANG_DP_SHARED_EXPERT_LOCAL=1", "SGLANG_DP_USE_GATHERV=1", "SGLANG_DP_USE_REDUCE_SCATTER=1", "SGLANG_HACK_FLASHMLA_BACKEND=unified_kv_triton", "AITER_BF16_FP8_MOE_BOUND=0", "SGLANG_OPT_USE_AITER_BATCHED_GEMM=true"],
@@ -2175,7 +2285,11 @@ sgl-eval run mmmu_pro \\
         "--port {{PORT}}",
       ],
     },
-    // NOT yet run end-to-end on this hardware.
+    // ====================================================================
+    // GB300 + NVFP4 — Official (0731 / 0813)
+    // Mirrors the Flash/Pro NVFP4 cells; the official checkpoints bundle a
+    // DSpark draft head, so low-latency uses `--speculative-algorithm DSPARK`
+    // instead of the EAGLE shape flags. NOT yet run end-to-end on this hardware.
     // ====================================================================
     {
       match: { hw: "gb300", variant: "flash-official", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
@@ -2351,6 +2465,9 @@ sgl-eval run mmmu_pro \\
 
     {
       match: { hw: "h200", variant: "flash-official", quant: "fp4", strategy: "low-latency", nodes: "single" },
+      // W4A8 (MXFP4 weights x FP8 activations, FlashInfer Humming kernels);
+      // requires FlashInfer >= 0.6.18. Falls back: drop the precision flag
+      // for the W4A16 path, or use --moe-runner-backend marlin.
       verificationStatus: "in-progress",
       env: [],
       flags: [
@@ -2640,6 +2757,9 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
+    // ====================================================================
+    // RTX PRO 6000 (SM120 / Blackwell Desktop) — Flash + low-latency only
+    // ====================================================================
     {
       match: { hw: "rtx6000", variant: "flash-official", quant: "fp4", strategy: "low-latency", nodes: "single" },
       verified: false,
@@ -2671,6 +2791,9 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
+    // ====================================================================
+    // RTX 5090 (SM120 / Blackwell Desktop) — Flash Official + low-latency
+    // ====================================================================
     {
       match: { hw: "rtx5090", variant: "flash-official", quant: "fp4", strategy: "low-latency", nodes: "single" },
       verified: false,
@@ -3329,19 +3452,34 @@ sgl-eval run mmmu_pro \\
       ],
     },
 
-    // ==================================================================== DGX
-    // Spark (GB10 / SM121) — 2-node TP=2, Balanced: Flash Official FP4, Flash
-    // Official NVFP4, Flash Vision FP4
     // ====================================================================
-    // Cells, all on the GB10 recipe: SM12x b12x compressed-MLA attention with
-    // DSpark, split TP=2 across DGX Sparks over ConnectX-7 RoCE, image
+    // DGX Spark (GB10 / SM121) — 2-node TP=2, Balanced: Flash Official FP4,
+    // Flash Official NVFP4, Flash Vision FP4
+    // ====================================================================
+    // Three cells, all on the GB10 recipe: SM12x b12x compressed-MLA attention
+    // with DSpark, split TP=2 across two DGX Sparks over ConnectX-7 RoCE, image
     // `lmsysorg/sglang:dev-v4f-2dgx-v2` (b12x-vision @ 452239a74f). Every other
     // DGX Spark combination (other strategies / single node / Flash / Pro) is
     // intentionally absent and greys out: a single 128GB GB10 cannot hold the
-    // checkpoints, and only Balanced has been run. - Flash Official FP4: b12x
-    // W4A8 MoE (verified on the v2 image: GSM8K
+    // checkpoints, and only Balanced has been run.
+    // - Flash Official FP4: b12x W4A8 MoE (verified on the v2 image: GSM8K
     //   96.5%; earlier same-recipe runs: ~224 tok/s plateau, AgentX c1/c2 clean,
     //   decode microbench at parity with the qualified stack).
+    // - Flash Official NVFP4: the NVFP4 routed experts need the flashinfer
+    //   cutlass runner (b12x's MoE is MXFP4-only; trtllm-gen is sm100-only); the
+    //   DSpark draft's MTP experts stay MXFP4 and run on b12x
+    //   (--speculative-moe-runner-backend b12x); HashTopK rejects fused shared
+    //   experts under the cutlass runner (--disable-shared-experts-fusion).
+    //   Verified on the v2 image: GSM8K 97.5%, DSpark accept 3.96, throughput
+    //   at parity with the FP4 cell.
+    // - Flash Vision FP4: same flags as Flash Official; images are served
+    //   natively on b12x (dual-cache prefill gate fix in the v2 image).
+    //   Verified on the v2 image with the cookbook Reproduce commands:
+    //   sgl-eval gsm8k 97.5% (200 q), sgl-eval mmmu_pro 85% / 0% errors
+    //   (20-q subset, --reasoning-effort max, temp 1.0, top-p 0.95).
+    // Env: b12x attention + FP8 wo_a opt-in + MHC post/pre fusion are the GB10
+    // tuning knobs; SGLANG_B12X_MAX_TOKENS must track --chunked-prefill-size;
+    // expandable_segments avoids unified-memory fragmentation OOMs.
     {
       match: { hw: "dgx-spark", variant: "flash-official", quant: "fp4", strategy: "balanced", nodes: "multi-2" },
       verified: true,
@@ -3435,6 +3573,17 @@ sgl-eval run mmmu_pro \\
 
     // ====================================================================
     // B200 + FP4 — Flash Vision (Exp)
+    //
+    // DeepSeek-V4-Flash-Vision-Exp (sgl-project/sglang#37253): the 0731
+    // Flash base plus a vision encoder + aligner. The checkpoint bundles a
+    // DSpark head; low-latency recipes enable it (--speculative-algorithm
+    // DSPARK, no other spec flags — the draft ships in the main checkpoint),
+    // verified on B200 via the MMMU-Pro round (4×B200, image batches).
+    // Balanced / high-throughput stay target-only: those recipes run DP
+    // attention, which DSpark is incompatible with on the current release.
+    // GB300 verified via the same MMMU-Pro round (4×GB300); B300 /
+    // GB200 / H200 / H100 — final verification in progress.
+    // ====================================================================
     {
       match: { hw: "b200", variant: "flash-vision", quant: "fp4", strategy: "low-latency", nodes: "single" },
       verified: true,

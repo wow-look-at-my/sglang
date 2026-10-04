@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 mod forward;
@@ -30,6 +30,8 @@ use std::time::Instant;
 const X_SGL_TTFT_SLO_MS: HeaderName = HeaderName::from_static("x-sgl-ttft-slo-ms");
 const X_SGL_TPS_SLO: HeaderName = HeaderName::from_static("x-sgl-tps-slo");
 
+/// Maximum buffered request body, including base64 multimodal inputs (32 MiB).
+/// Enforced by the `DefaultBodyLimit` layer in app.rs, which returns 413.
 pub const MAX_CHAT_BODY_BYTES: usize = 32 << 20;
 
 /// Validate, select workers, and forward a chat-completions request.

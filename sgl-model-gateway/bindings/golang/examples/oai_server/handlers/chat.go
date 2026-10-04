@@ -70,7 +70,9 @@ func (h *ChatHandler) HandleChatCompletion(ctx *fasthttp.RequestCtx) {
 			return
 		}
 
-		// Ensure content is always a string (not null) Chat template requires content field to be present, even if empty If content is missing or null.
+		// Ensure content is always a string (not null)
+		// Chat template requires content field to be present, even if empty
+		// If content is missing or null, use empty string
 		contentStr := ""
 		if contentOk && content != "" {
 			contentStr = content
@@ -160,7 +162,8 @@ func (h *ChatHandler) handleStreamingCompletion(ctx *fasthttp.RequestCtx, reques
 	ctx.SetStatusCode(200)
 
 	var clientDisconnected bool
-	// Flush timeout: prevent deadlock if client is slow or disconnected This timeout should be longer than typical network latency but shorter.
+	// Flush timeout: prevent deadlock if client is slow or disconnected
+	// This timeout should be longer than typical network latency but shorter than client timeout
 	const flushTimeout = 5 * time.Second
 
 	ctx.SetBodyStreamWriter(func(w *bufio.Writer) {
@@ -204,7 +207,8 @@ func (h *ChatHandler) handleStreamingCompletion(ctx *fasthttp.RequestCtx, reques
 				default:
 				}
 
-				// Call RecvJSON() - this may block.
+				// Call RecvJSON() - this may block, but stream.Close() will unblock it
+				// when context is cancelled (called from main loop)
 				chunkJSON, err := stream.RecvJSON()
 
 				// Check context again after RecvJSON() returns
@@ -214,8 +218,9 @@ func (h *ChatHandler) handleStreamingCompletion(ctx *fasthttp.RequestCtx, reques
 				default:
 				}
 
-				// Send to channel (may block if channel is full) If channel is full, this
-				// will block until main loop reads from it This is acceptable.
+				// Send to channel (may block if channel is full)
+				// If channel is full, this will block until main loop reads from it
+				// This is acceptable because main loop should be actively reading
 				select {
 				case recvChan <- recvResult{chunkJSON: chunkJSON, err: err}:
 					if err != nil {
@@ -267,6 +272,7 @@ func (h *ChatHandler) handleStreamingCompletion(ctx *fasthttp.RequestCtx, reques
 								h.logger.Warn("Final flush timeout", zap.Duration("timeout", flushTimeout))
 							}
 						case <-streamCtx.Done():
+							// Context cancelled, skip flush
 						}
 					}
 					return
@@ -295,7 +301,11 @@ func (h *ChatHandler) handleStreamingCompletion(ctx *fasthttp.RequestCtx, reques
 				w.WriteString(result.chunkJSON)
 				w.WriteString("\n\n")
 
-				// Flush with timeout to prevent deadlock: If Flush blocks indefinitely (slow client).
+				// Flush with timeout to prevent deadlock:
+				// If Flush blocks indefinitely (slow client), RecvJSON goroutine may fill recvChan
+				// and then block trying to send, causing deadlock
+				// Note: bufio.Writer.Flush() doesn't have a timeout parameter, so we use
+				// a goroutine + select pattern to implement timeout behavior
 				flushDone := make(chan error, 1)
 				go func() {
 					flushDone <- w.Flush()
@@ -520,7 +530,8 @@ func (h *ChatHandler) HandleGenerate(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Convert to SGLang /generate response format meta_info must match SGLang's expected format with completion_tokens.
+	// Convert to SGLang /generate response format
+	// meta_info must match SGLang's expected format with completion_tokens at top level
 	finishReason := resp.Choices[0].FinishReason
 	if finishReason == "" {
 		finishReason = "stop"

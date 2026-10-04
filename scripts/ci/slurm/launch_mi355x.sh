@@ -1,5 +1,47 @@
 #!/usr/bin/env bash
-# Launch a 2-node 1P1D disaggregation benchmark on the AMD MI355X `amd-sglang` Slurm cluster.
+# Launch a 2-node 1P1D disaggregation benchmark on the AMD MI355X `amd-sglang`
+# Slurm cluster, then emit per-concurrency result JSONs that
+# scripts/ci/slurm/process_result.py aggregates.
+#
+# salloc's (prefill_workers + decode_workers) nodes -- one server per node --
+# and runs the Docker harness: prefill server(s) on the first nodes, decode
+# server(s) on the rest, a standalone load balancer on the prefill node, then an
+# sglang.bench_serving concurrency sweep over MORI. Default recipe is 1P1D (2
+# nodes); see the drive.sh note on reserving 2P2D / 1P3D / 3P1D.
+#
+# Required environment variables (set by the GitHub Actions workflow):
+#   MODEL              - HuggingFace model id (table label / served model)
+#   MODEL_PREFIX       - short prefix, e.g. dsv4flash
+#   PRECISION          - fp8 / fp4
+#   ISL, OSL           - input / output sequence lengths for the sweep
+#   CONFIG_FILE        - path to the recipe YAML (relative to repo root)
+#   RESULT_FILENAME    - prefix for the emitted result JSONs
+#   MATRIX_CONFIG_NAME - matrix entry name (used in filenames/tags)
+#   GITHUB_WORKSPACE   - set by GitHub Actions; where result JSONs are written
+# Optional:
+#   MODEL_PATH         - local snapshot dir (preferred over downloading MODEL)
+#   SLURM_PARTITION    - default: amd-sglang
+#   SLURM_NODELIST     - optional explicit node pin (else scheduler chooses)
+#   SLURM_EXCLUDE      - optional comma-separated nodes to keep the scheduler
+#                        off (e.g. hosts with a broken RDMA driver)
+#   SGLANG_USE_CHECKOUT_RUNTIME
+#                      - default 1. Reinstall this workflow checkout's Python
+#                        sglang package inside each runtime container, and the
+#                        checkout sglang-router package inside the bench
+#                        container, before launching servers/bench. Set 0 to
+#                        use the image's baked-in packages.
+#   RUNNER_NAME        - GitHub runner name (a built-in default env var)
+#   GITHUB_RUN_ID      - GitHub Actions run id (a built-in default env var)
+#                        The allocation is named
+#                          mi355x-ci-<RUNNER_NAME>-<GITHUB_RUN_ID>-<config>
+#                        so workflow cleanup can scancel exactly this leg's job
+#                        (full name) or this runner's stale jobs (RUNNER_NAME
+#                        prefix) -- never a blanket `squeue --me`. The run id +
+#                        config make the name unique per matrix leg even if two
+#                        runners happen to share a name.
+#   SLURM_EXCLUSIVE    - request whole nodes (default 1); set 0 to disable
+#   TIME_LIMIT         - salloc time limit, default 02:30:00 (covers server
+#                        load + perf sweep + full GSM8K, under the 180m step cap)
 
 set -euo pipefail
 set -x
@@ -17,30 +59,45 @@ SLURM_PARTITION="${SLURM_PARTITION:-amd-sglang}"
 TIME_LIMIT="${TIME_LIMIT:-02:30:00}"
 MODEL_PATH="${MODEL_PATH:-${MODEL:-}}"
 
-# Scheduler profile. `slurm` (default) is the amd-sglang MI355X cluster and is the code path, unchanged.
+# Scheduler profile. `slurm` (default) is the amd-sglang MI355X cluster and is
+# the original code path, unchanged. `spur` is the TW PIT cluster, which runs
+# Spur -- a Slurm-compatible scheduler that differs in three ways that matter
+# here: salloc takes no trailing command, `scontrol show hostnames` does not
+# exist (its nodelist env var is already comma-expanded), and `srun --overlap`
+# requires an explicit --jobid instead of inheriting one from the environment.
 CLUSTER="${CLUSTER:-slurm}"
 case "$CLUSTER" in
     slurm|spur) ;;
     *) echo "ERROR: CLUSTER must be 'slurm' or 'spur', got '$CLUSTER'" >&2; exit 1 ;;
 esac
 
-# Require the unambiguous HH:MM:SS / D-HH:MM:SS form there rather than let a
-# typo book a node for a day.
+# Spur reads a two-field time limit as HH:MM where Slurm reads MM:SS, so "30:00"
+# silently becomes 30 HOURS. Require the unambiguous HH:MM:SS / D-HH:MM:SS form
+# there rather than let a typo book a node for a day.
 if [[ "$CLUSTER" == "spur" && ! "$TIME_LIMIT" =~ ^([0-9]+-)?[0-9]+:[0-9]{2}:[0-9]{2}$ ]]; then
     echo "ERROR: on spur TIME_LIMIT must be HH:MM:SS or D-HH:MM:SS (got '$TIME_LIMIT');" >&2
     echo "       a two-field value like '30:00' is parsed as 30 hours, not 30 minutes." >&2
     exit 1
 fi
 
-# Optional account / QoS.
+# Optional account / QoS. Empty on the mi355x cluster (which gates on partition
+# alone); required on spur, where every job must name an account and its QoS.
+# Both flags are spelled the same in real Slurm, so passing them is portable.
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-}"
 SLURM_QOS="${SLURM_QOS:-}"
 
-# Relocate the shared HuggingFace cache root.
+# Relocate the shared HuggingFace cache root. nightly-configs.yaml pins
+# model_path under /it-share/model_coverage (the mi355x cluster's NFS); a
+# cluster that mirrors the same models elsewhere sets MODEL_ROOT and every
+# recipe/config path is rewritten, so no recipe or config file needs editing.
 MODEL_ROOT="${MODEL_ROOT:-}"
-# Root used to RESOLVE the snapshot hash; defaults to MODEL_ROOT.
+# Root used to RESOLVE the snapshot hash; defaults to MODEL_ROOT. Set it when
+# MODEL_ROOT is node-local and therefore unreadable from the driver node.
 MODEL_RESOLVE_ROOT="${MODEL_RESOLVE_ROOT:-$MODEL_ROOT}"
-# Optional node-local mirror of the model cache, for clusters where shared storage cannot serve every rank at once.
+# Optional node-local mirror of the model cache, for clusters where shared
+# storage cannot serve every rank at once. Resolution stays on the shared root:
+# resolve_snapshot runs on the driver node, which has no mirror. Must be assigned
+# after MODEL_RESOLVE_ROOT, which keeps the readable root.
 MODEL_LOCAL_ROOT="${MODEL_LOCAL_ROOT:-}"
 if [[ -n "$MODEL_LOCAL_ROOT" ]]; then
     if [[ -z "$MODEL_RESOLVE_ROOT" ]]; then
@@ -90,13 +147,20 @@ resolve_snapshot() {
     fi
     echo "$p"
 }
-# Resolve the snapshot against the shared cache first, then relocate.
+# Resolve the snapshot against the shared cache first, then relocate. MODEL_ROOT
+# may name a node-local copy that does not exist on the node running this
+# script; resolve_snapshot would then find no refs/main and pass the bare cache
+# dir to the container. Three steps, since the resolve root and the destination
+# root can differ: rewrite onto a readable root, resolve refs/main, then rewrite
+# onto the root the container will see.
 MODEL_PATH="$(MODEL_ROOT="$MODEL_RESOLVE_ROOT" relocate_model_root "$MODEL_PATH")"
 MODEL_PATH="$(resolve_snapshot "$MODEL_PATH")" || exit 1
 MODEL_PATH="$(MODEL_ROOT_FROM="$MODEL_RESOLVE_ROOT" relocate_model_root "$MODEL_PATH")"
 
 # ---------------------------------------------------------------------------
-# Parse the recipe (runtime + bench + topology).
+# Parse the recipe (runtime + bench + topology) into shell vars.
+# ---------------------------------------------------------------------------
+# Ensure PyYAML is available to the host python used for parsing.
 python3 -c 'import yaml' 2>/dev/null || pip install pyyaml -q 2>/dev/null \
     || pip install --user pyyaml -q 2>/dev/null || true
 
@@ -209,23 +273,39 @@ if [[ -n "${IMAGE_OVERRIDE:-}" ]]; then
     IMAGE="$IMAGE_OVERRIDE"
 fi
 
-# Nodes per engine: an engine whose TP exceeds one node's GPU count spans ceil(TP/GPUS_PER_NODE) nodes.
+# Nodes per engine: an engine whose TP exceeds one node's GPU count spans
+# ceil(TP/GPUS_PER_NODE) nodes and needs torch-dist multi-node init. EP<=8
+# recipes give 1 (single node) so all downstream multi-node logic no-ops.
 GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 PN_PER=$(( (PTP + GPUS_PER_NODE - 1) / GPUS_PER_NODE ))
 DN_PER=$(( (DTP + GPUS_PER_NODE - 1) / GPUS_PER_NODE ))
-# torch-dist rendezvous port for a multi-node engine.
+# torch-dist rendezvous port for a multi-node engine. Default 29500 (torch's
+# conventional MASTER_PORT); avoids :5000, which a node-local daemon holds on
+# some clusters (spur). Overridable per environment.
 DIST_PORT="${DIST_PORT:-29500}"
+# A role may have multiple single-node engines (PW>1, each PN_PER=1: the router
+# fans out over them) OR one multi-node wide engine (PN_PER>1, workers==1). What
+# is NOT wired is *multiple copies of a multi-node engine* (a wide engine with
+# workers>1), because the drive split assumes one contiguous node block per wide
+# engine and the router only knows one endpoint per wide engine.
 if (( (PN_PER > 1 && PW > 1) || (DN_PER > 1 && DW > 1) )); then
     echo "ERROR: a wide engine (nodes/engine>1) cannot have >1 worker of that role (got PW=$PW PN_PER=$PN_PER DW=$DW DN_PER=$DN_PER)" >&2
     exit 1
 fi
 echo "recipe: image=$IMAGE attn=${ATTN:-$PATTN/$DATTN} ib=$IB ptp=$PTP dtp=$DTP pn_per=$PN_PER dn_per=$DN_PER a2a=${A2A:-<none>} concs=$CONCS isl=$ISL osl=$OSL"
 
-# --------------------------------------------------------------------------- Shared NFS scratch.
+# ---------------------------------------------------------------------------
+# Shared NFS scratch (visible to login node + compute nodes). Raw bench output
+# lands here; the launcher normalizes it into GITHUB_WORKSPACE afterwards.
+# ---------------------------------------------------------------------------
 WORKDIR="$HOME/.mi355x_ci/${MATRIX_CONFIG_NAME}"
 if [[ "$CLUSTER" == "spur" ]]; then
-  # `rm -rf "$WORKDIR"` is not safe to gate a leg on over NFS: if anything
-  # still holds a descriptor inside (an orphaned `tail -F` on bench.log).
+  # `rm -rf "$WORKDIR"` is not safe to gate a leg on over NFS: if anything still
+  # holds a descriptor inside (an orphaned `tail -F` on bench.log), the server
+  # renames the file to .nfsXXXX rather than unlinking it, so rm sees a
+  # non-empty directory and exits non-zero. Clear the contents instead, retry,
+  # and fall back to moving the directory aside. Housekeeping must not fail a
+  # leg.
   for _try in 1 2 3; do
     rm -rf "$WORKDIR"/* "$WORKDIR"/.[!.]* 2>/dev/null || true
     # Anything left is a silent .nfsXXXX handle; give the server a moment.
@@ -248,7 +328,9 @@ rm -rf "$WORKDIR"; mkdir -p "$WORKDIR"
 fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Stage the workflow checkout on shared NFS.
+# Stage the workflow checkout on shared NFS so Slurm compute-node containers can
+# reinstall the same code SHA the workflow checked out. The container gets a
+# read-only mount and copies it to /tmp before mutating pyproject.toml.
 CHECKOUT_DOCKER_ARGS="-e SGLANG_USE_CHECKOUT_RUNTIME=$SGLANG_USE_CHECKOUT_RUNTIME"
 if [[ "$SGLANG_USE_CHECKOUT_RUNTIME" == "1" ]]; then
     CHECKOUT_STAGE="$WORKDIR/checkout"
@@ -256,7 +338,8 @@ if [[ "$SGLANG_USE_CHECKOUT_RUNTIME" == "1" ]]; then
     echo "Staging checkout runtime: sha=$CHECKOUT_SHA -> $CHECKOUT_STAGE"
     rm -rf "$CHECKOUT_STAGE"
     mkdir -p "$CHECKOUT_STAGE"
-    # See install_checkout_sglang.sh: tar exit 1 is a warning ("file changed as we read it", raised spuriously by NFS attribute caching).
+    # See install_checkout_sglang.sh: tar exit 1 is a warning ("file changed as
+    # we read it", raised spuriously by NFS attribute caching), 2+ is an error.
     set +e
     tar --exclude='__pycache__' --exclude='*.pyc' --exclude='.git/config' \
         -C "$GITHUB_WORKSPACE" -cf - . | tar -C "$CHECKOUT_STAGE" -xf -
@@ -266,9 +349,10 @@ if [[ "$SGLANG_USE_CHECKOUT_RUNTIME" == "1" ]]; then
         echo "ERROR: staging tar failed (create=${STAGE_TAR_RC[0]} extract=${STAGE_TAR_RC[1]})" >&2
         exit 1
     fi
-    # Tolerating create-rc=1 above means a warning cannot abort the copy --
-    # but a TRUNCATED copy must still not reach a container, where it only
-    # surfaces several minutes later as "invalid checkout mount".
+    # Tolerating create-rc=1 above means a warning cannot abort the copy -- but a
+    # TRUNCATED copy must still not reach a container, where it only surfaces
+    # ~15 minutes later as "invalid checkout mount". Assert the same file the
+    # in-container installer checks, right where the copy was made.
     if [[ ! -f "$CHECKOUT_STAGE/python/sglang/version.py" ]]; then
         echo "ERROR: staged checkout is incomplete (no python/sglang/version.py in $CHECKOUT_STAGE);" >&2
         echo "       tar rc were create=${STAGE_TAR_RC[0]} extract=${STAGE_TAR_RC[1]}" >&2
@@ -296,8 +380,8 @@ sys.exit(0 if acc > thr else 1)
 PY
 fi
 
-# DSV4 load-bearing env (see
-# test/registered/amd/test_deepseek_v4_flash_fp8.py).
+# DSV4 load-bearing env (see test/registered/amd/test_deepseek_v4_flash_fp8.py).
+# SGLANG_DSV4_FP4_EXPERTS is precision-driven: true for fp4 weights, false for fp8.
 if [[ "$PRECISION" == "fp4" ]]; then
     FP4_EXPERTS=true
 else
@@ -316,13 +400,29 @@ DSV4_ENV=(
   -e AITER_BF16_FP8_MOE_BOUND=0 -e SGLANG_DSV4_FP4_EXPERTS=$FP4_EXPERTS
 )
 DSV4_ENV_STR="${DSV4_ENV[*]}"
-# A recipe carrying a `model:` block supplies its OWN docker env (below).
+# A recipe carrying a `model:` block supplies its OWN docker env (below), so the
+# DSV4 env must not leak into it; the DSV4 recipes keep the string above.
 [[ "$HAS_MODEL" == "1" ]] && DSV4_ENV_STR=""
-# NCCL_IB_HCA must name real devices. "ionic" is the mi355x cluster's spelling.
+# NCCL_IB_HCA must name real devices. "ionic" is the mi355x cluster's spelling;
+# on pit2 the HCAs are rdma0..7 (the recipe's $IB) and "ionic" matches nothing,
+# which fails TP group init outright with
+#   RuntimeError: NCCL error: remote process exited or there was a network error
+# from ncclCommInitRank. The wide-EP block below already overrides this for
+# EP>8; EP<=8 recipes need it too.
 MORI_NCCL_HCA=ionic
 [[ "$CLUSTER" == "spur" ]] && MORI_NCCL_HCA="$IB"
 MORI_ENV="-e MORI_DISABLE_AUTO_XGMI=1 -e NCCL_IB_HCA=$MORI_NCCL_HCA -e NCCL_IB_GID_INDEX=1 -e NCCL_CROSS_NIC=1"
-# Whether NCCL may use IB depends on the role, not on the recipe.
+# Whether NCCL may use IB depends on the role, not on the recipe. A single-node
+# engine does all its NCCL traffic intra-node (cross-node KV goes over mori),
+# and on pit2 letting it reach for IB hangs ncclCommInitRank. Gating on the
+# whole recipe is wrong for 2P1D-EP16 (PN_PER=1, DN_PER=2), whose prefill
+# engines are single-node TP8 but whose recipe-wide test left IB on for both
+# roles.
+#
+# Both cases still need a socket interface: NCCL uses one for its bootstrap
+# handshake even on an intra-node data path, and pit2 exposes eight tw-eth* /31
+# links that auto-selection picks and hangs on. Wide recipes set it in the block
+# below; pin it here for any role that block does not cover.
 SPUR_PNCCL=""
 SPUR_DNCCL=""
 if [[ "$CLUSTER" == "spur" ]]; then
@@ -337,7 +437,13 @@ fi
 # Wide-EP (engine spans >1 node) adds mori all-to-all MoE tuning + the cross-node
 # torch-dist socket NIC. Gated on nodes-per-engine>1 so EP<=8 recipes are untouched.
 if (( PN_PER > 1 || DN_PER > 1 )); then
-    # Docker last-wins => this overrides the base value for wide recipes.
+    # TC=104 (SL=3) = the ionic lossless RoCE queue (DSCP26/pri3); TC=96 is the
+    # lossy pri0 queue (~1% BW) and wedges cross-node a2a under load. bf16
+    # dispatch/combine matches the validated wide-EP run (job 13196).
+    # The base MORI_ENV sets NCCL_IB_HCA=ionic (a spur-ism); on this fabric the
+    # IB device names are the recipe's $IB (rdma0..7), and a wide engine's
+    # cross-node TP/attention collectives ride NCCL, so point NCCL at the real
+    # HCAs. Docker last-wins => this overrides the base value for wide recipes.
     MORI_ENV="$MORI_ENV \
 -e NCCL_IB_HCA=$IB \
 -e MORI_IB_GID_INDEX=1 \
@@ -351,7 +457,10 @@ if (( PN_PER > 1 || DN_PER > 1 )); then
 -e SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=3600 -e SGLANG_DISAGGREGATION_WAITING_TIMEOUT=3600 \
 -e SGLANG_DISAGGREGATION_NUM_PRE_ALLOCATE_REQS=32 -e SGLANG_EAGER_INPUT_NO_COPY=true \
 -e MORI_BOOTSTRAP_TIMEOUT=300"
-    # The overlap plan stream is a wide-EP perf knob.
+    # The overlap plan stream is a wide-EP perf knob, but it makes
+    # EAGLEWorkerV2.verify call attn_backend.update_verify_buffers_to_fill_after_draft,
+    # which the DSV4 MLA backend does not implement (NotImplementedError). Only
+    # enable it for non-MTP wide-EP; MTP wide-EP uses the plain verify path (as EP8 does).
     if [[ "$MTP_ENABLED" != "1" ]]; then
         MORI_ENV="$MORI_ENV -e SGLANG_ENABLE_OVERLAP_PLAN_STREAM=1"
     fi
@@ -364,7 +473,7 @@ fi
 # `model:` block, written as bash arrays to model_flags.sh (sourced by
 # prefill.sh/decode.sh). DSV4 recipes have no `model:` block -> empty arrays, so
 # their generated docker argv is unchanged. Each server arg + its value MUST be a
-# separate YAML list item so shlex.quote keeps "--foo" and "bar" as tokens.
+# separate YAML list item so shlex.quote keeps "--foo" and "bar" as two tokens.
 python3 - "$CONFIG_FILE" "$WORKDIR/model_flags.sh" <<'PY'
 import shlex, sys, yaml
 r = yaml.safe_load(open(sys.argv[1]))
@@ -423,14 +532,22 @@ IONIC_EOF
     printf 'STAGE_SHARED_ROOT=%q\n' "$MODEL_RESOLVE_ROOT"
 } > "$WORKDIR/stage_check.sh"
 
-# Optional topology / speculative-decode flags driven by the recipe.
+# Optional topology / speculative-decode flags driven by the recipe. Base recipes
+# (EP1/DP1, no mtp) leave the extra strings empty, preserving prior behavior.
+#
+# EP/DP are now PER ROLE: the DP-attention + ep-size flags come from PDP/PEP for
+# prefill and DDP/DEP for decode. For every EP<=8 recipe DDP==PDP and DEP==PEP
+# (decode inherits prefill), so both role strings equal the old single EXTRA_FLAGS
+# and the generated argv is byte-identical. Oren's wide-EP recipes set decode
+# EP/DP=16 while prefill stays EP8.
 PREFILL_DPEP=""
 (( PDP > 1 )) && PREFILL_DPEP="$PREFILL_DPEP --enable-dp-attention --dp-size $PDP"
 (( PEP > 1 )) && PREFILL_DPEP="$PREFILL_DPEP --ep-size $PEP"
 DECODE_DPEP=""
 (( DDP > 1 )) && DECODE_DPEP="$DECODE_DPEP --enable-dp-attention --dp-size $DDP"
 (( DEP > 1 )) && DECODE_DPEP="$DECODE_DPEP --ep-size $DEP"
-# Flags shared by both roles (a2a backend, mtp). --max-total-tokens stays here for non-wide recipes.
+# Flags shared by both roles (a2a backend, mtp). --max-total-tokens stays here for
+# non-wide recipes; wide recipes carry a per-role prefill_max_total via wide_ep.
 EXTRA_COMMON=""
 [[ -n "$A2A" ]] && EXTRA_COMMON="$EXTRA_COMMON --moe-a2a-backend $A2A --deepep-mode normal"
 [[ -n "$MAXTOK" ]] && EXTRA_COMMON="$EXTRA_COMMON --max-total-tokens $MAXTOK"
@@ -447,18 +564,24 @@ if [[ "$MTP_ENABLED" == "1" ]]; then
         EXTRA_COMMON="$EXTRA_COMMON --speculative-draft-model-path $DRAFT_RESOLVED"
     fi
 fi
-# Prefix a leading space only when the arg is non-empty.
+# Prefix a leading space only when the arg is non-empty (keeps EP<=8 argv byte-
+# identical: the wide-only strings are empty and contribute nothing).
 sp() { [[ -n "$1" ]] && printf ' %s' "$1"; return 0; }
-# --kv-cache-dtype is emitted only when the recipe sets wide_ep.kv_cache_dtype; the pre-wide DSV4 path had no such flag.
+# --kv-cache-dtype is emitted only when the recipe sets wide_ep.kv_cache_dtype;
+# the pre-wide DSV4 path had no such flag, so EP<=8 recipes omit it.
 KV_FLAG=""
 [[ -n "$KVDTYPE" ]] && KV_FLAG=" --kv-cache-dtype $KVDTYPE"
-# Assemble the per-role tail: role DP/EP + shared + wide common + role-specific wide extras.
+# Assemble the per-role tail: role DP/EP + shared + wide common + role-specific
+# wide extras. All wide pieces (WECOMMON/PEXTRA/DEXTRA) are empty for EP<=8.
 PREFILL_TAIL="$PREFILL_DPEP$EXTRA_COMMON$(sp "$WECOMMON")$(sp "$PEXTRA")"
 DECODE_TAIL="$DECODE_DPEP$EXTRA_COMMON$(sp "$WECOMMON")$(sp "$DEXTRA")"
 echo "prefill tail:${PREFILL_TAIL:-<none>} | decode tail:${DECODE_TAIL:-<none>} (pep=$PEP pdp=$PDP dep=$DEP ddp=$DDP mtp=$MTP_ENABLED)"
 
 if [[ "$HAS_MODEL" == "1" ]]; then
-    # Generic path (e.g. Kimi): attention + swa from the recipe, model parsers / quirks ride MODEL_SERVER_ARGS.
+    # Generic path (e.g. Kimi): attention + swa from the recipe, model parsers /
+    # quirks ride MODEL_SERVER_ARGS. Single `--attention-backend` when the recipe
+    # sets `attention_backend`; split `--prefill-/--decode-attention-backend` when
+    # it sets the per-role keys. swa dropped when the recipe omits it.
     ATTN_FLAGS=""
     [[ -n "$ATTN" ]]  && ATTN_FLAGS="$ATTN_FLAGS --attention-backend $ATTN"
     [[ -n "$PATTN" ]] && ATTN_FLAGS="$ATTN_FLAGS --prefill-attention-backend $PATTN"
@@ -492,18 +615,33 @@ else
 --disaggregation-transfer-backend $XFER --disaggregation-ib-device $IB$KV_FLAG$DECODE_TAIL"
 fi
 
-# /it-share is the mi355x cluster's model NFS.
+# /it-share is the mi355x cluster's model NFS. Mount it only where it exists --
+# docker would otherwise silently create a root-owned empty /it-share on every
+# node of a cluster that keeps its models elsewhere (see MODEL_ROOT).
 IT_SHARE_MOUNT="-v /it-share:/it-share:ro "
 [[ -d /it-share ]] || IT_SHARE_MOUNT=""
 # A cluster that relocates the model cache must bind that root in too, at the
-# same path: --model-path is resolved inside the container.
+# same path: --model-path is resolved inside the container, and a missing
+# directory does not fail as "no such file" -- transformers falls back to
+# treating it as a HuggingFace repo id and dies with a confusing
+# "Repo id must be in the form 'repo_name' or 'namespace/repo_name'".
 if [[ -n "$MODEL_ROOT" && "$MODEL_ROOT" != /it-share/* ]]; then
     IT_SHARE_MOUNT="$IT_SHARE_MOUNT-v $MODEL_ROOT:$MODEL_ROOT:ro "
 fi
-# Slurm hosts each server as a long-lived job step and reaps the container when the step ends, so --rm is right there.
+# Slurm hosts each server as a long-lived job step and reaps the container when
+# the step ends, so --rm is right there. Spur has no equivalent step (its
+# --overlap path is an interactive exec-into-job), so the container runs
+# DETACHED under dockerd and drive.sh polls it -- which means it must NOT be
+# --rm, or the exit code is gone before the poller can read it. Teardown removes
+# it explicitly instead.
 DOCKER_LIFECYCLE="--rm"
 [[ "$CLUSTER" == "spur" ]] && DOCKER_LIFECYCLE="-d"
-# pit2 runs rootless docker, whose spur-authz plugin refuses --privileged outright ("denied [P1]").
+# pit2 runs rootless docker, whose spur-authz plugin refuses --privileged
+# outright ("denied [P1]"). Spell out what --privileged was actually buying us:
+# the device nodes (already listed below), the groups that own kfd/dri, and two
+# capabilities -- IPC_LOCK, which RDMA memory registration needs, and SYS_PTRACE
+# for profiling. Verified on g11: ibv_devinfo sees all 8 HCAs PORT_ACTIVE and
+# --ipc/--network host and --shm-size are all permitted under this set.
 PRIV_ARGS="--privileged"
 if [[ "$CLUSTER" == "spur" ]]; then
     PRIV_ARGS="--group-add video --group-add render --cap-add IPC_LOCK --cap-add SYS_PTRACE"
@@ -512,27 +650,49 @@ DOCKER_COMMON="$DOCKER_LIFECYCLE --network host --ipc host --shm-size 32g $PRIV_
 --security-opt seccomp=unconfined \
 --device /dev/kfd --device /dev/dri --device /dev/infiniband \
 ${IT_SHARE_MOUNT}-v $HOME:/host_home $CHECKOUT_DOCKER_ARGS"
-# Optional extra docker args (e.g. bind-mounting a locally-built lib for validation).
+# Optional extra docker args (e.g. bind-mounting a locally-built lib for
+# validation). Empty by default so the docker argv is byte-identical otherwise.
 [[ -n "${EXTRA_DOCKER_ARGS:-}" ]] && DOCKER_COMMON="$DOCKER_COMMON ${EXTRA_DOCKER_ARGS}"
 
-# Spur compute nodes run prolog/epilog hooks that reap any container not
-# tagged with the owning job.
+# Spur compute nodes run prolog/epilog hooks that reap any container not tagged
+# with the owning job, so an untagged server is SIGKILLed (rc=137) seconds after
+# it starts. Single-quoted so the literal $SPUR_JOB_ID survives into the
+# generated per-role script and expands on the compute node, where the job
+# environment actually defines it.
 if [[ "$CLUSTER" == "spur" ]]; then
     DOCKER_COMMON="$DOCKER_COMMON "'--label spur_job_id=$SPUR_JOB_ID'
 fi
 
-# Per-role wide-EP docker env (MORI dispatch-token tuning etc.).
+# Per-role wide-EP docker env (MORI dispatch-token tuning etc.). Empty for EP<=8
+# recipes; carries its own leading space so an empty value leaves the docker argv
+# byte-identical (no stray double space).
 PENV_ARG=""; [[ -n "$PENV" ]] && PENV_ARG=" $PENV"
 DENV_ARG=""; [[ -n "$DENV" ]] && DENV_ARG=" $DENV"
 
-# Pin the torch-dist rendezvous port for single-node engines.
+# Pin the torch-dist rendezvous port for single-node engines. Without
+# --nccl-port, get_free_port() binds port 0, closes the socket, and rank 0
+# re-binds the same number later for the TCPStore; anything handed that port in
+# between makes rank 0 die with EADDRINUSE. It reproduces rather than being a
+# lottery, since the kernel walks its ephemeral range in order.
+#
+# Only single-node engines need this -- a multi-node engine gets
+# --dist-init-addr, which _resolve_dist_init_method() prefers over the port.
+# The value is the recipe's own per-role port +1000, which clears the server
+# port and stays under the 32768 ephemeral floor. These recipes place at most
+# one single-node engine per node, so two engines cannot collide.
+#
+# Pinning is safe here because --dp-size is only emitted together with
+# --enable-dp-attention, and that path gives every DP rank the same nccl port.
+# launch_dp_schedulers(), which needs a distinct port per worker, is never
+# reached by these recipes.
 PNCCL_ARG=""
 DNCCL_ARG=""
 if [[ "$CLUSTER" == "spur" ]]; then
     PNCCL_ARG=" --nccl-port $((PPORT + 1000))"
     DNCCL_ARG=" --nccl-port $((DPORT + 1000))"
 fi
-# Per-role NCCL IB/socket policy (spur only; empty under slurm, so the argv there is unchanged).
+# Per-role NCCL IB/socket policy (spur only; empty under slurm, so the argv
+# there is unchanged). Appended after $PENV/$DENV so docker's last-wins applies.
 PENV_ARG="$PENV_ARG$SPUR_PNCCL"
 DENV_ARG="$DENV_ARG$SPUR_DNCCL"
 
@@ -831,7 +991,8 @@ EOF
 fi
 
 # Probe payload + validator (separate files to avoid quoting inside the
-# bench.sh `bash -lc '...'` block).
+# bench.sh `bash -lc '...'` block). One real request exercises the full
+# prefill->decode KV handoff before we commit to the whole sweep.
 cat > "$WORKDIR/probe.json" <<'JSON'
 {"text": "The capital of France is", "sampling_params": {"max_new_tokens": 16, "temperature": 0.0}}
 JSON
@@ -1324,7 +1485,9 @@ chmod +x "$WORKDIR/drive.sh"
 NODELIST_ARG=()
 [[ -n "${SLURM_NODELIST:-}" ]] && NODELIST_ARG=(--nodelist="$SLURM_NODELIST")
 
-# Request whole nodes so a co-scheduled job can't share a node and skew the benchmark numbers.
+# Request whole nodes so a co-scheduled job can't share a node and skew the
+# benchmark numbers. Toggle off with SLURM_EXCLUSIVE=0 on partitions that
+# disallow --exclusive.
 EXCLUSIVE_ARG=()
 [[ "${SLURM_EXCLUSIVE:-1}" == "1" ]] && EXCLUSIVE_ARG=(--exclusive)
 
@@ -1337,7 +1500,8 @@ ACCT_ARG=()
 [[ -n "$SLURM_ACCOUNT" ]] && ACCT_ARG+=(-A "$SLURM_ACCOUNT")
 [[ -n "$SLURM_QOS" ]] && ACCT_ARG+=(-q "$SLURM_QOS")
 
-# Nodes = sum over engines of nodes-per-engine.
+# Nodes = sum over engines of nodes-per-engine. EP<=8 (PN_PER=DN_PER=1) gives the
+# original PW+DW (1P1D -> 2 nodes); wide EP16 1P1D gives 2+2 = 4 nodes.
 TOTAL_NODES=$(( PW * PN_PER + DW * DN_PER ))
 
 # Keep g20 out of a wide engine's root position, where its slower MORI
@@ -1346,10 +1510,14 @@ if [[ "$MATRIX_CONFIG_NAME" == *-2p1d-ep16* ]]; then
     export SLURM_DIST_TAIL="${SLURM_DIST_TAIL:-mia1-p01-g20}"
 fi
 
-# Name the allocation <RUNNER_NAME>-<GITHUB_RUN_ID>-<config> so the workflow's cleanup steps can scancel precisely instead.
+# Name the allocation <RUNNER_NAME>-<GITHUB_RUN_ID>-<config> so the workflow's
+# cleanup steps can scancel precisely instead of a blanket `squeue --me` that
+# would kill a concurrent matrix leg. RUNNER_NAME alone is not assumed unique;
+# GITHUB_RUN_ID + config make the name unique per matrix leg regardless.
 JOB_NAME="mi355x-ci-${RUNNER_NAME:-norunner}-${GITHUB_RUN_ID:-0}-${MATRIX_CONFIG_NAME}"
 
-# Address-resolution fallback NIC for drive.sh (see ADDR_NIC there).
+# Address-resolution fallback NIC for drive.sh (see ADDR_NIC there). Only spur
+# needs one, because only there does drive.sh run on an allocated node.
 ADDR_NIC=""
 [[ "$CLUSTER" == "spur" ]] && ADDR_NIC="${ADDR_NIC_OVERRIDE:-eno0}"
 
@@ -1406,7 +1574,21 @@ EOF
     rm -f "$WORKDIR/drive_exit"
     SBATCH_OUT="$WORKDIR/sbatch.out"
     : > "$SBATCH_OUT"
-    # Node count is what matters here; do NOT pass -n1 to make the task count match.
+    # Node count is what matters here; do NOT pass -n1 to make the task count
+    # match. Spur sizes the allocation from the task count, so -n1 collapses a
+    # 2-node request to a single node and the decode engine has nowhere to run.
+    # Uniqueness of the driver is handled in drive_batch.sh by an atomic lock,
+    # not by the task count.
+    # Spur's controller is a Raft cluster, so submission can fail for reasons
+    # that have nothing to do with the request: during a leader election it
+    # answers `The service is currently unavailable ... "not the Raft leader"`.
+    # That is transient and clears in seconds, but an unretried submit turns it
+    # into a failed leg. Worse, the message is multi-line, so the ${VAR##* }
+    # job-id parse below extracted `leader"` from it and the leg was reported as
+    # a benchmark failure with an empty bench.log -- indistinguishable, at a
+    # glance, from a model bug. Observed on glm52-fp4-1k1k-2p1d-ep16 2026-09-17.
+    # Retry only on that signature; a genuinely bad sbatch request must still
+    # fail immediately rather than being retried six times.
     SPUR_LEG_JOB_ID=""
     for _attempt in 1 2 3 4 5 6; do
         SBATCH_MSG=$(sbatch -p "$SLURM_PARTITION" -N"$TOTAL_NODES" "${NODELIST_ARG[@]}" \
@@ -1439,14 +1621,31 @@ EOF
         while :; do
             [[ -f "$WORKDIR/drive_exit" ]] && break
             if ! squeue -h -o "%i" 2>/dev/null | grep -qx "$SPUR_LEG_JOB_ID"; then
-                # The job has left the queue. drive_exit is written on a
-                # compute node and read here on the login node.
+                # The job has left the queue. drive_exit is written on a compute
+                # node and read here on the login node, so NFS close-to-open
+                # visibility can delay it well past a single short sleep. A five
+                # second grace produced three false reds on 2026-09-16, each on a
+                # leg that had finished every concurrency point and passed the
+                # accuracy gate; one of them was the whole GLM EP16 row.
                 for _ in $(seq 1 30); do
                     [[ -f "$WORKDIR/drive_exit" ]] && break
                     sleep 3
                 done
                 if [[ ! -f "$WORKDIR/drive_exit" ]]; then
-                    # Still not visible.
+                    # Still not visible. Do not invent a failure we did not
+                    # observe -- decide from what the run actually produced.
+                    # bench_exit is written earlier and is usually visible by now;
+                    # when even that is missing (seen on glm52-fp4-1k1k-2p1d-ep16,
+                    # which had all seven results at 0.945), a passed accuracy
+                    # gate with results on disk is the stronger evidence.
+                    #
+                    # "Some results plus a passed gate" is not enough. A leg
+                    # whose decode ran at ~9 tok/s got through conc=1, 8 and 16
+                    # of seven points before the job ended, and this branch
+                    # called it green: the gate had passed and raw files
+                    # existed. Require every expected concurrency point, so a
+                    # sweep that stopped early is red rather than a green row
+                    # standing on someone else's numbers.
                     WANT=0; HAVE=0
                     for _c in ${CONCS//,/ }; do
                         WANT=$((WANT + 1))
@@ -1473,7 +1672,17 @@ EOF
         done
         kill "$SPUR_TAIL_PID" 2>/dev/null || true
         SALLOC_RC=$(cat "$WORKDIR/drive_exit" 2>/dev/null || echo 1)
-        # Release the allocation.
+        # Release the allocation. On slurm the job ends when salloc's command
+        # returns; on spur drive.sh is an sbatch job, and the loop above exits as
+        # soon as drive_exit appears -- while the batch job, and every container
+        # it started, is still running. Nothing else ever cancels it, so the
+        # allocation is held until the time limit. The next leg then cannot get
+        # nodes and dies with `JobLaunchFailure (dispatch confirmation failed
+        # (2/4 confirmed))`, which reads as an unrelated infrastructure fault and
+        # cascades through every leg after it. Observed 2026-09-17: jobs
+        # 1774/1775 held all four nodes long after their legs had been recorded
+        # rc=1. Unconditional, because reaching here means this leg is done with
+        # its nodes either way.
         if squeue -h -o "%i" 2>/dev/null | grep -qx "$SPUR_LEG_JOB_ID"; then
             echo "[launch] releasing spur job $SPUR_LEG_JOB_ID"
             scancel "$SPUR_LEG_JOB_ID" 2>/dev/null || true
@@ -1490,7 +1699,9 @@ set -e
 
 # bench output already streamed live from drive.sh (tail -F). drive.sh exits
 # non-zero when a server died or bench failed; on failure dump bench.log + the
-# server logs (the actual root cause).
+# server logs (the actual root cause). We still fall through to normalize
+# whatever raw results the completed concurrencies produced -- partial perf data
+# is worth uploading -- and propagate the failure via the exit code at the end.
 if [[ "$SALLOC_RC" -ne 0 ]]; then
     echo "ERROR: allocation/bench failed (rc=$SALLOC_RC); bench + server logs:" >&2
     echo "--- bench.log (tail) ---"; tail -40 "$WORKDIR/bench.log" 2>/dev/null || true
@@ -1511,17 +1722,47 @@ if [[ "$ACC_ENABLED" == "1" && -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     } >> "$GITHUB_STEP_SUMMARY"
 fi
 
-# --------------------------------------------------------------------------- Normalize raw bench_serving output ->.
+# ---------------------------------------------------------------------------
+# Normalize raw bench_serving output -> process_result.py schema.
+#
+# bench_serving and process_result.py disagree on field names, so we remap the
+# last JSON line of each raw file. If bench_serving ever renames an output
+# field, the KeyError raised here (rather than a silently wrong table) is the
+# signal to update this mapping. Field-by-field:
+#
+#   bench_serving key          ->  process_result.py key       (purpose)
+#   --------------------------     ------------------------     -------------------------
+#   max_concurrency            ->  max_concurrency             (sweep point; falls back to $C)
+#   total_throughput           ->  total_token_throughput      (in+out tok/s, tput_per_gpu)
+#   output_throughput          ->  output_throughput           (out tok/s, output_tput_per_gpu)
+#   median_ttft_ms             ->  median_ttft_ms              (TTFT; /1000 -> s)
+#   median_tpot_ms             ->  median_tpot_ms              (TPOT; -> interactivity)
+#   median_e2e_latency_ms      ->  median_e2el_ms              (E2E latency; /1000 -> s)
+#   (none; injected here)      ->  model_id                    (served model, from $MODEL_PATH)
+# ---------------------------------------------------------------------------
+# GPU counts are per-ROLE totals across all engines: PW prefill engines of PTP
+# GPUs each, DW decode engines of DTP each. For EP<=8 (PW=DW=1) this is PTP/DTP
+# exactly, so the filename fields are unchanged. process_result.py reads the
+# _ctx_/_gen_ fields as PREFILL_GPUS/DECODE_GPUS for its per-GPU throughput math,
+# so they must be the role totals (Oren EP16: ctx=2*8=16, gen=1*16=16, gpus=32).
 PREFILL_GPUS_TOTAL=$((PW * PTP)); DECODE_GPUS_TOTAL=$((DW * DTP))
 TOTAL_GPUS=$((PREFILL_GPUS_TOTAL + DECODE_GPUS_TOTAL))
 # Clear this leg's results from any previous run before writing new ones.
+# The filenames are a pure function of the config, so a run that produces
+# fewer concurrency points than the last one leaves the missing slots filled
+# by the old run's files and the published table silently mixes two runs.
+# Seen on kimik26-mxfp4-1k1k-2p1d-ep16-mxfp4: 2 points measured, 7 published,
+# 5 of them a day old. Deleting first means a short run looks short.
 rm -f "$GITHUB_WORKSPACE/${RESULT_FILENAME}_${MATRIX_CONFIG_NAME}_conc"*"_gpus_"*".json"
 
 PROCESSED=0
 for C in ${CONCS//,/ }; do
     RAW="$WORKDIR/raw_conc${C}.json"
     # raw_conc*.json is written by the bench container on a compute node; this
-    # loop runs on the driver.
+    # loop runs on the driver. NFS close-to-open means the last file written is
+    # routinely not visible here yet, and skipping it outright silently dropped
+    # one or two concurrency points from four legs of a 34-leg sweep -- the runs
+    # were fine, only the published results were short. Wait a bounded 60s.
     for _ in $(seq 1 20); do
         [[ -f "$RAW" ]] && break
         sleep 3

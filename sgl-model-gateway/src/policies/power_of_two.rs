@@ -1,4 +1,4 @@
-//! Power-of-choices load balancing policy
+//! Power-of-two choices load balancing policy
 
 use std::{
     collections::HashMap,
@@ -12,7 +12,10 @@ use tracing::debug;
 use super::{get_healthy_worker_indices, LoadBalancingPolicy, SelectWorkerInfo};
 use crate::core::Worker;
 
-/// Power-of- choices policy Randomly selects workers and routes to the one with lower load.
+/// Power-of-two choices policy
+///
+/// Randomly selects two workers and routes to the one with lower load.
+/// This provides good load distribution with minimal coordination overhead.
 #[derive(Debug)]
 pub struct PowerOfTwoPolicy {
     /// Cached load information from external monitoring
@@ -44,9 +47,10 @@ impl LoadBalancingPolicy for PowerOfTwoPolicy {
             return Some(healthy_indices[0]);
         }
 
-        // Select random workers - use offset to guarantee different selection in O(1)
+        // Select two random workers - use offset to guarantee different selection in O(1)
         let mut rng = rand::rng();
         let idx1 = rng.random_range(0..healthy_indices.len());
+        // Pick idx2 from remaining indices: offset by 1 + random from (len-1) to guarantee different
         let idx2 =
             (idx1 + 1 + rng.random_range(0..healthy_indices.len() - 1)) % healthy_indices.len();
 
@@ -74,7 +78,8 @@ impl LoadBalancingPolicy for PowerOfTwoPolicy {
                 (t1, t2)
             }
             _ => {
-                // If One or both are missing token data. Fallback to local request counts for BOTH.
+                // If One or both are missing token data.
+                // Fallback to local request counts for BOTH.
                 (worker1.load() as isize, worker2.load() as isize)
             }
         };
@@ -147,6 +152,7 @@ mod tests {
         for _ in 0..5 {
             worker2.increment_load();
         }
+        // worker3 has load 0
 
         let workers: Vec<Arc<dyn Worker>> =
             vec![Arc::new(worker1), Arc::new(worker2), Arc::new(worker3)];
@@ -229,10 +235,12 @@ mod tests {
         // 1. Setup the policy
         let policy = PowerOfTwoPolicy::new();
 
+        // 2. Create Worker A: Idle (0 reqs), but has high token usage in cache
         let worker_a = BasicWorkerBuilder::new("http://worker_a:8000")
             .worker_type(WorkerType::Regular)
             .build();
 
+        // 3. Create Worker B: Busy (5 reqs), but missing from cache
         let worker_b = BasicWorkerBuilder::new("http://worker_b:8000")
             .worker_type(WorkerType::Regular)
             .build();
@@ -244,7 +252,8 @@ mod tests {
 
         let workers: Vec<Arc<dyn Worker>> = vec![Arc::new(worker_a), Arc::new(worker_b)];
 
-        // 4. Simulate LoadMonitor update: Only Worker A gets a token report.
+        // 4. Simulate LoadMonitor update:
+        // Only Worker A gets a token report. Worker B is missing (e.g. monitor failure).
         let mut loads = HashMap::new();
         loads.insert("http://worker_a:8000".to_string(), 50_000); // 50k tokens load
         policy.update_loads(&loads);
@@ -255,6 +264,12 @@ mod tests {
             .await
             .expect("Should select a worker");
 
+        // 6. Verify the Fix
+        // Logic:
+        // - Worker A has token load (50k) but Worker B has NO token load.
+        // - Policy should fallback to request counts for BOTH.
+        // - A has 0 requests, B has 5 requests.
+        // - 0 <= 5, so A should be selected.
 
         if selected_idx == 0 {
             println!("Bug Fixed: System correctly fell back to request counts and selected idle Worker A.");
@@ -264,6 +279,7 @@ mod tests {
             );
         }
 
+        // Assert that the CORRECT worker (A, index 0) is selected
         assert_eq!(
             selected_idx, 0,
             "The policy failed to handle incompatible metrics. Should select idle Worker A."
@@ -288,6 +304,10 @@ mod tests {
             Arc::new(w)
         };
 
+        //  Scenario 1: Happy Path (Both have Token Data)
+        // Worker A: 10 requests, but only 1,000 tokens (Light usage) -> Should be CHOSEN
+        // Worker B:  2 requests, but 100,000 tokens (Heavy usage) -> Should be AVOIDED
+        // This proves we use high-fidelity metrics when available, ignoring request counts.
         let w_a = create_worker("http://a:8000", 10);
         let w_b = create_worker("http://b:8000", 2);
         let workers_1: Vec<Arc<dyn Worker>> = vec![w_a.clone(), w_b.clone()];
@@ -306,6 +326,10 @@ mod tests {
             "Happy Path Failed: Should select Worker A (fewer tokens) despite higher request count"
         );
 
+        // Scenario 2: Partial Failure (Worker A has tokens, Worker B is missing)
+        // Worker A: 10 requests, 1,000 tokens (Cached)
+        // Worker B:  2 requests, MISSING cache
+        // Logic: Fallback to requests -> Compare 10 (A) vs 2 (B) -> Select B
         let w_c = create_worker("http://c:8000", 10);
         let w_d = create_worker("http://d:8000", 2);
         let workers_2: Vec<Arc<dyn Worker>> = vec![w_c.clone(), w_d.clone()];
@@ -321,6 +345,10 @@ mod tests {
             .unwrap();
         assert_eq!(idx_2, 1, "Partial Fail 1 Failed: Should fallback to requests and select Worker B (fewer requests)");
 
+        // Scenario 3: Partial Failure (Worker A is missing, Worker B has tokens)
+        // Worker A:  2 requests, MISSING cache
+        // Worker B: 10 requests, 1,000 tokens (Cached)
+        // Logic: Fallback to requests -> Compare 2 (A) vs 10 (B) -> Select A
         let w_e = create_worker("http://e:8000", 2);
         let w_f = create_worker("http://f:8000", 10);
         let workers_3: Vec<Arc<dyn Worker>> = vec![w_e.clone(), w_f.clone()];
@@ -336,6 +364,10 @@ mod tests {
             .unwrap();
         assert_eq!(idx_3, 0, "Partial Fail 2 Failed: Should fallback to requests and select Worker A (fewer requests)");
 
+        // Scenario 4: Total Failure (Both missing)
+        // Worker A: 5 requests
+        // Worker B: 3 requests
+        // Logic: Requests vs Requests -> Select B
         let w_g = create_worker("http://g:8000", 5);
         let w_h = create_worker("http://h:8000", 3);
         let workers_4: Vec<Arc<dyn Worker>> = vec![w_g.clone(), w_h.clone()];

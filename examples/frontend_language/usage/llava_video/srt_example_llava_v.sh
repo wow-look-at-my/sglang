@@ -42,8 +42,8 @@ NUM_FRAMES=$5
 
 # FRAME_FORMAT=$(echo $FRAME_FORMAT | tr '[:lower:]' '[:upper:]')
 
-# # Check if FRAME_FORMAT is either JPEG or PNG if [[ "$FRAME_FORMAT"
-# != "JPEG" && "$FRAME_FORMAT" != "PNG" ]].
+# # Check if FRAME_FORMAT is either JPEG or PNG
+# if [[ "$FRAME_FORMAT" != "JPEG" && "$FRAME_FORMAT" != "PNG" ]]; then
 #     echo "Error: FRAME_FORMAT must be either JPEG or PNG."
 #     exit 1
 # fi
@@ -83,7 +83,7 @@ for IDX in $(seq 1 $LOCAL_CHUNKS); do
 
         echo "Chunk $(($LOCAL_IDX - 1)) will run on GPUs $CHUNK_GPUS_STR"
 
-        # Calculate the port for this chunk.
+        # Calculate the port for this chunk. Ensure it's incremented by 5 for each chunk.
         PORT=$((10000 + RANDOM % 55536))
 
         MAX_RETRIES=10

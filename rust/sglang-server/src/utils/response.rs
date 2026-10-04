@@ -1,4 +1,12 @@
 //! Shared HTTP error-response shaping for the api-server endpoint modules.
+//!
+//! Two mechanics live here; the WIRE SHAPES stay owned by their endpoints:
+//! the native `{"error": {"message", "code"}}` body (Python
+//! `http_server.generate_request` parity) built by [`error_value`] and formed
+//! by [`json_error`], and the SSE variant [`sse_error_response`] used by any
+//! endpoint family (native and OpenAI alike — the caller supplies its own
+//! body shape). The OpenAI error payload and the PD bootstrap registry's
+//! plain-text bodies are protocol-owned and deliberately not unified here.
 
 use std::convert::Infallible;
 
@@ -23,7 +31,10 @@ pub fn json_error(code: StatusCode, message: &str) -> Response {
 }
 
 /// Form an error in the shape the client committed to: unary → `code` plus
-/// the JSON `body`.
+/// the JSON `body`; streaming → 200 with one SSE error frame + `[DONE]` (the
+/// client is already reading a stream — Python answers in-stream too, from
+/// `stream_results()`). The `body` is caller-shaped: native [`error_value`]
+/// or the OpenAI error payload.
 pub fn error_response(code: StatusCode, body: serde_json::Value, stream: bool) -> Response {
     if !stream {
         return (code, Json(body)).into_response();
@@ -31,7 +42,8 @@ pub fn error_response(code: StatusCode, body: serde_json::Value, stream: bool) -
     sse_error_response(body)
 }
 
-/// Shared by every
+/// A 200 SSE response carrying one error frame + `[DONE]` — how a stream the
+/// client is already committed to reading reports a failure. Shared by every
 /// endpoint family: the native API and the OpenAI
 /// frontend's `openai_error_response`.
 pub fn sse_error_response(body: serde_json::Value) -> Response {
@@ -46,7 +58,10 @@ pub fn sse_error_response(body: serde_json::Value) -> Response {
 mod tests {
     use super::*;
 
-    /// Python-parity pins for the native error shapes (`generate_request`): unary errors are a 4xx/5xx with a JSON `{"error": ...}` body.
+    /// Python-parity pins for the native error shapes (`generate_request`):
+    /// unary errors are a 4xx/5xx with a JSON `{"error": ...}` body; streaming
+    /// ones are 200 + one SSE error frame + `[DONE]`, because Python answers
+    /// from inside `stream_results()` once the stream is committed.
     #[tokio::test]
     async fn error_responses_match_python_shape() {
         let unary = error_response(

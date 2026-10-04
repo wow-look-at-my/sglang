@@ -1,5 +1,8 @@
 #!/bin/bash
 # Install dependencies for CUDA CI jobs.
+#
+# CU_VERSION (default: cu130) controls PyTorch index URL, FlashInfer JIT cache
+# index, and the sglang wheel index. CUDA 13 only.
 set -euxo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,7 +11,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 # shellcheck source=scripts/ci/utils/git_clone_with_retry.sh
 source "${SCRIPT_DIR}/../utils/git_clone_with_retry.sh"
 
-# --------------------------------------------------------------------------- Timing helper.
+# ---------------------------------------------------------------------------
+# Timing helper
+# ---------------------------------------------------------------------------
 SECONDS=0
 _CI_MARK_PREV=${SECONDS}
 
@@ -26,7 +31,9 @@ mark_step_done() {
 # ---------------------------------------------------------------------------
 
 configure_environment() {
-    # CU_VERSION controls PyTorch index URL, FlashInfer JIT cache index, and the sglang wheel index.
+    # CU_VERSION controls PyTorch index URL, FlashInfer JIT cache index, and
+    # the sglang wheel index. Only CUDA 13 lanes exist: PyTorch 2.14 publishes
+    # no CUDA 12 wheels for the cu129 index the retired cu12 lane used.
     CU_VERSION="${CU_VERSION:-cu130}"
     CU_STRIP="${CU_VERSION#cu}"
     case "${CU_STRIP}" in
@@ -44,7 +51,7 @@ configure_environment() {
         fi
     fi
 
-    # Whether to create a uv venv (set USE_VENV=1).
+    # Whether to create a uv venv (set USE_VENV=1). Default: 0.
     USE_VENV="${USE_VENV:-0}"
     echo "USE_VENV=${USE_VENV}"
 
@@ -131,7 +138,11 @@ kill_existing_processes() {
 }
 
 cleanup_stale_shm() {
-    # Reclaim /dev/shm segments leaked by SIGKILLed processes from earlier jobs.
+    # Reclaim /dev/shm segments leaked by SIGKILLed processes from earlier
+    # jobs; leaked segments accumulate until the tmpfs fills and scheduler
+    # init dies with SIGBUS. Runs right after killall so every dead creator's
+    # segments are reclaimable. The module is dependency-free and runnable by
+    # path, so this works before sglang is installed.
     SGLANG_IS_IN_CI=true python3 "${REPO_ROOT}/python/sglang/srt/utils/stale_shm_cleanup.py" || true
 
     mark_step_done "${FUNCNAME[0]}"
@@ -139,6 +150,8 @@ cleanup_stale_shm() {
 
 is_apt_package_installed() {
     local name
+    # Ubuntu 24.04 renamed time64 libraries (librdmacm1 -> librdmacm1t64);
+    # apt-get follows the Provides alias, dpkg -l does not.
     for name in "$1" "${1}t64"; do
         if dpkg -l "$name" 2>/dev/null | grep -q "^ii"; then
             return 0
@@ -156,7 +169,10 @@ install_apt_packages() {
         ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
     )
 
-    # The images bake these in, so the usual run pays apt-get update's round trips to install nothing.
+    # The images bake these in, so the usual run pays apt-get update's round
+    # trips to install nothing. Skipping it costs no currency either: apt-get
+    # install only ever considers the packages named above, and a passing run
+    # leaves 100+ others un-upgraded - the image is what pins these versions.
     local pkg
     local -a MISSING_APT_PACKAGES=()
     for pkg in "${CI_APT_PACKAGES[@]}"; do
@@ -178,6 +194,8 @@ install_apt_packages() {
 }
 
 install_gdrcopy() {
+    # DeepEP tests only run on 4+ GPU hosts. Keep GDRCopy in the shared CUDA
+    # bootstrap while avoiding a DKMS/package build on the 1- and 2-GPU jobs.
     local gpu_count=0
     if command -v nvidia-smi >/dev/null 2>&1; then
         gpu_count=$(
@@ -236,8 +254,12 @@ install_gdrcopy() {
 }
 
 clean_site_packages() {
-    # The torch compilation cache is deliberately NOT wiped here.
+    # The torch compilation cache is deliberately NOT wiped here: entries are
+    # content-hash addressed so stale ones are never reused, and hosts packing
+    # several runners share one cache mount - a wipe unlinks files a concurrent
+    # job is compiling against.
 
+    # Remove broken dist-info directories (missing METADATA per PEP 376)
     SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])")
     if [ -d "$SITE_PACKAGES" ]; then
         { set +x; } 2>/dev/null
@@ -250,9 +272,11 @@ clean_site_packages() {
         set -x
     fi
 
-    # An orphaned sglang/ shadows the checkout: `uv pip uninstall` deletes
-    # only what RECORD lists, so __pycache__ keeps the directory alive without
-    # __init__.py.
+    # An orphaned sglang/ shadows the checkout: `uv pip uninstall` deletes only
+    # what RECORD lists, so __pycache__ keeps the directory alive without
+    # __init__.py, PathFinder claims it as a namespace portion, and the editable
+    # install's _EditableFinder sits at the END of sys.meta_path - submodule
+    # imports fail. No install leaves this directory without __init__.py.
     if [ -d "$SITE_PACKAGES/sglang" ] && [ ! -f "$SITE_PACKAGES/sglang/__init__.py" ]; then
         echo "Removing orphaned sglang skeleton that would shadow the checkout: $SITE_PACKAGES/sglang"
         find "$SITE_PACKAGES/sglang" -maxdepth 2 | head -20
@@ -269,7 +293,11 @@ clean_site_packages() {
     bash "${SCRIPT_DIR}/../utils/install_rust_protoc.sh"
     export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:${PATH}"
 
-    # Same-step counterpart of the PATH export above: install_rustup.sh exports RUSTUP_TOOLCHAIN too.
+    # Same-step counterpart of the PATH export above: install_rustup.sh exports
+    # RUSTUP_TOOLCHAIN too, but as a child process only reaches later steps.
+    # rust-toolchain.toml does not cover it either - setuptools-rust runs cargo
+    # from python/, outside the pin's cwd scope - so without this an image's own
+    # older rustc builds the crates and fails their MSRV.
     RUST_PINNED_CHANNEL=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' "${REPO_ROOT}/rust/rust-toolchain.toml" 2>/dev/null || true)
     if [ -n "${RUST_PINNED_CHANNEL}" ]; then
         export RUSTUP_TOOLCHAIN="${RUST_PINNED_CHANNEL}"
@@ -286,7 +314,10 @@ setup_cargo_cache() {
         return
     fi
 
-    # actions/checkout's `git clean -ffdx` deletes the gitignored in-repo rust/target.
+    # actions/checkout's `git clean -ffdx` deletes the gitignored in-repo
+    # rust/target, so every job recompiles the whole dependency graph. Move the
+    # target dir out of the tree: setuptools-rust has no target-dir option of its
+    # own and defers to CARGO_TARGET_DIR, which uv passes to the build backend.
     export CARGO_TARGET_DIR="${HOME}/.cache/sglang-cargo-target"
     local cargo_target_lock="${HOME}/.cache/sglang-cargo-target.lock"
     mkdir -p "${HOME}/.cache"
@@ -297,7 +328,9 @@ setup_cargo_cache() {
     echo "Acquired cargo target lock"
     mkdir -p "${CARGO_TARGET_DIR}"
 
-    # Same disk-pressure guard as the uv cache in ci_cleanup_venv.sh (which carries the ENOSPC story). cargo cannot prune partially.
+    # Same disk-pressure guard as the uv cache in ci_cleanup_venv.sh (which
+    # carries the ENOSPC story). cargo cannot prune partially, so drop the whole
+    # tree and pay one cold build.
     local used
     used="$(df --output=pcent "${CARGO_TARGET_DIR}" 2>/dev/null | tr -dc '0-9')"
     if [ "${used:-0}" -ge 85 ]; then
@@ -334,7 +367,9 @@ setup_pip_toolchain() {
     PIP_UNINSTALL_CMD="uv pip uninstall"
     PIP_UNINSTALL_SUFFIX=""
 
-    # Remove both the source distribution and the SGLang wheel before resolving the pyproject pin.
+    # Remove both the legacy source distribution and the SGLang wheel before
+    # resolving the pyproject pin. They own the same deep_ep module files, so
+    # leaving either installed can make pip preserve a mixed installation.
     $PIP_UNINSTALL_CMD deep-ep sgl-deep-ep $PIP_UNINSTALL_SUFFIX || true
 
     # sglang-kernel stays: install_sglang_kernel version-gates and reinstalls it.
@@ -369,8 +404,11 @@ remove_stale_cuda12_nvidia_wheels() {
     echo "Removing stale CUDA 12 NVIDIA wheels from ${CU_VERSION} job: ${STALE_CUDA12_NVIDIA_WHEELS[*]}"
     $PIP_UNINSTALL_CMD "${STALE_CUDA12_NVIDIA_WHEELS[@]}" $PIP_UNINSTALL_SUFFIX
 
-    # Uninstalling the stale variant deletes those shared files even though
-    # the remaining wheel metadata still says they are installed.
+    # CUDA 12 and CUDA 13 wheels can own the same nvidia/* paths. Uninstalling
+    # the stale variant deletes those shared files even though the remaining
+    # wheel metadata still says they are installed. Restore every remaining
+    # NVIDIA wheel at its already-installed version to make the transition
+    # atomic and avoid package-specific payload checks.
     if [ ${#NVIDIA_WHEELS_TO_RESTORE[@]} -gt 0 ]; then
         echo "Restoring NVIDIA wheels after CUDA 12 cleanup: ${NVIDIA_WHEELS_TO_RESTORE[*]}"
         $PIP_CMD install --force-reinstall --no-deps "${NVIDIA_WHEELS_TO_RESTORE[@]}" $PIP_INSTALL_SUFFIX
@@ -380,6 +418,9 @@ remove_stale_cuda12_nvidia_wheels() {
 }
 
 uninstall_stale_flashinfer() {
+    # Keep flashinfer packages if version matches to avoid re-downloading:
+    # - flashinfer-cubin: 150+ MB
+    # - flashinfer-jit-cache: 1.2+ GB
     FLASHINFER_PYTHON_REQUIRED=$(grep -Po -m1 'flashinfer_python(\[[^]]+\])?==\K[0-9A-Za-z\.\-]+' python/pyproject.toml || echo "")
     # flashinfer-cubin is no longer a pyproject dependency (installed explicitly below), tracks the same version as flashinfer_python
     FLASHINFER_CUBIN_REQUIRED="$FLASHINFER_PYTHON_REQUIRED"
@@ -452,13 +493,20 @@ require_prebuilt_rust_exts() {
         mark_step_done "${FUNCNAME[0]}"
         return
     fi
-    # Stages whose download succeeded set this to none.
+    # Stages whose download succeeded set this to none. Runs before
+    # setup_pip_toolchain uninstalls sglang, so clearing it here still reaches
+    # install_sglang below - setup.py reads it from the environment at build time.
     if [ "${SGLANG_BUILD_RUST_EXTS:-}" != "none" ]; then
         mark_step_done "${FUNCNAME[0]}"
         return
     fi
 
-    # Exact EXT_SUFFIX rather than an _*.so glob: no crate sets abi3.
+    # Exact EXT_SUFFIX rather than an _*.so glob: no crate sets abi3, so a module
+    # built for another minor version satisfies the glob while the import system
+    # ignores it, leaving is_rust_server_built() false and the Rust-server tests
+    # silently skipped. Stages have no setup-python, so the interpreter is whatever
+    # the image ships, and the pools are not on one version (h20 is 3.12 while
+    # h100 is 3.10) - a mismatch is drift to route around, not a failure.
     local suffix
     suffix=$(python3 -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')
     local missing=()
@@ -495,7 +543,9 @@ install_sglang() {
     echo "Installing python extras: [${EXTRAS}]"
     $PIP_CMD install -e "python[${EXTRAS}]" $PIP_INSTALL_SUFFIX
 
-    # Defensive: some runners ended up with nvidia-cusparselt-cu13 metadata present but libcusparseLt.so.0 missing on disk.
+    # Defensive: some runners ended up with nvidia-cusparselt-cu13 metadata
+    # present but libcusparseLt.so.0 missing on disk, breaking any torch import.
+    # If the file is missing, force-reinstall the wheel before downstream steps.
     SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])")
     if [ ! -f "$SITE_PACKAGES/nvidia/cusparselt/lib/libcusparseLt.so.0" ] \
        && pip show nvidia-cusparselt-cu13 >/dev/null 2>&1; then
@@ -507,12 +557,19 @@ install_sglang() {
 }
 
 install_nccl() {
+    # PyTorch pins 2.29.7, so this override must run after every command
+    # that resolves Python dependencies (including lmms-eval).
     $PIP_CMD install "nvidia-nccl-cu13==2.30.7" \
         --force-reinstall --no-deps $PIP_INSTALL_SUFFIX
 
     mark_step_done "${FUNCNAME[0]}"
 }
 
+# Trust an installed wheel only if the version matches and every RECORD file is
+# on disk (dist-info can survive a partial install - cf. the cusparselt guard).
+# reject-local refuses wheels installed from a local file: a kernel-PR job
+# installs its own build under the SAME +cuXXX version string, and only file://
+# provenance (PEP 610; index installs record none) tells them apart.
 installed_wheel_ok() {
     WHEEL_DIST="$1" WHEEL_WANTED="$2" WHEEL_REJECT_LOCAL="${3:-}" python3 - <<'EOF'
 import importlib.metadata as md
@@ -572,7 +629,9 @@ install_sglang_kernel() {
     fi
 
     if [ "${CUSTOM_BUILD_SGL_KERNEL:-}" != "true" ]; then
-        # The PyPI default wheel tracks one CUDA version ( cu130).
+        # The PyPI default wheel tracks one CUDA version (currently cu130); other
+        # runners need the +${CU_VERSION}-tagged wheel from the sglang index,
+        # linked against the right libnvrtc.
         SGL_KERNEL_WANTED="${SGL_KERNEL_VERSION_FROM_SRT}+${CU_VERSION}"
         if installed_wheel_ok sglang-kernel "${SGL_KERNEL_WANTED}" reject-local; then
             echo "sglang-kernel==${SGL_KERNEL_WANTED} already installed, keeping it"
@@ -623,7 +682,8 @@ download_flashinfer_cache() {
 
 stabilize_flashinfer_jit_paths() {
     # In venv mode, FlashInfer JIT writes build.ninja with hardcoded -isystem
-    # paths.
+    # paths. Per-job venvs get unique paths, but the JIT cache is shared on the
+    # host mount. Fix by symlinking venv copies to a stable host-mounted path.
     if [ "$USE_VENV" != "1" ]; then
         return
     fi
@@ -679,7 +739,10 @@ install_extra_deps() {
     NIXL_BIN_NAME="nixl-cu13"
     EXTRA_NVIDIA_SPECS="nvidia-cuda-nvrtc"
     # Both variants own the same mooncake/ package files and bin/ scripts
-    # (mooncake_master, etc.).
+    # (mooncake_master, etc.). Uninstalling the stale variant deletes shared
+    # files that the live variant's RECORD still references, so we force a
+    # reinstall to restore them — pip would otherwise see "already satisfied"
+    # and skip.
     if pip show ${MOONCAKE_STALE_PKG} >/dev/null 2>&1; then
         $PIP_UNINSTALL_CMD ${MOONCAKE_STALE_PKG} $PIP_UNINSTALL_SUFFIX || true
         $PIP_CMD install ${MOONCAKE_PKG} --force-reinstall --no-deps $PIP_INSTALL_SUFFIX
@@ -694,13 +757,18 @@ install_extra_deps() {
         echo "nixl==${NIXL_VERSION} and ${NIXL_BIN_NAME}==${NIXL_VERSION} already installed, keeping them"
     else
         echo "nixl mismatch (meta: ${NIXL_INSTALLED:-none}, ${NIXL_BIN_NAME}: ${NIXL_BIN_INSTALLED:-none}, required: ${NIXL_VERSION}); installing"
-        # Meta stub owns the nixl import path.
+        # Meta stub owns the nixl import path; install only the CUDA binary for
+        # this runner's torch CUDA major. --no-deps avoids pulling the other CUDA
+        # variant; leave any other variant already on the runner image untouched.
         $PIP_CMD install "nixl==${NIXL_VERSION}" "${NIXL_BIN_NAME}==${NIXL_VERSION}" \
             --no-deps --force-reinstall $PIP_INSTALL_SUFFIX
     fi
 
     if [ "$IS_BLACKWELL" != "1" ]; then
         $PIP_CMD install "lmms_eval==0.5.0" $PIP_INSTALL_SUFFIX
+        # lmms_eval 0.5.0 pulls antlr4-python3-runtime==4.7.2, clobbering the
+        # 4.9.3 that sgl-eval's latex2sympy2_extended needs (4.7.2 ImportError
+        # at sgl-eval import). Pin it back so the nightly sgl-eval path works.
         $PIP_CMD install "antlr4-python3-runtime==4.9.3" --force-reinstall --no-deps $PIP_INSTALL_SUFFIX
     fi
     $PIP_CMD uninstall xformers || true
@@ -726,7 +794,8 @@ prepare_runner() {
 }
 
 setup_ld_library_path() {
-    # NVIDIA pip packages and torch ship .so files under site-packages that are not on the default LD_LIBRARY_PATH.
+    # NVIDIA pip packages and torch ship .so files under site-packages that are
+    # not on the default LD_LIBRARY_PATH; lib/ always nests under nvidia/.
     SITE_PACKAGES=$(python3 -c "import site, sys; print(site.getsitepackages()[0])")
     NVIDIA_LIBS=$( (find "$SITE_PACKAGES/nvidia" -type d -name lib 2>/dev/null || true) | tr '\n' ':')
     TORCH_LIB="$SITE_PACKAGES/torch/lib"
@@ -825,6 +894,8 @@ main() {
     setup_cargo_cache
     install_sglang
     release_cargo_cache_lock
+    # Diffusion B200 CI imports torch inside install_sglang_kernel after removing
+    # stale CUDA 12 NVIDIA wheels, so opt into one early LD_LIBRARY_PATH refresh.
     if [ "${SGLANG_CI_EARLY_LD_LIBRARY_PATH:-0}" = "1" ]; then
         setup_ld_library_path
     fi

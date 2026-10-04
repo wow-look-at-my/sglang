@@ -410,6 +410,7 @@ fn generated_response_id(prefix: &str) -> String {
 }
 
 /// Lower the OpenAI Chat wire type into the structured internal chat request.
+/// Chat template rendering and tool constraints deliberately happen later in
 /// `ChatPreprocessor`, where every transport shares them.
 pub(crate) fn lower_chat_request(
     config: &RendererConfig,
@@ -841,7 +842,8 @@ pub fn completion_sampling_params(
         top_p: request.top_p.map(f64::from).unwrap_or(defaults.top_p),
         frequency_penalty: request.frequency_penalty.unwrap_or(0.0) as f64,
         presence_penalty: request.presence_penalty.unwrap_or(0.0) as f64,
-        // OpenAI `n` is implemented by fan-out: every native request has one output.
+        // OpenAI `n` is implemented by fan-out: every native request has one
+        // output, avoiding the native path's intentional `n > 1` rejection.
         n: 1,
         logit_bias: (!logit_bias.is_empty()).then_some(logit_bias),
         sampling_seed: request.seed,

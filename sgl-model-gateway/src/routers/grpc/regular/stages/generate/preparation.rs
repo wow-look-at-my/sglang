@@ -19,7 +19,10 @@ use crate::{
     tokenizer::traits::Tokenizer,
 };
 
-/// Generate preparation stage Extracts generate-specific preparation logic from the unified PreparationStage.
+/// Generate preparation stage
+///
+/// Extracts generate-specific preparation logic from the old unified PreparationStage.
+/// This is a direct extraction without architectural changes.
 pub(crate) struct GeneratePreparationStage;
 
 #[async_trait]

@@ -1,4 +1,7 @@
-//! The response direction: the per-request back-channel the API handler drains ([`ResponseSink`] / [`ResponseItem`]).
+//! The response direction: the per-request back-channel the API handler
+//! drains ([`ResponseSink`] / [`ResponseItem`]), the response frame encodings
+//! (batch / control result / error), and the columnar batch decode into
+//! per-request [`ChunkEvent`]s.
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -9,13 +12,15 @@ use super::types::TokenIds;
 use crate::message::ids::Rid;
 use crate::utils::error::Error;
 
-/// Per-request back-channel the detok shard writes decode frames to and the API handler drains for SSE; bounded.
+/// Per-request back-channel the detok shard writes decode frames to and the API
+/// handler drains for SSE; bounded, and receiver-drop (disconnect) = stream end.
 #[derive(Clone, Debug)]
 pub enum ResponseSink {
     Local(mpsc::Sender<ResponseItem>),
 }
 
-/// Why an [`ResponseSink::try_send`] failed: `Full` = client backpressure, `Closed` = client gone.
+/// Why an [`ResponseSink::try_send`] failed: `Full` = client backpressure, `Closed`
+/// = client gone. Both terminal for a stream; the caller distinguishes for logging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SinkError {
     Full,
@@ -37,31 +42,41 @@ impl ResponseSink {
 #[allow(dead_code)] // the receiver half is created inline in api_server::submit.
 pub type ResponseSource = mpsc::Receiver<ResponseItem>;
 
-/// What the connection handler receives on the decode stream: a detok-decoded [`ChunkEvent`] (handler formats it).
+/// What the connection handler receives on the decode stream: a detok-decoded
+/// [`ChunkEvent`] (handler formats it), a verbatim control payload, or an error.
 #[derive(Debug)]
 pub enum ResponseItem {
     /// An intermediate streamed generation step (only sent for streaming reqs).
     Frame(ChunkEvent),
     /// The final generation step.
     Done(ChunkEvent),
-    /// A control-request result: one verbatim payload (e.g. `/server_info`), delivered as-is.
+    /// A control-request result: one verbatim payload (e.g. `/server_info`),
+    /// delivered as-is with no per-protocol formatting.
     Control(Bytes),
-    /// Reply to an internal service request (`RequestKind::Detokenize`): raw bytes for the SUBMITTER to consume.
+    /// Reply to an internal service request (`RequestKind::Detokenize`): raw
+    /// bytes for the SUBMITTER to consume (e.g. the decoded prompt text), not
+    /// client-bound JSON like `Control` and not a generation frame. Generation
+    /// and control drains never see it.
     Data(Bytes),
     /// Terminal failure: handler emits an error frame (stream) or status (unary).
     Error(Error),
 }
 
-/// Response frame tag (first byte, prepended Rust-side.
+/// Response frame tag (first byte, prepended Rust-side; Python wire unchanged):
+/// a single control-request result payload.
 pub const DISPATCH_TAG_RESULT: u8 = 1;
-/// A whole decode batch: msgpack columnar header + one concatenated raw buffer.
+/// A whole decode batch: msgpack columnar header + one concatenated raw buffer;
+/// from-scheduler decodes it into per-request [`ChunkEvent`]s (no per-request FFI).
 pub const DISPATCH_TAG_BATCH: u8 = 2;
-/// A per-request failure `[rid, message]`: the Python drain couldn't decode a header.
+/// A per-request failure `[rid, message]`: the Python drain couldn't decode a
+/// header, so it routes a 400 back to that request instead of crashing the loop.
 pub const DISPATCH_TAG_ERROR: u8 = 3;
 
-/// Read `n` little-endian f32s from `data` at `*off`, advancing `*off`.
-/// `None` when the range runs past the buffer (a malformed /
-/// positional-ABI-drifted frame): the caller rejects the whole frame.
+/// Read `n` little-endian f32s from `data` at `*off`, advancing `*off`. `None` when
+/// the range runs past the buffer (a malformed / positional-ABI-drifted frame): the
+/// caller rejects the whole frame. Bounds-checked via `data.get` — clamping only the
+/// end is unsafe because a prior bad length can push `*off` past `len`, making the
+/// range reversed (`start > end`) and the slice panic.
 fn take_f32(data: &[u8], off: &mut usize, n: usize) -> Option<Vec<f32>> {
     let start = *off;
     let end = start.checked_add(n.checked_mul(4)?)?;
@@ -103,10 +118,24 @@ pub fn frame_decode_batch_cols(header: &[u8], data_cols: &[&[u8]]) -> Bytes {
     Bytes::from(buf)
 }
 
-/// Columnar scalar header for a whole decode batch.
+/// Columnar scalar header for a whole decode batch. The first four fields are
+/// required; every field after `tok_lens` defaults empty, so the hot path emits
+/// a four-element header. Field order is the wire ABI and must match
+/// `RustTokenizerManager.push_generation`'s `header_cols` in
+/// `python/sglang/srt/rust_server/server.py`.
+///
+/// Field names follow `direction_family_shape`:
+/// - direction: `out` = decode output, `in` = prefill input;
+/// - family: `lp` = token logprobs, `top` = top-k logprobs, `tokids_lp` =
+///   requested-token logprobs, and `hidden` = hidden states;
+/// - shape: `lens` counts elements per request, `reqlens` counts positions or
+///   rows per request, and `poslens` counts elements per position or row.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct BatchHeader {
-    /// Request ids, as the same strings Python holds (`Req.rid`, uuid hex) — hashed back to the internal routing key in `decode_one`.
+    /// Request ids, as the same strings Python holds (`Req.rid`, uuid hex) —
+    /// hashed back to the internal routing key in `decode_one`
+    /// (`Rid::shard`), mirroring the control path. The wire has no
+    /// rid-shape coupling; any string is a valid rid.
     pub rids: Vec<String>,
     pub finish_reasons: Vec<Option<FinishReason>>,
     pub prompt_tokens: Vec<u32>,
@@ -137,8 +166,9 @@ pub struct BatchHeader {
     pub hidden_poslens: Vec<u32>,
 }
 
-/// Read a request's flat logprob column (`l` val/idx pairs) from `data` at
-/// cursors `cv`/`ci`, advancing them.
+/// Read a request's flat logprob column (`l` val/idx pairs) from `data` at cursors
+/// `cv`/`ci`, advancing them. Only this request is copied — no whole-column buffer.
+/// `None` if either read runs past the buffer (see [`take_f32`]).
 fn take_flat(
     data: &[u8],
     cv: &mut usize,
@@ -148,7 +178,12 @@ fn take_flat(
     Some((take_f32(data, cv, l)?, take_i32(data, ci, l)?))
 }
 
-/// Read `np` per-position lengths from `poslens` at `*pcur`, advancing it.
+/// Read `np` per-position lengths from `poslens` at `*pcur`, advancing it. `None`
+/// when the range runs past the column — the header's `reqlens` promised more
+/// positions than `poslens` carries, so this request's lengths are unknowable.
+/// Clamping instead would return a short `lens`, and since `lens` also drives how
+/// far the val/idx cursors advance, every later request in that column would read
+/// from the wrong offset: silently wrong logprobs rather than a rejected frame.
 fn take_poslens(poslens: &[u32], pcur: &mut usize, np: usize) -> Option<Vec<u32>> {
     let start = *pcur;
     let end = start.checked_add(np)?;
@@ -206,8 +241,8 @@ pub fn for_each_chunk(body: &[u8], mut route: impl FnMut(ChunkEvent)) -> Decoded
     let Some(header) = body.get(4..4 + hlen) else {
         return decoded;
     };
-    // Every rejection past the header slice names its requests by re-reading
-    // the rid column, rather than the whole frame paying a clone.
+    // Every rejection past the header slice names its requests by re-reading the
+    // rid column, rather than the whole frame paying a clone for the error path.
     macro_rules! reject {
         () => {{
             decoded.rids = recover_rids(header);
@@ -221,11 +256,17 @@ pub fn for_each_chunk(body: &[u8], mut route: impl FnMut(ChunkEvent)) -> Decoded
         Err(_) => reject!(),
     };
     let n = h.rids.len();
-    // Every column must agree with `rids`.
+    // Every column must agree with `rids`. A SHORT column contributes nothing to
+    // `base`, so the `base != data.len()` check below cannot see it: a short
+    // `tok_lens` delivered a 200 with an empty completion, and a short
+    // `finish_reasons` dropped the terminal marker so the request never completed
+    // and its unary drain pended forever. The producer already asserts this for the
+    // extras columns; the four core ones were unchecked.
     if h.finish_reasons.len() != n || h.prompt_tokens.len() != n || h.tok_lens.len() != n {
         reject!()
     }
-    // The per-request extras columns are either absent (no request asked) or one entry per request — never partial.
+    // The per-request extras columns are either absent (no request asked) or one
+    // entry per request — never partial.
     let per_req_ok = |c: &[u32]| c.is_empty() || c.len() == n;
     if !per_req_ok(&h.out_lp_lens)
         || !per_req_ok(&h.in_lp_lens)
@@ -239,7 +280,8 @@ pub fn for_each_chunk(body: &[u8], mut route: impl FnMut(ChunkEvent)) -> Decoded
     }
     let sum = |v: &[u32]| v.iter().map(|&x| x as usize).sum::<usize>();
     // Each ragged family's per-request counts must consume its position column
-    // EXACTLY.
+    // EXACTLY. Only the deficit was caught (`take_poslens` runs off the end); a
+    // surplus left positions unread and delivered a truncated row with a 200.
     if sum(&h.out_top_reqlens) != h.out_top_poslens.len()
         || sum(&h.in_top_reqlens) != h.in_top_poslens.len()
         || sum(&h.out_tokids_lp_reqlens) != h.out_tokids_lp_poslens.len()
@@ -249,7 +291,8 @@ pub fn for_each_chunk(body: &[u8], mut route: impl FnMut(ChunkEvent)) -> Decoded
         reject!()
     }
 
-    // Per-column byte cursors, advanced per request — no whole-column read.
+    // Per-column byte cursors, advanced per request — no whole-column read. Columns
+    // are concatenated in exactly this order, every element 4 bytes.
     let mut base = 0usize;
     let mut col = |count: usize| -> usize {
         let start = base;
@@ -280,7 +323,14 @@ pub fn for_each_chunk(body: &[u8], mut route: impl FnMut(ChunkEvent)) -> Decoded
     let mut c_id_i = col(n_id);
     let mut c_h_v = col(n_h);
 
-    // `col` summed every column's span into `base`.
+    // `col` summed every column's span into `base`, so a truncated frame is caught
+    // here — the one rejection that is genuinely whole-frame, since it precedes the
+    // routing loop. Past this point a failure can only be partial.
+    //
+    // The check is EQUALITY, not `>`: every column length is header-determined, so
+    // a data buffer longer than `base` means the header and the buffer disagree.
+    // Accepting the surplus let a producer-side val/idx mismatch through with a
+    // 200, every later column reading off by the difference.
     if base != data.len() {
         reject!()
     }
@@ -358,8 +408,8 @@ pub fn for_each_chunk(body: &[u8], mut route: impl FnMut(ChunkEvent)) -> Decoded
                 lens_i(&h.hidden_reqlens, i),
             )?;
 
-            // Even in an extras batch, most requests carry none — box only
-            // if this does, so its `ChunkEvent` stays the small common frame.
+            // Even in an extras batch, most requests carry none — box only if this
+            // one actually does, so its `ChunkEvent` stays the small common frame.
             let ex = ChunkExtras {
                 out_lp_val,
                 out_lp_idx,
@@ -379,7 +429,8 @@ pub fn for_each_chunk(body: &[u8], mut route: impl FnMut(ChunkEvent)) -> Decoded
                 in_tid_lens,
                 hidden_val,
                 hidden_lens,
-                // Explicit, NOT `..Default::default()` — same reason as `ChunkEvent` below: a new column must fail to compile here.
+                // Explicit, NOT `..Default::default()` — same reason as `ChunkEvent`
+                // below: a new column must fail to compile here until it is decoded.
                 out_lp_txt: Vec::new(),
                 in_lp_txt: Vec::new(),
                 out_top_txt: Vec::new(),
@@ -391,13 +442,17 @@ pub fn for_each_chunk(body: &[u8], mut route: impl FnMut(ChunkEvent)) -> Decoded
         };
 
         Some(ChunkEvent {
-            // Any string is a valid rid; hash to the routing key.
+            // Any string is a valid rid; hash to the routing key. An unknown
+            // rid routes to a shard whose table has no entry → dropped there.
             rid: std::mem::take(&mut h.rids[i]).into(),
             token_ids,
             finish_reason: h.finish_reasons.get(i).cloned().flatten(),
             prompt_tokens: h.prompt_tokens.get(i).copied().unwrap_or(0),
             extras,
-            // Listed explicitly, NOT `..Default::default()`: a new column added to `ChunkEvent` and wired into the response must fail to compile here.
+            // Listed explicitly, NOT `..Default::default()`: a new column added to
+            // `ChunkEvent` and wired into the response must fail to compile here
+            // until it is actually decoded. With the struct-update syntax it
+            // compiled clean and silently shipped zeros.
             text: String::new(),
             completion_tokens: 0,
         })
@@ -411,8 +466,20 @@ pub fn for_each_chunk(body: &[u8], mut route: impl FnMut(ChunkEvent)) -> Decoded
     decoded
 }
 
-/// Recover the rid column straight from the header bytes. Read through `rmpv`
-/// `Err(LengthMismatch(1))` every time and named nobody.
+/// Recover the rid column straight from the header bytes.
+///
+/// Read through `rmpv` rather than a serde tuple: `(Vec<String>,)` decodes ONLY a
+/// 1-element array, while real headers carry 4 or 16 columns, so it returned
+/// `Err(LengthMismatch(1))` every time and named nobody. Arity independence is the
+/// whole point — the trigger for the typed-decode-failure path is Python appending
+/// a column an older Rust build does not know.
+///
+/// Called only when a frame is rejected, which is why the accepted path no longer
+/// clones the column up front. That clone was discarded unread on every good frame
+/// and cost ~27% of the whole decode at batch 4096, plus a third of the crate's
+/// steady-state allocations. It also has to be a re-read rather than a snapshot:
+/// `decode_one` moves each rid out of the header as it goes, so by the time the
+/// routing loop can fail, the decoded header no longer holds the earlier ones.
 fn recover_rids(header: &[u8]) -> Vec<Rid> {
     rmpv::decode::read_value(&mut &header[..])
         .ok()
@@ -431,7 +498,10 @@ fn recover_rids(header: &[u8]) -> Vec<Rid> {
         .unwrap_or_default()
 }
 
-/// Outcome of [`for_each_chunk`]: whether the frame was accepted, plus the rids it named.
+/// Outcome of [`for_each_chunk`]: whether the frame was accepted, plus the rids it
+/// named. `rids` is populated as soon as the header parses, so a caller can fail
+/// every request in a rejected frame — including ones whose chunk never decoded,
+/// which would otherwise wait forever for a `Done` that no longer exists.
 #[derive(Debug, Default)]
 pub struct Decoded {
     pub ok: bool,
@@ -459,10 +529,21 @@ pub fn frame_error(rid: &str, message: &str) -> Bytes {
     Bytes::from(buf)
 }
 
-/// One scheduler output increment — the common, always-present frame.
+/// One scheduler output increment — the common, always-present frame. `token_ids`
+/// / `prompt_tokens` / `finish_reason` arrive from Python (pre-decode); the detok
+/// shard fills `text` in place. Deltas — fold with `OutputAccumulator` for
+/// cumulative. Logprobs + hidden states (rare, and large) live behind the boxed
+/// [`ChunkExtras`] (`None` unless requested) so this frame stays small even when
+/// the decoder builds an inline array at up to batch 4096 per step.
+///
+/// Not a wire type — built by `for_each_chunk` from the columnar [`BatchHeader`]
+/// frame and moved between stages in-process (never serialized), so no serde.
 #[derive(Debug, Clone, Default)]
 pub struct ChunkEvent {
-    /// Client-visible rid — the request's IDENTITY.
+    /// Client-visible rid — the request's IDENTITY. Moved out of the frame header
+    /// (which owns it and drops it), so carrying it costs no allocation. The shard
+    /// is still chosen by `Rid::shard`, but a hash collision there now only
+    /// co-locates two requests instead of merging them.
     pub rid: Rid,
     /// New token ids for this step. Empty allowed (e.g. metadata-only frames).
     pub token_ids: TokenIds,
@@ -470,14 +551,22 @@ pub struct ChunkEvent {
     pub finish_reason: Option<FinishReason>,
     /// Prompt token count for this request (constant across its chunks).
     pub prompt_tokens: u32,
-    /// Decoded text **delta** for this chunk (empty in skip mode / on partial UTF-8), filled by the detok shard.
+    /// Decoded text **delta** for this chunk (empty in skip mode / on partial UTF-8),
+    /// filled by the detok shard. `token_ids` doubles as `output_ids`;
+    /// `completion_tokens` is this chunk's count.
     pub text: String,
     pub completion_tokens: u64,
     /// Logprob + hidden-state columns — `None` unless the request asked for them.
+    /// Boxed to keep the common token/text/finish frame small at large decode
+    /// batches (the decoder allocates it only when a column is non-empty).
     pub extras: Option<Box<ChunkExtras>>,
 }
 
-/// Logprob + hidden-state columns for a [`ChunkEvent`], allocated only.
+/// Logprob + hidden-state columns for a [`ChunkEvent`], allocated only when the
+/// request enabled logprobs / hidden states. Columnar `val`/`idx` (+ ragged `lens`)
+/// buffers arrive pre-decode; the detok shard fills the parallel `*_txt` columns
+/// when `return_text_in_logprobs` is set. In-process only — no serde (see
+/// [`ChunkEvent`]).
 #[derive(Debug, Clone, Default)]
 pub struct ChunkExtras {
     /// Output-token logprobs (parallel `val`/`idx`, one entry per new output token).
@@ -486,6 +575,8 @@ pub struct ChunkExtras {
     /// Input (prefill) token logprobs, sent once on the first chunk.
     pub in_lp_val: Vec<f32>,
     pub in_lp_idx: Vec<i32>,
+    /// Top-k logprobs (2-level ragged): flat `val`/`idx` + per-position `lens` (0 =
+    /// null). Output = per-step delta, input = once on the first chunk.
     pub out_top_val: Vec<f32>,
     pub out_top_idx: Vec<i32>,
     pub out_top_lens: Vec<u32>,
@@ -499,10 +590,12 @@ pub struct ChunkExtras {
     pub in_tid_val: Vec<f32>,
     pub in_tid_idx: Vec<i32>,
     pub in_tid_lens: Vec<u32>,
-    /// Hidden states (dense f32): flat buffer + per-row lengths.
+    /// Hidden states (dense f32): flat buffer + per-row lengths. Last-writer-wins
+    /// across chunks (the final message has the full set).
     pub hidden_val: Vec<f32>,
     pub hidden_lens: Vec<u32>,
-    /// Decoded logprob token text (`return_text_in_logprobs`), parallel to the `*_idx` buffers.
+    /// Decoded logprob token text (`return_text_in_logprobs`), parallel to the
+    /// `*_idx` buffers; empty when not requested (the tuple's text slot stays null).
     pub out_lp_txt: Vec<String>,
     pub in_lp_txt: Vec<String>,
     pub out_top_txt: Vec<String>,
@@ -548,11 +641,14 @@ mod tests {
         assert_eq!(&multi[8..], &[10, 11, 12, 13, 14]); // columns end-to-end
     }
 
-    /// A batch frame (the fast path) decodes into per-request ChunkEvents.
+    /// A batch frame (the fast path) decodes into per-request ChunkEvents, with
+    /// token ids sliced from the single concatenated buffer by `tok_lens`. The
+    /// header is a msgspec-style positional array (what Python emits).
     #[test]
     fn decodes_batch_frame() {
         use rmpv::Value;
-        // Requests: rids "1","2","3".
+        // 3 requests: rids "1","2","3"; finish [nil, {type:stop,matched:5}, nil];
+        // prompt_tokens [4,5,6]; tok_lens [2,0,1] -> ids [10,11 | (none) | 12].
         let stop = Value::Map(vec![
             (Value::from("type"), Value::from("stop")),
             (Value::from("matched"), Value::from(5)),
@@ -589,7 +685,7 @@ mod tests {
         assert!(events[0].finish_reason.is_none());
         assert_eq!(events[1].rid, Rid::from("2"));
         assert!(events[1].token_ids.is_empty());
-        // The whole reason survives msgpack (type + matched), not the type.
+        // The whole reason survives msgpack (type + matched), not just the type.
         assert_eq!(
             events[1].finish_reason,
             Some(
@@ -602,37 +698,51 @@ mod tests {
         assert_eq!(events[2].rid, Rid::from("3"));
         assert_eq!(events[2].token_ids, vec![12]);
         assert_eq!(events[2].prompt_tokens, 6);
-        // A plain decode frame carries no extras columns at all.
+        // A plain decode frame carries no extras columns at all, so the per-frame
+        // `has_extras` guard must skip the extras machinery entirely for every
+        // request (this is the from-scheduler hot path — see `for_each_chunk`).
         assert!(events.iter().all(|e| e.extras.is_none()));
     }
 
-    /// A header whose column lengths exceed the data buffer (a Python/Rust positional-ABI drift, or a truncated frame) is rejected.
+    /// A header whose column lengths exceed the data buffer (a Python/Rust
+    /// positional-ABI drift, or a truncated frame) is rejected: `for_each_chunk`
+    /// returns false and routes nothing — it must NOT panic the sole from_scheduler thread
+    /// on an out-of-bounds slice. Built the way Python emits (positional msgpack
+    /// header + concatenated data columns).
     #[test]
     fn rejects_frame_with_lengths_past_data() {
         use rmpv::Value;
-        // The old clamp-only-`end` code advanced the cursor past `len`, then sliced
-        // `data[40..4]` (start > end) and panicked.
+        // 1 request: tok_lens[0]=10 claims 40 bytes and out_lp_lens[0]=1 puts the
+        // logprob column's base past the 4-byte data buffer. The old clamp-only-`end`
+        // code advanced the cursor past `len`, then sliced `data[40..4]` (start > end)
+        // and panicked.
         let header_arr = Value::Array(vec![
             Value::Array(vec![Value::from("1")]),   // rids
             Value::Array(vec![Value::Nil]),         // finish_reasons
             Value::Array(vec![Value::from(0u32)]),  // prompt_tokens
-            Value::Array(vec![Value::from(10u32)]), // tok_lens (claims many
+            Value::Array(vec![Value::from(10u32)]), // tok_lens (claims 40 bytes)
             Value::Array(vec![Value::from(1u32)]),  // out_lp_lens (base now past data)
         ]);
         let mut header = Vec::new();
         rmpv::encode::write_value(&mut header, &header_arr).unwrap();
-        let data: Vec<u8> = [0i32].iter().flat_map(|x| x.to_le_bytes()).collect(); // A few
+        let data: Vec<u8> = [0i32].iter().flat_map(|x| x.to_le_bytes()).collect(); // 4 bytes
 
         let framed = frame_decode_batch_cols(&header, &[&data]);
         let mut routed = 0usize;
         let decoded = for_each_chunk(&framed[1..], |_| routed += 1);
         assert!(!decoded.ok, "malformed frame must be rejected, not decoded");
         assert_eq!(routed, 0, "no request may be routed from a rejected frame");
-        // The rid is still reported, so the caller can fail the request that was waiting on this frame instead.
+        // The rid is still reported, so the caller can fail the request that was
+        // waiting on this frame instead of letting it hang.
         assert_eq!(decoded.rids, vec![Rid::from("1")]);
     }
 
-    /// A header whose `reqlens` claim more positions than `poslens` carries is rejected, not truncated.
+    /// A header whose `reqlens` claim more positions than `poslens` carries is
+    /// rejected, not truncated. This drift passes the upfront `base > data.len()`
+    /// check — the data columns are exactly as long as `poslens` says — so only the
+    /// per-column bound catches it. Clamping (the old behavior) handed req0 a short
+    /// `lens`, which also under-advanced the val/idx cursors, so req1 read from the
+    /// wrong offset: a frame that decodes "successfully" into wrong logprobs.
     #[test]
     fn rejects_poslens_shorter_than_reqlens_claims() {
         use rmpv::Value;
@@ -642,6 +752,7 @@ mod tests {
         let rids = Value::Array(vec![Value::from("1"), Value::from("2")]);
         let finish = Value::Array(vec![Value::Nil, Value::Nil]);
 
+        // Ragged column: reqs claim 2 + 1 = 3 positions, `out_top_poslens` has 2.
         let header_arr = Value::Array(vec![
             rids.clone(),
             finish.clone(),
@@ -649,8 +760,8 @@ mod tests {
             arr_u(&[1, 1]), // tok_lens
             arr_u(&[0, 0]), // out_lp_lens
             arr_u(&[0, 0]), // in_lp_lens
-            arr_u(&[2, 1]), // out_top_reqlens — positions claimed
-            arr_u(&[2, 2]),
+            arr_u(&[2, 1]), // out_top_reqlens — 3 positions claimed
+            arr_u(&[2, 2]), // out_top_poslens — only 2 supplied
         ]);
         let mut header = Vec::new();
         rmpv::encode::write_value(&mut header, &header_arr).unwrap();
@@ -665,6 +776,7 @@ mod tests {
             "ragged poslens drift must be rejected, not truncated"
         );
 
+        // Same drift in the hidden column, which has no idx pair: 2 rows claimed, 1 supplied.
         let header_arr = Value::Array(vec![
             rids,
             finish,
@@ -680,8 +792,8 @@ mod tests {
             arr_u(&[]),     // out_tokids_lp_poslens
             arr_u(&[0, 0]), // in_tokids_lp_reqlens
             arr_u(&[]),     // in_tokids_lp_poslens
-            arr_u(&[2, 0]),
-            arr_u(&[3]),
+            arr_u(&[2, 0]), // hidden_reqlens — 2 rows claimed
+            arr_u(&[3]),    // hidden_poslens — only 1 supplied
         ]);
         let mut header = Vec::new();
         rmpv::encode::write_value(&mut header, &header_arr).unwrap();
@@ -696,7 +808,9 @@ mod tests {
         );
     }
 
-    /// A frame that fails at request buckets nothing.
+    /// A frame that fails at request 0 buckets nothing, so bucket-driven cleanup
+    /// would leave every request in it hanging. The rids come from the header,
+    /// which is fully parsed before the decode loop.
     #[test]
     fn rejected_frame_still_reports_all_its_rids() {
         use rmpv::Value;
@@ -720,7 +834,9 @@ mod tests {
         );
     }
 
-    /// A data buffer LONGER than the header's columns means the disagree — a producer-side val/idx mismatch.
+    /// A data buffer LONGER than the header's columns means the two disagree — a
+    /// producer-side val/idx mismatch. Accepting the surplus delivered another
+    /// column's bytes as logprobs with a 200.
     #[test]
     fn frame_longer_than_its_columns_is_rejected() {
         use rmpv::Value;
@@ -728,17 +844,20 @@ mod tests {
             Value::Array(vec![Value::from("1")]),
             Value::Array(vec![Value::Nil]),
             Value::Array(vec![Value::from(0u32)]),
-            Value::Array(vec![Value::from(1u32)]),
+            Value::Array(vec![Value::from(1u32)]), // tok_lens: 1 id = 4 bytes
         ]);
         let mut header = Vec::new();
         rmpv::encode::write_value(&mut header, &header_arr).unwrap();
-        let data: Vec<u8> = vec![0u8; 8]; // A few bytes too
+        let data: Vec<u8> = vec![0u8; 8]; // 4 bytes too many
         let framed = frame_decode_batch_cols(&header, &[&data]);
         let decoded = for_each_chunk(&framed[1..], |_| {});
         assert!(!decoded.ok, "header and data must agree exactly");
     }
 
-    /// Request/response rid agreement: the rid decoded from the frame must be the one Python sent.
+    /// Request/response rid agreement: the rid decoded from the frame must be the
+    /// one Python sent, AND both sides must derive the same shard from it. The
+    /// partition key is memoized inside `Rid`, so a per-conversion hasher seed
+    /// would send a request's chunks to a shard that never registered it.
     #[test]
     fn uuid_rid_decodes_to_the_same_rid_and_shard() {
         use rmpv::Value;
@@ -757,8 +876,11 @@ mod tests {
         let mut events = Vec::new();
         assert!(for_each_chunk(&framed[1..], |ev| events.push(ev)).ok);
         assert_eq!(events.len(), 1);
-        // The equality below reuses `from_rid`, so on its own it would hold
-        // for any decoder that hashed *something*.
+        // The equality below reuses `from_rid`, so on its own it would hold for
+        // any decoder that hashed *something*. These pin the two failure modes it
+        // is meant to catch: a decoder that parsed the rid as an integer (a uuid
+        // is not numeric, so it would fall back to 0), and one that keyed off the
+        // request's position in the batch rather than its rid.
         assert_eq!(
             events[0].rid, rid,
             "the rid IS the identity — carried, not hashed"
@@ -779,7 +901,9 @@ mod tests {
         );
     }
 
-    /// A batch frame carrying the numeric columns (extras path): requests, req0 with output logprobs + top-k + hidden.
+    /// A batch frame carrying the numeric columns (extras path): 2 requests,
+    /// req0 with output logprobs + top-k + hidden, req1 empty. Verifies the
+    /// column-major data split by the header's reqlens/poslens.
     #[test]
     fn decodes_batch_frame_with_extras() {
         use rmpv::Value;
@@ -797,7 +921,7 @@ mod tests {
             arr_u(&[1, 1]),                                         // tok_lens
             arr_u(&[2, 0]),                                         // out_lp_lens
             arr_u(&[0, 0]),                                         // in_lp_lens
-            arr_u(&[1, 0]),
+            arr_u(&[1, 0]),                                         // out_top_reqlens (req0: 1 pos)
             arr_u(&[2]),    // out_top_poslens (that pos: k=2)
             arr_u(&[0, 0]), // in_top_reqlens
             arr_u(&[]),     // in_top_poslens
@@ -805,18 +929,18 @@ mod tests {
             arr_u(&[]),     // out_tokids_lp_poslens
             arr_u(&[0, 0]), // in_tokids_lp_reqlens
             arr_u(&[]),     // in_tokids_lp_poslens
-            arr_u(&[1, 0]),
-            arr_u(&[3]),
+            arr_u(&[1, 0]), // hidden_reqlens (req0: 1 row)
+            arr_u(&[3]),    // hidden_poslens (dim 3)
         ]);
         let mut header = Vec::new();
         rmpv::encode::write_value(&mut header, &header_arr).unwrap();
         let mut data = Vec::new();
-        data.extend(i(&[10, 20]));
-        data.extend(f(&[-0.5, -0.6]));
+        data.extend(i(&[10, 20])); // token_ids: req0=[10], req1=[20]
+        data.extend(f(&[-0.5, -0.6])); // out_lp_val (req0, 2)
         data.extend(i(&[10, 99])); // out_lp_idx
-        data.extend(f(&[-0.1, -0.2]));
+        data.extend(f(&[-0.1, -0.2])); // out_top_val (1 pos, k=2)
         data.extend(i(&[10, 11])); // out_top_idx
-        data.extend(f(&[0.1, 0.2, 0.3]));
+        data.extend(f(&[0.1, 0.2, 0.3])); // hidden_val (1 row, dim 3)
 
         let framed = frame_decode_batch_cols(&header, &[&data]);
         let mut events = Vec::new();
@@ -838,7 +962,16 @@ mod tests {
         assert!(events[1].extras.is_none());
     }
 
-    /// An inactive extras family may arrive as EMPTY columns or as `batch_size` zeros.
+    /// An inactive extras family may arrive as EMPTY columns or as `batch_size`
+    /// zeros, and both must decode to exactly the same events.
+    ///
+    /// This is the contract the Python producer's per-family gating relies on. It
+    /// used to run all seven families whenever any one of them was active, so an
+    /// inactive family shipped 4096 zeros per column; it now skips `accept`, which
+    /// leaves those columns empty. `per_req_ok` admits either and `lens_i` reads 0
+    /// past the end — but nothing pinned that, so a later tightening of the column
+    /// validation (say, requiring every column to be `batch_size` long) would
+    /// silently start rejecting whole frames, hanging every request in them.
     #[test]
     fn empty_and_zero_filled_inactive_families_decode_alike() {
         use rmpv::Value;
@@ -846,10 +979,12 @@ mod tests {
         let i = |xs: &[i32]| -> Vec<u8> { xs.iter().flat_map(|x| x.to_le_bytes()).collect() };
         let arr_u = |xs: &[u32]| Value::Array(xs.iter().map(|&x| Value::from(x)).collect());
 
-        // Only `out_lp` is active; the other families are inactive.
-        // `zeros` picks how they are spelled: the producer's per-request
-        // zeros, or the gated producer's empty column.
+        // Only `out_lp` is active; the other six families are inactive. `zeros`
+        // picks how they are spelled: the old producer's per-request zeros, or the
+        // gated producer's empty column.
         let build = |zeros: bool| {
+            // Inactive: the old producer ran `accept` anyway and appended a 0 per
+            // request; the gated producer skips it and leaves the column empty.
             let reqlens = if zeros { arr_u(&[0, 0]) } else { arr_u(&[]) };
             let header_arr = Value::Array(vec![
                 Value::Array(vec![Value::from("1"), Value::from("2")]), // rids
@@ -907,7 +1042,7 @@ mod tests {
                 _ => panic!("extras presence differs between the two spellings"),
             }
         }
-        // req0 did carry its active family through both spellings.
+        // req0 really did carry its active family through both spellings.
         assert_eq!(
             new[0]
                 .extras
@@ -918,7 +1053,12 @@ mod tests {
         );
     }
 
-    /// All extras families in one frame, each with a distinct length AND distinct values.
+    /// All SEVEN extras families in one frame, each with a distinct length AND
+    /// distinct values. The existing extras test exercises only `out_lp` /
+    /// `out_top` / `hidden`, so transposing a header pair — `in_top_*` with
+    /// `out_tokids_lp_*`, say, leaves every assertion passing while the client
+    /// receives another request's logprobs under the wrong key. Lengths differ per
+    /// family (2/1/2/1/2/1/3 elements) so a swap misaligns the cursors too.
     #[test]
     fn decodes_all_extras_families_without_transposition() {
         use rmpv::Value;
@@ -931,18 +1071,18 @@ mod tests {
             Value::Array(vec![Value::Nil]),       // finish
             arr_u(&[9]),                          // prompt
             arr_u(&[1]),                          // tok_lens
-            arr_u(&[2]),
-            arr_u(&[1]),
-            arr_u(&[1]),                          // out_top_reqlens (position…
-            arr_u(&[2]),                          // out_top_poslens …k=2)
-            arr_u(&[1]),                          // in_top_reqlens (position…
-            arr_u(&[1]),                          // in_top_poslens …k=1)
-            arr_u(&[1]),
-            arr_u(&[2]),
-            arr_u(&[1]),
-            arr_u(&[1]),
-            arr_u(&[1]),                          // hidden_reqlens (a couple
-            arr_u(&[3]),
+            arr_u(&[2]),                          // out_lp_lens      (2 flat)
+            arr_u(&[1]),                          // in_lp_lens       (1 flat)
+            arr_u(&[1]),                          // out_top_reqlens  (1 position…
+            arr_u(&[2]),                          // out_top_poslens  …k=2)
+            arr_u(&[1]),                          // in_top_reqlens   (1 position…
+            arr_u(&[1]),                          // in_top_poslens   …k=1)
+            arr_u(&[1]),                          // out_tokids_lp_reqlens (1 position...
+            arr_u(&[2]),                          // out_tokids_lp_poslens ...2 ids)
+            arr_u(&[1]),                          // in_tokids_lp_reqlens  (1 position...
+            arr_u(&[1]),                          // in_tokids_lp_poslens  ...1 id)
+            arr_u(&[1]),                          // hidden_reqlens   (1 row…
+            arr_u(&[3]),                          // hidden_poslens   …dim 3)
         ]);
         let mut header = Vec::new();
         rmpv::encode::write_value(&mut header, &header_arr).unwrap();
@@ -992,7 +1132,10 @@ mod tests {
         assert_eq!(events[0].token_ids, vec![100]);
     }
 
-    /// DISTINCT rids that hash to the same shard must stay separate requests.
+    /// Two DISTINCT rids that hash to the same shard must stay separate requests.
+    /// Identity is the rid string now, so a shard-hash collision can only co-locate
+    /// them — it can no longer merge their `DetokState`, which used to evict one
+    /// client's sink and deliver their tokens to the other's connection.
     #[test]
     fn colliding_rids_stay_distinct_requests() {
         use rmpv::Value;
@@ -1014,7 +1157,8 @@ mod tests {
         assert_ne!(events[0].rid, events[1].rid);
     }
 
-    /// The common frame must stay small: logprob/hidden columns are boxed behind `ChunkExtras`.
+    /// The common frame must stay small: logprob/hidden columns are boxed behind
+    /// `ChunkExtras`.
     #[test]
     fn chunk_event_frame_stays_small() {
         let sz = std::mem::size_of::<ChunkEvent>();
@@ -1029,13 +1173,17 @@ mod tests {
 mod rid_recovery_tests {
     use super::*;
 
-    /// A header this build cannot type-decode (Python appended a column) must still name its requests.
+    /// A header this build cannot type-decode (Python appended a column) must
+    /// still name its requests, or every one of them hangs. The previous
+    /// `(Vec<String>,)` tuple decoded ONLY a 1-element array, so it failed on every
+    /// real header — arity independence is the entire point of this path.
     #[test]
     fn rid_recovery_works_at_every_header_arity() {
         use rmpv::Value;
         for extra_cols in [0usize, 3, 15, 16] {
             let mut cols = vec![Value::Array(vec![Value::from("a"), Value::from("b")])];
-            // Columns of a type this build would reject (strings where u32 is expected).
+            // Columns of a type this build would reject (strings where u32 is
+            // expected) — the "Python widened a column" case.
             cols.extend((0..extra_cols).map(|_| Value::from("unexpected")));
             let mut header = Vec::new();
             rmpv::encode::write_value(&mut header, &Value::Array(cols)).unwrap();

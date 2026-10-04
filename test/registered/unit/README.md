@@ -1,6 +1,8 @@
 # Unit Tests
 
-CPU-only component tests that do **not** launch a server, load model weights, or require an accelerator. GPU operator correctness belongs under `test/registered/kernels/ops/<group>/`.
+CPU-only component tests that do **not** launch a server, load model weights,
+or require an accelerator. GPU operator correctness belongs under
+`test/registered/kernels/ops/<group>/`.
 
 ## Quick Start
 
@@ -59,9 +61,13 @@ if __name__ == "__main__":
 
 ### Stubbing GPU-only imports for CPU tests
 
-Some modules (e.g. `scheduler.py`, `io_struct.py`) transitively import packages like `sgl_kernel` that require a GPU to initialize. To run pure-mock tests against these modules on CPU-only CI, stub the problematic package **before** importing it.
+Some modules (e.g. `scheduler.py`, `io_struct.py`) transitively import packages like
+`sgl_kernel` that require a GPU to initialize. To run pure-mock tests against these
+modules on CPU-only CI, stub the problematic package **before** importing it.
 
-`maybe_stub_sgl_kernel()` in `test_utils.py` does this for `sgl_kernel`. It is a no-op on GPU machines, and on CPU it installs a `sys.meta_path` finder that auto-creates empty stub modules. This is for all `sgl_kernel.*` submodules.
+`maybe_stub_sgl_kernel()` in `test_utils.py` does this for `sgl_kernel`: it's a no-op
+on GPU machines, and on CPU it installs a `sys.meta_path` finder that auto-creates empty
+stub modules for all `sgl_kernel.*` submodules.
 
 ```python
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -75,11 +81,17 @@ from sglang.srt.managers.scheduler import Scheduler
 register_cpu_ci(est_time=2, suite="base-a-test-cpu")
 ```
 
-The same pattern (`sys.meta_path` finder) can be applied to other GPU-only packages. See `maybe_stub_sgl_kernel()` in `python/sglang/test/test_utils.py` for the implementation. Do not directly mutate `sys.modules` at module level — pytest imports all test files before running any, so such mutations pollute the entire process. If you must stub, use `patch.dict("sys.modules", ...)` with proper cleanup.
+The same pattern (`sys.meta_path` finder) can be applied to other GPU-only packages.
+See `maybe_stub_sgl_kernel()` in `python/sglang/test/test_utils.py` for the
+implementation. Do not directly mutate `sys.modules` at module level — pytest
+imports all test files before running any, so such mutations pollute the entire
+process. If you must stub, use `patch.dict("sys.modules", ...)` with proper cleanup.
 
 ## Rules
 
 - **No** `popen_launch_server()` or `Engine(...)`.
 - **No** model weight loading.
 - Use `CustomTestCase` (from `sglang.test.test_utils`, adds CI retry).
-- Mock external or slow dependency boundaries only when the assertion still checks a result, state transition, protocol output, or error. A test that proves only that its mock was called is not sufficient.
+- Mock external or slow dependency boundaries only when the assertion still
+  checks a result, state transition, protocol output, or error. A test that
+  proves only that its mock was called is not sufficient.

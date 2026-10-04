@@ -8,7 +8,7 @@ Host the VLM:
 python -m sglang.launch_server --model-path Qwen/Qwen2-VL-7B-Instruct --port 30000
 ```
 
-It is recommended to reduce the memory usage by appending something like `--mem-fraction-static 0.6` to the command above.
+It's recommended to reduce the memory usage by appending something like `--mem-fraction-static 0.6` to the command above.
 
 Benchmark:
 
@@ -46,4 +46,4 @@ python benchmark/mmmu/bench_hf.py --model-path Qwen/Qwen2-VL-7B-Instruct
 ```
 
 # Profiling MMMU
-You must use the standard instructions found in the [dedicated profiling doc](https://docs.sglang.io/docs/developer_guide/benchmark_and_profiling) if running this benchmark with the profile option. We recommend using `--concurrency 1` for consistency, which makes profiling and debugging easier.
+You should use the standard instructions found in the [dedicated profiling doc](https://docs.sglang.io/docs/developer_guide/benchmark_and_profiling) if running this benchmark with the profile option. We recommend using `--concurrency 1` for consistency, which makes profiling and debugging easier.

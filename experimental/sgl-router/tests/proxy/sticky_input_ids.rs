@@ -1,7 +1,24 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Tokenize-once at ingress under the STICKY policy.
+//! Tokenize-once at ingress under the STICKY policy. The engine-tokenization
+//! offload (`input_ids` forwarding) is a property of the MODEL — does it have a
+//! chat formatter? — not of the routing policy, so a sticky-routed request on a
+//! chat-formatter model must forward `input_ids` exactly like cache-aware does,
+//! while still pinning sessions O(1) by header.
+//!
+//! Asserts through the real chat handler + `MockWorker` backends:
+//!
+//! * A plain text chat request forwards `input_ids` AND retains `messages`,
+//!   even though sticky never consults the tokens for routing.
+//! * A request carrying `tools` / multimodal content omits `input_ids` — the
+//!   same safe-to-forward predicate applies regardless of policy.
+//! * Same-session-header requests still pin to a single worker (O(1) sticky
+//!   routing is unchanged by the added tokenization).
+//!
+//! The model id contains `deepseek-v4` so the tokenizer registry auto-attaches
+//! the built-in V4 chat formatter — the engine-equivalent path — without a
+//! template fixture.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -65,6 +82,7 @@ fn config() -> Config {
 }
 
 /// Build an `AppContext` running the sticky policy over the given workers.
+/// The tokenizer registry is loaded from config (real tiny tokenizer + the
 /// auto-attached V4 chat formatter) so the ingress can tokenize — the sticky
 /// policy itself holds no tokenizer.
 fn build_ctx(worker_urls: &[String]) -> Arc<AppContext> {
@@ -84,7 +102,8 @@ fn build_ctx(worker_urls: &[String]) -> Arc<AppContext> {
             bootstrap_port: None,
         });
     }
-    // Sticky needs no cache-aware deps, so the defaults registry is fine — the ingress tokenizes via `ctx.tokenizers`.
+    // Sticky needs no cache-aware deps, so the defaults registry is fine — the
+    // ingress tokenizes via `ctx.tokenizers`, not the policy.
     let policies = Arc::new(build_policy_registry(&cfg).unwrap());
     let proxy = Arc::new(Proxy::new(Duration::from_secs(5)).unwrap());
     Arc::new(AppContext::new(cfg, tokenizers, proxy, registry, policies))
@@ -165,7 +184,9 @@ async fn sticky_tool_request_omits_input_ids() {
 
 #[tokio::test]
 async fn sticky_thinking_request_omits_input_ids() {
-    // `chat_template_kwargs` steers engine-side thinking mode the router's encoder renders in the default mode only.
+    // `chat_template_kwargs` steers engine-side thinking mode the router's
+    // encoder renders in the default mode only — the safe-to-forward predicate
+    // is policy-independent, so sticky must omit ids here too.
     let mock = MockWorker::start(vec![]).await;
     let ctx = build_ctx(std::slice::from_ref(&mock.url));
     let status = send(
@@ -209,7 +230,9 @@ async fn sticky_multimodal_request_omits_input_ids() {
     );
 }
 
-/// Routing is unchanged: same session header pins every request to one worker (O(1) sticky).
+/// Routing is unchanged: same session header pins every request to one worker
+/// (O(1) sticky), even though the ingress now also tokenizes. With two
+/// backends, all same-key requests must land on exactly one of them.
 #[tokio::test]
 async fn sticky_pins_session_by_header_with_tokenization_on() {
     let w0 = MockWorker::start(vec![]).await;
@@ -244,7 +267,8 @@ async fn sticky_pins_session_by_header_with_tokenization_on() {
         "same routing key must pin to exactly one worker (w0_hit={w0_hit}, w1_hit={w1_hit})"
     );
 
-    // And the pinned worker still received forwarded input_ids — the offload and the pin coexist.
+    // And the pinned worker still received forwarded input_ids — the offload
+    // and the pin coexist.
     let pinned = if w0_hit { &w0 } else { &w1 };
     let body = captured(pinned);
     assert!(

@@ -1,4 +1,10 @@
 //! Request-scoped OpenAI chat output interpretation.
+//!
+//! The processor owns parser selection and mutable reasoning/tool state. Its
+//! input is decoded engine output; its output is typed chat semantics.
+//! Submission, cancellation, and scheduler transport remain host
+//! responsibilities. HTTP and future gRPC adapters consume these semantic
+//! events without reimplementing parser behavior.
 
 use std::pin::Pin;
 
@@ -46,7 +52,8 @@ pub struct ChatToolCallDelta {
     pub arguments: Option<String>,
 }
 
-/// Semantic chat output.
+/// Semantic chat output. Protocol adapters add response metadata and wire
+/// framing without knowing how reasoning or tool syntax was parsed.
 #[derive(Debug, Clone)]
 pub enum ChatEvent {
     Role {

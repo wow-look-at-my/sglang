@@ -1,4 +1,9 @@
-//! Tests for WorkerLoadGuard RAII pattern.
+//! Tests for WorkerLoadGuard RAII pattern with response body attachment
+//!
+//! These tests verify that load guards properly decrement worker load when:
+//! - Response body is fully consumed
+//! - Response body is dropped (client disconnect simulation)
+//! - Multiple guards are attached (dual prefill/decode workers)
 
 use std::sync::Arc;
 
@@ -37,12 +42,14 @@ async fn test_guard_dropped_when_response_body_consumed() {
 
     let guarded_response = AttachedBody::wrap_response(response, guard);
 
+    // Load should still be 1 (guard is in the body)
     assert_eq!(worker.load(), 1);
 
     // Consume the response body
     let body = guarded_response.into_body();
     let _bytes = body.collect().await.unwrap().to_bytes();
 
+    // After consuming, guard should be dropped, load should be 0
     assert_eq!(worker.load(), 0);
 }
 
@@ -60,10 +67,13 @@ async fn test_guard_dropped_when_response_dropped_without_consumption() {
 
         let _guarded_response = AttachedBody::wrap_response(response, guard);
 
+        // Load is still 1
         assert_eq!(worker.load(), 1);
 
+        // Response goes out of scope here
     }
 
+    // After response is dropped, guard should be dropped, load should be 0
     assert_eq!(worker.load(), 0);
 }
 
@@ -91,6 +101,7 @@ async fn test_streaming_guard_dropped_when_stream_ends() {
                     break;
                 }
             }
+            // Body is still in scope here, guard not dropped yet
         }
         // Body dropped here, guard should be dropped
         assert_eq!(worker_clone.load(), 0);
@@ -100,6 +111,7 @@ async fn test_streaming_guard_dropped_when_stream_ends() {
     tx.send(Bytes::from("data: chunk1\n\n")).unwrap();
     tx.send(Bytes::from("data: chunk2\n\n")).unwrap();
 
+    // Load should still be 1 while streaming
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     assert_eq!(worker.load(), 1);
 
@@ -109,6 +121,7 @@ async fn test_streaming_guard_dropped_when_stream_ends() {
     // Wait for consumer to finish
     consume_task.await.unwrap();
 
+    // Load should now be 0
     assert_eq!(worker.load(), 0);
 }
 
@@ -133,8 +146,10 @@ async fn test_streaming_guard_dropped_on_client_disconnect() {
         tx.send(Bytes::from("data: chunk1\n\n")).unwrap();
         let _ = body.frame().await;
 
+        // Load still 1
         assert_eq!(worker.load(), 1);
 
+        // Body dropped here (simulating client disconnect)
     }
 
     // Guard should be dropped when body is dropped
@@ -163,6 +178,7 @@ async fn test_multiple_guards_all_dropped() {
 
         let _response = AttachedBody::wrap_response(response, vec![guard1, guard2]);
 
+        // Both loads are 1
         assert_eq!(worker1.load(), 1);
         assert_eq!(worker2.load(), 1);
     }

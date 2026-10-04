@@ -6,7 +6,13 @@ This directory contains scripts to automate version bumping for SGLang releases.
 
 ### `upload_zip_to_whl.sh`
 
-Uploads a local ZIP file to a new [`sgl-project/whl`](https://github.com/sgl-project/whl) GitHub Release and prints its direct download URL. The ZIP bytes remain in the Release rather than the Git tree. The script adds the direct link to the flat [`others/index.html`](https://docs.sglang.io/whl/others/) catalog on the `gh-pages` branch and adds an `others/` entry to the root index. Existing package-specific PEP multiple indexes are unchanged.
+Uploads a local ZIP file to a new
+[`sgl-project/whl`](https://github.com/sgl-project/whl) GitHub Release and
+prints its direct download URL. The ZIP bytes remain in the Release rather than
+the Git tree. The script adds the direct link to the flat
+[`others/index.html`](https://docs.sglang.io/whl/others/) catalog on the
+`gh-pages` branch and adds an `others/` entry to the root index. Existing
+package-specific PEP 503 indexes are unchanged.
 
 Prerequisites:
 
@@ -28,7 +34,8 @@ For example:
 scripts/release/upload_zip_to_whl.sh ~/Downloads/model-cache.zip v1.2.0
 ```
 
-This creates the tag and release `zip-v1.2.0`, preserves the filename `model-cache.zip`, and prints output similar to:
+This creates the tag and release `zip-v1.2.0`, preserves the filename
+`model-cache.zip`, and prints output similar to:
 
 ```text
 Release: https://github.com/sgl-project/whl/releases/tag/zip-v1.2.0
@@ -38,18 +45,28 @@ Index:   https://docs.sglang.io/whl/others/
 wget https://github.com/sgl-project/whl/releases/download/zip-v1.2.0/model-cache.zip
 ```
 
-The optional third and fourth arguments override the default `zip-<version>` tag and `ZIP <version>: <filename>` title:
+The optional third and fourth arguments override the default `zip-<version>` tag
+and `ZIP <version>: <filename>` title:
 
 ```bash
 scripts/release/upload_zip_to_whl.sh archive.zip 20260726 \
   special-build-20260726 "Special build 20260726"
 ```
 
-The version and tag may contain ASCII letters, digits, `.`, `_`, and `-`. Every upload must use a new tag. The script never overwrites or deletes a Release, asset, tag, or index entry. ZIP filenames may contain spaces but not backslashes or control characters.
+The version and tag may contain ASCII letters, digits, `.`, `_`, and `-`. Every
+upload must use a new tag. The script never overwrites or deletes a Release,
+asset, tag, or index entry. ZIP filenames may contain spaces but not backslashes
+or control characters.
 
-The root and `others` index changes are pushed in one commit. If another process updates `gh-pages` concurrently, the script reclones the latest branch and retries a bounded number of times.
+The root and `others` index changes are pushed in one commit. If another process
+updates `gh-pages` concurrently, the script reclones the latest branch and
+retries up to three times.
 
-If Release creation succeeds but index publication fails, rerun the exact same command. The script resumes only when the existing Release's filename, byte size, GitHub asset digest, and SHA256 marker match the local file. Any mismatch is treated as a version conflict. After multiple failed index pushes, use the `Release` URL printed by the script to inspect the uploaded asset.
+If Release creation succeeds but index publication fails, rerun the exact same
+command. The script resumes only when the existing Release's filename, byte
+size, GitHub asset digest, and SHA256 marker match the local file; any mismatch
+is treated as a version conflict. After three failed index pushes, use the
+`Release` URL printed by the script to inspect the uploaded asset.
 
 ### `bump_sglang_version.py`
 Updates SGLang version across all relevant files following the pattern from [PR #10468](https://github.com/sgl-project/sglang/pull/10468).
@@ -80,7 +97,7 @@ python scripts/release/bump_docs_install_version.py 0.5.13
 ```
 
 **Files updated:**
-- `docs/docs/get-started/install.mdx` (Method 2: From source. Method 3: pinned Docker image)
+- `docs/docs/get-started/install.mdx` (Method 2: From source; Method 3: pinned Docker image)
 - `docs/docs/hardware-platforms/amd_gpu.mdx` (Install from Source)
 
 ### `bump_kernel_version.py`

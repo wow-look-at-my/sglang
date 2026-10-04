@@ -1,4 +1,5 @@
-# Reusable workflow: cross-reference CI test failures with coverage-based test recommendations. Called by pr-test-npu.yml's analyze-failure-report job.
+# Reusable workflow: cross-reference CI test failures with coverage-based
+# test recommendations. Called by pr-test-npu.yml's analyze-failure-report job.
 name: Analyze Failure Report
 
 on:

@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Per-engine admission: a set of caps compared against the selected engine's current measurements.
+//! Per-engine admission: a set of caps compared against the selected engine's
+//! current measurements. Request size is a bucket concern, not an admission one.
 
 use std::fmt::Debug;
 
@@ -18,7 +19,9 @@ pub enum Decision {
     Reject(String),
 }
 
-/// One engine's measurements at pick time. Reported values are `None` without a fresh, complete report, never zero.
+/// One engine's measurements at pick time. Reported values are `None` without a
+/// fresh, complete report, never zero. In-flight requests are counted by this
+/// router and always known.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EngineMetrics {
     pub running_requests: Option<u64>,
@@ -43,12 +46,15 @@ impl EngineMetrics {
     }
 }
 
-/// Checks one selected engine.
+/// Checks one selected engine. Policies decide when to check and how to handle
+/// rejection; admission never selects replacements or reserves capacity.
 pub trait EngineAdmission: Send + Sync + Debug {
     fn check(&self, engine: &Worker, metrics: &EngineMetrics) -> Result<Decision, PickError>;
 }
 
-/// Per-engine caps; an unset limit is not checked. A limit admits while the metric is below it.
+/// Per-engine caps; an unset limit is not checked. A limit admits while the
+/// metric is below it. Unknown engine metrics fail open. The default allows
+/// everything. Checks observe load; they do not reserve capacity.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AdmissionLimits {

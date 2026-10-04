@@ -6,7 +6,8 @@ if [ ! -f "${sglang_source_path}/${test_case}" ];then
   exit 0
 fi
 
-# Leave the image WORKDIR (/sgl-workspace): the sglang repo cloned there can shadow the installed package on sys.path.
+# Leave the image WORKDIR (/sgl-workspace): the sglang repo cloned there can
+# shadow the installed package on sys.path.
 cd "${sglang_source_path}"
 
 echo "NPU info:"
@@ -44,6 +45,7 @@ if [ -n "${TRANSFORMERS_VERSION_FOR_SGLANG}" ];then
 fi
 
 if [ -n "${TRANSFORMERS_VERSION_FOR_TEST_TOOL}" ]; then
+  # Example: TRANSFORMERS_VERSION_FOR_TEST_TOOL=4.57.6
   echo "===== Install transformers in virtual env for test tools - Begin ====="
   PYTHON_ENV_FOR_TEST_TOOL=python_venv_for_test_tool
   PIP_FOR_TEST_TOOL=${PYTHON_ENV_FOR_TEST_TOOL}/bin/pip
@@ -68,7 +70,7 @@ echo "Transformers version for sglang: $(${PIP_FOR_SGLANG} show transformers | g
 
 # copy or download required file
 cp /root/.cache/huggingface/hub/datasets--anon8231489123--ShareGPT_Vicuna_unfiltered/snapshots/192ab2185289094fc556ec8ce5ce1e8e587154ca/ShareGPT_V3_unfiltered_cleaned_split.json /tmp
-# curl -o /tmp/test.jsonl -L.
+#curl -o /tmp/test.jsonl -L https://gh-proxy.test.osinfra.cn/https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl
 cp /root/.cache/modelscope/hub/datasets/grade_school_math/test.jsonl /tmp
 
 echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor

@@ -6,7 +6,7 @@ This example demonstrates rate limiting middleware for sgl-model-gateway using t
 
 This middleware provides rate limiting:
 
-- **Default**: requests per minute per identifier
+- **Default**: 60 requests per minute per identifier
 - **Identifier Priority**: API Key > IP Address > Request ID
 - **Response**: Returns `429 Too Many Requests` when limit exceeded
 

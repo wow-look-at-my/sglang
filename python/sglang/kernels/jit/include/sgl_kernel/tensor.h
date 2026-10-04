@@ -459,11 +459,24 @@ struct DeviceRef : BaseRef<SymbolicDevice> {
 
 }  // namespace details
 
-/** \brief Fluent API for validating tensor shape, strides, dtype, and device.
+/**
+ * \brief Fluent API for validating tensor shape, strides, dtype, and device.
+ *
  * Construct with the expected shape (using `SymbolicSize` or literal
  * integers), chain `.with_strides()`, `.with_dtype<...>()`, and
- * `.with_device<...>()`, then call `.verify(tensor)`. Do not store in a
- * variable. */
+ * `.with_device<...>()`, then call `.verify(tensor)`.
+ *
+ * Example:
+ * \code
+ *   auto N = SymbolicSize{"N"};
+ *   TensorMatcher({N, 128})
+ *       .with_dtype<fp16_t, bf16_t>()
+ *       .with_device<kDLCUDA>()
+ *       .verify(input_tensor);
+ * \endcode
+ *
+ * \note `TensorMatcher` is a move-only temporary. Do not store in a variable.
+ */
 struct TensorMatcher {
  private:
   using SizeRef = details::SizeRef;
@@ -567,7 +580,7 @@ struct TensorMatcher {
     if (m_has_strides()) {
       for (const auto i : irange(dim)) {
         if (view.size(i) != 1 || !m_strides[i]->has_value()) {
-          // skip stride check for size dimension
+          // skip stride check for size 1 dimension
           m_strides[i]->verify(view.stride(i), "stride", i);
         }
       }

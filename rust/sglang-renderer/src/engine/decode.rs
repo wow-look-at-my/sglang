@@ -88,7 +88,10 @@ impl TokenDecoder {
 }
 
 /// Match text stops locally without removing them from the engine request.
-/// The engine uses the same stops to end decoding promptly.
+///
+/// The engine uses the same stops to end decoding promptly. The renderer still
+/// needs its own matcher because it owns text decoding, stop trimming, and the
+/// OpenAI-facing finish reason.
 pub(super) fn text_stop_matcher(request: &GenerateRequest) -> Option<StopStringMatcher> {
     let params = &request.sampling_params;
     StopStringMatcher::new(params.stop.clone(), params.no_stop_trim)

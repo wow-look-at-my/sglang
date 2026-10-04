@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::body::Body;
@@ -69,7 +69,8 @@ async fn forwards_whitelisted_headers_strips_others() {
     }))
     .unwrap();
 
-    // Use a spoofed content-length that differs from the real body length so we can distinguish "inbound value forwarded".
+    // Use a spoofed content-length that differs from the real body length so we
+    // can distinguish "inbound value forwarded" from "reqwest auto-computed it".
     let spoofed_content_length = "99999";
     let req = Request::builder()
         .method("POST")
@@ -88,7 +89,8 @@ async fn forwards_whitelisted_headers_strips_others() {
 
     let seen = worker.captured.lock().unwrap();
     // Whitelisted headers are forwarded with their inbound VALUES intact —
-    // a regression that mangles, uppercases.
+    // a regression that mangles, uppercases, or drops the value (e.g.,
+    // forwarding the name but not the value) must fail this assertion.
     assert_eq!(
         seen.headers.get("authorization").map(String::as_str),
         Some("Bearer test"),
@@ -106,12 +108,15 @@ async fn forwards_whitelisted_headers_strips_others() {
     );
     // Cookie must be stripped.
     assert!(!seen.seen.contains("cookie"));
-    // transfer-encoding is hop-by-hop and must not be forwarded.
+    // transfer-encoding is hop-by-hop and must not be forwarded (reqwest does not
+    // re-add it for a regular body, so absence check is reliable here).
     assert!(
         !seen.seen.contains("transfer-encoding"),
         "transfer-encoding is hop-by-hop and must be stripped"
     );
     // content-length: the inbound spoofed value must not reach the upstream.
+    // reqwest may auto-compute its own content-length for the outbound body,
+    // so we assert value-inequality rather than absence.
     assert_ne!(
         seen.headers.get("content-length").map(|s| s.as_str()),
         Some(spoofed_content_length),

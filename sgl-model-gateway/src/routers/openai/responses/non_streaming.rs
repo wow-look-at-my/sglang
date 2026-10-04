@@ -1,5 +1,6 @@
 //! Non-streaming response handling for OpenAI-compatible responses
 //!
+//! This module handles non-streaming Responses API requests with MCP tool support.
 
 use axum::{
     http::StatusCode,

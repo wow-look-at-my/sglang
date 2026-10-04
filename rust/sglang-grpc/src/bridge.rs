@@ -66,7 +66,9 @@ impl TerminalError {
     }
 }
 
-// skip_from_py_object: this enum is only returned to Python, never received from it.
+// skip_from_py_object: this enum is only returned to Python, never received
+// from it, so it opts out of pyo3's (deprecated-by-default) FromPyObject
+// derive for Clone pyclasses.
 #[pyclass(eq, eq_int, skip_from_py_object)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChunkSendStatus {
@@ -83,7 +85,8 @@ struct EngineStateChangedCallback {
 #[pymethods]
 impl EngineStateChangedCallback {
     fn __call__(&self) {
-        // A full snapshot is built after the notification is received.
+        // A full snapshot is built after the notification is received, so one
+        // pending signal is enough to represent any number of quick changes.
         let _ = self.sender.try_send(());
     }
 }
@@ -274,8 +277,9 @@ impl PyBridge {
         })
     }
 
-    // ------------------------------------------------------------------ Info
-    // / control RPCs (synchronous, small data).
+    // ------------------------------------------------------------------
+    // Info / control RPCs (synchronous, small data)
+    // ------------------------------------------------------------------
 
     pub fn get_model_info(&self) -> PyResult<String> {
         Python::attach(|py| {
@@ -595,7 +599,8 @@ fn try_send_chunk(
                 match sender.send(msg).await {
                     Ok(()) => {
                         if terminal {
-                            // Terminal chunks end the producer contract.
+                            // Terminal chunks end the producer contract; no further on_ready
+                            // signal is fired after a parked Finished/Error drains.
                             remove_channel_refs(&rid_owned, &state);
                             return;
                         }
@@ -648,7 +653,8 @@ struct ChunkCallback {
 
 #[pymethods]
 impl ChunkCallback {
-    /// Register before producing chunks.
+    /// Register before producing chunks. If a parked chunk drained before registration,
+    /// Rust fires `on_ready` immediately so late registration cannot miss the edge.
     fn set_on_ready(&self, py: Python<'_>, on_ready: Py<PyAny>) -> PyResult<()> {
         set_on_ready_for_rid(py, &self.rid, &self.state, on_ready)
     }
@@ -735,7 +741,8 @@ struct JsonChunkCallback {
 
 #[pymethods]
 impl JsonChunkCallback {
-    /// Register before producing chunks.
+    /// Register before producing chunks. If a parked chunk drained before registration,
+    /// Rust fires `on_ready` immediately so late registration cannot miss the edge.
     fn set_on_ready(&self, py: Python<'_>, on_ready: Py<PyAny>) -> PyResult<()> {
         set_on_ready_for_rid(py, &self.rid, &self.state, on_ready)
     }
@@ -817,8 +824,8 @@ fn extract_meta_info(chunk: &Bound<'_, PyDict>) -> HashMap<String, String> {
         && let Ok(meta_dict) = meta_obj.cast::<PyDict>()
     {
         for (k, v) in meta_dict.iter() {
-            // The proto schema is map<string, string>; encode each Python
-            // value as JSON so clients can recover numbers, booleans, arrays.
+            // The proto schema is map<string, string>; encode each Python value as JSON
+            // so clients can recover numbers, booleans, arrays, and objects losslessly.
             if let Ok(key) = k.extract::<String>()
                 && let Ok(val) = py_value_to_json_string(&v)
             {

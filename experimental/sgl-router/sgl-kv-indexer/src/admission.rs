@@ -1,7 +1,12 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Deadline-based load shedding for the query path.
+//!
+//! A query that already waited out its caller's whole deadline can no longer be
+//! answered usefully, so serving it only delays the rest of the backlog. The
+//! budget is the caller's own `grpc-timeout`: no server-side threshold to tune,
+//! and a caller that declared no deadline is never shed.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -13,7 +18,8 @@ use tonic::{Extensions, Request, Status};
 #[derive(Clone, Copy)]
 struct Arrival(Instant);
 
-/// Counts rejections of one kind and reports on doubling totals.
+/// Counts rejections of one kind and reports on doubling totals, so the first
+/// rejection is visible immediately and a sustained overload cannot flood the log.
 pub(crate) struct RejectionLog(AtomicU64);
 
 impl RejectionLog {
@@ -31,8 +37,9 @@ impl RejectionLog {
 
 static DEADLINE_SHED_LOG: RejectionLog = RejectionLog::new();
 
-/// Timestamps a request's arrival so the query path can measure how long it
-/// then waited.
+/// Timestamps a request's arrival so the query path can measure how long it then
+/// waited. Runs before the per-request task is spawned, so the stamp precedes
+/// any scheduling delay. Without this interceptor nothing is ever shed.
 pub fn stamp_arrival(mut request: Request<()>) -> Result<Request<()>, Status> {
     request.extensions_mut().insert(Arrival(Instant::now()));
     Ok(request)
@@ -68,8 +75,8 @@ pub(crate) fn reject_if_deadline_passed(
 }
 
 /// The budget the caller declared in `grpc-timeout`, per the gRPC wire spec (up
-/// to multiple digits followed by a unit). `None` for an absent or unparsable value,
-/// which leaves the request unshed. Measured against the wait since arrival.
+/// to 8 digits followed by a unit). `None` for an absent or unparsable value,
+/// which leaves the request unshed. Measured against the wait since arrival, so
 /// transit time is ignored and shedding can only be late, never early.
 fn caller_deadline(metadata: &MetadataMap) -> Option<Duration> {
     let raw = metadata.get("grpc-timeout")?.to_str().ok()?;

@@ -20,6 +20,7 @@ fi
 
 
 # Default base tags (can be overridden by command line arguments).
+# Keep this aligned with the default AMD PR and Nightly CI lane.
 ROCM_VERSION="rocm10"
 DEFAULT_MI30X_BASE_TAG="${SGLANG_VERSION}-${ROCM_VERSION}-mi30x"
 DEFAULT_MI35X_BASE_TAG="${SGLANG_VERSION}-${ROCM_VERSION}-mi35x"
@@ -78,6 +79,7 @@ else
   echo "Warning: could not parse GPU architecture from '${HOSTNAME_VALUE}', defaulting to ${GPU_ARCH}"
 fi
 
+# Normalise / collapse architectures we don't yet build specifically for
 case "${GPU_ARCH}" in
   mi35x)
     echo "Runner uses ${GPU_ARCH}; will fetch mi35x image."
@@ -105,6 +107,7 @@ retry_with_backoff() {
   local max_attempts=$1; shift
   local attempt=1
   local wait_secs=30
+  # Add jitter (0-30s) so concurrent jobs don't all retry at the same instant
   local jitter=$(( RANDOM % 30 ))
   while true; do
     if "$@"; then
@@ -255,7 +258,8 @@ elif [[ -n "${BUILD_FROM_DOCKERFILE}" ]]; then
 else
   # Find the latest pre-built image
   IMAGE=$(find_latest_image "${GPU_ARCH}")
-  # Temporarily bypass the shared local registry while concurrent CI pulls saturate it.
+  # Temporarily bypass the shared local registry while concurrent CI pulls
+  # saturate it. Keep using the authenticated, retried public-registry path.
   retry_with_backoff 6 docker pull "${IMAGE}"
 fi
 
@@ -315,5 +319,7 @@ docker exec ci_sglang mkdir -p \
   /sgl-data/pip-cache \
   /sgl-data/miopen-cache
 
-# The checkout is owned by the runner (non-root) but the container runs as root.
+# The checkout is owned by the runner (non-root) but the container runs as
+# root.  Git >= 2.35.2 rejects cross-user repos; mark the mount as safe so
+# setuptools-scm / vcs_versioning can resolve the package version.
 docker exec ci_sglang git config --global --add safe.directory /sglang-checkout

@@ -103,7 +103,10 @@ impl ToolCallMode {
     }
 }
 
-/// Processor for streaming Harmony responses Returns an SSE stream that parses Harmony tokens incrementally.
+/// Processor for streaming Harmony responses
+///
+/// Returns an SSE stream that parses Harmony tokens incrementally and
+/// emits ChatCompletionChunk events for streaming responses.
 pub(crate) struct HarmonyStreamingProcessor;
 
 impl HarmonyStreamingProcessor {
@@ -356,6 +359,7 @@ impl HarmonyStreamingProcessor {
         let start_time = Instant::now();
         let mut first_token_time: Option<Instant> = None;
 
+        // Phase 1: Process prefill stream (collect metadata)
         let mut prompt_tokens: HashMap<u32, u32> = HashMap::new();
 
         while let Some(result) = prefill_stream.next().await {
@@ -367,6 +371,7 @@ impl HarmonyStreamingProcessor {
             }
         }
 
+        // Phase 2: Process decode stream (same as single stream)
         let mut parsers: HashMap<u32, HarmonyParserAdapter> = HashMap::new();
         let mut is_firsts: HashMap<u32, bool> = HashMap::new();
         let mut finish_reasons: HashMap<u32, Option<String>> = HashMap::new();
@@ -467,7 +472,8 @@ impl HarmonyStreamingProcessor {
 
         decode_stream.mark_completed();
 
-        // Mark prefill stream as completed AFTER decode completes successfully This ensures that if client disconnects during decode.
+        // Mark prefill stream as completed AFTER decode completes successfully
+        // This ensures that if client disconnects during decode, BOTH streams send abort
         prefill_stream.mark_completed();
 
         // Compute totals once for both usage chunk and metrics
@@ -678,10 +684,12 @@ impl HarmonyStreamingProcessor {
         tx: &mpsc::UnboundedSender<Result<Bytes, io::Error>>,
         mcp_tool_names: &std::collections::HashSet<String>,
     ) -> Result<ResponsesIterationResult, String> {
+        // Phase 1: Process prefill stream (collect metadata, no output)
         while let Some(result) = prefill_stream.next().await {
             let _response = result.map_err(|e| format!("Prefill stream error: {}", e))?;
         }
 
+        // Phase 2: Process decode stream with per-tool mode detection
         let result = Self::process_decode_stream_with_tool_lookup(
             decode_stream,
             emitter,
@@ -690,7 +698,8 @@ impl HarmonyStreamingProcessor {
         )
         .await;
 
-        // Mark prefill stream as completed AFTER decode completes successfully This ensures that if client disconnects during decode.
+        // Mark prefill stream as completed AFTER decode completes successfully
+        // This ensures that if client disconnects during decode, BOTH streams send abort
         prefill_stream.mark_completed();
         result
     }
@@ -720,7 +729,8 @@ impl HarmonyStreamingProcessor {
         let mut message_item_id: Option<String> = None;
         let mut has_emitted_content_part_added = false;
 
-        // Tool call tracking (call_index -> (output_index, item_id, mode)) Mode is determined per-tool.
+        // Tool call tracking (call_index -> (output_index, item_id, mode))
+        // Mode is determined per-tool when mcp_tool_names is provided
         let mut tool_call_tracking: HashMap<usize, (usize, String, ToolCallMode)> = HashMap::new();
 
         // Metadata from Complete message
@@ -1116,7 +1126,8 @@ impl HarmonyStreamingProcessor {
         if let Some(tool_calls) = accumulated_tool_calls {
             if !tool_calls.is_empty() {
                 let analysis_content = if has_analysis {
-                    // Get analysis from finalized parser output by calling finalize again This is safe.
+                    // Get analysis from finalized parser output by calling finalize again
+                    // This is safe because finalize can be called multiple times
                     let output = parser.finalize(finish_reason.clone(), matched_stop.clone())?;
                     output.analysis
                 } else {

@@ -29,7 +29,8 @@ pub(crate) fn inject_bootstrap_metadata(
         bootstrap_room: room_id,
     };
 
-    // Inject metadata directly into SGLang request.
+    // Inject metadata directly into SGLang request
+    // (vLLM doesn't support PD mode, so this will panic if called with vLLM)
     let sglang_request = request.as_sglang_mut();
     sglang_request.disaggregated_params = Some(disagg_params);
 

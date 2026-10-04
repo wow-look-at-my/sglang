@@ -10,6 +10,7 @@ inline void softmax(float* __restrict__ out, const scalar_t* __restrict__ input)
 
   constexpr int kVecSize = bVec::size();
 
+  // step 1: get max
   fVec max_fvec = fVec(-std::numeric_limits<float>::infinity());
   if constexpr (std::is_same_v<scalar_t, float>) {
     if constexpr (SIZE < kVecSize) {
@@ -26,6 +27,7 @@ inline void softmax(float* __restrict__ out, const scalar_t* __restrict__ input)
     }
   } else {
     if constexpr (SIZE < kVecSize) {
+      // SIZE = 1, 2, 4, 8, 16; only the top half is used
       bVec x_bvec = bVec::loadu(input, SIZE);
       fVec x_fvec0, x_fvec1;
       std::tie(x_fvec0, x_fvec1) = at::vec::convert_to_float(x_bvec);
@@ -48,8 +50,10 @@ inline void softmax(float* __restrict__ out, const scalar_t* __restrict__ input)
   float max_val = vec_reduce_max(max_fvec);
   max_fvec = fVec(max_val);
 
+  // step 2: sum of (x - max).exp()
   fVec sum_fvec = fVec(float(0));
   if constexpr (SIZE < fVec::size()) {
+    // SIZE = 1, 2, 4, 8
     fVec x_fvec = (fVec::loadu(out, SIZE) - max_fvec).exp_u20();
     x_fvec = fVec::set(sum_fvec, x_fvec, SIZE);
     sum_fvec += x_fvec;
@@ -63,8 +67,10 @@ inline void softmax(float* __restrict__ out, const scalar_t* __restrict__ input)
   }
   float sum_val = vec_reduce_sum(sum_fvec);
 
+  // step 3: x * (1 / sum)
   sum_fvec = fVec(1.f / sum_val);
   if constexpr (SIZE < fVec::size()) {
+    // SIZE = 1, 2, 4, 8
     fVec out_fvec = fVec::loadu(out, SIZE) * sum_fvec;
     out_fvec.store(out, SIZE);
   } else {
@@ -335,7 +341,8 @@ void biased_grouped_topk_kernel_impl(
             scores2 + g * num_experts_per_group,
             num_experts_per_group);
 
-        // find position of first max, we may have multiple max values.
+        // find position of first max,
+        // note that we may have multiple max values.
         int first_max_idx = -1;
         for (int64_t e = 0; e < num_experts_per_group; ++e) {
           if (scores2[g * num_experts_per_group + e] == gmax) {
@@ -344,6 +351,7 @@ void biased_grouped_topk_kernel_impl(
           }
         }
 
+        // find the 2nd max
         scores2[first_max_idx] = -std::numeric_limits<float>::infinity();
         float gmax2 = at::vec::reduce_all<float>(
             [](Vec& x, Vec& y) { return at::vec::maximum(x, y); },
@@ -611,8 +619,8 @@ std::tuple<at::Tensor, at::Tensor> grouped_topk_cpu(
     int64_t num_fused_shared_experts,
     std::optional<double> routed_scaling_factor,
     std::optional<at::Tensor> num_token_non_padded) {
-  // TODO: Will support num_fused_shared_experts, routed_scaling_factor and
-  // num_token_non_padded. we check them as default value.
+  // TODO: Will support num_fused_shared_experts, routed_scaling_factor and num_token_non_padded.
+  // For now, we just check them as default value.
   TORCH_CHECK(
       num_fused_shared_experts == 0,
       "num_fused_shared_experts must be 0 default value, got: ",
@@ -688,8 +696,8 @@ std::tuple<at::Tensor, at::Tensor> biased_grouped_topk_cpu(
     int64_t num_fused_shared_experts,
     std::optional<double> routed_scaling_factor,
     std::optional<at::Tensor> num_token_non_padded) {
-  // TODO: Will support num_fused_shared_experts and num_token_non_padded. we
-  // check them as default value.
+  // TODO: Will support num_fused_shared_experts and num_token_non_padded.
+  // For now, we just check them as default value.
   TORCH_CHECK(
       num_fused_shared_experts == 0,
       "num_fused_shared_experts must be 0 default value, got: ",

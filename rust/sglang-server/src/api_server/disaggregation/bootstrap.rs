@@ -1,4 +1,7 @@
-//! PD KV bootstrap registry — rust port of Python `CommonKVBootstrapServer` (shared by all transfer backends): prefill ranks PUT `/route`.
+//! PD KV bootstrap registry — rust port of Python `CommonKVBootstrapServer` (shared by all
+//! transfer backends): prefill ranks PUT `/route`, decode ranks GET routes and the `-1`-sentinel
+//! topology, the PD router tracks per-room dp ranks; the wire format is Python-owned parity.
+//! Mounted on the prefill api listener (bootstrap port = api port) before `init_disaggregation`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -61,7 +64,7 @@ struct Registry {
 /// Room→dp-rank entries, sharded `room % `[`ROOM_SHARD_COUNT`].
 struct RoomShards([Mutex<HashMap<i64, RoomEntry>>; ROOM_SHARD_COUNT]);
 
-// Manual: `Default` is only derivable for arrays a bounded number of elements.
+// Manual: `Default` is only derivable for arrays up to 32 elements.
 impl Default for RoomShards {
     fn default() -> Self {
         Self(std::array::from_fn(|_| Mutex::new(HashMap::new())))
@@ -109,7 +112,8 @@ struct Topology {
     follow_bootstrap_room: Option<bool>,
     enable_dsa_cache_layer_split: Option<bool>,
     prefill_http_port: Option<i64>,
-    /// Keyed `(dp_group, attn_cp_rank, attn_tp_rank, pp_rank)` — the flat form.
+    /// Keyed `(dp_group, attn_cp_rank, attn_tp_rank, pp_rank)` — the flat form
+    /// of Python's nested `prefill_port_table` dicts.
     prefill_ranks: HashMap<(i64, i64, i64, i64), PrefillRankInfo>,
     registered_count: i64,
 }
@@ -175,7 +179,8 @@ async fn route_put(State(state): State<Arc<Registry>>, Json(body): Json<Route>) 
         body.system_dp_rank
     };
 
-    // Copy-on-write update.
+    // Copy-on-write update. `rcu` may re-run the closure under write
+    // contention, so it only reads `body` and clones what it stores.
     let mut layout_mismatch = false;
     state.topology.rcu(|current| {
         let mut topo = (**current).clone();
@@ -241,6 +246,7 @@ async fn route_get(
     State(state): State<Arc<Registry>>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
+    // A missing, empty (Python truthiness), or non-integer param → 400.
     let rank = |k: &str| query.get(k).and_then(|v| v.trim().parse::<i64>().ok());
     let (Some(dp), Some(cp), Some(tp), Some(pp)) = (
         rank("prefill_dp_rank"),
@@ -338,8 +344,12 @@ async fn query_dp_ranks(
     Json(result).into_response()
 }
 
+/// No `/health` here: the merged api router already serves it (same 200 "OK"
+/// the standalone Python bootstrap server answered, so probes are unchanged).
 fn router(state: Arc<Registry>) -> Router {
     Router::new()
+        // Unmatched methods on a routed path get axum's built-in 405, matching
+        // Python's explicit method_not_allowed branch.
         .route("/route", put(route_put).get(route_get))
         .route("/register_dp_rank", post(register_dp_rank))
         .route("/query_dp_ranks", post(query_dp_ranks))
@@ -441,7 +451,10 @@ mod tests {
     }
 
     /// Pick a free port (probe-bind pattern, as in the `runtime` tests) and
-    /// boot the full runtime there with the bootstrap registry mounted.
+    /// boot the full runtime there with the bootstrap registry mounted — the
+    /// registry serves on the api listener, so these tests also pin the merge
+    /// wiring (including the `enable_pd_bootstrap()` derivation from the
+    /// role), not just the handlers.
     fn start_on_free_port() -> (Runtime, SocketAddr) {
         start_runtime(test_server_args(DisaggregationMode::Prefill))
     }
@@ -461,14 +474,22 @@ mod tests {
         (crate::runtime::start(cfg).expect("start runtime"), addr)
     }
 
-    /// The full wire contract the Python decode side / PD router depends on: until every rank is registered.
+    /// The full wire contract the Python decode side / PD router depends on:
+    /// 503 until every rank is registered, the `-1` sentinel returning
+    /// `PrefillServerInfo` with Python's exact field names, per-rank lookup
+    /// returning `PrefillRankInfo`, 404 for an unknown rank, 400 for missing
+    /// params, and `int(...)`-style acceptance of a string `rank_port`. Field
+    /// names and status codes are external literals owned by
+    /// disaggregation/common/conn.py — this pins the copy.
     #[test]
     fn route_contract_matches_python_client() {
         let (_rt, addr) = start_on_free_port();
 
+        // Not registered yet → 503 (the decode side retries on exactly this).
         let (status, _) = request(addr, "GET", SENTINEL, None);
         assert_eq!(status, 503);
 
+        // Missing/empty params → 400.
         let (status, _) = request(addr, "GET", "/route?prefill_dp_rank=0", None);
         assert_eq!(status, 400);
         let (status, _) = request(
@@ -479,12 +500,14 @@ mod tests {
         );
         assert_eq!(status, 400);
 
-        // Register the rank.
+        // Register the single rank; rank_port as a STRING (Python coerces
+        // with `int(data["rank_port"])`, so the wire tolerates it).
         let body = put_route(serde_json::json!({"rank_port": "17000"}));
         let (status, text) = request(addr, "PUT", "/route", Some(&body));
         assert_eq!((status, text.as_str()), (200, "OK"));
 
-        // Sentinel now serves the topology, keys verbatim from `dataclasses.asdict(PrefillServerInfo)`.
+        // Sentinel now serves the topology, keys verbatim from
+        // `dataclasses.asdict(PrefillServerInfo)`.
         let (status, body) = request(addr, "GET", SENTINEL, None);
         assert_eq!(status, 200);
         let info: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -513,6 +536,7 @@ mod tests {
             serde_json::json!({"rank_ip": "10.0.0.1", "rank_port": 17000})
         );
 
+        // Unknown rank → 404 (ready, but no such entry).
         let (status, _) = request(
             addr,
             "GET",
@@ -540,7 +564,11 @@ mod tests {
         assert_eq!(info["dsv41_spec_layout"], layout);
     }
 
-    /// System-dp topology derivation: with `system_dp_size > 1` the dp axis (readiness expectation AND rank keying) comes from `system_dp_*`.
+    /// System-dp topology derivation: with `system_dp_size > 1` the dp axis
+    /// (readiness expectation AND rank keying) comes from `system_dp_*`, not
+    /// `attn_dp_*` — a "looks equivalent" simplification to always using
+    /// `attn_dp_*` passes single-dp tests but strands multi-dp deployments at
+    /// 503 / wrong-rank routes.
     #[test]
     fn system_dp_drives_readiness_and_rank_keys() {
         let (_rt, addr) = start_on_free_port();
@@ -578,7 +606,10 @@ mod tests {
         assert_eq!(rank["rank_ip"], "10.0.0.2");
     }
 
-    /// The PD router's room→dp-rank side channel: register/query round-trip with Python's `{str(room): dp_rank}` response shape.
+    /// The PD router's room→dp-rank side channel: register/query round-trip
+    /// with Python's `{str(room): dp_rank}` response shape, unknown rooms
+    /// silently omitted (not an error). (`/health` liveness now belongs to the
+    /// api router the registry is merged into.)
     #[test]
     fn dp_rank_round_trip() {
         let (_rt, addr) = start_on_free_port();
@@ -602,7 +633,10 @@ mod tests {
         assert_eq!(result, serde_json::json!({"42": 3}));
     }
 
-    /// The registry mounts only on prefill (`enable_pd_bootstrap()`).
+    /// The registry mounts only on prefill (`enable_pd_bootstrap()`): a
+    /// non-prefill server must 404 the bootstrap routes rather than host an
+    /// empty replica — that replica would answer 503 "not registered" forever,
+    /// hiding a misdirected decode/router behind its retry loop.
     #[test]
     fn routes_absent_off_prefill() {
         let (_rt, addr) = start_runtime(test_server_args(DisaggregationMode::Null));

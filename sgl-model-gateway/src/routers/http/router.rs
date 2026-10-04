@@ -180,6 +180,7 @@ impl Router {
             )
             .await?;
 
+        // Record worker selection metric (Layer 3)
         Metrics::record_worker_selection(
             metrics_labels::WORKER_REGULAR,
             metrics_labels::CONNECTION_HTTP,
@@ -203,6 +204,7 @@ impl Router {
         let model = model_id.unwrap_or(UNKNOWN_MODEL_ID);
         let endpoint = route_to_endpoint(route);
 
+        // Record request start (Layer 2)
         Metrics::record_router_request(
             metrics_labels::ROUTER_HTTP,
             metrics_labels::BACKEND_REGULAR,
@@ -233,6 +235,7 @@ impl Router {
             |res, _attempt| is_retryable_status(res.status()),
             // on_backoff hook
             |delay, attempt| {
+                // Layer 3 worker metrics
                 Metrics::record_worker_retry(metrics_labels::WORKER_REGULAR, endpoint);
                 Metrics::record_worker_retry_backoff(attempt, delay);
             },
@@ -312,7 +315,11 @@ impl Router {
 
         let status = response.status();
         // For streaming responses, the wrapped body (`BreakerTrackedStream`)
-        // records the circuit-breaker outcome once the stream terminates.
+        // records the circuit-breaker outcome once the stream actually
+        // terminates (success on clean end, failure on mid-stream error).
+        // Recording it eagerly here based on the initial status code would
+        // mask "200-then-broken" workers — every request would tick a
+        // success before the stream had a chance to error out.
         if !is_stream {
             worker.record_outcome(status.is_success());
         }
@@ -346,7 +353,8 @@ impl Router {
         endpoint: &str,
         method: Method,
     ) -> Response {
-        // TODO: the sglang worker is using in-memory state management.
+        // TODO: currently the sglang worker is using in-memory state management, so this implementation has to fan out to all workers.
+        // Eventually, we need to have router to manage the chat history with a proper database, will update this implementation accordingly.
         let workers = self.worker_registry.get_all();
         if workers.is_empty() {
             return error::service_unavailable("no_workers", "No available workers");
@@ -564,7 +572,15 @@ impl Router {
                 );
 
                 // For streaming requests the caller skips the eager
-                // `record_outcome` on the assumption.
+                // `record_outcome` on the assumption that a
+                // `BreakerTrackedStream` will tick the breaker on drop —
+                // but no tracked stream is installed when send() fails
+                // before any response stream exists. Record the failure
+                // here so a worker flapping at the TCP layer doesn't
+                // stay permanently selectable. Non-streaming requests
+                // are already covered by the caller's
+                // `worker.record_outcome(status.is_success())`, so
+                // gating on `is_stream` avoids double-counting.
                 if is_stream {
                     worker.record_outcome(false);
                 }
@@ -600,8 +616,17 @@ impl Router {
             // Ensure we set the correct content-type for SSE
             response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
 
-            // Pass the reqwest byte stream straight through as the response
-            // body.
+            // Pass the reqwest byte stream straight through as the response body.
+            // Dropping the response body drops this stream, which closes the
+            // upstream HTTP connection and lets the engine abort generation —
+            // no spawned task or channel needed. `BreakerTrackedStream`
+            // updates the worker's circuit breaker exactly once on drop:
+            // success on clean end, failure on stream error, neither on
+            // client disconnect. For non-2xx responses we pre-mark the
+            // wrapper as Errored — otherwise the small error body would
+            // stream cleanly to `None` and Drop would record a spurious
+            // success (and the streaming branch also skips the eager
+            // `record_outcome` above).
             let mut tracked = BreakerTrackedStream::new(
                 res.bytes_stream(),
                 worker.clone(),
@@ -883,7 +908,7 @@ mod tests {
 
         assert!(result.is_ok());
         let url = result.unwrap();
-        // DashMap doesn't guarantee order, so check we get one of the workers
+        // DashMap doesn't guarantee order, so just check we get one of the workers
         assert!(url == "http://worker1:8080" || url == "http://worker2:8080");
     }
 

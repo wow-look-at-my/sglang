@@ -19,11 +19,12 @@ namespace op {
 //   v                     |    |                  v    v
 //   / ------ \            v    v            /     ------     \
 //   | ------ |     /      ||||||      \     |     ------     |
-// M | ------ | @ | |||||| | = | ------ |
+// M | ------ |  @  |      ||||||      |  =  |     ------     |
 //   | ------ |     |      ||||||      |     |     ------     |
 //   | ------ |     \      ||||||      /     |     ------     |
 //   \ ------ /                              \     ------     /
 //       K                   N
+//
 template <int R = 4, int C = 8, typename T>
 __attribute__((target("+dotprod+bf16"))) void sdot_matmul(
     const int8_t* __restrict__ a,

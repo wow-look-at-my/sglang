@@ -1,5 +1,14 @@
 name: PR States
-# Maintains the CI-states block at the bottom of the PR body. Uses pull_request_target (not pull_request) for fork-PR write access; safe because we never check out PR head code, only API-read and PATCH the body. Three triggers, each covering a gap: - pull_request_target: push / open / label change (all PRs incl forks). - workflow_run: pr-test* requested / completed events (incl fork PRs). `requested` is absent on reruns, but `completed` still fires. - workflow_dispatch: explicit refreshes for a provided PR number. This is the only event here that GITHUB_TOKEN can cascade-create.
+# Maintains the CI-states block at the bottom of the PR body. Uses
+# pull_request_target (not pull_request) for fork-PR write access; safe
+# because we never check out PR head code, only API-read and PATCH the body.
+#
+# Three triggers, each covering a gap:
+#   - pull_request_target: push / open / label change (all PRs incl forks).
+#   - workflow_run: pr-test* requested / completed events (incl fork PRs).
+#     `requested` is absent on reruns, but `completed` still fires.
+#   - workflow_dispatch: explicit refreshes for a provided PR number. This
+#     is the only event here that GITHUB_TOKEN can cascade-create.
 
 on:
   pull_request_target:
@@ -19,7 +28,8 @@ permissions:
   actions: read
 
 concurrency:
-  # Per-SHA dedupe (PR number for workflow_dispatch). Queues concurrent fires across the three triggers so they don't race on the body PATCH.
+  # Per-SHA dedupe (PR number for workflow_dispatch). Queues concurrent
+  # fires across the three triggers so they don't race on the body PATCH.
   group: pr-states-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || inputs.pr_number }}
   cancel-in-progress: false
 

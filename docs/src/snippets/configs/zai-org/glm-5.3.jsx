@@ -96,6 +96,8 @@ sgl-eval run aime25 \\
     b200:  "lmsysorg/sglang:latest",
     gb300: "lmsysorg/sglang:latest",
     b300:  "lmsysorg/sglang:latest",
+    // >= v0.5.20 so `--*-parser auto` detects GLM-5.3 (#38297); the rocm700
+    // line stopped at v0.5.19, so mi30x moves to the rocm720 build.
     mi355x: "lmsysorg/sglang-rocm:v0.5.20-rocm720-mi35x-20260920",
     mi325x: "lmsysorg/sglang-rocm:v0.5.20-rocm720-mi30x-20260920",
     mi300x: "lmsysorg/sglang-rocm:v0.5.20-rocm720-mi30x-20260920",
@@ -135,14 +137,18 @@ sgl-eval run aime25 \\
 
   playgroundFeatures: {
 
-    // CP sizes auto-gate in the engine to the runtime derivation attn_cp_size
-    // = tp/dp (a user-passed --attn-cp-size is overridden). CP is
-    // single-machine only (tp_size <= 8). Interleave CP + DP-Attention fails
-    // the runtime's dp_size == 1 assert but is allowed here with a warning
-    // (combined support is planned upstream). Strategy knob: interleave (ex
-    // round-robin-split) is the default; zigzag (ex in-seq-split) is exposed
-    // as an experiment — the runtime auto-configures deepep + ep=tp for it
-    // and restricts it to batch_size=1 (long-context single-request runs).
+    // ----- Card 1: "Attention Parallelism" -----
+    // DSA prefill Context Parallelism (CP) splits the long-prefill attention across
+    // `cp` ranks — runs on Hopper (H200) and Blackwell (B200/GB300/B300).
+    // CP sizes auto-gate in the engine to the runtime derivation
+    // attn_cp_size = tp/dp (a user-passed --attn-cp-size is overridden).
+    // CP is single-machine only (tp_size <= 8). Interleave CP + DP-Attention
+    // currently fails the runtime's dp_size == 1 assert but is allowed here
+    // with a warning (combined support is planned upstream).
+    // Strategy knob: interleave (ex round-robin-split) is the default;
+    // zigzag (ex in-seq-split) is exposed as an
+    // experiment — the runtime auto-configures deepep + ep=tp for it and
+    // restricts it to batch_size=1 (long-context single-request runs).
     attention: {
       knobs: [
         { id: "tp", label: "TP", values: [null, 4, 8] },
@@ -172,6 +178,7 @@ sgl-eval run aime25 \\
       ],
     },
 
+    // ----- Card 2: "MoE Parallelism" -----
     moe: {
       backend: {
         options: [
@@ -182,6 +189,7 @@ sgl-eval run aime25 \\
       ep: { label: "EP", values: [null, 4, 8] },
     },
 
+    // ----- Card 3: "Parsers" -----
     parsers: {
       items: [
         { id: "reasoning", label: "Reasoning Parser", flag: "--reasoning-parser auto" },
@@ -189,8 +197,10 @@ sgl-eval run aime25 \\
       ],
     },
 
-    // DFlash2 is the algorithm no Deploy cell ships: its draft is a
-    // separate checkpoint.
+    // ----- Card 4: "Speculative Decoding" -----
+    // GLM-5.3 ships a single MTP (nextn) layer; index_share_for_mtp_iteration reuses the
+    // DSA indexer topk across draft steps (topk==1 only). DFlash2 is the one
+    // algorithm no Deploy cell ships: its draft is a separate checkpoint.
     speculative: {
       options: [
         { id: "current", label: "Inherited from base" },
@@ -206,8 +216,11 @@ sgl-eval run aime25 \\
           disable: { hw: ["mi355x", "mi325x", "mi300x"] },
           disableReason: "MTP/EAGLE speculative decoding is not yet validated on AMD ROCm (MI300X/MI325X/MI355X): the gfx950 spec-decode draft kernel is not yet validated and at --speculative-num-steps > 3 hits a separate build issue; the DSA nextn draft path is CUDA-only." },
         { id: "dflash", label: "DFlash2 (block diffusion)",
-          // Block-wise draft from a separate checkpoint, not the
-          // in-checkpoint MTP layer.
+          // Block-wise draft from a separate checkpoint, not the in-checkpoint
+          // MTP layer. The block size (8) comes from the draft's own
+          // dflash_config, so no --speculative-num-draft-tokens here. The draft
+          // is a small dense model and does not run on the target's DSA
+          // backends, hence the explicit draft attention backend.
           flags: ["--speculative-algorithm DFLASH",
                   "--speculative-draft-model-path incoai/GLM-5.3-DFlash2",
                   "--speculative-draft-attention-backend fa4"],
@@ -221,9 +234,11 @@ sgl-eval run aime25 \\
       ],
     },
 
-    // Owns the `--disaggregation-*` flags; the engine also pins role-specific
-    // serving ports (spaced apart) so prefill + decode don't collide on one
-    // host.
+    // ----- Card 5: "PD Disaggregation" -----
+    // GLM-5.3 is a DSA model (same family as DeepSeek-V3.2/V4) and supports
+    // prefill/decode disaggregation. Owns the `--disaggregation-*` flags; the
+    // engine also pins role-specific serving ports (spaced apart) so prefill +
+    // decode don't collide on one host.
     pdDisagg: {
       modes: [
         { id: "off",     label: "Off" },
@@ -260,6 +275,7 @@ sgl-eval run aime25 \\
       },
     },
 
+    // ----- Card 6: "Hierarchical KV Cache" -----
     hicache: {
       backends: [
         { id: null,       label: "Auto" },
@@ -309,7 +325,8 @@ sgl-eval run aime25 \\
         "--speculative-eagle-topk 1",
         "--speculative-num-draft-tokens 2",
         "--mem-fraction-static 0.85",
-        // Large chunked-prefill is the main high-throughput tuning lever.
+        // Large chunked-prefill is the main high-throughput tuning lever;
+        // max-running should track the available KV capacity.
         "--chunked-prefill-size 32768",
         "--max-running-requests 256",
         "--host {{HOST_IP}}",
@@ -351,7 +368,8 @@ sgl-eval run aime25 \\
         "--speculative-eagle-topk 1",
         "--speculative-num-draft-tokens 2",
         "--mem-fraction-static 0.85",
-        // Large chunked-prefill is the main high-throughput tuning lever.
+        // Large chunked-prefill is the main high-throughput tuning lever;
+        // max-running should track the available KV capacity.
         "--chunked-prefill-size 32768",
         "--max-running-requests 256",
         "--host {{HOST_IP}}",
@@ -447,6 +465,10 @@ sgl-eval run aime25 \\
 
     // ====================================================================
     // B300 + BF16 (Blackwell Ultra, 8-GPU single node) — TP8.
+    // The unquantized GLM-5.3 (~700B, ~1.51 TB) only fits single-node on 8xB300
+    // (~2.1 TB HBM); smaller GPUs need multi-node (e.g. 2x 8xH200). Balanced/HT run plain TP8
+    // without DP-Attention or DeepEP.
+    // ====================================================================
     {
       match: { hw: "b300", variant: "default", quant: "bf16", strategy: "low-latency", nodes: "single" },
       verified: true,
@@ -495,9 +517,12 @@ sgl-eval run aime25 \\
       ],
     },
 
+    // ====================================================================
+    // BF16 multi-node (inferred) — the 1.51 TB checkpoint spread over 2 nodes.
     // 2x 8xH200 / 2x 8xB200 at TP16, 2x 4xGB300 at TP8. The engine injects
-    // --nnodes / --node-rank / --dist-init-addr from the Multi-Nodes
-    // selector.
+    // --nnodes / --node-rank / --dist-init-addr from the Multi-Nodes selector.
+    // Recipes reuse the single-node B300 flags and remain unverified.
+    // ====================================================================
     {
       match: { hw: "h200", variant: "default", quant: "bf16", strategy: "low-latency", nodes: "multi-2" },
       verified: false,
@@ -641,8 +666,12 @@ sgl-eval run aime25 \\
     },
 
 
-    // ==================================================================== NVFP4
-    // — RadixArk/GLM-5.3-NVFP4 (Model Optimizer, experts-only W4A4).
+    // ====================================================================
+    // NVFP4 — RadixArk/GLM-5.3-NVFP4 (Model Optimizer, experts-only W4A4).
+    // Same runtime contract as nvidia/GLM-5.2-NVFP4 (experts-only NVFP4, KV FP8,
+    // no per-tensor k/v scale tensors), so the GLM-5.2 NVFP4 recipes carry over:
+    // TP8 on B200/B300, TP4 on GB300; low-latency MTP 5-1-6, balanced MTP 2-1-3.
+    // ====================================================================
     {
       match: { hw: "b200", variant: "default", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
       verified: false,
@@ -785,10 +814,17 @@ sgl-eval run aime25 \\
     },
 
     // ====================================================================
-    // AMD MI300X / MI325X / MI355X (ROCm) — TP8, DSA tilelang backend. No
-    // MTP: disabled in the Speculative card for AMD (the gfx950 spec-decode
-    // draft kernel is not yet validated, and num-steps>3 hits a separate
-    // build issue).
+    // AMD MI300X / MI325X / MI355X (ROCm) — TP8, DSA tilelang backend.
+    // No MTP: disabled in the Speculative card for AMD (the gfx950 spec-decode
+    // draft kernel is not yet validated, and num-steps>3 hits a separate build
+    // issue). Strategies differ only by batch-shaping levers
+    // (cuda-graph-max-bs / max-running-requests / chunked-prefill):
+    //   low-latency      — large chunked-prefill, default bs.
+    //   balanced         — chunked-prefill 32768 + bs128, max-running 80.
+    //   high-throughput  — bs256, max-running 256.
+    // BF16 (~1.51 TB) only fits single-node on MI325X (2 TB) / MI355X (2.3 TB);
+    // MI300X (1.5 TB) needs multi-node, so its BF16 cells are omitted.
+    // ====================================================================
     {
       match: { hw: "mi355x", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
       verified: false,

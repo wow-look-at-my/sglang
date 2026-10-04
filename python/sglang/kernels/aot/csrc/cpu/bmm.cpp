@@ -131,14 +131,17 @@ void bmm_kernel_impl(
 
 }  // anonymous namespace
 
-// Mat1: [B, M, K] mat2: [B, N, K] or [B, OC, IC] out: [B, M, N] scale: []
-// 0-dim tensor for per tensor quant
+// mat1 : [B, M, K]
+// mat2 : [B, N, K] or [B, OC, IC]
+// out  : [B, M, N]
+// scale: [] 0-dim tensor for per tensor quant
 //
 void bmm_cpu(
     at::Tensor& out, at::Tensor& mat1, at::Tensor& mat2, bool is_vnni, const std::optional<at::Tensor>& scale) {
   auto packed_w = is_vnni ? mat2 : convert_weight_packed(mat2);
 
-  // input and out could be non-contiguous weight needs to be contiguous in [OC, IC] order
+  // input and out could be non-contiguous
+  // weight needs to be contiguous in [OC, IC] order
   CHECK_LAST_DIM_CONTIGUOUS_INPUT(mat1);
   CHECK_LAST_DIM_CONTIGUOUS_INPUT(out);
   CHECK_INPUT(mat2);

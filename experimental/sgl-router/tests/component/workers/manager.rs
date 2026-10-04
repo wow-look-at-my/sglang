@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::{routing::get, Json, Router};
@@ -13,12 +13,18 @@ use tokio::sync::{mpsc, oneshot, Barrier};
 
 /// Spin up a tiny fake worker that returns `body` on both introspection
 /// endpoints. Returns the worker base URL and a shutdown channel.
+///
+/// One body for both because a real engine reports `served_model_name` on
+/// each.
 async fn spawn_fake_worker(body: Value) -> (String, oneshot::Sender<()>) {
     spawn_worker_serving(body, true).await
 }
 
 /// A worker that answers `/server_info` only — an SGLang predating
-/// `served_model_name` on `/model_info`.
+/// `served_model_name` on `/model_info`, and the shape the kind e2e fleet
+/// still has (`tests/e2e/k8s_integration/fake_worker.py` defines no
+/// `/model_info`). Registration must resolve the model name from the
+/// `/server_info` fallback for this worker.
 async fn spawn_server_info_only_worker(body: Value) -> (String, oneshot::Sender<()>) {
     spawn_worker_serving(body, false).await
 }
@@ -48,7 +54,8 @@ async fn spawn_worker_serving(body: Value, with_model_info: bool) -> (String, on
 
 fn spec_for(id: &str, url: &str, mode: WorkerMode) -> WorkerSpec {
     // model_ids are intentionally empty: the manager resolves them via
-    // /server_info introspection.
+    // /server_info introspection.  Pre-populating here would lie about
+    // what discovery backends actually emit.
     WorkerSpec {
         id: WorkerId(id.into()),
         url: url.into(),
@@ -186,7 +193,8 @@ async fn manager_handles_mode_changed() {
     h.await.unwrap();
 }
 
-/// A worker that reports `enable_http2: true` is registered with [`WireProtocol::H2c`].
+/// A worker that reports `enable_http2: true` is registered with
+/// [`WireProtocol::H2c`], so the proxy forwards to it over cleartext h2c.
 #[tokio::test]
 async fn manager_resolves_h2c_protocol_from_introspection() {
     let (url, _s) =
@@ -215,7 +223,8 @@ async fn manager_resolves_h2c_protocol_from_introspection() {
     h.await.unwrap();
 }
 
-/// A worker that omits `enable_http2` (older SGLang) keeps the safe HTTP/1.1 default on its registry entry.
+/// A worker that omits `enable_http2` (older SGLang) keeps the safe HTTP/1.1
+/// default on its registry entry.
 #[tokio::test]
 async fn manager_defaults_http1_when_enable_http2_absent() {
     let (url, _s) = spawn_fake_worker(json!({"served_model_name": "m"})).await;
@@ -232,8 +241,12 @@ async fn manager_defaults_http1_when_enable_http2_absent() {
     .await
     .unwrap();
 
-    // Non-empty `model_ids` is what proves introspection ran:
-    // `spawn_fake_worker` answers from one body.
+    // Non-empty `model_ids` is what proves introspection ran: `spawn_fake_worker`
+    // answers from one body, so a resolved model id means `/server_info`
+    // answered too and its silence on `enable_http2` is the engine's, not the
+    // fixture's. The positive direction — that `enable_http2` is actually read
+    // — is pinned by `manager_resolves_protocol_per_worker_no_fleet_lock`
+    // below.
     let registered = wait_for(Duration::from_secs(2), || {
         registry
             .get(&WorkerId("w1".into()))
@@ -248,7 +261,13 @@ async fn manager_defaults_http1_when_enable_http2_absent() {
     h.await.unwrap();
 }
 
-/// A worker with no `/model_info` at all still registers, resolving its model name from the `/server_info` fallback and its protocol.
+/// A worker with no `/model_info` at all still registers, resolving its model
+/// name from the `/server_info` fallback and its protocol from the same
+/// response.
+///
+/// Every other test here uses a fixture that answers both endpoints, so without
+/// this one the fallback chain in `introspect::fetch` has no component-level
+/// coverage — while the kind e2e fleet runs exactly this shape.
 #[tokio::test]
 async fn manager_registers_worker_that_serves_server_info_only() {
     let (url, _s) =
@@ -280,10 +299,16 @@ async fn manager_registers_worker_that_serves_server_info_only() {
     h.await.unwrap();
 }
 
-/// The load-bearing regression for the production h2c bug.
+/// The load-bearing regression for the production h2c bug: per-worker protocol
+/// means one worker that resolved HTTP/1.1 first does NOT lock the rest of the
+/// fleet off h2c. A mixed fleet (one h2c-capable worker registered AFTER a
+/// plain HTTP/1.1 worker) ends with each worker on its own protocol — the old
+/// single-client first-write-wins design forced both to HTTP/1.1.
 #[tokio::test]
 async fn manager_resolves_protocol_per_worker_no_fleet_lock() {
-    // w-http1 registers first and reports no enable_http2 (resolves Http1).
+    // w-http1 registers first and reports no enable_http2 (resolves Http1);
+    // w-h2c registers second and reports enable_http2: true (must still get
+    // h2c — it is not dragged down by w-http1's earlier Http1 resolution).
     let (url_http1, _s1) = spawn_fake_worker(json!({"served_model_name": "m"})).await;
     let (url_h2c, _s2) =
         spawn_fake_worker(json!({"served_model_name": "m", "enable_http2": true})).await;
@@ -300,7 +325,7 @@ async fn manager_resolves_protocol_per_worker_no_fleet_lock() {
     .await
     .unwrap();
     // Let the HTTP/1.1 worker resolve first so it is the one that would have
-    // "won" the fleet-wide client.
+    // "won" the old fleet-wide client.
     assert!(
         wait_for_protocol(&registry, "w-http1", WireProtocol::Http1).await,
         "first worker should resolve Http1",
@@ -334,8 +359,16 @@ async fn manager_resolves_protocol_per_worker_no_fleet_lock() {
     h.await.unwrap();
 }
 
+/// Block until `worker_id`'s registry entry reports `expected`, or 2 s elapse.
 /// Returns whether it converged.
-/// predicate on purpose.
+///
+/// The `model_ids` check is half the predicate on purpose. `H2c` proves itself
+/// — it is reachable only through a successful `/server_info` read — but
+/// `Http1` is also the default for a worker built without a resolved protocol,
+/// so waiting on that value alone would be satisfied by an implementation that
+/// never reads one. Requiring a resolved model id as well means the worker at
+/// least completed introspection against a fixture that answers both
+/// endpoints.
 async fn wait_for_protocol(
     registry: &Arc<WorkerRegistry>,
     worker_id: &str,
@@ -350,6 +383,7 @@ async fn wait_for_protocol(
     .await
 }
 
+/// Poll `cond` every 20 ms until it returns true or `budget` elapses.
 async fn wait_for(budget: Duration, mut cond: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
@@ -381,6 +415,7 @@ async fn mode_changed_preserves_active_requests_and_breaker() {
     // Grab a handle, bump active_requests, and open the breaker.
     let w = registry.get(&WorkerId("w1".into())).unwrap();
     w.active_requests.fetch_add(5, Ordering::Relaxed);
+    // Default threshold is 3 — record 10 failures to guarantee Open state.
     for _ in 0..10 {
         w.breaker.record_failure();
     }
@@ -427,7 +462,10 @@ async fn mode_changed_preserves_active_requests_and_breaker() {
     h.await.unwrap();
 }
 
-/// An out-of-order `ModeChanged` for a worker the registry does not know about.
+/// An out-of-order `ModeChanged` for a worker the registry does not know
+/// about (e.g. a buggy discovery backend reordered `Removed` and
+/// `ModeChanged`) must not panic, must not silently log INFO claiming the
+/// mode flip happened, and must leave the registry untouched.
 #[tokio::test]
 async fn manager_handles_orphan_mode_changed_without_panic() {
     let (tx, rx) = mpsc::channel(16);
@@ -456,7 +494,8 @@ async fn manager_handles_orphan_mode_changed_without_panic() {
     h.await.unwrap();
 }
 
-/// A `Removed` for an unknown id is a no-op — registry stays empty, manager keeps running.
+/// A `Removed` for an unknown id is a no-op — registry stays empty, manager
+/// keeps running.
 #[tokio::test]
 async fn manager_handles_orphan_removed_without_panic() {
     let (tx, rx) = mpsc::channel(16);
@@ -475,7 +514,9 @@ async fn manager_handles_orphan_removed_without_panic() {
     h.await.unwrap();
 }
 
-/// Duplicate `Added` for the same id is an upsert — the registry ends up with exactly one worker.
+/// Duplicate `Added` for the same id is an upsert — the registry ends up
+/// with exactly one worker. The model resolved by /server_info wins on
+/// re-add (a different worker may advertise a different served model).
 #[tokio::test]
 async fn manager_handles_duplicate_added_as_upsert() {
     let (url_first, _s_first) = spawn_fake_worker(json!({"served_model_name": "m1"})).await;
@@ -573,7 +614,7 @@ async fn spawn_gated_worker(body: Value, gate: Arc<Barrier>) -> (String, oneshot
 }
 
 /// Spawn a fake worker that counts each `GET /server_info` hit in the
-/// returned `AtomicUsize`. Used to assert the manager makes exactly
+/// returned `AtomicUsize`.  Used to assert the manager makes exactly
 /// one round-trip per worker.
 async fn spawn_counting_worker(body: Value) -> (String, Arc<AtomicUsize>, oneshot::Sender<()>) {
     let body = Arc::new(body);
@@ -603,7 +644,8 @@ async fn spawn_counting_worker(body: Value) -> (String, Arc<AtomicUsize>, onesho
     (format!("http://127.0.0.1:{port}"), counter, tx)
 }
 
-/// Registration must start every `/server_info` fetch before any response is released.
+/// Registration must start every `/server_info` fetch before any response is
+/// released. A sequential manager stalls at the first worker's barrier.
 #[tokio::test]
 async fn added_events_run_in_parallel() {
     let n = 5;
@@ -648,7 +690,11 @@ async fn added_events_run_in_parallel() {
     h.await.unwrap();
 }
 
-/// A `Removed` issued while the matching `Added` is still mid-fetch must await the in-flight registration handle.
+/// A `Removed` issued while the matching `Added` is still mid-fetch
+/// must await the in-flight registration handle before removing.
+/// Without that ordering the removal runs first (registry has nothing
+/// to remove), then the Added's deferred registry write leaks the
+/// worker.
 #[tokio::test]
 async fn removed_awaits_pending_added() {
     let (url, _s) = spawn_slow_worker(
@@ -674,7 +720,9 @@ async fn removed_awaits_pending_added() {
     .await
     .unwrap();
 
-    // Wait long enough for the Added's /server_info to complete (300ms), then assert the worker is gone.
+    // Wait long enough for the Added's /server_info to complete (300ms),
+    // then assert the worker is gone. If Removed ran before Added's
+    // registry write, the post-fetch write would leak the entry.
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(
         registry.get(&WorkerId("w-slow".into())).is_none(),
@@ -687,6 +735,9 @@ async fn removed_awaits_pending_added() {
 }
 
 /// The manager must make exactly ONE `/server_info` request per worker.
+/// Before this fix the worker manager fetched `served_model_name` and
+/// `KvEventIndex::add_worker` fetched the `kv_events` block
+/// independently — 2N round-trips for N workers.
 #[tokio::test]
 async fn manager_emits_single_server_info_fetch_per_worker() {
     use sgl_router::state::kv_events::KvEventIndex;
@@ -750,7 +801,13 @@ async fn manager_emits_single_server_info_fetch_per_worker() {
     kv_index.shutdown().await;
 }
 
-/// Public-API integration for the reconcile loop: a worker that registers with empty `model_ids`.
+/// Public-API integration for the reconcile loop: a worker that registers
+/// with empty `model_ids` (its `/server_info` was failing when discovery
+/// first reported it — the "EndpointSlice ready before the engine can
+/// answer /server_info" race) must be recovered by the manager's
+/// reconcile loop once `/server_info` starts answering. Exercised through
+/// the public `run_with_introspector_and_reconcile` entrypoint with no
+/// new discovery event after the initial `Added`.
 #[tokio::test]
 async fn reconcile_recovers_worker_with_unresolved_model_ids() {
     use axum::http::StatusCode;
@@ -758,6 +815,8 @@ async fn reconcile_recovers_worker_with_unresolved_model_ids() {
     use sgl_router::workers::WorkerIntrospector;
     use std::sync::atomic::AtomicBool;
 
+    // Switchable fake engine: 503 on /server_info until `ready` flips
+    // true, then serves a body advertising model "m".
     let ready = Arc::new(AtomicBool::new(false));
     let ready_handler = ready.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -805,6 +864,8 @@ async fn reconcile_recovers_worker_with_unresolved_model_ids() {
     .await
     .unwrap();
 
+    // Phase 1: the worker registers but stays out of the model pool while
+    // /server_info keeps failing.
     let stuck = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             if let Some(w) = registry.get(&WorkerId("w-slow".into())) {
@@ -824,6 +885,8 @@ async fn reconcile_recovers_worker_with_unresolved_model_ids() {
     // Engine finishes coming up.
     ready.store(true, Ordering::SeqCst);
 
+    // Phase 2: the reconcile loop re-introspects and the worker joins the
+    // model pool — no new discovery event was sent.
     let recovered = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if registry.workers_for(&ModelId("m".into())).len() == 1 {

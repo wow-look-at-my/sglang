@@ -1,7 +1,20 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! PD-disagg bootstrap-room injection + dual-dispatch — end-to-end at the HTTP layer using MockWorkers.
+//! PD-disagg bootstrap-room injection + dual-dispatch — end-to-end
+//! at the HTTP layer using MockWorkers.
+//!
+//! Asserts the router-side contract for SGLang disagg-prefill HTTP mode:
+//!
+//! * Every PD-mode `/v1/chat/completions` request fans out to BOTH a
+//!   prefill and a decode worker (the prefill is `tokio::spawn`'d in
+//!   the background; the decode is awaited for the client response).
+//! * Both bodies carry the SAME flat top-level fields:
+//!     - `bootstrap_host` = the chosen prefill worker's host
+//!     - `bootstrap_port` = the chosen prefill worker's bootstrap port
+//!     - `bootstrap_room` = a random u64 in `[0, i64::MAX]` (63-bit)
+//! * Plain-mode requests do NOT carry any `bootstrap_*` field — the
+//!   injection step is gated on `worker.mode() == Prefill`.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -83,7 +96,7 @@ fn chat_request() -> Request<Body> {
 /// Pattern-B dispatch: prefill is `tokio::spawn`'d as a detached task
 /// so the client response can return as soon as decode is reachable —
 /// the prefill body is captured *eventually* but may not be present
-/// when the handler returns.
+/// when the handler returns. Poll with a short bound rather than
 /// sleeping a fixed duration.
 async fn await_captured_body(
     mock: &crate::common::mock_worker::MockWorker,
@@ -92,7 +105,8 @@ async fn await_captured_body(
 ) -> Bytes {
     let start = Instant::now();
     loop {
-        // Release the `std::sync::Mutex` guard before the sleep.await (clippy: await_holding_lock).
+        // Release the `std::sync::Mutex` guard before the sleep.await
+        // (clippy: await_holding_lock).
         let captured = mock.captured.lock().unwrap().last_body.clone();
         if let Some(b) = captured {
             return b;
@@ -123,7 +137,8 @@ fn bootstrap_room(v: &Value) -> Option<u64> {
     v.get("bootstrap_room").and_then(|x| x.as_u64())
 }
 
-/// PD-mode chat fans out to BOTH prefill and decode with identical bootstrap fields injected into both bodies.
+/// PD-mode chat fans out to BOTH prefill and decode with identical
+/// bootstrap fields injected into both bodies.
 #[tokio::test]
 async fn pd_mode_chat_injects_bootstrap_fields_into_both_bodies() {
     let prefill = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -162,13 +177,15 @@ async fn pd_mode_chat_injects_bootstrap_fields_into_both_bodies() {
         "prefill and decode must share the same bootstrap_room"
     );
 
-    // Room must be in [i64::MAX]: the SGLang prefill stores it as
+    // Room must be in [0, i64::MAX]: the SGLang prefill stores it as
     // i64 internally, so values with the top bit set wrap negative.
     assert!(
         p_room <= i64::MAX as u64,
         "bootstrap_room {p_room} exceeds 63-bit range; SGLang would mis-store as negative i64",
     );
 
+    // bootstrap_host on both sides == prefill worker's hostname
+    // (MockWorker binds to 127.0.0.1).
     assert_eq!(bootstrap_host(&pj), Some("127.0.0.1"));
     assert_eq!(bootstrap_host(&dj), Some("127.0.0.1"));
 
@@ -215,6 +232,8 @@ async fn round_robin_pd_prefill_does_not_track_dispatch_timestamps() {
 }
 
 /// Plain-mode (non-PD) requests do NOT carry any `bootstrap_*` field.
+/// The injection step is gated on `worker.mode() == Prefill`; plain
+/// workers serve the chat route directly without disagg bootstrapping.
 #[tokio::test]
 async fn plain_mode_chat_does_not_inject_bootstrap_fields() {
     let plain = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -246,7 +265,9 @@ async fn plain_mode_chat_does_not_inject_bootstrap_fields() {
     );
 }
 
-/// PD-mode with multiple prefill workers + different `bootstrap_port` values.
+/// PD-mode with multiple prefill workers + different `bootstrap_port`
+/// values: the bootstrap_port injected MUST match the actually-chosen
+/// prefill (not e.g. the first registered or a global config value).
 #[tokio::test]
 async fn pd_mode_bootstrap_port_matches_chosen_prefill_worker() {
     let prefill_a = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -301,7 +322,13 @@ async fn pd_mode_bootstrap_port_matches_chosen_prefill_worker() {
     );
 }
 
-/// Pin Pattern B's "prefill failure is invisible to the client" contract.
+/// Pin Pattern B's "prefill failure is invisible to the client"
+/// contract: when the spawned prefill task gets a 5xx (or any other
+/// upstream error), the decode response still reaches the client
+/// unmodified. The router intentionally does not wire fail-fast here —
+/// the decode side will eventually hang on `bootstrap_room` and time
+/// out, but the chat handler itself doesn't propagate the prefill
+/// error. Matches llm-d / aibrix behaviour.
 #[tokio::test]
 async fn pd_mode_prefill_5xx_does_not_poison_decode_response() {
     let prefill = crate::common::mock_worker::MockWorker::start_returning_error(
@@ -328,6 +355,7 @@ async fn pd_mode_prefill_5xx_does_not_poison_decode_response() {
     ]);
     let app = build_router(ctx);
 
+    // Client must see decode's 200 — the failing prefill is invisible.
     let res = app.oneshot(chat_request()).await.unwrap();
     assert_eq!(
         res.status(),
@@ -335,12 +363,15 @@ async fn pd_mode_prefill_5xx_does_not_poison_decode_response() {
         "decode response should reach the client even when prefill returned 5xx",
     );
 
-    // Decode received its body (proves dual dispatch fired despite the prefill failure).
+    // Decode received its body (proves dual dispatch fired despite
+    // the prefill failure).
     let decode_body = await_captured_body(&decode, Duration::from_secs(2), "decode").await;
     let v = parse_body(&decode_body);
     assert_eq!(bootstrap_port(&v), Some(8997));
 
-    // Prefill also received its body — it returned 5xx.
+    // Prefill also received its body — it just returned 5xx. The
+    // bootstrap fields are present so the engine WOULD have honoured
+    // the bootstrap_room if the mock had succeeded.
     let prefill_body = await_captured_body(&prefill, Duration::from_secs(2), "prefill").await;
     let pv = parse_body(&prefill_body);
     assert_eq!(bootstrap_port(&pv), Some(8997));

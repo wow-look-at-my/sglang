@@ -214,6 +214,7 @@ static inline void CHECK_INPUT_SHAPE_DTYPE(const at::Tensor& tensor, const at::I
 //
 //  * parallel_2d      - parallel for 2 dimensions, used in GEMM, etc.
 //                       this one will do payload balance across 2 dimensions.
+//
 
 // grain size for each thread
 constexpr int GRAIN_SIZE = 1024;
@@ -223,6 +224,8 @@ inline T div_up(T x, T y) {
   return (x + y - 1) / y;
 }
 
+// you can only use at::get_thread_num() with at::parallel_for()
+// as it is lazy initialized, otherwise it will always return 0.
 inline int get_thread_num() {
 #if defined(_OPENMP)
   return omp_get_thread_num();
@@ -272,6 +275,8 @@ inline void parallel_for(int n, const func_t& f) {
 #endif
 }
 
+// for 1d parallel, use `actual_nth`
+// for 2d parallel, use even nths, e.g. 43->42
 int inline adjust_num_threads(int m) {
   int actual_nth = at::get_num_threads();
   if (m == 1) {
@@ -296,6 +301,7 @@ inline void parallel_2d(int m, int n, const func_t& f) {
   //     BM / TM = BN / TN
   //   then:
   //     TM = ((BM / BN) * T) ^ 0.5
+  //
   float r = float(m) / n;
   int nth_m = std::ceil(std::sqrt(r * nth));
   int nth_n = 1;
@@ -334,6 +340,7 @@ inline void parallel_2d(int m, int n, const func_t& f) {
 
 template <typename T>
 inline int get_cache_blocks(int chunk_size) {
+  // L2 2MB and ratio of 50%
   const int L2_size = 2048 * 1024 >> 1;
   return std::max(1, int(L2_size / (chunk_size * sizeof(T))));
 }

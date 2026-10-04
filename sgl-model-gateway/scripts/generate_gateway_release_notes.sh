@@ -1,5 +1,6 @@
 #!/bin/bash
-# Generate release notes for SGLang Gateway/Router Only includes commits that affect gateway-related paths
+# Generate release notes for SGLang Gateway/Router
+# Only includes commits that affect gateway-related paths
 
 set -e
 
@@ -129,7 +130,8 @@ echo -e "${BLUE}Analyzing contributors...${NC}" >&2
 # Get all contributors in this release (with commit count)
 CONTRIBUTORS=$(git log "$PREV_TAG..$CURR_TAG" --format='%aN <%aE>' --no-merges "${PATH_ARGS[@]}" | sort | uniq -c | sort -rn)
 
-# Get all contributors before this release (from initial commit up to PREV_TAG) Using $(git rev-list --max-parents=0 HEAD).
+# Get all contributors before this release (from initial commit up to PREV_TAG)
+# Using $(git rev-list --max-parents=0 HEAD) to get initial commit ensures we check entire history
 INITIAL_COMMIT=$(git rev-list --max-parents=0 HEAD | tail -1)
 PREV_CONTRIBUTORS=$(git log "$INITIAL_COMMIT..$PREV_TAG" --format='%aN <%aE>' --no-merges "${PATH_ARGS[@]}" | sort | uniq)
 

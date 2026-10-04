@@ -110,8 +110,9 @@ inline void unpack_B(
     int64_t ldb_tmp,
     float scale) {
 #if defined(CPU_CAPABILITY_AVX512)
+  // [K/2, N, 2]
   const int64_t K2 = K >> 1;
-  const int64_t ldb2 = ldb;
+  const int64_t ldb2 = ldb;  // ldb * 2 >> 1;
   const uint16_t* b_ptr = reinterpret_cast<const uint16_t*>(packed_B);
   const __m512 vexp = _mm512_castsi512_ps(_mm512_set1_epi32(kFP8_BIAS));
   const __m512 vd = _mm512_mul_ps(_mm512_set1_ps(scale), vexp);
@@ -165,8 +166,9 @@ inline void unpack_B(
     int ldb,
     int ldb_tmp) {
 #if defined(CPU_CAPABILITY_AVX512)
+  // [K/2, N, 2]
   const int K2 = K >> 1;
-  const int ldb2 = ldb;
+  const int ldb2 = ldb;  // ldb * 2 >> 1;
   const uint16_t* b_ptr = reinterpret_cast<const uint16_t*>(packed_B);
 
   // prefetch distance
@@ -201,9 +203,10 @@ inline void unpack_B(
     int64_t ldb_tmp,
     const uint8_t* __restrict__ scale) {
 #if defined(CPU_CAPABILITY_AVX512)
+  // [K/2, N, 2]
   const int64_t K2 = K >> 1;
-  const int64_t ldb2 = ldb;
-  const uint8_t* b_ptr = reinterpret_cast<const uint8_t*>(packed_B);
+  const int64_t ldb2 = ldb;                                           // ldb * 2 >> 1;
+  const uint8_t* b_ptr = reinterpret_cast<const uint8_t*>(packed_B);  // 2 * 4 bit = 8 bit
 
   constexpr int BLOCK_N = block_size_n();
   static_assert(BLOCK_N == 32);
@@ -211,13 +214,15 @@ inline void unpack_B(
   // prefetch distance
   constexpr int PREFETCH_SIZE_K = 64;
 
+  // exponent bias 127
   const __m512i off = _mm512_set1_epi16(0x7F);
 
+  // load 32 bytes only once for each block
   __m256i s8 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(scale));
   __m512i s16 = _mm512_slli_epi16(_mm512_sub_epi16(_mm512_cvtepu8_epi16(s8), off), 0x7);
 
-  // holds Nx2(64) scales, interleaved as multiple belongs to K
-  // dimension e.g. vs0: { s0, s0, s1, s1, ..., s15, s15}
+  // holds Nx2(64) scales, interleaved as 2 belongs to K dimension
+  // e.g. vs0: { s0,  s0,  s1,  s1, ..., s15, s15}
   //      vs1: {s16, s16, s17, s17, ..., s31, s31}
   auto [vscale0, vscale1] = transpose_2x32_16bit(s16, s16);
 
@@ -313,7 +318,7 @@ struct tinygemm_kernel_nn<at::BFloat16, at::Float8_e4m3fn, float, has_bias, BLOC
     Unroll<ROWS * COLS>{}(loadc);
 
     const int64_t lda2 = lda >> 1;
-    const int64_t ldb2 = ldb;
+    const int64_t ldb2 = ldb;  // ldb * 2 >> 1;
     const float* a_ptr = reinterpret_cast<const float*>(A);
     const uint16_t* b_ptr = reinterpret_cast<const uint16_t*>(B);
 
@@ -363,6 +368,7 @@ struct tinygemm_kernel_nn<at::BFloat16, at::Float8_e4m3fn, float, has_bias, BLOC
     auto storec = [&](auto i) {
       constexpr int row = i / COLS;
       constexpr int col = i % COLS;
+      // for COLS = 2,4 use 512bit store
       if constexpr (col % 2 == 0) {
         _mm512_storeu_si512(
             reinterpret_cast<__m512i*>((C + row * ldc + col * 16)),
@@ -411,7 +417,7 @@ struct tinygemm_kernel_nn2<at::BFloat16, at::Float8_e4m3fn, has_bias, BLOCK_M, B
     Unroll<ROWS * COLS>{}(loadc);
 
     const int64_t lda2 = lda >> 1;
-    const int64_t ldb2 = ldb;
+    const int64_t ldb2 = ldb;  // ldb * 2 >> 1;
     const float* a_ptr = reinterpret_cast<const float*>(A);
     const uint16_t* b_ptr = reinterpret_cast<const uint16_t*>(B);
 
@@ -455,6 +461,7 @@ struct tinygemm_kernel_nn2<at::BFloat16, at::Float8_e4m3fn, has_bias, BLOCK_M, B
     auto storec = [&](auto i) {
       constexpr int row = i / COLS;
       constexpr int col = i % COLS;
+      // for COLS = 2, 4 use 512bit store
       if constexpr (col % 2 == 0) {
         _mm512_storeu_si512(
             reinterpret_cast<__m512i*>((C + row * ldc + col * 16)),
@@ -478,6 +485,8 @@ struct tinygemm_kernel_nn<at::BFloat16, uint8_t, uint8_t, has_bias, BLOCK_M, BLO
       int ldb,
       int ldc,
       int64_t block_size_K) {
+    // mxfp4 supports only group size of 32
+    // expect weight packed in 32-way, vnni2 format Nx2(64)
     assert(block_size_K == 32);
     assert(BLOCK_N == 32);
 
@@ -492,11 +501,12 @@ struct tinygemm_kernel_nn<at::BFloat16, uint8_t, uint8_t, has_bias, BLOCK_M, BLO
     __m512bh vb[COLS];
     __m512 vc[ROWS * COLS];
 
-    // holds Nx2(64) scales, interleaved as multiple belongs to K
-    // dimension e.g. vs0: { s0, s0, s1, s1, ..., s15, s15}
+    // holds Nx2(64) scales, interleaved as 2 belongs to K dimension
+    // e.g. vs0: { s0,  s0,  s1,  s1, ..., s15, s15}
     //      vs1: {s16, s16, s17, s17, ..., s31, s31}
     __m512i vscale[COLS];
 
+    // exponent bias 127
     const __m512i off = _mm512_set1_epi16(0x7F);
 
     auto loadc = [&](auto i) {
@@ -511,7 +521,7 @@ struct tinygemm_kernel_nn<at::BFloat16, uint8_t, uint8_t, has_bias, BLOCK_M, BLO
 
     const int64_t K2 = K >> 1;
     const int64_t lda2 = lda >> 1;
-    const int64_t ldb2 = ldb;
+    const int64_t ldb2 = ldb;  // ldb * 2 >> 1;
     const float* a_ptr = reinterpret_cast<const float*>(A);
     const uint8_t* b_ptr = reinterpret_cast<const uint8_t*>(B);
 
@@ -526,6 +536,7 @@ struct tinygemm_kernel_nn<at::BFloat16, uint8_t, uint8_t, has_bias, BLOCK_M, BLO
         }
       }
       if constexpr (row == 0) {
+        // load 32 * 2 (64) int4 at a time
         if constexpr (col % 2 == 0) {
           __m256i b4 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b_ptr + k * ldb2 + col * 16));
           if constexpr (PREFETCH_SIZE_K > 0) {
@@ -550,6 +561,7 @@ struct tinygemm_kernel_nn<at::BFloat16, uint8_t, uint8_t, has_bias, BLOCK_M, BLO
     auto storec = [&](auto i) {
       constexpr int row = i / COLS;
       constexpr int col = i % COLS;
+      // for COLS = 2,4 use 512bit store
       if constexpr (col % 2 == 0) {
         _mm512_storeu_si512(
             reinterpret_cast<__m512i*>((C + row * ldc + col * 16)),
@@ -647,6 +659,7 @@ struct brgemm<at::BFloat16, at::Float8_e4m3fn, float, has_bias> {
       bool do_unpack = true) {
     constexpr int BLOCK_N = block_size_n();
 
+    // [K, BLOCK_N] -> [K / 2, BLOCK_N * 2]
     const int ldb_tmp = BLOCK_N;
 
     if (do_unpack) {
@@ -690,6 +703,7 @@ struct brgemm2<at::BFloat16, at::Float8_e4m3fn, has_bias> {
       bool do_unpack = true) {
     constexpr int BLOCK_N = block_size_n();
 
+    // [BLOCK_K, BLOCK_N] -> [BLOCK_K / 2, BLOCK_N * 2]
     const int ldb_tmp = block_size_n();
 
     // accumulate across K per BLOCK_K
@@ -731,9 +745,11 @@ struct brgemm<at::BFloat16, uint8_t, uint8_t, has_bias> {
       bool do_unpack = true) {
     constexpr int BLOCK_N = block_size_n();
 
+    // [K, BLOCK_N] -> [K / 2, BLOCK_N * 2]
     const int ldb_tmp = BLOCK_N;
 
     if (do_unpack) {
+      // group size 32 for mxfp4
       for (int k = 0; k < K; k += 32) {
         unpack_B(Btmp + k * ldb_tmp, B + k * (ldb >> 1), N, 32, ldb, ldb_tmp, scale + (k >> 5) * BLOCK_N);
       }
@@ -776,6 +792,7 @@ void tinygemm_kernel(
     return;
   }
 
+  // pattern: 1-4-16
   constexpr int64_t BLOCK_M = 4;
   constexpr int64_t BLOCK_N = 64;
   const int64_t MB = div_up(M, BLOCK_M);
@@ -829,6 +846,7 @@ void tinygemm_kernel2(
     return;
   }
 
+  // pattern: 1-8-8
   if (M == 1) {
     constexpr int64_t BLOCK_N = 128;
     const int64_t NB = div_up(N, BLOCK_N);
@@ -858,6 +876,7 @@ void tinygemm_kernel2(
     return;
   }
 
+  // pattern: 1-4-16
   constexpr int64_t BLOCK_M = 4;
   constexpr int64_t BLOCK_N = 64;
   const int64_t MB = div_up(M, BLOCK_M);
@@ -910,6 +929,7 @@ void tinygemm_kernel2(
 //        scalar_t     packed_t     param_t
 //   FP8    BF16         FP8         FP32
 //  MXFP4   BF16          U8           U8
+//
 template <typename scalar_t, typename packed_t, typename param_t, typename func_t>
 void fp_scaled_mm_kernel_impl(
     scalar_t* __restrict__ out,
@@ -1364,6 +1384,9 @@ at::Tensor fp8_per_tensor_scaled_mm_cpu(
   return out;
 }
 
+// mat1 : [M, K] bfloat16
+// mat2 : [N, K / 2] uint8, actual layout: [N / BLOCK_N, K / 2, BLOCK_N, 2]
+// scales2: [N, K / G], actual layout: [N / BLOCK_N, K / G, BLOCK_N]
 at::Tensor mxfp4_scaled_mm_cpu(
     at::Tensor& mat1, at::Tensor& mat2, at::Tensor& scales2, const std::optional<at::Tensor>& bias, bool is_vnni) {
   auto packed_w = is_vnni ? mat2 : convert_weight_packed(mat2);
@@ -1376,6 +1399,7 @@ at::Tensor mxfp4_scaled_mm_cpu(
   int64_t N = mat2.size(0);
   int64_t K = mat2.size(1) * 2;
 
+  // mxfp4 supports only group size of 32 (2^5)
   constexpr int64_t group_size = 32;
   constexpr int64_t BLOCK_N = block_size_n();
 

@@ -1,6 +1,10 @@
 # TensorCast as an L3 KV Cache
 
-This document describes how to use TensorCast as the L3 storage backend for SGLang HiCache. The initial integration targets the Unified Radix Cache FULL pool and uses TensorCast's public process-scoped `RegionBackedArtifactSession`. SGLang does not construct daemon requests, region layouts, or canonical TensorCast artifact IDs.
+This document describes how to use TensorCast as the L3 storage backend for
+SGLang HiCache. The initial integration targets the Unified Radix Cache FULL
+pool and uses TensorCast's public process-scoped
+`RegionBackedArtifactSession`; SGLang does not construct daemon requests,
+region layouts, or canonical TensorCast artifact IDs.
 
 Related documentation:
 
@@ -10,40 +14,58 @@ Related documentation:
 
 ## About TensorCast
 
-TensorCast manages model state, KV caches, checkpoints, and other tensor state as distributed artifacts. It separates cluster-wide discovery and routing from host-local memory and data transfer:
+TensorCast manages model state, KV caches, checkpoints, and other tensor state
+as distributed artifacts. It separates cluster-wide discovery and routing from
+host-local memory and data transfer:
 
 - One **Global Store** manages artifact metadata, replica state, and routing.
-- One **StoreDaemon** on each serving host owns local memory regions and moves artifact bytes locally or between hosts.
-- Each SGLang rank attaches one process-scoped Session to its node-local StoreDaemon. The Session owns that rank's regions, RPC health, and transfer protocol details.
+- One **StoreDaemon** on each serving host owns local memory regions and moves
+  artifact bytes locally or between hosts.
+- Each SGLang rank attaches one process-scoped Session to its node-local
+  StoreDaemon. The Session owns that rank's regions, RPC health, and transfer
+  protocol details.
 
-SGLang HiCache continues to decide when pages are published and prefetched. TensorCast stores and moves the K/V fragments that make up those pages.
+SGLang HiCache continues to decide when pages are published and prefetched.
+TensorCast stores and moves the K/V fragments that make up those pages.
 
 ### Transfer modes
 
 Both modes use the same artifact identity and HiCache operation path.
 
 1. **Allocator-backed direct mode** is the default and recommended mode.
-   - The TensorCast Session allocates the CPU tensors used to back the standard SGLang HostPool.
-   - L2/L3 operations submit spans in those tensors directly, without an SGLang-side staging copy.
-   - Separate HostPool allocations, including asymmetric MHA K and V tensors, become separate Session-managed regions automatically.
+   - The TensorCast Session allocates the CPU tensors used to back the standard
+     SGLang HostPool.
+   - L2/L3 operations submit spans in those tensors directly, without an
+     SGLang-side staging copy.
+   - Separate HostPool allocations, including asymmetric MHA K and V tensors,
+     become separate Session-managed regions automatically.
 2. **Scratch mode** is the compatibility mode.
    - The standard SGLang allocator owns the HostPool tensors.
-   - The Session lazily creates one fixed-capacity get arena and one fixed-capacity put arena and copies between them and the HostPool.
-   - Operators must size `scratch.capacity_bytes` for the largest storage batch. Registration fails at startup if the configured capacity is too small.
+   - The Session lazily creates one fixed-capacity get arena and one
+     fixed-capacity put arena and copies between them and the HostPool.
+   - Operators must size `scratch.capacity_bytes` for the largest storage
+     batch. Registration fails at startup if the configured capacity is too
+     small.
 
 ## Requirements and Initial Scope
 
 The initial integration requires:
 
-- Linux and SGLang's CUDA backend.
-- Unified Radix Cache with the primary FULL KV pool.
-- `--hicache-host-memory-mode cache`.
-- either `page_first` with the `kernel` I/O backend or `page_first_direct` with the `direct` I/O backend.
-- a Global Store and node-local StoreDaemon started and ready before SGLang.
-- `engine.cpu_shared_memory.enabled: true` in the StoreDaemon config. And
-- a daemon-visible SGLang owner PID. Containers must share a PID namespace or provide an equivalent PID visibility arrangement.
+- Linux and SGLang's CUDA backend;
+- Unified Radix Cache with the primary FULL KV pool;
+- `--hicache-host-memory-mode cache`;
+- either `page_first` with the `kernel` I/O backend or
+  `page_first_direct` with the `direct` I/O backend;
+- a Global Store and node-local StoreDaemon started and ready before SGLang;
+- `engine.cpu_shared_memory.enabled: true` in the StoreDaemon config; and
+- a daemon-visible SGLang owner PID. Containers must share a PID namespace
+  or provide an equivalent PID visibility arrangement.
 
-The FULL path supports standard MHA, asymmetric MHA with separate K/V HostPool tensors, and MLA. Currently TensorCast L3 does not support `buffer_only`, non-CUDA platforms, `layer_first`, `page_head`, split-head layouts, DCP/attention CP, packed. MTP draft pools, or storage-v2 sidecar transfers such as Mamba and SWA. There is no automatic fallback from allocator mode to scratch mode.
+The FULL path supports standard MHA, asymmetric MHA with separate K/V HostPool
+tensors, and MLA. Currently TensorCast L3 does not support `buffer_only`, non-CUDA
+platforms, `layer_first`, `page_head`, split-head layouts, DCP/attention CP,
+packed MTP draft pools, or storage-v2 sidecar transfers such as Mamba and SWA.
+There is no automatic fallback from allocator mode to scratch mode.
 
 ## Install TensorCast
 
@@ -53,22 +75,28 @@ Install an ABI-compatible TensorCast SDK and daemon:
 pip install tensorcast
 ```
 
-If the published wheel's Torch or CUDA build does not match the SGLang environment, build TensorCast from source instead. See the [TensorCast build guide](https://github.com/tensorcast-ai/tensorcast/blob/main/docs/development/build-from-source.md).
+If the published wheel's Torch or CUDA build does not match the SGLang
+environment, build TensorCast from source instead. See the
+[TensorCast build guide](https://github.com/tensorcast-ai/tensorcast/blob/main/docs/development/build-from-source.md).
 
-TensorCast is an optional SGLang dependency. Importing SGLang does not import TensorCast unless this storage backend is selected.
+TensorCast is an optional SGLang dependency. Importing SGLang does not import
+TensorCast unless this storage backend is selected.
 
 ## Deployment
 
 The recommended deployment is operator-managed services plus SDK attachment:
 
 - The operator starts one Global Store for the TensorCast cluster.
-- The operator starts one StoreDaemon on every SGLang host and waits for it to become ready.
+- The operator starts one StoreDaemon on every SGLang host and waits for it to
+  become ready.
 - SGLang ranks attach to the local daemon during HostPool construction.
 - SGLang never starts, restarts, supervises, or stops TensorCast services.
 
 ### Single-host deployment
 
-Run the following commands from the SGLang repository root. The checked-in files under `configs/` are starter configurations and must be sized and secured for the target deployment.
+Run the following commands from the SGLang repository root. The checked-in
+files under `configs/` are starter configurations and must be sized and secured
+for the target deployment.
 
 **Step 1: Prepare the environment**
 
@@ -101,9 +129,14 @@ tensorcast-cli daemon start \
   --session "${TC_DAEMON_SESSION}"
 ```
 
-The checked-in daemon config listens for SDK RPCs on port `50052` and uses port `65090` for P2P transfers.
+The checked-in daemon config listens for SDK RPCs on port `50052` and uses
+port `65090` for P2P transfers.
 
-Its capability-token secret is fixed test material for local validation only. A production copy must replace `capability_tokens.active.secret` with independently generated secret material. The Global Store and every daemon in a deployment must also use a consistent, deployment-specific cluster identity.
+Its capability-token secret is fixed test material for local validation only.
+A production copy must replace
+`capability_tokens.active.secret` with independently generated secret material.
+The Global Store and every daemon in a deployment must also use a consistent,
+deployment-specific cluster identity.
 
 **Step 4: Verify service readiness**
 
@@ -112,7 +145,9 @@ tensorcast-cli global status --gs-session "${TC_GLOBAL_SESSION}"
 tensorcast-cli daemon status --session "${TC_DAEMON_SESSION}"
 ```
 
-Do not start SGLang until both commands succeed. Session attachment additionally checks that the daemon is ready, CPU shared memory is enabled, its local handle service is reachable. The endpoint is node-local.
+Do not start SGLang until both commands succeed. Session attachment additionally
+checks that the daemon is ready, CPU shared memory is enabled, its local handle
+service is reachable, and the endpoint is node-local.
 
 **Step 5: Start SGLang in allocator mode**
 
@@ -135,7 +170,9 @@ python -m sglang.launch_server \
   }'
 ```
 
-`page_first` plus `kernel` is also supported. Transfer mode controls L2/L3 movement. It does not silently select or change the HostPool layout or L1/L2 I/O backend.
+`page_first` plus `kernel` is also supported. Transfer mode controls L2/L3
+movement; it does not silently select or change the HostPool layout or L1/L2
+I/O backend.
 
 **Scratch-mode alternative**
 
@@ -160,22 +197,27 @@ python -m sglang.launch_server \
   }'
 ```
 
-The 4 GiB value is only an example. Use the sizing rule below for the selected model, rank topology, dtype, page size, and HostPool capacity.
+The 4 GiB value is only an example. Use the sizing rule below for the selected
+model, rank topology, dtype, page size, and HostPool capacity.
 
 **Step 6: Shut down in ownership order**
 
-First terminate SGLang normally and allow its storage workers to join. Then stop the StoreDaemon before the Global Store:
+First terminate SGLang normally and allow its storage workers to join. Then
+stop the StoreDaemon before the Global Store:
 
 ```bash
 tensorcast-cli daemon stop --session "${TC_DAEMON_SESSION}"
 tensorcast-cli global stop --gs-session "${TC_GLOBAL_SESSION}"
 ```
 
-Do not stop the daemon while attached SGLang ranks are still running. The StoreDaemon reclaims a rank's process-pinned stable region backing after that rank process exits.
+Do not stop the daemon while attached SGLang ranks are still running. The
+StoreDaemon reclaims a rank's process-pinned stable region backing after that
+rank process exits.
 
 ### Multi-host and multi-instance deployment
 
-One Global Store may serve many hosts. Each host runs a StoreDaemon, and all SGLang ranks on that host attach to its node-local endpoint:
+One Global Store may serve many hosts. Each host runs a StoreDaemon, and all
+SGLang ranks on that host attach to its node-local endpoint:
 
 ```text
                          Global Store
@@ -188,15 +230,28 @@ One Global Store may serve many hosts. Each host runs a StoreDaemon, and all SGL
        rank 0 rank 1 rank N                rank 0 rank N
 ```
 
-Multiple ranks and multiple SGLang instances may attach to the same local daemon. Every rank owns a distinct process Session and one or more distinct regions. SGLang appends `rank{world_rank}of{world_size}` to the configured Session and region prefixes, while TensorCast makes concrete region names PID-unique.
+Multiple ranks and multiple SGLang instances may attach to the same local
+daemon. Every rank owns a distinct process Session and one or more distinct
+regions. SGLang appends `rank{world_rank}of{world_size}` to the configured
+Session and region prefixes, while TensorCast makes concrete region names
+PID-unique.
 
-Instances reuse artifacts only when their artifact identity inputs agree, including namespace, model ID, model version, FULL layout, dtype, page size. This is TP/PP rank topology. Each instance's rank 0 consumes the artifact shard published by rank 0 of a compatible instance. Ranks do not consume one another's shards.
+Instances reuse artifacts only when their artifact identity inputs agree,
+including namespace, model ID, model version, FULL layout, dtype, page size,
+and TP/PP rank topology. Each instance's rank 0 consumes the artifact shard
+published by rank 0 of a compatible instance; ranks do not consume one
+another's shards.
 
-For cross-host traffic, configure every daemon to register with the same Global Store and ensure its advertised and P2P addresses are reachable. Enable and tune RDMA in the daemon config only when the host fabric and drivers support it. Otherwise configure the supported TCP transport.
+For cross-host traffic, configure every daemon to register with the same Global
+Store and ensure its advertised and P2P addresses are reachable. Enable and
+tune RDMA in the daemon config only when the host fabric and drivers support
+it; otherwise configure the supported TCP transport.
 
 ## Configuration
 
-The full extra-config value is a JSON object, or an `@path` reference to a JSON, YAML, or TOML file. TensorCast-specific fields must be nested under `tensorcast`:
+The full extra-config value is a JSON object, or an `@path` reference to a
+JSON, YAML, or TOML file. TensorCast-specific fields must be nested under
+`tensorcast`:
 
 ```json
 {
@@ -249,7 +304,8 @@ These optional fields remain at the top level of the extra config:
 
 ### Scratch capacity
 
-The exact minimum is known only after SGLang constructs and registers the HostPool:
+The exact minimum is known only after SGLang constructs and registers the
+HostPool:
 
 ```text
 maximum_batch_pages = min(128, host_pool.page_num)
@@ -257,9 +313,15 @@ page_bytes = sum(bytes of all registered fragments in one logical page)
 minimum_capacity_bytes = maximum_batch_pages * page_bytes
 ```
 
-For MHA, `page_bytes` includes both K and V. For MLA, it contains the single combined KV fragment. The configured value applies independently to the lazy get and put arenas, so budget up to `2 * scratch.capacity_bytes` of additional host memory. This is after both directions have been used.
+For MHA, `page_bytes` includes both K and V. For MLA, it contains the single
+combined KV fragment. The configured value applies independently to the lazy
+get and put arenas, so budget up to `2 * scratch.capacity_bytes` of additional
+host memory after both directions have been used.
 
-The 16 MiB default is syntactically valid but may be too small for a real model. An insufficient value fails rank startup with the configured and required byte counts plus the calculated page geometry. Runtime scratch growth is not supported.
+The 16 MiB default is syntactically valid but may be too small for a real
+model. An insufficient value fails rank startup with the configured and
+required byte counts plus the calculated page geometry. Runtime scratch growth
+is not supported.
 
 ### Supported layout matrix
 
@@ -274,16 +336,33 @@ The 16 MiB default is syntactically valid but may be too small for a real model.
 
 ## Runtime and Failure Semantics
 
-Session attachment is an early startup operation. A daemon readiness, configuration, or allocator failure aborts rank startup. SGLang does not fall back to another transfer mode.
+Session attachment is an early startup operation. A daemon readiness,
+configuration, or allocator failure aborts rank startup; SGLang does not fall
+back to another transfer mode.
 
-During a supported FULL-v1 exists/get/put operation, a fatal Session or adapter exception permanently disables TensorCast L3 for that rank. Subsequent calls report no storage hits or false page results, while the SGLang worker continues running and may recompute the missing prefix locally. Other ranks retain their own rank-local Session health.
+During a supported FULL-v1 exists/get/put operation, a fatal Session or adapter
+exception permanently disables TensorCast L3 for that rank. Subsequent calls
+report no storage hits or false page results, while the SGLang worker continues
+running and may recompute the missing prefix locally. Other ranks retain their own
+rank-local Session health.
 
-Transfer mode, daemon endpoint, and Session options cannot be changed at runtime. A failed or terminated Session cannot reattach in the same rank process. Restart the rank to establish a new Session.
+Transfer mode, daemon endpoint, and Session options cannot be changed at
+runtime. A failed or terminated Session cannot reattach in the same rank
+process. Restart the rank to establish a new Session.
 
-`TensorcastStore.close()` terminates Session admission but does not directly release process-pinned allocator or scratch regions. Their mappings remain valid for the HostPool lifetime, and the daemon reclaims stable backing only after the SGLang rank exits.
+`TensorcastStore.close()` terminates Session admission but does not directly
+release process-pinned allocator or scratch regions. Their mappings remain
+valid for the HostPool lifetime, and the daemon reclaims stable backing only
+after the SGLang rank exits.
 
 ## Troubleshooting
 
-- **Attach fails before model startup:** verify Global Store and StoreDaemon status, `cpu_shared_memory.enabled`, the configured daemon address, local handle socket access, and PID visibility.
-- **`Too many open files` from `memfd_create`:** raise the StoreDaemon's inherited `RLIMIT_NOFILE`, for example with `ulimit -n 65535`, and restart the failed daemon and rank processes.
-- **Scratch capacity is insufficient:** use the exact required byte count in the startup error and increase `scratch.capacity_bytes`. Remember that get and put may allocate arenas of that size.
+- **Attach fails before model startup:** verify Global Store and StoreDaemon
+  status, `cpu_shared_memory.enabled`, the configured daemon address, local
+  handle socket access, and PID visibility.
+- **`Too many open files` from `memfd_create`:** raise the StoreDaemon's
+  inherited `RLIMIT_NOFILE`, for example with `ulimit -n 65535`, and restart
+  the failed daemon and rank processes.
+- **Scratch capacity is insufficient:** use the exact required byte count in
+  the startup error and increase `scratch.capacity_bytes`; remember that get
+  and put may allocate two arenas of that size.

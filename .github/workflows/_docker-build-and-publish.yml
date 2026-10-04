@@ -1,6 +1,7 @@
 name: Build and Publish Multi-Arch Docker Images
 
-# Reusable workflow: builds CUDA 13 images for amd64 and arm64, then creates multi-arch manifests with caller-specified tags.
+# Reusable workflow: builds CUDA 13 images for amd64 and arm64, then creates
+# multi-arch manifests with caller-specified tags.
 
 on:
   workflow_call:
@@ -226,25 +227,30 @@ jobs:
 
       - name: Create multi-arch manifests
         env:
+          TAG_CONFIG: ${{ inputs.tag_config }}
+          SGL_VERSION: ${{ inputs.sgl_version }}
+          IMAGE_REPO: ${{ inputs.image_repo }}
+          X86_CU130: ${{ needs.build-x86.outputs.digest-cu130 }}
+          ARM64_CU130: ${{ needs.build-arm64.outputs.digest-cu130 }}
           SHORT_SHA: ${{ github.sha }}
         run: |
-          echo "${{ inputs.tag_config }}" | jq -c '.[]' | while read -r entry; do
-            X86_DIGEST="${{ needs.build-x86.outputs.digest-cu130 }}"
-            ARM64_DIGEST="${{ needs.build-arm64.outputs.digest-cu130 }}"
+          echo "${TAG_CONFIG}" | jq -c '.[]' | while read -r entry; do
+            X86_DIGEST="${X86_CU130}"
+            ARM64_DIGEST="${ARM64_CU130}"
 
             TAG_ARGS=""
             for tag in $(echo "${entry}" | jq -r '.tags[]'); do
               # Substitute template variables
-              tag=$(echo "${tag}" | sed "s/{version}/${{ inputs.sgl_version }}/g")
+              tag=$(echo "${tag}" | sed "s/{version}/${SGL_VERSION}/g")
               tag=$(echo "${tag}" | sed "s/{date}/$(date +%Y%m%d)/g")
               tag=$(echo "${tag}" | sed "s/{short_sha}/${SHORT_SHA:0:8}/g")
-              TAG_ARGS="${TAG_ARGS} -t ${{ inputs.image_repo }}:${tag}"
+              TAG_ARGS="${TAG_ARGS} -t ${IMAGE_REPO}:${tag}"
             done
 
             docker buildx imagetools create \
               ${TAG_ARGS} \
-              ${{ inputs.image_repo }}@${X86_DIGEST} \
-              ${{ inputs.image_repo }}@${ARM64_DIGEST}
+              ${IMAGE_REPO}@${X86_DIGEST} \
+              ${IMAGE_REPO}@${ARM64_DIGEST}
 
             echo "Published:${TAG_ARGS}"
           done

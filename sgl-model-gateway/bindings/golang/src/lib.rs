@@ -1,4 +1,15 @@
-//! FFI module for exposing sgl-model-gateway preprocessing and postprocessing functions to C-compatible languages.
+//! FFI module for exposing sgl-model-gateway preprocessing and postprocessing functions
+//! to C-compatible languages (e.g., Golang via cgo)
+//!
+//! This module provides C-compatible function signatures for:
+//! - Tokenizer operations (encode, decode, chat template)
+//! - Tool parser operations (parse tool calls)
+//! - Tool constraint generation
+//! - gRPC client SDK (complete request-response flow)
+//!
+//! # Safety
+//! All functions marked with `#[no_mangle]` and `extern "C"` must be called
+//! with valid pointers and follow the documented memory management rules.
 
 // Re-export error types
 pub use error::{clear_error_message, set_error_message, set_error_message_fmt, SglErrorCode};

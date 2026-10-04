@@ -1,3 +1,11 @@
+//! Qwen VL family (Qwen2-VL / 2.5-VL / 3-VL / 3.5) server-pipeline image processor.
+//!
+//! Pure-Rust equivalent of the HF `Qwen2VLImageProcessor` pipeline the Python
+//! `QwenVLImageProcessor` drives: `smart_resize` → bicubic resize → rescale +
+//! normalize → patchify into `[grid_h*grid_w, C*tps*ps*ps]` (HF flatten order:
+//! patches by `(gh/m, gw/m, m, m)`, features by `(C, tps, ps, ps)`, temporal
+//! copies duplicated for stills) — plus the image-only M-RoPE fast path.
+//! All parameters come from the runtime spec; nothing is hardcoded per model.
 
 use crate::common::{par, resize, token_layout};
 use crate::pipeline::{
@@ -14,7 +22,8 @@ pub struct MropeItem {
     pub grid: [u32; 3],
 }
 
-/// Resolved processor params.
+/// Resolved processor params, deserialized from the Python-side spec JSON
+/// (unknown fields like `family` are ignored here).
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct QwenVlSpec {
     pub image_token_id: i32,
@@ -29,7 +38,8 @@ pub struct QwenVlSpec {
     pub resample: Resampler,
 }
 
-/// The HF image processor the pipeline must match bit-exactly. Defaults to the one a default server runs.
+/// The HF image processor the pipeline must match bit-exactly. Defaults to the
+/// one a default server runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Resampler {
@@ -59,6 +69,8 @@ pub struct QwenVlProcessor {
 const INV_RESCALE: f32 = 255.0;
 
 /// u8 → normalized f32, rounded as the mirrored processor rounds. The slow one
+/// rescales then normalizes; the fast one folds the rescale into mean/std first
+/// (`_fuse_mean_std_and_rescale_factor`), which differs on 128 of the 256 inputs.
 fn normalize_lut(resample: Resampler, mean: f32, std: f32) -> [f32; 256] {
     match resample {
         Resampler::Pil => core::array::from_fn(|v| (v as f32 / INV_RESCALE - mean) / std),
@@ -161,7 +173,9 @@ impl MmFamilyProcessor for QwenVlProcessor {
         };
         let (gh, gw) = (th / self.spec.patch_size, tw / self.spec.patch_size);
         // `smart_resize` guarantees both: dims are positive and divisible by
-        // `patch_size * merge_size`.
+        // `patch_size * merge_size`. `patchify` indexes on that (and the `dim`
+        // division below needs a non-empty grid), so fail loudly rather than
+        // panic if a future spec change breaks the guarantee.
         if gh == 0 || gw == 0 || gh % self.spec.merge_size != 0 || gw % self.spec.merge_size != 0 {
             return Err(format!(
                 "qwen_vl: patch grid {gh}x{gw} is empty or not a multiple of \
@@ -255,6 +269,11 @@ pub fn smart_resize(
         h_bar = ((h * beta / f).ceil() * f) as usize;
         w_bar = ((w * beta / f).ceil() * f) as usize;
     }
+    // The downscale branch floors without a lower clamp (as Python does), so a
+    // very thin image against a small `max_pixels` can floor a side to 0.
+    // Python then fails inside PIL's resize; here it would reach the resize
+    // coefficient math (overflow panic in debug, garbage in release) and the
+    // `dim = len / (gh * gw)` division, so reject it as a request error.
     if h_bar == 0 || w_bar == 0 {
         return Err(format!(
             "smart_resize: {height}x{width} degenerates to {h_bar}x{w_bar} at \
@@ -266,7 +285,7 @@ pub fn smart_resize(
 
 /// Image-only M-RoPE fast path (the image branch of
 /// `MRotaryEmbedding.get_rope_index`, identical across Qwen generations):
-/// text runs sequentially on all of them rows; each image spans `(t, h/m, w/m)`
+/// text runs sequentially on all three rows; each image spans `(t, h/m, w/m)`
 /// index grids; positions advance by `max(t, h/m, w/m)` past an image.
 /// Returns flattened row-major `[3, input_len]` positions and the delta
 /// (`max + 1 - input_len`). `items` must be in prompt order.
@@ -323,11 +342,15 @@ pub fn mrope_image_only(
     Ok((pos, max + 1 - len as i64))
 }
 
-/// The qwen scheduler-drain shape, extracted from the generic driver [`Output`](crate::driver::Output). Shared by `sglang-server`'s MM worker and the parity binding so the
-/// mapping can't drift.
+/// The qwen scheduler-drain shape, extracted from the generic driver
+/// [`Output`](crate::driver::Output). Shared by `sglang-server`'s MM worker
+/// and the parity binding so the mapping can't drift. TODO(mm-families):
+/// replace with a generic named-tensor handoff once a second family needs a
+/// different shape.
 pub struct QwenPackedOutput {
     pub input_ids: Vec<i32>,
-    /// All items' `pixel_values`, concatenated in prompt order.
+    /// All items' `pixel_values`, concatenated in prompt order; flattened
+    /// `[Σ t·h·w, 3·temporal_patch_size·patch_size²]`.
     pub features: Vec<f32>,
     /// Per item `[t, h, w]` patch grid.
     pub grids: Vec<[u32; 3]>,
@@ -400,7 +423,9 @@ mod python {
         i64,
     );
 
-    /// Run the full native image path on encoded image bytes.
+    /// Run the full native image path on encoded image bytes:
+    /// decode → smart_resize → bicubic → normalize → patchify.
+    /// Returns `(pixel_values flat f32, (t, h, w))`.
     #[pyfunction]
     fn preprocess<'py>(
         py: Python<'py>,
@@ -432,7 +457,8 @@ mod python {
         smart_resize(height, width, factor, min_pixels, max_pixels).map_err(PyValueError::new_err)
     }
 
-    /// `(positions flat [3*input_len], delta)` for image-only requests.
+    /// `(positions flat [3*input_len], delta)` for image-only requests;
+    /// `items` = [(start, end_inclusive, t, h, w), ...] in prompt order.
     #[pyfunction]
     fn mrope_image_only_py<'py>(
         py: Python<'py>,
@@ -453,14 +479,16 @@ mod python {
         Ok((pos.into_pyarray(py), delta))
     }
 
-    /// One image source: a `str` (data:/base64/file/http, resolved by `common::fetch`) or raw encoded `bytes`.
+    /// One image source: a `str` (data:/base64/file/http, resolved by
+    /// `common::fetch`) or raw encoded `bytes`.
     #[derive(FromPyObject)]
     enum PyImageSource {
         Str(String),
         Bytes(Vec<u8>),
     }
 
-    /// Drive the same typed native Qwen request pipeline used by `sglang-server`.
+    /// Drive the same typed native Qwen request pipeline used by
+    /// `sglang-server` (whose message layer owns the wire-payload parsing).
     #[pyfunction]
     #[pyo3(signature = (input_ids, images, spec_json))]
     fn process_mm<'py>(
@@ -537,12 +565,15 @@ mod tests {
         }
     }
 
-    /// The fused and unfused normalize forms are not interchangeable.
+    /// The fused and unfused normalize forms are not interchangeable: with
+    /// mean = std = 0.5 they disagree on 128 of the 256 u8 inputs, so picking
+    /// the wrong one silently costs bit-exactness with the HF processor.
     #[test]
     fn normalize_lut_differs_per_resampler() {
         let pil = normalize_lut(Resampler::Pil, 0.5, 0.5);
         let aten = normalize_lut(Resampler::AtenU8, 0.5, 0.5);
         assert_eq!(pil.iter().zip(aten).filter(|(p, a)| *p != a).count(), 128);
+        // Both still span [-1, 1] — this is rounding, not a scale error.
         for lut in [pil, aten] {
             assert_eq!(lut[0], -1.0);
             assert_eq!(lut[255], 1.0);
@@ -567,18 +598,24 @@ mod tests {
         );
         // Upscale branch: tiny image below min_pixels → ceil_by_factor.
         assert_eq!(smart_resize(20, 20, 28, 3136, 12845056).unwrap(), (56, 56));
+        // Qwen3.5 factors (patch 16 * merge 2, min 65536, max 16777216).
         assert_eq!(
             smart_resize(1365, 2048, 32, 65536, 16777216).unwrap(),
             (1376, 2048)
         );
+        // Banker's rounding tie: 48/32 = 1.5 rounds to 2 (even), not 1.
         assert_eq!(smart_resize(4000, 48, 32, 4, 1 << 30).unwrap(), (4000, 64));
         // Extreme aspect ratio rejected.
         assert!(smart_resize(10000, 10, 28, 3136, 12845056).is_err());
     }
 
-    /// A thin image against a small `max_pixels` floors one side to.
+    /// A thin image against a small `max_pixels` floors one side to 0. That
+    /// used to reach the resize coefficient math and panic on a worker thread
+    /// (`attempt to multiply with overflow`) instead of rejecting the request.
     #[test]
     fn degenerate_target_is_rejected_not_panicked() {
+        // Aspect ratio 200 is exactly at MAX_RATIO, so it passes that guard;
+        // 10 / beta then floors to 0 with factor 28.
         assert!(smart_resize(10, 2000, 28, 3136, 3136).is_err());
 
         let mut spec = spec();
@@ -597,7 +634,9 @@ mod tests {
         assert!(err.contains("smart_resize"), "unexpected error: {err}");
     }
 
-    /// The server's message layer gates modalities on what a family declares.
+    /// The server's message layer gates modalities on what a family declares,
+    /// so a family gaining video/audio support must not silently inherit the
+    /// images-only default.
     #[test]
     fn qwen_declares_images_only() {
         let caps = QwenVlProcessor::new(spec()).unwrap().capabilities();
@@ -606,6 +645,8 @@ mod tests {
 
     #[test]
     fn patchify_layout_matches_hf_order() {
+        // 4x8 image, ps=2, m=2, tps=2 → gh=2, gw=4, dim=3*2*2*2=24.
+        // Pixel value encodes its (y, x): v = y*16 + x*2 (fits u8).
         let (h, w) = (4usize, 8usize);
         let mut rgb = vec![0u8; h * w * 3];
         for y in 0..h {
@@ -617,21 +658,30 @@ mod tests {
         }
         let proc = QwenVlProcessor::new(spec()).unwrap();
         let pv = proc.patchify(&rgb, h, w);
-        let dim = 24;
+        let dim = 24; // 3 * tps * ps * ps
         assert_eq!(pv.len(), 2 * 4 * dim);
 
+        // Patch order (gh/m=1, gw/m=2, m, m): patch 0 = block(0,0) offset (0,0),
+        // patch 1 = (0,0)+(0,1) → x0=2, patch 2 = (0,0)+(1,0) → y0=2,
+        // patch 4 = block(0,1) → x0=4.
         let lut = |y: usize, x: usize, c: usize| ((y * 16 + x * 2 + c) as f32) / 255.0;
+        // patch 1, channel 0, t=0, (py=0, px=0) → pixel (0, 2).
         assert_eq!(pv[dim], lut(0, 2, 0));
+        // patch 2, channel 0, t=0, (0,0) → pixel (2, 0).
         assert_eq!(pv[2 * dim], lut(2, 0, 0));
+        // patch 4, channel 0 → pixel (0, 4).
         assert_eq!(pv[4 * dim], lut(0, 4, 0));
         // Temporal duplicate: t=1 block equals t=0 block.
         let ps2 = 4; // ps*ps
         assert_eq!(pv[dim + ps2], pv[dim]);
+        // Channel 1 block of patch 0 → same pixel, c=1.
         assert_eq!(pv[2 * ps2], lut(0, 0, 1)); // c stride = tps*ps*ps = 8
     }
 
     #[test]
     fn mrope_image_only_matches_reference() {
+        // 3 text tokens, image of grid [1, 4, 6] (m=2 → 2x3 = 6 tokens), 2 text.
+        // input: [T T T I I I I I I T T], len 11.
         let items = [MropeItem {
             start: 3,
             end: 8,
@@ -639,17 +689,21 @@ mod tests {
         }];
         let (pos, delta) = mrope_image_only(11, &items, 2).unwrap();
         let len = 11;
+        // Text prefix 0..3: all rows 0,1,2.
         for k in 0..3 {
             assert_eq!(
                 (pos[k], pos[len + k], pos[2 * len + k]),
                 (k as i64, k as i64, k as i64)
             );
         }
+        // Image tokens: t=0, h in 0..2, w in 0..3, +3 offset.
         assert_eq!((pos[3], pos[len + 3], pos[2 * len + 3]), (3, 3, 3));
         assert_eq!((pos[4], pos[len + 4], pos[2 * len + 4]), (3, 3, 4));
         assert_eq!((pos[6], pos[len + 6], pos[2 * len + 6]), (3, 4, 3));
+        // Text tail resumes at 3 + max(1,2,3) = 6.
         assert_eq!((pos[9], pos[len + 9], pos[2 * len + 9]), (6, 6, 6));
         assert_eq!((pos[10], pos[len + 10], pos[2 * len + 10]), (7, 7, 7));
+        // delta = max + 1 - len = 7 + 1 - 11.
         assert_eq!(delta, -3);
     }
 }

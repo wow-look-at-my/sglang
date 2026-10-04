@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::{Arc, Mutex};
@@ -47,7 +47,8 @@ struct ObserveAdmission {
 impl EngineAdmission for ObserveAdmission {
     fn check(&self, engine: &Worker, metrics: &EngineMetrics) -> Result<Decision, PickError> {
         assert_eq!(engine.url, URL);
-        // A new report arriving after selection must not change the observation supplied to admission.
+        // A new report arriving after selection must not change the observation
+        // supplied to admission. The next pick should read the new report.
         report(&self.table, 0, 99, Instant::now());
         self.observations.lock().unwrap().push(*metrics);
         Ok(Decision::Allow)
@@ -77,7 +78,8 @@ async fn selected_load_reaches_admission_and_next_pick_reads_fresh_state() {
         model_ids: vec![ModelId("m".into())],
         bootstrap_port: None,
     }));
-    // These old-format reports lack native pressure metrics.
+    // These old-format reports lack native pressure metrics, so selection uses
+    // local active counts for both candidates and chooses the second engine.
     let _busy = alternative.load_guard();
     let engines = [alternative, engine()];
     for _ in 0..2 {

@@ -3,7 +3,11 @@
 // Numbers pending: each entry is a bare `match` stub (renders "pending") until measured
 // end-to-end on the corresponding hardware, then filled with sglang_version + speed/accuracy.
 export const benchmarks = [
+  // ---- H200 + FP8 ----  (8-GPU single node; serve recipe in glm-5.2.jsx; real weights,
+  // --random-range-ratio 1.0, flush-cache every run)
   {
+    // EAGLE MTP 5-1-6, mfs 0.8. env SGLANG_SIMULATE_ACC_LEN=3.5
+    // (match-expected: 50% accept 3 / 50% accept 4) fixes the acceptance length.
     match: { hw: "h200", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
     sglang_version: "v0.5.14 @ 49e384ce",
     speed: [
@@ -14,6 +18,8 @@ export const benchmarks = [
     ],
   },
   {
+    // Balanced: DP8 + deepep + mfs 0.85 + chunked-prefill 32768 (÷dp8 = 4096) + max-running 256,
+    // 1-1-2 EAGLE. env SGLANG_SIMULATE_ACC_LEN=2 (match-expected: accept 2 of 2 draft tokens).
     match: { hw: "h200", variant: "default", quant: "fp8", strategy: "balanced", nodes: "single" },
     sglang_version: "v0.5.14 @ 49e384ce",
     speed: [
@@ -24,6 +30,7 @@ export const benchmarks = [
     ],
   },
   {
+    // HT: DP8 + deepep + mfs 0.85 + max-running 256, no spec (so no SIMULATE_ACC_LEN).
     match: { hw: "h200", variant: "default", quant: "fp8", strategy: "high-throughput", nodes: "single" },
     sglang_version: "v0.5.14 @ 49e384ce",
     speed: [
@@ -31,7 +38,10 @@ export const benchmarks = [
         ttft_ms: 553480, tpot_ms: 61.71, tokens_per_sec_per_gpu: 1656 },
     ],
   },
+  // ---- B200 + FP8 ----  (8-GPU single node, TP8; real weights, --random-range-ratio 1.0, flush-cache every run)
   {
+    // EAGLE MTP 5-1-6, mfs 0.8, no cuda-graph-max-bs. env SGLANG_SIMULATE_ACC_LEN=3.5
+    // (match-expected: 50% accept 3 / 50% accept 4) fixes the acceptance length.
     match: { hw: "b200", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
     sglang_version: "main @ 09ca4fc",
     speed: [
@@ -42,6 +52,8 @@ export const benchmarks = [
     ],
   },
   {
+    // Balanced: DP8 + deepep + mfs 0.85 + chunked-prefill 32768 + max-running 256, 1-1-2 EAGLE.
+    // env SGLANG_SIMULATE_ACC_LEN=2 (match-expected: accept 2 of 2 draft tokens).
     match: { hw: "b200", variant: "default", quant: "fp8", strategy: "balanced", nodes: "single" },
     sglang_version: "main @ 09ca4fc",
     speed: [
@@ -52,6 +64,9 @@ export const benchmarks = [
     ],
   },
   {
+    // HT: DP8 + deepep + mfs 0.85 + max-running 256. B200 (178GB) keeps --max-running-requests 256
+    // (clamps the decode capture list to <=32 < the default 128 DeepEP buffer); no env buffer bump.
+    // No spec, so no SIMULATE_ACC_LEN.
     match: { hw: "b200", variant: "default", quant: "fp8", strategy: "high-throughput", nodes: "single" },
     sglang_version: "main @ 09ca4fc",
     speed: [
@@ -59,7 +74,11 @@ export const benchmarks = [
         ttft_ms: 177620, tpot_ms: 47.99, tokens_per_sec_per_gpu: 4059 },
     ],
   },
+  // ---- GB300 + FP8 ----  (4-GPU single node, TP4; real weights, --random-range-ratio 1.0, flush-cache every run)
   {
+    // EAGLE MTP 5-1-6, mfs 0.85, no cuda-graph-max-bs; mrr auto-capped 48. env
+    // SGLANG_SIMULATE_ACC_LEN=3.5 (match-expected: 50% accept 3 / 50% accept 4) fixes the
+    // acceptance length so the spec numbers are comparable across runs.
     match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
     sglang_version: "main @ 09ca4fc",
     speed: [
@@ -70,6 +89,8 @@ export const benchmarks = [
     ],
   },
   {
+    // Balanced: DP4 + deepep + mfs 0.85 + chunked-prefill 32768 (÷dp4 = 8192) + max-running 256,
+    // 1-1-2 EAGLE. env SGLANG_SIMULATE_ACC_LEN=2 (match-expected: accept 2 of 2 draft tokens).
     match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "balanced", nodes: "single" },
     sglang_version: "main @ 09ca4fc",
     speed: [
@@ -79,6 +100,13 @@ export const benchmarks = [
         ttft_ms: 27488, tpot_ms: 48.43, tokens_per_sec_per_gpu: 6804 },
     ],
   },
+  // GB300 HT: drop-flags (mfs/cgbs/mrr dropped) + env SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=512.
+  // DeepEP low_latency asserts x.size(0) <= num_max_dispatch_tokens_per_rank (deep_ep.cpp:1262,
+  // default 128). Decode cuda-graph capture builds a dummy batch of `bs` tokens per rank (not
+  // DP-split), so the 256/512 capture buckets trip the assert at default 128; GB300 (DP4) also
+  // hits bs/4 = 256 > 128 at c1024 runtime. Raising the buffer to 512 fixes both and lets HT
+  // drop --max-running-requests. Verified on main: with env=512 capture + serve pass; without
+  // env the assert trips at the bs=512 capture bucket. No spec, so no SIMULATE_ACC_LEN.
   {
     match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "high-throughput", nodes: "single" },
     sglang_version: "main @ 09ca4fc",
@@ -87,15 +115,15 @@ export const benchmarks = [
         ttft_ms: 231101, tpot_ms: 86.01, tokens_per_sec_per_gpu: 6039 },
     ],
   },
-  // ---- B300 + FP8 ---- (8-GPU single node, TP8; serve recipe in glm-5.2.jsx; benchmark pending re-measurement)
+  // ---- B300 + FP8 ----  (8-GPU single node, TP8; serve recipe in glm-5.2.jsx; benchmark pending re-measurement)
   { match: { hw: "b300", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" } },
   { match: { hw: "b300", variant: "default", quant: "fp8", strategy: "balanced", nodes: "single" } },
   { match: { hw: "b300", variant: "default", quant: "fp8", strategy: "high-throughput", nodes: "single" } },
-  // ---- B300 + BF16 ---- (unquantized zai-org/GLM-5.2, TP8.
+  // ---- B300 + BF16 ----  (unquantized zai-org/GLM-5.2, TP8; serve recipe in glm-5.2.jsx; benchmark pending re-measurement)
   { match: { hw: "b300", variant: "default", quant: "bf16", strategy: "low-latency", nodes: "single" } },
   { match: { hw: "b300", variant: "default", quant: "bf16", strategy: "balanced", nodes: "single" } },
   { match: { hw: "b300", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" } },
-  // ---- BF16 multi-node (inferred) ---- benchmarks pending
+  // ---- BF16 multi-node (inferred) ----  benchmarks pending
   { match: { hw: "h200",  variant: "default", quant: "bf16", strategy: "low-latency",     nodes: "multi-2" } },
   { match: { hw: "h200",  variant: "default", quant: "bf16", strategy: "balanced",        nodes: "multi-2" } },
   { match: { hw: "h200",  variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "multi-2" } },
@@ -105,6 +133,10 @@ export const benchmarks = [
   { match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "low-latency",     nodes: "multi-2" } },
   { match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "balanced",        nodes: "multi-2" } },
   { match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "multi-2" } },
+  // ---- B200 + NVFP4 ----  (8-GPU single node, TP8; nvidia/GLM-5.2-NVFP4 via --quantization modelopt_fp4,
+  // flush-cache every run.
+  // ttft_ms/tpot_ms are P50; tokens_per_sec_per_gpu = total (in+out) tok/s/GPU (output/GPU × (isl+osl)/osl).
+  // balanced & high-throughput add DP-Attention (dp8); low-latency uses MTP 5-1-6, balanced MTP 2-1-3.)
   {
     match: { hw: "b200", variant: "default", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
     speed: [
@@ -130,6 +162,10 @@ export const benchmarks = [
         ttft_ms: 130174, tpot_ms: 67.12, tokens_per_sec_per_gpu: 5305 },
     ],
   },
+  // ---- B300 + NVFP4 ----  (8-GPU single node, TP8; nvidia/GLM-5.2-NVFP4 via --quantization modelopt_fp4,
+  // flush-cache every run.
+  // tokens_per_sec_per_gpu = total (in+out) tok/s/GPU (measured output/GPU 51/224/153/205/430 × (isl+osl)/osl).
+  // aime25 overrides the variant default (87.7 → 89.58, measured on this NVFP4 build); gsm8k inherits the default.)
   {
     match: { hw: "b300", variant: "default", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
     accuracy: { aime25_pct: 89.58 },
@@ -158,11 +194,9 @@ export const benchmarks = [
         ttft_ms: 6370, tpot_ms: 280, tokens_per_sec_per_gpu: 3870 },
     ],
   },
-  // ---- MI355X + FP8 ---- gfx950, TP8, DSA tilelang, NO MTP (disabled on
-  // AMD). Measured on
-  // lmsysorg/sglang-rocm:v0.5.13.post1-rocm720-mi35x-20260618, flush-cache
-  // every run. No spec-decoding, so not directly comparable to the NVIDIA
-  // low-latency cells (EAGLE MTP).
+  // ---- MI355X + FP8 ----  gfx950, TP8, DSA tilelang, NO MTP (disabled on AMD).
+  // Measured on lmsysorg/sglang-rocm:v0.5.13.post1-rocm720-mi35x-20260618, flush-cache every run.
+  // No spec-decoding, so not directly comparable to the NVIDIA low-latency cells (EAGLE MTP).
   {
     match: { hw: "mi355x", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
     sglang_version: "0.5.13.post1",

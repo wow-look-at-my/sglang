@@ -1,4 +1,7 @@
-//! Generate endpoint pipeline stages These stages handle generate-specific preprocessing, request building.
+//! Generate endpoint pipeline stages
+//!
+//! These stages handle generate-specific preprocessing, request building, and response processing.
+//! They work with any model type by using injected model adapters.
 
 mod preparation;
 mod request_building;

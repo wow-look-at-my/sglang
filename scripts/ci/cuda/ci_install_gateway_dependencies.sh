@@ -1,5 +1,10 @@
 #!/bin/bash
 # Install dependencies for the sgl-model-gateway CI jobs.
+#
+# Gateway-specific apt deps are installed here; protoc and the Rust toolchain
+# are delegated to the shared installer (the toolchain version is pinned by
+# sgl-model-gateway/rust-toolchain.toml, picked up automatically on first
+# `cargo` invocation).
 set -euxo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

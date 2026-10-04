@@ -439,7 +439,9 @@ pub(crate) fn serialize_chat_stream_response(
         .expect("OpenAI response must serialize")
 }
 
-/// The Dynamo response type omits an absent `reasoning_content`.
+/// The Dynamo response type omits an absent `reasoning_content`. SGLang's
+/// streaming contract emits it explicitly as `null`, so use a borrowed wire
+/// view instead of building and patching a `serde_json::Value` tree.
 #[derive(Serialize)]
 struct ChatStreamResponseWire<'a> {
     id: &'a str,
@@ -645,7 +647,8 @@ mod tests {
         }
     }
 
-    /// Python `to_sampling_params` priority: user value > model generation config (`--sampling-defaults model`).
+    /// Python `to_sampling_params` priority: user value > model generation
+    /// config (`--sampling-defaults model`) > OpenAI terminal default.
     #[test]
     fn sampling_defaults_follow_python_priority_chain() {
         let model = SamplingDefaults {
@@ -655,13 +658,15 @@ mod tests {
             min_p: Some(0.1),
             repetition_penalty: Some(1.1),
         };
+        // Omitted → model defaults, not the 1.0 OpenAI terminals.
         let sampling = chat_sampling_params(&request(), &model).unwrap();
         assert_eq!(sampling.temperature, 0.6);
         assert_eq!(sampling.top_p, 0.9);
         assert_eq!(sampling.top_k, 32);
         assert_eq!(sampling.min_p, 0.1);
         assert_eq!(sampling.repetition_penalty, 1.1);
-        // Explicit request values win. `Option<f32>` loses precision in f64 — compare with tolerance.
+        // Explicit request values win. `Option<f32>` loses precision in f64 —
+        // compare with tolerance.
         let mut request = request();
         request.temperature = Some(0.2);
         request.top_p = Some(0.5);
@@ -670,7 +675,8 @@ mod tests {
         assert!((sampling.top_p - 0.5).abs() < 1e-6);
     }
 
-    /// `--sampling-defaults openai` resolves an empty model-config slice.
+    /// `--sampling-defaults openai` resolves an empty model-config slice, so the
+    /// conversion falls back to the OpenAI terminal defaults.
     #[test]
     fn sampling_defaults_fall_back_to_openai_terminals_in_openai_mode() {
         let openai_mode = SamplingDefaults::default();
@@ -682,7 +688,8 @@ mod tests {
         assert_eq!(sampling.repetition_penalty, 1.0);
     }
 
-    /// A request with no `max_tokens`/`max_completion_tokens` stays unbounded — no terminal default is imposed.
+    /// A request with no `max_tokens`/`max_completion_tokens` stays unbounded —
+    /// no terminal default is imposed.
     #[test]
     fn chat_without_a_token_limit_stays_unbounded() {
         let request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
@@ -784,7 +791,8 @@ mod tests {
     #[tokio::test]
     async fn streaming_chat_separates_reasoning_into_own_deltas() {
         let (choice, tx) = chat_submitted(0);
-        // Force mode starts in reasoning.
+        // Force mode starts in reasoning, so the opener is stripped and the first
+        // reasoning fragment streams immediately.
         tx.send(chunk("<think>be", false)).await.unwrap();
         tx.send(chunk("cause</think>Par", false)).await.unwrap();
         tx.send(chunk("is", true)).await.unwrap();
@@ -895,7 +903,8 @@ mod tests {
         );
         assert_eq!(error.message, "out of memory");
 
-        // The other choice may already be ready.
+        // The other choice may already be ready, but it must not be polled after
+        // the aggregate request has emitted an error.
         tx1.send(chunk("late", true)).await.unwrap();
         let remaining = stream.collect::<Vec<_>>().await;
         assert_eq!(remaining.len(), 1);

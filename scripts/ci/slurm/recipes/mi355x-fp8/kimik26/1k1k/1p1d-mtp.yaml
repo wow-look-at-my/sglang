@@ -7,7 +7,7 @@
 # draft dir must live under /it-share (the container's :ro mount). MTP is applied
 # to both prefill and decode. Mirrors the Kimi-K2.6 serving cookbook.
 #
-# Consumed by.
+# Consumed by:
 #   * scripts/ci/slurm/process_result.py reads `resources` and
 #     `backend.sglang_config` (TP/EP/DP + worker counts) for the summary table.
 #   * scripts/ci/slurm/launch_mi355x.sh reads `runtime`, `bench`, `model`, `mtp`.
@@ -76,7 +76,8 @@ bench:
   num_prompts_factor: 4      # num-prompts = concurrency * factor
   random_range_ratio: 1.0
 
-  # Correctness gate run through the PD path before the perf sweep.
+  # Correctness gate run through the PD path before the perf sweep. Mirrors the
+  # registered single-node Kimi-K2.6 eval (full GSM8K, 8-shot, accuracy > 0.92).
   accuracy:
     enabled: true
     num_shots: 8

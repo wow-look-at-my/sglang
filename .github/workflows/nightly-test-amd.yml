@@ -114,7 +114,8 @@ on:
         description: 'ROCm image version ("all" runs rocm10, rocm724, and rocm720)'
         required: false
         type: string
-        # A caller that says nothing gets the same single-flavor default as a manual dispatch; pass "all" explicitly for multi-version GPU coverage.
+        # A caller that says nothing gets the same single-flavor default as a
+        # manual dispatch; pass "all" explicitly for multi-version GPU coverage.
         default: rocm10
       ref:
         description: 'Git ref (branch, tag, or SHA) to test. If not provided, uses the default branch.'
@@ -143,13 +144,21 @@ env:
   DOCKERHUB_AMD_TOKEN: ${{ secrets.DOCKERHUB_AMD_TOKEN }}
 
 concurrency:
-  # When called via workflow_call with ref set, use a unique group per caller run to avoid collisions with direct schedule/push triggers. We use inputs.ref (not github.event_name) to detect this, because github.event_name inherits from the caller in workflow_call. Manual dispatch and scheduled runs also get unique groups so a version bump or the next daily run cannot cancel an in-progress three-version nightly.
+  # When called via workflow_call with ref set, use a unique group per caller run to avoid
+  # collisions with direct schedule/push triggers. We use inputs.ref (not github.event_name)
+  # to detect this, because github.event_name inherits from the caller in workflow_call.
+  # Manual dispatch and scheduled runs also get unique groups so a version bump
+  # or the next daily run cannot cancel an in-progress three-version nightly.
   group: nightly-test-amd-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'schedule' && format('scheduled-{0}', github.run_id) || inputs.ref && format('caller-{0}', github.run_id) || github.ref }}
   cancel-in-progress: ${{ !inputs.ref && github.event_name != 'workflow_call' && github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' }}
 
 jobs:
-  # ============================================== MI30x ROCm Unit Tests ============================================== 1-GPU Unit Tests - LoRA, debug utils, scheduler, etc. (MI30x ROCm) ============================================================================== 1-GPU Unit Tests (MI30x + MI35x) ==============================================================================
+  # ============================================== MI30x ROCm Unit Tests ==============================================
+  # 1-GPU Unit Tests - LoRA, debug utils, scheduler, etc. (MI30x ROCm)
 
+  # ==============================================================================
+  # 1-GPU Unit Tests (MI30x + MI35x)
+  # ==============================================================================
 
   nightly-test-1-gpu-unit:
     name: ${{ format('nightly-test-1-gpu-unit ({0}, linux-mi300-1gpu-sglang)', matrix.rocm_version) }}
@@ -266,7 +275,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 2-GPU and 4-GPU Tests (MI30x + MI35x) ==============================================================================
+  # ==============================================================================
+  # 2-GPU and 4-GPU Tests (MI30x + MI35x)
+  # ==============================================================================
 
   nightly-accuracy-2-gpu:
     name: ${{ format('nightly-accuracy-2-gpu ({0}, linux-mi300-2gpu-sglang)', matrix.rocm_version) }}
@@ -556,7 +567,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU GPT-OSS (MI35x mixes Qwen3-Coder-Next) ==============================================================================
+  # ==============================================================================
+  # 8-GPU GPT-OSS (MI35x mixes Qwen3-Coder-Next)
+  # ==============================================================================
 
   nightly-accuracy-8-gpu:
     name: ${{ format('nightly-accuracy-8-gpu ({0}, linux-mi300-8gpu-sglang)', matrix.rocm_version) }}
@@ -599,7 +612,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-      # Shares this job with the accuracy step above: it already serves the same two models, and an MI30x job spends ~49 min pulling the image and installing dependencies before it runs anything.
+      # Shares this job with the accuracy step above: it already serves the same
+      # two models, and an MI30x job spends ~49 min pulling the image and
+      # installing dependencies before it runs anything.
       - name: Performance Test ROCm (8-GPU GPT-OSS)
         if: ${{ !cancelled() }}
         timeout-minutes: 120
@@ -656,7 +671,8 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-      # Shares this job with the accuracy step above rather than taking its own, so the container setup and the GPT-OSS weight cache are paid for once.
+      # Shares this job with the accuracy step above rather than taking its own,
+      # so the container setup and the GPT-OSS weight cache are paid for once.
       - name: Performance Test MI35x ROCm (8-GPU GPT-OSS)
         if: ${{ !cancelled() }}
         timeout-minutes: 120
@@ -669,7 +685,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU Grok1-INT4 (MI30x + MI35x) ==============================================================================
+  # ==============================================================================
+  # 8-GPU Grok1-INT4 (MI30x + MI35x)
+  # ==============================================================================
 
   nightly-8-gpu-grok1-int4:
     name: ${{ format('nightly-8-gpu-grok1-int4 ({0}, linux-mi300-8gpu-sglang)', matrix.rocm_version) }}
@@ -780,7 +798,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU Grok2 (MI30x + MI35x) ==============================================================================
+  # ==============================================================================
+  # 8-GPU Grok2 (MI30x + MI35x)
+  # ==============================================================================
 
   nightly-8-gpu-grok2:
     name: ${{ format('nightly-8-gpu-grok2 ({0}, linux-mi300-8gpu-sglang)', matrix.rocm_version) }}
@@ -891,7 +911,13 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU DeepSeek-V3.2 (MI30x) V3-0324 and V3.1 are no longer scheduled here: V3.2 covers the same MI30x paths (aiter MLA, EAGLE MTP, multithread weight load) on a current checkpoint, and DeepSeek-R1/V4 carry the MI35x side. ==============================================================================
+  # ==============================================================================
+  # 8-GPU DeepSeek-V3.2 (MI30x)
+  #
+  # V3-0324 and V3.1 are no longer scheduled here: V3.2 covers the same MI30x
+  # paths (aiter MLA, EAGLE MTP, multithread weight load) on a current
+  # checkpoint, and DeepSeek-R1/V4 carry the MI35x side.
+  # ==============================================================================
 
   nightly-8-gpu-deepseek-v32:
     name: ${{ format('nightly-8-gpu-deepseek-v32 ({0}, linux-mi300-8gpu-sglang)', matrix.rocm_version) }}
@@ -997,7 +1023,13 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU DeepSeek-V3.2 (MI35x) Accuracy and performance share one job per config, as the MI30x V3.2 jobs above already do: both steps serve the same weights, so splitting them cost a second container setup and a second cold weight load for nothing. ==============================================================================
+  # ==============================================================================
+  # 8-GPU DeepSeek-V3.2 (MI35x)
+  #
+  # Accuracy and performance share one job per config, as the MI30x V3.2 jobs
+  # above already do: both steps serve the same weights, so splitting them cost
+  # a second container setup and a second cold weight load for nothing.
+  # ==============================================================================
 
   nightly-8-gpu-mi35x-deepseek-v32:
     name: ${{ format('nightly-8-gpu-mi35x-deepseek-v32 ({0}, linux-mi35x-gpu-8)', matrix.rocm_version) }}
@@ -1111,7 +1143,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU DeepSeek-R1 (MI35x only) ==============================================================================
+  # ==============================================================================
+  # 8-GPU DeepSeek-R1 (MI35x only)
+  # ==============================================================================
 
   nightly-8-gpu-mi35x-deepseek-r1-mxfp4:
     name: ${{ format('nightly-8-gpu-mi35x-deepseek-r1-mxfp4 ({0}, linux-mi35x-gpu-8)', matrix.rocm_version) }}
@@ -1382,7 +1416,13 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU DeepSeek-V4-Flash (MI30x) Accuracy only: the MI35x jobs below carry the DSV4 perf numbers, and gfx942 has no DSV4 perf baseline to regress against yet. Runs the cookbook's. MI300X Flash FP8 low-latency cell, so it also covers MLA + KV-FP8 on gfx942. ==============================================================================
+  # ==============================================================================
+  # 8-GPU DeepSeek-V4-Flash (MI30x)
+  #
+  # Accuracy only: the MI35x jobs below carry the DSV4 perf numbers, and gfx942
+  # has no DSV4 perf baseline to regress against yet. Runs the cookbook's
+  # MI300X Flash FP8 low-latency cell, so it also covers MLA + KV-FP8 on gfx942.
+  # ==============================================================================
 
   nightly-8-gpu-deepseek-v4-flash:
     name: ${{ format('nightly-8-gpu-deepseek-v4-flash ({0}, linux-mi300-8gpu-sglang)', matrix.rocm_version) }}
@@ -1426,7 +1466,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU DeepSeek-V4 (MI35x) ==============================================================================
+  # ==============================================================================
+  # 8-GPU DeepSeek-V4 (MI35x)
+  # ==============================================================================
 
   nightly-8-gpu-mi35x-deepseek-v4-flash:
     name: ${{ format('nightly-8-gpu-mi35x-deepseek-v4-flash ({0}, linux-mi35x-gpu-8)', matrix.rocm_version) }}
@@ -1651,7 +1693,12 @@ jobs:
             python3 run_suite.py --hw amd --suite nightly-amd-8-gpu-mi35x-deepseek-v4-pro-dspark --nightly --timeout-per-file 7200 ${{ (github.event_name == 'schedule' || inputs.continue_on_error) && '--continue-on-error' || '' }}
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
 
-  # ============================================================================== 8-GPU Kimi-K2.6 (MI30x) Kept on MI30x: Kimi-K3 needs gfx95x for its native MXFP4 weights, so it cannot take over here the way it does on MI35x. ==============================================================================
+  # ==============================================================================
+  # 8-GPU Kimi-K2.6 (MI30x)
+  #
+  # Kept on MI30x: Kimi-K3 needs gfx95x for its native MXFP4 weights, so it
+  # cannot take over here the way it does on MI35x.
+  # ==============================================================================
 
   nightly-8-gpu-kimi-k26:
     name: ${{ format('nightly-8-gpu-kimi-k26 ({0}, linux-mi300-8gpu-sglang)', matrix.rocm_version) }}
@@ -1695,7 +1742,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU Kimi-K3 (MI35x only - native MXFP4 needs gfx95x) ==============================================================================
+  # ==============================================================================
+  # 8-GPU Kimi-K3 (MI35x only - native MXFP4 needs gfx95x)
+  # ==============================================================================
 
   nightly-8-gpu-mi35x-kimi-k3:
     name: ${{ format('nightly-8-gpu-mi35x-kimi-k3 ({0}, linux-mi35x-gpu-8)', matrix.rocm_version) }}
@@ -1731,7 +1780,8 @@ jobs:
           # Install tabulate for run_suite.py (missing in MI35x container)
           bash scripts/ci/amd/amd_ci_exec.sh pip install tabulate
 
-      # The 2.8T MXFP4 checkpoint is ~1.56 TB, so weight download and load dominate wall time well before the eval itself starts.
+      # The 2.8T MXFP4 checkpoint is ~1.56 TB, so weight download and load
+      # dominate wall time well before the eval itself starts.
       - name: Accuracy Test MI35x ROCm (8-GPU Kimi-K3)
         timeout-minutes: 300
         run: |
@@ -1743,7 +1793,12 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-      # Shares the job with the eval above so the checkpoint is already cached and only one 8-GPU MI35x slot is consumed. Step ordering is also the accuracy gate: a failed eval fails the job before this runs, so throughput is never measured on a build that got the tokens wrong. continue-on-error matches every other combined accuracy + perf job here, so a perf hiccup cannot turn the accuracy result red.
+      # Shares the job with the eval above so the checkpoint is already cached
+      # and only one 8-GPU MI35x slot is consumed. Step ordering is also the
+      # accuracy gate: a failed eval fails the job before this runs, so
+      # throughput is never measured on a build that got the tokens wrong.
+      # continue-on-error matches every other combined accuracy + perf job here,
+      # so a perf hiccup cannot turn the accuracy result red.
       - name: Performance Test MI35x ROCm (8-GPU Kimi-K3)
         timeout-minutes: 300
         continue-on-error: true
@@ -1756,7 +1811,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU Qwen 3.5 (MI30x + MI35x) ==============================================================================
+  # ==============================================================================
+  # 8-GPU Qwen 3.5 (MI30x + MI35x)
+  # ==============================================================================
 
   nightly-8-gpu-qwen35:
     name: ${{ format('nightly-8-gpu-qwen35 ({0}, linux-mi300-8gpu-sglang)', matrix.rocm_version) }}
@@ -1915,7 +1972,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU Qwen3.8-MXFP4 (MI35x only - MXFP4 needs gfx95x) ==============================================================================
+  # ==============================================================================
+  # 8-GPU Qwen3.8-MXFP4 (MI35x only - MXFP4 needs gfx95x)
+  # ==============================================================================
 
   nightly-8-gpu-mi35x-qwen38-mxfp4:
     name: ${{ format('nightly-8-gpu-mi35x-qwen38-mxfp4 ({0}, linux-mi35x-gpu-8)', matrix.rocm_version) }}
@@ -1951,14 +2010,19 @@ jobs:
           # Install tabulate for run_suite.py (missing in MI35x container)
           bash scripts/ci/amd/amd_ci_exec.sh pip install tabulate
 
-      # ~1.2 TB of weights against a fleet-shared cache that runs at 100% used. Run 32196787596 died 40 minutes into the download on ENOSPC with no free-space figure anywhere in its log; record one up front instead.
+      # ~1.2 TB of weights against a fleet-shared cache that runs at 100% used.
+      # Run 32196787596 died 40 minutes into the download on ENOSPC with no
+      # free-space figure anywhere in its log; record one up front instead.
       - name: Check model cache space
         run: |
           bash scripts/ci/amd/amd_ci_exec.sh -w /sglang-checkout \
             bash scripts/ci/amd/check_hf_cache_space.sh \
             amd/Qwen3.8-2.4T-A95B-Quark-MXFP4 1250
 
-      # One step, not the usual accuracy/perf pair: both phases live in the same suite so they launch from one server config. The 2.4T MXFP4 checkpoint is ~1.2 TB and is loaded once per phase, which dominates wall time well before either the eval or the benchmark starts.
+      # One step, not the usual accuracy/perf pair: both phases live in the
+      # same suite so they launch from one server config. The 2.4T MXFP4
+      # checkpoint is ~1.2 TB and is loaded once per phase, which dominates
+      # wall time well before either the eval or the benchmark starts.
       - name: Accuracy Test + Performance Test MI35x ROCm (8-GPU Qwen3.8-MXFP4)
         timeout-minutes: 420
         run: |
@@ -1970,7 +2034,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU GLM-5.1 (MI30x + MI35x) ==============================================================================
+  # ==============================================================================
+  # 8-GPU GLM-5.1 (MI30x + MI35x)
+  # ==============================================================================
 
   nightly-8-gpu-glm51:
     name: ${{ format('nightly-8-gpu-glm51 ({0}, linux-mi300-8gpu-sglang)', matrix.rocm_version) }}
@@ -2027,7 +2093,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU GLM-5.2-FP8 (MI35x accuracy + performance) ==============================================================================
+  # ==============================================================================
+  # 8-GPU GLM-5.2-FP8 (MI35x accuracy + performance)
+  # ==============================================================================
 
   nightly-8-gpu-mi35x-glm52-fp8:
     name: ${{ format('nightly-8-gpu-mi35x-glm52-fp8 ({0}, linux-mi35x-gpu-8)', matrix.rocm_version) }}
@@ -2062,7 +2130,8 @@ jobs:
           bash scripts/ci/amd/amd_ci_install_dependency.sh --skip-test-time-deps
           bash scripts/ci/amd/amd_ci_exec.sh pip install tabulate
 
-      # The ~700 GB FP8 checkpoint means weight download and load dominate wall time well before the eval itself starts.
+      # The ~700 GB FP8 checkpoint means weight download and load dominate wall
+      # time well before the eval itself starts.
       - name: Accuracy Test MI35x ROCm (8-GPU GLM-5.2-FP8 DSA)
         timeout-minutes: 180
         run: |
@@ -2074,7 +2143,8 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-      # Run perf only after correctness passes. Keeping both steps in this job reuses the cached ~700 GB checkpoint and one scarce 8-GPU MI35x slot.
+      # Run perf only after correctness passes. Keeping both steps in this job
+      # reuses the cached ~700 GB checkpoint and one scarce 8-GPU MI35x slot.
       - name: Performance Test MI35x ROCm (8-GPU GLM-5.2-FP8)
         timeout-minutes: 120
         continue-on-error: true
@@ -2087,7 +2157,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU GLM-5-MXFP4 (MI35x only) ==============================================================================
+  # ==============================================================================
+  # 8-GPU GLM-5-MXFP4 (MI35x only)
+  # ==============================================================================
 
   nightly-8-gpu-mi35x-glm5-mxfp4:
     name: ${{ format('nightly-8-gpu-mi35x-glm5-mxfp4 ({0}, linux-mi35x-gpu-8)', matrix.rocm_version) }}
@@ -2146,7 +2218,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 4-GPU MiniMax-M2.5 (MI35x) ==============================================================================
+  # ==============================================================================
+  # 4-GPU MiniMax-M2.5 (MI35x)
+  # ==============================================================================
 
   nightly-4-gpu-mi35x-minimax-m25:
     name: ${{ format('nightly-4-gpu-mi35x-minimax-m25 ({0}, linux-mi35x-gpu-8)', matrix.rocm_version) }}
@@ -2191,7 +2265,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 4-GPU MiniMax-M3 MXFP8 (MI35x accuracy + performance) ==============================================================================
+  # ==============================================================================
+  # 4-GPU MiniMax-M3 MXFP8 (MI35x accuracy + performance)
+  # ==============================================================================
 
   nightly-4-gpu-mi35x-minimax-m3:
     name: ${{ format('nightly-4-gpu-mi35x-minimax-m3 ({0}, linux-mi35x-gpu-8)', matrix.rocm_version) }}
@@ -2236,7 +2312,8 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-      # Run perf only after correctness passes. Keeping both steps in this job reuses the cached checkpoint and one scarce MI35x slot.
+      # Run perf only after correctness passes. Keeping both steps in this job
+      # reuses the cached checkpoint and one scarce MI35x slot.
       - name: Performance Test MI35x ROCm (4-GPU MiniMax-M3 MXFP8)
         timeout-minutes: 120
         continue-on-error: true  # Perf test failure doesn't fail the job if accuracy passed
@@ -2250,7 +2327,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== 8-GPU MiniMax-M2.7 (MI30x only) ==============================================================================
+  # ==============================================================================
+  # 8-GPU MiniMax-M2.7 (MI30x only)
+  # ==============================================================================
 
   nightly-8-gpu-minimax-m27:
     name: ${{ format('nightly-8-gpu-minimax-m27 ({0}, linux-mi300-8gpu-sglang)', matrix.rocm_version) }}
@@ -2308,7 +2387,9 @@ jobs:
           echo "$(<github_summary.md )" >> $GITHUB_STEP_SUMMARY || true
           exit ${TEST_EXIT_CODE:-0}
 
-  # ============================================================================== Diffusion (MI30x) ==============================================================================
+  # ==============================================================================
+  # Diffusion (MI30x)
+  # ==============================================================================
 
   nightly-1-gpu-zimage-turbo:
     name: ${{ format('nightly-1-gpu-zimage-turbo ({0}, linux-mi300-1gpu-sglang)', matrix.rocm_version) }}

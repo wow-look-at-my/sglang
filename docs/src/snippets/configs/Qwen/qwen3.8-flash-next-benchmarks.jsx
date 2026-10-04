@@ -65,8 +65,10 @@ export const benchmarks = [
   { match: { hw: "gb300", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" } },
   { match: { hw: "gb300", variant: "default", quant: "nvfp4", strategy: "low-latency", nodes: "single" } },
   { match: { hw: "gb300", variant: "default", quant: "nvfp4", strategy: "high-throughput", nodes: "single" } },
-  // 2x DGX Spark, TP=2, lmsysorg/sglang:qwen38flashnext (SGLang 593134d17a),.
-  // AIME26 and MMMU-Pro not run.
+  // 2x DGX Spark, TP=2, lmsysorg/sglang:qwen38flashnext (SGLang 593134d17a),
+  // 2026-09-04. GSM8K is the full 1,319-question set via the chat API (thinking
+  // off, greedy, 8192 max tokens) on lmsysorg/sglang:dev-qwen38-next-local
+  // (qwen4-main-squashed 4ccff141db). AIME26 and MMMU-Pro not run.
   {
     match: { hw: "dgx-spark", variant: "default", quant: "nvfp4", strategy: "low-latency", nodes: "multi-2" },
     sglang_version: "qwen38flashnext image @ 593134d17a",
@@ -123,8 +125,11 @@ export const benchmarks = [
         ttft_ms: 8336.78, tpot_ms: 241.20, tokens_per_sec_per_gpu: 415 },
     ],
   },
-  // Same bench workload as above; GSM8K as in the RDXA rows (full set,
-  // dev-qwen38-next-local image).
+  // nvidia/Qwen3.8-Flash-Next-NVFP4 (ModelOpt MIXED_PRECISION) on the same
+  // Spark pair, measured on qwen4-main-squashed 4ccff141db (which includes
+  // sgl-project/sglang#38121); the qwen38flashnext image cannot load this
+  // export. Same bench workload as above; GSM8K as in the RDXA rows (full
+  // set, dev-qwen38-next-local image).
   {
     match: { hw: "dgx-spark", variant: "default", quant: "nvfp4-nvda", strategy: "low-latency", nodes: "multi-2" },
     sglang_version: "qwen4-main-squashed @ 4ccff141db",
@@ -152,7 +157,9 @@ export const benchmarks = [
     ],
   },
   // 1x DGX Spark, TP=1, nvidia export with the N-gram table file-backed on NVMe,
-  // lmsysorg/sglang:dev-qwen38-next-local (4ccff141db).
+  // lmsysorg/sglang:dev-qwen38-next-local (4ccff141db). Same 1024/256 bench
+  // workload; GSM8K as in the 2-node rows (full set).
+  // The in-checkpoint MTP head is used at TP=1.
   {
     match: { hw: "dgx-spark", variant: "default", quant: "nvfp4-nvda", strategy: "low-latency", nodes: "single" },
     sglang_version: "dev-qwen38-next-local image @ 4ccff141db",
@@ -179,6 +186,17 @@ export const benchmarks = [
         ttft_ms: 7151.52, tpot_ms: 246.79, tokens_per_sec_per_gpu: 443 },
     ],
   },
+  // 1x RTX PRO 6000 Blackwell (96 GB), TP=1, lmsysorg/sglang:dev-qwen38-next-local
+  // (qwen4-main-squashed 4ccff141db, which carries the #36811 and #38290 router fixes), 2026-09-07:
+  // all four cells run as the
+  // command generator emits them. GSM8K is the full 1,319-question set with the
+  // same chat protocol as the DGX Spark rows (chat completions API, thinking off,
+  // greedy, 8,192-token budget, answer parsed from a final "The answer is N"
+  // line); the run_eval
+  // 5-shot / thinking-on figures are in the notes. Same 1024/256 bench workload;
+  // tokens_per_sec_per_gpu is (input + output) tok/s on the one GPU; output alone
+  // is one fifth of it (1024 in / 256 out, range ratio 1, ignore_eos).
+  // AIME26 and MMMU-Pro not run.
   {
     match: { hw: "rtx6000", variant: "default", quant: "nvfp4", strategy: "low-latency", nodes: "single" },
     sglang_version: "dev-qwen38-next-local image @ 4ccff141db",

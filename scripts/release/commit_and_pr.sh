@@ -1,7 +1,13 @@
 #!/bin/bash
 set -e
 
-# Script to commit version bump changes and create a pull request Usage.
+# Script to commit version bump changes and create a pull request
+# Usage: commit_and_pr.sh <version_type> <new_version> <branch_name>
+#
+# Arguments:
+#   version_type: "SGLang" or "sgl-kernel"
+#   new_version: The new version number
+#   branch_name: The git branch name to push to
 
 VERSION_TYPE="$1"
 NEW_VERSION="$2"

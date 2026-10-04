@@ -1,7 +1,10 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Cache-aware selection within one engine group, following the legacy `policies::cache_aware` proposal.
+//! Cache-aware selection within one engine group, following the legacy
+//! `policies::cache_aware` proposal and `resolve_cache_candidates` rules.
+//! Prefix I/O is memoized per request; candidate bounding, the queue gate and
+//! admission run per pick against a fresh load snapshot.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -88,7 +91,8 @@ impl CacheSource {
     }
 }
 
-/// One per prepared request. Keyed by source identity so distinct index namespaces never share an answer.
+/// One per prepared request. Keyed by source identity so distinct index
+/// namespaces never share an answer.
 #[derive(Default)]
 pub struct PrefixMemo {
     cells: Mutex<Vec<(Arc<CacheSource>, Lookup)>>,

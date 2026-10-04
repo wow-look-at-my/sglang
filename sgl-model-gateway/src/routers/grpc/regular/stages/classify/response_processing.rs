@@ -1,4 +1,11 @@
 //! Response processing stage for classify requests.
+//!
+//! Key responsibilities:
+//! 1. Extract embedding (logits) from EmbedComplete response
+//! 2. Apply softmax to convert logits to probabilities
+//! 3. Find predicted class (argmax)
+//! 4. Map class index to label (from id2label or generic LABEL_N)
+//! 5. Build ClassifyResponse
 
 use std::collections::HashMap;
 
@@ -21,6 +28,12 @@ use crate::{
 };
 
 /// Response processing stage for classify requests.
+///
+/// Takes the logits from the embedding response and converts them to
+/// classification results with probabilities and labels.
+///
+/// The stage is stateless - id2label mapping is obtained from the
+/// selected worker's model card at runtime.
 pub(crate) struct ClassifyResponseProcessingStage;
 
 impl ClassifyResponseProcessingStage {
@@ -209,6 +222,7 @@ mod tests {
         let logits = vec![1.0, 2.0, 3.0];
         let probs = ClassifyResponseProcessingStage::softmax(&logits);
 
+        // Probabilities should sum to 1
         let sum: f32 = probs.iter().sum();
         assert!((sum - 1.0).abs() < 1e-6);
 

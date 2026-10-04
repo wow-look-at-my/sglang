@@ -1,9 +1,13 @@
-// One entry per cell `match` tuple. Speed is pending — fill
-// tokens_per_sec_per_gpu / ttft_ms / tpot_ms once bench_serving has been run
-// per cell.
+// One entry per cell `match` tuple. Accuracy is per-cell measured (keyed to
+// config.accuracyLabels), taken at reasoning effort max (0.99) on the balanced
+// recipe for each platform. Speed is pending — fill tokens_per_sec_per_gpu /
+// ttft_ms / tpot_ms once bench_serving has been run per cell.
 //
-// NVIDIA cells ran on the lmsysorg/sglang:inkling-cu13 image (inkling-support
-// branch); AMD on inkling-rocm700-mi35x. GB300 balanced HLE not yet run.
+// Accuracy provenance: BFCL v3 / MMAU / MMMU-Pro / AIME25 (pass@1, avg of 8) /
+// NIAH single-needle / HLE (self-judge, text subset). NVIDIA cells ran on the
+// lmsysorg/sglang:inkling-cu13 image (inkling-support branch); AMD on
+// inkling-rocm700-mi35x. NIAH shows the two long-context buckets (512K / 1M) —
+// all platforms score ~1.0 below ~220K. GB300 balanced HLE not yet run.
 
 export const benchmarks = [
   { match: { hw: "b200"   , variant: "default" , quant: "nvfp4" , strategy: "balanced"     , nodes: "single"   },

@@ -11,6 +11,9 @@ use anyhow::{anyhow, ensure, Result};
 pub const K8S_DEFAULT_GRACE_SECS: u64 = 30;
 
 /// Maximum shutdown pause; deployments must also allow time to drain in-flight requests.
+/// This is the hard typo gate (an extra digit, seconds confused with milliseconds);
+/// whether a legal drain fits a particular grace period is [`shutdown_drain_advisory`]'s
+/// job, because the operator can raise the budget.
 pub const MAX_SHUTDOWN_DRAIN_SECS: u64 = 1800;
 
 /// A shutdown pause that exhausts the declared or assumed pod grace period.
@@ -496,7 +499,9 @@ mod tests {
         assert!(shutdown_drain_advisory(0, None).is_none());
     }
 
-    /// Pinned because this is the one case an operator meets without choosing it.
+    /// Pinned because this is the one case an operator meets without choosing it:
+    /// an edit to either constant that silenced the warning would change the default
+    /// deployment's behaviour, and should have to say so here.
     #[test]
     fn the_default_drain_warns_until_the_grace_period_is_raised() {
         let advisory = shutdown_drain_advisory(default_shutdown_drain_secs(), None)
@@ -506,8 +511,8 @@ mod tests {
             !advisory.grace_declared,
             "an assumed budget must not be reported as declared",
         );
-        // Raising the pod's grace period past the drain is what silences it
-        // — the action the warning asks for has to work.
+        // Raising the pod's grace period past the drain is what silences it —
+        // the action the warning asks for has to actually work.
         assert!(
             shutdown_drain_advisory(
                 default_shutdown_drain_secs(),

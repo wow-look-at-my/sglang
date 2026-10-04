@@ -1,4 +1,16 @@
 //! Request lifecycle FSM.
+//!
+//! The state lives *inside* the owned request struct (see [`crate::message`]),
+//! so transitions are in-place mutations on a single owner — no shared state,
+//! no locks. Each pipeline stage drives the transition for its own phase and
+//! then moves the request to the next stage's channel.
+//!
+//! Port of the design enum:
+//! ```text
+//! Received, Validating, Normalizing, Encoding, Tokenizing, PreSendValidating,
+//! Queued, Streaming { chunks_sent }, Finalizing, Completed, Failed(Error),
+//! Aborted
+//! ```
 
 use super::error::Error;
 
@@ -10,7 +22,9 @@ pub enum RequestState {
     Normalizing,
     Encoding,
     Tokenizing,
-    /// Every branch converges here with its final `input_ids`.
+    /// Every branch converges here with its final `input_ids`, for the checks
+    /// that need the tokenized length (the input + `max_new_tokens` ceiling).
+    /// The last state before the request leaves Rust.
     PreSendValidating,
     Queued,
     Streaming {
@@ -25,7 +39,8 @@ pub enum RequestState {
 /// Outcome of validation.
 #[derive(Debug, Clone, Copy)]
 pub enum ValidationOutcome {
-    /// Has multimodal inputs → Encoding.
+    /// Has multimodal inputs → Encoding, where an MM worker runs the multimodal
+    /// pipeline and returns the final expanded `input_ids`.
     HasMultimodal,
     /// Plain text → Tokenizing.
     NeedsTokenize,
@@ -33,7 +48,8 @@ pub enum ValidationOutcome {
     AlreadyTokenized,
 }
 
-/// Events that drive transitions. Each variant maps:1 to an edge in the design's transition table.
+/// Events that drive transitions. Each variant maps 1:1 to an edge in the
+/// design's transition table.
 #[derive(Debug)]
 pub enum Event {
     // --- request ---
@@ -99,15 +115,20 @@ impl RequestState {
         let next = match (&*self, &event) {
             // request
             (Received, Validated(_)) => Validating,
-            // Generate requests pass through Normalizing (sampling-param normalize/verify); control requests skip it.
+            // Generate requests pass through Normalizing (sampling-param
+            // normalize/verify); control requests skip it, having none.
             (Validating, NeedsNormalize) => Normalizing,
             (Validating, Validated(AlreadyTokenized)) => PreSendValidating,
             (Normalizing, Validated(HasMultimodal)) => Encoding,
             (Normalizing, Validated(NeedsTokenize)) => Tokenizing,
             (Normalizing, Validated(AlreadyTokenized)) => PreSendValidating,
-            // The MM worker returns the *final* placeholder-expanded input_ids.
+            // The MM worker returns the *final* placeholder-expanded input_ids,
+            // so an encoded request skips the tokenizer pool — but not the
+            // pre-send checks: expanded image tokens count against the same
+            // input + max_new_tokens ceiling as tokenized text.
             (Encoding, EncodeDone) => PreSendValidating,
-            // Every to-scheduler branch funnels through the pre-send checks.
+            // Every to-scheduler branch funnels through the pre-send checks, so they
+            // run exactly once per request no matter how it got its ids.
             (Tokenizing, TokenizeDone) => PreSendValidating,
             (PreSendValidating, PreSendValidated) => Queued,
             (Queued, SchedulerPicked) => Streaming { chunks_sent: 0 },
@@ -133,7 +154,10 @@ mod tests {
         state
     }
 
-    /// Every to-scheduler branch — control, client-supplied ids, and text through the tokenizer pool — must land in `PreSendValidating`.
+    /// Every to-scheduler branch — control, client-supplied ids, and text through the
+    /// tokenizer pool — must land in `PreSendValidating`, because that is where
+    /// the checks needing the final `input_ids` run. A branch that reached
+    /// `Queued` directly would skip them silently.
     #[test]
     fn every_branch_reaches_the_ring_through_pre_send_validating() {
         for from in [
@@ -158,7 +182,8 @@ mod tests {
         }
     }
 
-    /// The converse: `Queued` has no other in-edge.
+    /// The converse: `Queued` has no other in-edge, so the checks can't be skipped
+    /// by emitting the wrong event, and can't run twice.
     #[test]
     fn queued_has_no_other_in_edge() {
         for mut state in [

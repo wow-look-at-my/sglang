@@ -1,4 +1,5 @@
-//! Rid-keyed parking of finished results between an MM worker and the scheduler drain.
+//! Rid-keyed parking of finished results between an MM worker and the
+//! scheduler drain.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -95,13 +96,18 @@ pub enum MmEncodedEntry {
 
 /// Where a result's feature buffers live between worker and drain.
 pub enum FeatureStore {
-    /// In-process; the drain wraps them zero-copy. Single-rank serving, or the shm fallback.
+    /// In-process; the drain wraps them zero-copy. Single-rank serving, or the
+    /// shm fallback. Under TP the whole buffer would ride `broadcast_pyobj`.
     Inline(Vec<f32>),
-    /// One POSIX segment per item, written by the worker; only the names cross ranks. See [`ShmSegment`].
+    /// One POSIX segment per item, written by the worker; only the names cross
+    /// ranks. See [`ShmSegment`].
     Shm(Vec<ShmSegment>),
 }
 
-/// Results parked between a worker's `MmEncoded` and the scheduler drain, keyed by rid.
+/// Results parked between a worker's `MmEncoded` and the scheduler drain, keyed
+/// by rid. Owns the lifecycle so entries never leak: [`park`](Self::park)
+/// strictly before `MmEncoded`, [`take`](Self::take) at the drain,
+/// [`purge`](Self::purge) for requests that die while parked.
 #[derive(Clone, Default)]
 pub struct MmResultStore(Arc<Mutex<HashMap<String, MmEncodedEntry>>>);
 
@@ -152,9 +158,11 @@ mod tests {
     use super::super::shm::shm_path;
     use super::*;
 
-    /// Per-item slicing follows the grid row counts.
+    /// Per-item slicing follows the grid row counts, so Python's
+    /// `(rows, feature_dim)` reshape of a segment sees only its own item.
     #[test]
     fn park_splits_features_by_grid() {
+        // Two items: grids (1,2,2)=4 rows and (1,1,2)=2 rows, dim=3.
         let features: Vec<f32> = (0..18).map(|i| i as f32).collect();
         let grids = [[1, 2, 2], [1, 1, 2]];
         let FeatureStore::Shm(segments) = park_features_in_shm(&features, &grids) else {
@@ -175,7 +183,7 @@ mod tests {
     /// A degenerate shape must degrade to inline, never a shm-side panic.
     #[test]
     fn shape_surprise_falls_back_inline() {
-        let features = vec![0.0f32; 7];
+        let features = vec![0.0f32; 7]; // not divisible by 2 rows
         let grids = [[1, 1, 2]];
         assert!(matches!(
             park_features_in_shm(&features, &grids),

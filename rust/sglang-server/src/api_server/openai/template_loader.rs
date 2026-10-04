@@ -50,7 +50,8 @@ pub(super) fn load_chat_formatter(
     chat_template_arg: Option<&str>,
 ) -> Result<ChatFormatter, TemplateError> {
     // Python resolves registry names before looking at the filesystem — and
-    // before touching the tokenizer config.
+    // before touching the tokenizer config, so a built-in name works even when
+    // `tokenizer_config.json` is absent.
     if let Some(argument) = chat_template_arg
         && let Some(spec) = builtin_template(argument)
     {
@@ -139,7 +140,8 @@ pub(super) fn load_chat_formatter(
 /// is the fallback then, as in Python.
 pub(super) fn infer_legacy_template_from_model_path(model_path: &str) -> Option<LegacySpec> {
     let lower = model_path.to_lowercase();
-    // Regexes without regex: every Python pattern here is a plain substring or a `prefix.*suffix` pair.
+    // Regexes without regex: every Python pattern here is a plain substring or
+    // a `prefix.*suffix` pair, both on a lowercased path.
     let contains = |needle: &str| lower.contains(needle);
     let precedes = |prefix: &str, suffix: &str| {
         lower
@@ -175,6 +177,8 @@ pub(super) fn infer_legacy_template_from_model_path(model_path: &str) -> Option<
     {
         return builtin_template("chatml-llava");
     }
+    // MiniCPM: 4.6+ uses its own template and must not fall back to the
+    // legacy conv template.
     if contains("minicpm-v-4.6")
         || contains("minicpm-v-4_6")
         || contains("minicpm-o-4.6")
@@ -204,7 +208,8 @@ pub(super) fn infer_legacy_template_from_model_path(model_path: &str) -> Option<
         return builtin_template("whisper");
     }
 
-    // Model-type matchers read `<model_path>/config.json`.
+    // Model-type matchers read `<model_path>/config.json` (local dirs only —
+    // Python's `get_model_type` cannot resolve HF repo ids either).
     let model_type = read_model_type(model_path)?;
     // Python `MODEL_TYPE_TO_TEMPLATE`; minicpmv4_6 is deliberately absent.
     let name = match model_type.as_str() {

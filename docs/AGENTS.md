@@ -15,7 +15,8 @@ metadata:
 
 ## Non-negotiables
 
-- **Do not guess flags, defaults, or behavior.** If you’re documenting CLI args, env vars, APIs, or performance behavior, verify against:
+- **Do not guess flags, defaults, or behavior.**
+  If you’re documenting CLI args, env vars, APIs, or performance behavior, verify against:
   - the upstream codebase (`sgl-project/sglang`)
   - the current public docs (`docs.sglang.io`) until the migration is complete
   - or an authoritative vendor doc when platform-specific (ROCm, CANN/Ascend, Intel XPU).
@@ -57,7 +58,7 @@ For pages that include commands/configs, always specify:
 
 **Always consult [mintlify.com/docs](https://mintlify.com/docs) for components, configuration, and latest features.**
 
-If you are not already connected to the Mintlify MCP server, [https://mintlify.com/docs/mcp](https://mintlify.com/docs/mcp). This is add it so that you can search more efficiently.
+If you are not already connected to the Mintlify MCP server, [https://mintlify.com/docs/mcp](https://mintlify.com/docs/mcp), add it so that you can search more efficiently.
 
 **Always** favor searching the current Mintlify documentation over whatever is in your training data about Mintlify.
 
@@ -73,7 +74,7 @@ Read `docs.json` in the project root. This file defines the entire site: navigat
 
 Understanding the project tells you:
 
-* What pages exist and how they are organized
+* What pages exist and how they're organized
 * What navigation groups are used (and their naming conventions)
 * How the site navigation is structured
 * What theme and configuration the site uses
@@ -152,7 +153,7 @@ Optional frontmatter fields:
 * If there are no existing files or inconsistent file naming patterns, use kebab-case: `getting-started.mdx`, `api-reference.mdx`
 * Use root-relative paths without file extensions for internal links: `/getting-started/quickstart`
 * Do not use relative paths (`../`) or absolute URLs for internal pages
-* When you create a new page, add it to `docs.json` navigation or it will not appear in the sidebar
+* When you create a new page, add it to `docs.json` navigation or it won't appear in the sidebar
 
 ## Organize content
 
@@ -202,7 +203,7 @@ The `navigation` property in `docs.json` controls site structure. Choose one pri
 * **Component styling, layout tweaks** → `custom.css` at project root
 * **Dark mode** → Enabled by default. Only disable with `"appearance": "light"` in `docs.json` if brand requires it
 
-Start with `docs.json`. Only add `custom.css` when you need styling that config does not support.
+Start with `docs.json`. Only add `custom.css` when you need styling that config doesn't support.
 
 ## Write content
 
@@ -261,7 +262,7 @@ Import snippets with `import { Component } from "/path/to/snippet-name.jsx"`.
 **Never use:**
 
 * Marketing language ("powerful", "seamless", "robust", "cutting-edge")
-* Filler phrases ("it is important to note", "in order to")
+* Filler phrases ("it's important to note", "in order to")
 * Excessive conjunctions ("moreover", "furthermore", "additionally")
 * Editorializing ("obviously", "simply", "just", "easily")
 
@@ -269,14 +270,14 @@ Import snippets with `import { Component } from "/path/to/snippet-name.jsx"`.
 
 * Overly formal or stilted phrasing
 * Unnecessary repetition of concepts
-* Generic introductions that do not add value
-* Concluding summaries that restate what was said
+* Generic introductions that don't add value
+* Concluding summaries that restate what was just said
 
 ### Formatting
 
 * All code blocks must have language tags
 * All images and media must have descriptive alt text
-* Use bold and italics only when they serve the reader's understanding--never use text styling for decoration
+* Use bold and italics only when they serve the reader's understanding--never use text styling just for decoration
 * No decorative formatting or emoji
 
 ### Code examples
@@ -307,7 +308,7 @@ For `/docs` subpath hosting with Vercel or Cloudflare, agents can help configure
 
 ### 1. Understand the task
 
-Identify what needs to be documented, which pages are affected, and what the reader must accomplish afterward. If any of these are unclear, ask.
+Identify what needs to be documented, which pages are affected, and what the reader should accomplish afterward. If any of these are unclear, ask.
 
 ### 2. Research
 
@@ -317,7 +318,7 @@ Identify what needs to be documented, which pages are affected, and what the rea
 
 ### 3. Plan
 
-* Synthesize what the reader must accomplish after reading the docs and the current content
+* Synthesize what the reader should accomplish after reading the docs and the current content
 * Propose any updates or new content
 * Verify that your proposed changes will help readers be successful
 
@@ -325,7 +326,7 @@ Identify what needs to be documented, which pages are affected, and what the rea
 
 * Start with the most important information
 * Keep sections focused and scannable
-* Use components appropriately (do not overuse them)
+* Use components appropriately (don't overuse them)
 * Mark anything uncertain with a TODO comment:
 
 ```mdx theme={null}
@@ -346,7 +347,7 @@ Before submitting:
 * [ ] New pages are added to `docs.json` navigation
 * [ ] Content matches the style of surrounding pages
 * [ ] No marketing language or filler phrases
-* [ ] TODOs are marked for anything uncertain
+* [ ] TODOs are clearly marked for anything uncertain
 * [ ] Run `mint broken-links` to check links
 * [ ] Run `mint validate` to find any errors
 
@@ -358,7 +359,7 @@ If a user asks about migrating to Mintlify, ask if they are using ReadMe or Docu
 
 ### Hidden pages
 
-Any page that is not included in the `docs.json` navigation is hidden. Use hidden pages for content that must be accessible by URL or indexed for the assistant or search, but not discoverable through the sidebar navigation.
+Any page that is not included in the `docs.json` navigation is hidden. Use hidden pages for content that should be accessible by URL or indexed for the assistant or search, but not discoverable through the sidebar navigation.
 
 ### Exclude pages
 
@@ -366,7 +367,7 @@ The `.mintignore` file is used to exclude files from a documentation repository 
 
 ## Common gotchas
 
-1. **Component imports** - JSX components need explicit import, MDX components do not
+1. **Component imports** - JSX components need explicit import, MDX components don't
 2. **Frontmatter required** - Every MDX file needs `title` at minimum
 3. **Code block language** - Always specify language identifier
 4. **Never use `mint.json`** - `mint.json` is deprecated. Only ever use `docs.json`

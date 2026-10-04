@@ -4,6 +4,8 @@
 
 namespace {
 
+// convert to vnni format
+// from [N, K] to [K/2, N, 2] for bfloat16 and float16
 template <typename scalar_t>
 inline void
 pack_vnni(scalar_t* __restrict__ packed, const scalar_t* __restrict__ weight, int64_t N, int64_t K, int64_t lda) {
@@ -89,6 +91,9 @@ void conv3d_embed_kernel_impl(
   // K in gemm
   const int64_t K = IC * D * H * W;
 
+  // input : [ N/BLOCK_M, BLOCK_M, IC, D, H, W]
+  // weight: [OC/BLOCK_N, IC, D, H*W/2, BLOCK_N, 2]
+  // out   : [N/BLOCK_M, BLOCK_M, OC/BLOCK_N, BLOCK_N]
   parallel_2d(MB, NB, [&](int64_t mb0, int64_t mb1, int64_t nb0, int64_t nb1) {
     alignas(64) float Ctmp[BLOCK_M * BLOCK_N];
 
@@ -101,6 +106,7 @@ void conv3d_embed_kernel_impl(
       const scalar_t* __restrict__ A = input + mb_start * K;
       const scalar_t* __restrict__ B = weight + nb_start * K;
 #if 0
+      // only access 1st index of D dimension
       for (int64_t ic = 0; ic < IC; ++ic) {
         for (int64_t d = 0; d < D; ++d) {
           at::native::cpublas::brgemm(
@@ -136,6 +142,7 @@ void conv3d_embed_kernel_impl(
 //   view [OC / BLOCK_N, IC, D, BLOCK_N, H * W]
 //   to   [OC / BLOCK_N][IC, D][H * W / 2, BLOCK_N, 2]
 //        +- parallel -+- seq -+------ mma ----------+
+//
 at::Tensor conv3d_embed_weight_pack(const at::Tensor& weight) {
   CHECK_INPUT(weight);
 
@@ -205,6 +212,7 @@ at::Tensor conv3d_embed_cpu(const at::Tensor& input, const at::Tensor& weight, c
   CHECK_INPUT_SHAPE_DTYPE<false>(weight, {OC, IC, D, H, W}, st);
   CHECK_INPUT_SHAPE_DTYPE<false>(bias, {OC}, st);
 
+  // allocate {D, H, W} for out is 1
   at::Tensor out = at::empty({N, OC}, input.options());
   AT_DISPATCH_REDUCED_FLOATING_TYPES(st, "conv3d_embed_kernel_impl", [&] {
     conv3d_embed_kernel_impl<scalar_t>(

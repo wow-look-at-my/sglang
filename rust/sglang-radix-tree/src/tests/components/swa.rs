@@ -182,6 +182,8 @@ fn match_validator_accepts_valued_nodes_before_any_gap() {
     let [a, b] = chain(&mut tc);
     set_swa_device(&mut tc, a);
     set_swa_device(&mut tc, b);
+    // The window starts unbounded: a 2-atom valued span validates under a
+    // window of 4 because no gap has been seen yet.
     let mut validator =
         swa_component(4).create_match_validator(&tc, /* match_device_only = */ true);
     assert!(validator(&tc, a));
@@ -199,7 +201,8 @@ fn match_validator_gap_resets_until_the_window_is_reached() {
     let mut validator =
         swa_component(2).create_match_validator(&tc, /* match_device_only = */ true);
     assert!(validator(&tc, a));
-    // The tombstone resets the run.
+    // The tombstone resets the run; below the window stays invalid, the
+    // exact window boundary revalidates, and beyond it stays valid.
     assert!(!validator(&tc, t));
     assert!(!validator(&tc, c));
     assert!(validator(&tc, d));
@@ -307,7 +310,8 @@ fn match_validator_hicache_tombstone_acceptance_still_resets_the_window() {
     set_swa_device(&mut tc, c);
     let mut validator =
         swa_component(2).create_match_validator(&tc, /* match_device_only = */ true);
-    // The accepted tombstone still zeroes the run: the next valued node sits below the window.
+    // The accepted tombstone still zeroes the run: the next valued node
+    // sits below the window.
     assert!(validator(&tc, live));
     assert!(!validator(&tc, c));
 }
@@ -339,6 +343,8 @@ fn refresh_lru_match_end_reranks_the_window_run_deepest_first() {
         set_swa_device(&mut tc, node);
         tc.device_lru_list_mut(SWA).insert_mru(node);
     }
+    // The walk window is sliding_window_size + page_size = 3: d, c, b are
+    // re-ranked deepest first; a stays beyond the window.
     swa_component(2).refresh_lru(&mut tc, LRURefreshPhase::MatchEnd, d);
     assert_eq!(swa_lru_order(&tc), vec![d, c, b, a]);
 }
@@ -374,6 +380,8 @@ fn refresh_lru_window_walk_skips_tombstones_but_counts_their_span() {
         set_swa_device(&mut tc, node);
         tc.device_lru_list_mut(SWA).insert_mru(node);
     }
+    // The walk window is 2: the unlisted tombstone t is skipped but its
+    // atom consumes the window, so a is never re-ranked.
     swa_component(1).refresh_lru(&mut tc, LRURefreshPhase::MatchEnd, c);
     assert_eq!(swa_lru_order(&tc), vec![c, s, a]);
 }
@@ -424,6 +432,7 @@ fn finalize_sums_swa_host_chunks_within_the_window() {
     set_swa_host(&mut tc, h);
     set_swa_device(&mut tc, b);
     set_swa_device(&mut tc, c);
+    // From c up: device 1 + 1, then host 1 + 1 — all inside the window of 5.
     let out = finalize(&tc, &swa_component(5), c, /* prior = */ 0);
     assert_eq!(out.swa_host_hit_length, 2);
 }
@@ -435,6 +444,8 @@ fn finalize_stops_at_the_window_before_higher_host_chunks() {
     set_swa_host(&mut tc, h);
     set_swa_device(&mut tc, b);
     set_swa_device(&mut tc, c);
+    // The device span alone covers the window of 2: the host chunk above
+    // the boundary is never counted.
     let out = finalize(&tc, &swa_component(2), c, /* prior = */ 0);
     assert_eq!(out.swa_host_hit_length, 0);
 }
@@ -463,6 +474,8 @@ fn finalize_counts_the_straddling_host_chunk_in_full() {
         .unwrap();
     set_swa_host(&mut tc, h);
     set_swa_device(&mut tc, c);
+    // The host chunk straddles the window boundary (2 of its 4 tokens are
+    // in-window) and is counted in full, uncapped.
     let out = finalize(&tc, &swa_component(3), c, /* prior = */ 0);
     assert_eq!(out.swa_host_hit_length, 4);
 }
@@ -473,7 +486,8 @@ fn finalize_breaks_at_an_swa_gap() {
     let [h, _t, c] = chain(&mut tc);
     set_swa_host(&mut tc, h);
     set_swa_device(&mut tc, c);
-    // The tombstone between c and h ends the walk: the host chunk above the gap is unreachable.
+    // The tombstone between c and h ends the walk: the host chunk above
+    // the gap is unreachable.
     let out = finalize(&tc, &swa_component(5), c, /* prior = */ 0);
     assert_eq!(out.swa_host_hit_length, 0);
 }
@@ -679,6 +693,8 @@ fn cap_split_uses_the_page_rounded_window() {
     ));
     let root = tc.arena.root();
     let capped = child_of(&tc, root, &[1, 2]);
+    // tail_size rounds the window of 3 up to 2 pages: the tail keeps 4
+    // atoms, the parent 2.
     assert_eq!(tc.arena.node(capped).key, vec![1, 2]);
     let tail = child_of(&tc, capped, &[3, 4]);
     assert_eq!(tc.arena.node(tail).key, vec![3, 4, 5, 6]);
@@ -726,8 +742,8 @@ fn insert_overlap_recovers_a_tombstone_inside_the_window() {
         track_adopted_ranges: true,
         ..insert_params_swa(&vec![1, 2, 3], &[20, 21, 22], 0, 0)
     });
-    // SWA consumed the whole slice: the node adopts the fresh Full KV and the
-    // Full is freed instead of the duplicates.
+    // SWA consumed the whole slice: the node adopts the fresh Full KV and
+    // the old Full is freed instead of the duplicates.
     assert!(
         tc.arena
             .device_value(leaf, FULL)
@@ -757,7 +773,9 @@ fn insert_overlap_recovers_a_locked_swa_tombstone() {
     tc.insert(&insert_params_swa(&vec![1, 2, 3], &[10, 11, 12], 0, 0));
     let root = tc.arena.root();
     let leaf = child_of(&tc, root, &[1]);
-    // A segment lock may hold an SWA tombstone.
+    // A segment lock may hold an SWA tombstone; the co-held FULL lock (the
+    // full >= swa protocol invariant) forces the Recover branch, so the
+    // locked full stays on the node.
     tc.arena
         .node_mut(leaf)
         .set_lock_ref_(ValueSlotIdx::device(SWA), 1);
@@ -833,7 +851,8 @@ fn insert_overlap_straddling_the_boundary_splits_and_recovers_the_tail() {
         /* swa_evicted_seqlen = */ 2,
     ));
     assert_eq!(result.prefix_len, 4);
-    // The node split at the boundary: the parent keeps the out-of-window Full span, the tail adopts the fresh KV.
+    // The node split at the boundary: the parent keeps the old
+    // out-of-window Full span, the tail adopts the fresh KV.
     let parent = child_of(&tc, root, &[1]);
     assert_eq!(tc.arena.node(parent).key, vec![1, 2]);
     assert_eq!(tc.arena.node(node).key, vec![3, 4]);
@@ -1014,6 +1033,8 @@ fn insert_overlap_straddling_a_second_level_node_recovers_the_tail() {
         /* swa_evicted_seqlen = */ 4,
     ));
     assert_eq!(result.prefix_len, 5);
+    // The boundary lands one atom into b (total_prefix_len 3): b splits at
+    // its node-relative offset 1, not at the absolute seqlen.
     let p = child_of(&tc, a, &[4]);
     assert_eq!(tc.arena.node(p).key, vec![4]);
     assert_eq!(tc.arena.node(b).key, vec![5]);
@@ -1232,6 +1253,8 @@ fn reinsert_straddling_the_boundary_at_a_second_level_node_splits_before_the_reb
         /* prev_prefix_len = */ 0,
         /* swa_evicted_seqlen = */ 4,
     ));
+    // The unevicted b splits at its node-relative offset 1; only the
+    // in-window tail is rebuilt.
     let p = child_of(&tc, a, &[4]);
     assert_eq!(tc.arena.node(p).key, vec![4]);
     assert_eq!(tc.arena.node(b).key, vec![5]);
@@ -1409,7 +1432,8 @@ fn redistribute_on_node_split_slices_host_values_and_parks_tombstones() {
             .host_value(node, SWA)
             .equal(&Tensor::from_slice(&[71i64]))
     );
-    // Both sides are device tombstones: the parent joins the host LRU, the child stays listed.
+    // Both sides are device tombstones: the parent joins the host LRU, the
+    // child stays listed.
     assert!(tc.host_lru_list(SWA).in_list(Some(parent)));
     assert!(tc.host_lru_list(SWA).in_list(Some(node)));
 }
@@ -1528,6 +1552,8 @@ fn acquire_lock_overshooting_the_window_stops_at_the_crossing_node() {
         IncLockRefResult::default(),
         /* lock_host = */ false,
     );
+    // The 2-atom nodes overshoot the 3-atom window at b (2 -> 4): the walk
+    // stops there, stamps b, and leaves a untouched.
     assert_eq!(tc.arena.device_lock_ref(c, SWA), 1);
     assert_eq!(tc.arena.device_lock_ref(b, SWA), 1);
     assert_eq!(tc.arena.device_lock_ref(a, SWA), 0);
@@ -1580,7 +1606,8 @@ fn acquire_lock_counts_tombstones_toward_the_window() {
         IncLockRefResult::default(),
         /* lock_host = */ false,
     );
-    // The valueless b is counted too (no ledger move).
+    // The valueless b is counted too (no ledger move); position-based
+    // coverage fills the window at b, so a stays outside the segment.
     assert_eq!(tc.arena.device_lock_ref(c, SWA), 1);
     assert_eq!(tc.arena.device_lock_ref(b, SWA), 1);
     assert_eq!(tc.arena.device_lock_ref(a, SWA), 0);
@@ -1620,7 +1647,8 @@ fn inc_lock_ref_runs_full_and_swa_walks_together() {
     let result = tc
         .inc_lock_ref(tc.arena.node(c).id, ComponentSet::EMPTY)
         .expect("live test node");
-    // FULL counts its valueless bottom segment (no ledger move); SWA locks its window.
+    // FULL counts its valueless bottom segment (no ledger move); SWA locks
+    // its window.
     assert_eq!(result.delta, Some(0));
     assert_eq!(tc.arena.device_lock_ref(c, FULL), 1);
     assert_eq!(tc.arena.device_lock_ref(b, FULL), 1);
@@ -1678,7 +1706,8 @@ fn dec_host_lock_ref_with_the_inner_uuid_leaves_an_outer_window_pinned() {
     assert_eq!(tc.arena.host_lock_ref(c, SWA), 1);
     assert_eq!(tc.arena.host_lock_ref(b, SWA), 2);
     assert_eq!(tc.arena.host_lock_ref(a, SWA), 1);
-    // Releasing the inner window with its own uuid stops at b; the outer window's lock above the boundary survives.
+    // Releasing the inner window with its own uuid stops at b; the outer
+    // window's lock above the boundary survives.
     let params = inner.to_dec_params();
     tc.dec_host_lock_ref(tc.arena.node(c).id, &params)
         .expect("live test node");
@@ -1762,7 +1791,8 @@ fn acquire_host_lock_counts_host_tombstones_toward_the_window() {
         IncLockRefResult::default(),
         /* lock_host = */ true,
     );
-    // The host-valueless b is counted too.
+    // The host-valueless b is counted too; position-based coverage fills
+    // the window at b, so a stays outside the segment.
     assert_eq!(tc.arena.host_lock_ref(c, SWA), 1);
     assert_eq!(tc.arena.host_lock_ref(b, SWA), 1);
     assert_eq!(tc.arena.host_lock_ref(a, SWA), 0);
@@ -1916,7 +1946,8 @@ fn evict_component_device_frees_the_full_indices_and_tombstones_swa() {
         EvictLayer::Device,
     );
     assert_eq!((freed, host_freed), (2, 0));
-    // The freed indices are the FULL slice (SWA slots pair through it); the FULL value itself stays on the node.
+    // The freed indices are the FULL slice (SWA slots pair through it);
+    // the FULL value itself stays on the node.
     assert!(device_frees[&SWA][0].equal(&Tensor::from_slice(&[10i64, 11])));
     assert!(!tc.arena.has_device_value(node, SWA));
     assert!(
@@ -2239,7 +2270,8 @@ fn dec_swa_lock_only_evicts_a_fully_unlocked_device_leaf() {
         &mut host_frees,
     )
     .expect("live test node");
-    // The fully unlocked leaf c is device-evicted on release.
+    // The fully unlocked leaf c is device-evicted on release; b keeps its
+    // SWA value because its child still holds FULL KV.
     assert!(!tc.arena.has_device_value(c, SWA));
     assert!(device_frees[&SWA][0].equal(&Tensor::from_slice(&[9i64])));
     assert!(tc.arena.has_device_value(b, SWA));
@@ -2330,7 +2362,8 @@ fn release_lock_skip_set_leaves_a_relocked_tombstone_credited() {
         IncLockRefResult::default(),
         /* lock_host = */ false,
     );
-    // b regains a value and a second request locks it before the first release replays its tombstone skip set.
+    // b regains a value and a second request locks it before the first
+    // release replays its tombstone skip set.
     store_swa_device(&mut tc, b);
     let _ = swa.acquire_component_lock(
         &mut tc,
@@ -2397,6 +2430,7 @@ fn dec_swa_lock_only_releases_the_window_exactly_once() {
         &mut host_frees,
     )
     .expect("live test node");
+    // The second window still holds the lock: refs drop to 1, sizes stay.
     assert_eq!(tc.arena.device_lock_ref(c, SWA), 1);
     assert_eq!(tc.arena.device_lock_ref(b, SWA), 1);
     assert_eq!(tc.swa_evictable_size(), 1);
@@ -2525,7 +2559,8 @@ fn release_host_lock_does_not_repark_a_node_whose_host_value_was_taken() {
         IncLockRefResult::default(),
         /* lock_host = */ true,
     );
-    // The host value moved out while the lock was held.
+    // The host value moved out while the lock was held; the node has no
+    // device value either, so the release has nothing to park.
     let _ = tc.arena.take_host_value(a, SWA);
     let params = result.to_dec_params();
     swa.release_component_lock(&mut tc, a, &params, /* lock_host = */ true);
@@ -2580,6 +2615,8 @@ fn release_host_lock_leaves_an_already_listed_node_listed() {
     let _ = a;
 }
 
+// A three-node chain built through insert (leaf sets maintained), with
+// SWA device values stored on every node.
 fn swa_evict_chain(tc: &mut UnifiedTreeCore<Vec<i64>>) -> [NodeIdx_; 3] {
     tc.insert(&insert_params_swa(&vec![1], &[10], 0, 0));
     tc.insert(&insert_params_swa(&vec![1, 2], &[10, 11], 0, 0));
@@ -2608,7 +2645,8 @@ fn evict_walk_advances_one_allocator_mutation_per_call() {
     tc.evict_device_start(SWA, /* request_cnt = */ 100);
     let (first, step) = tc.evict_device_next_node(SWA, &tracker);
     accumulate_step(step, &mut tracker, &mut device_frees, &mut host_frees);
-    // Each internal tombstone is its own step so the allocator can observe and reuse the freed slice.
+    // Each internal tombstone is its own step so the allocator can observe
+    // and reuse the freed slice before the walk mutates another node.
     assert_eq!(first, None);
     assert!(!tc.arena.has_device_value(a, SWA));
     assert!(tc.arena.has_device_value(b, SWA));
@@ -2663,6 +2701,7 @@ fn evict_walk_step_tracker_carries_only_the_deltas_over_the_baseline() {
     tc.evict_device_start(SWA, /* request_cnt = */ 100);
     let (next, step) = tc.evict_device_next_node(SWA, &baseline);
     assert_eq!(next, None);
+    // One internal node tombstones: the step reports 1, not the running total.
     assert_eq!(step.tracker[&SWA], 1);
     tc.evict_device_end(SWA);
 }
@@ -2728,7 +2767,8 @@ fn evict_walk_second_call_resumes_past_the_returned_leaf() {
     let (third, step) = tc.evict_device_next_node(SWA, &tracker);
     accumulate_step(step, &mut tracker, &mut device_frees, &mut host_frees);
     assert_eq!(third, Some(tc.arena.node(c).id));
-    // The driver has not delisted c yet: the pre-advanced cursor must not hand the same leaf out again.
+    // The driver has not delisted c yet: the pre-advanced cursor must not
+    // hand the same leaf out again.
     let (fourth, step) = tc.evict_device_next_node(SWA, &tracker);
     accumulate_step(step, &mut tracker, &mut device_frees, &mut host_frees);
     assert_eq!(fourth, None);
@@ -2765,7 +2805,8 @@ fn evict_walk_revalidation_skips_a_locked_lru_end() {
     let mut tc = swa_core(/* window = */ 2, /* page_size = */ 1);
     let [a, b, c] = swa_evict_chain(&mut tc);
     tc.evict_device_start(SWA, /* request_cnt = */ 100);
-    // The cursor's node leaves the list and the new LRU end gets locked before the walk resumes.
+    // The cursor's node leaves the list and the new LRU end gets locked
+    // before the walk resumes.
     tc.device_lru_list_mut(SWA).remove_node(a);
     tc.arena
         .node_mut(b)
@@ -2899,7 +2940,8 @@ fn finalize_window_arithmetic_at_page_boundaries() {
     set_swa_host(&mut tc, a);
     set_swa_host(&mut tc, h);
     set_swa_device(&mut tc, c);
-    // The window of multiple lands exactly on the c/h page boundary sum: h is counted, the page above it is not.
+    // The window of 4 lands exactly on the c/h page boundary sum: h is
+    // counted, the page above it is not.
     let out = finalize(&tc, &swa_component(4), c, /* prior = */ 0);
     assert_eq!(out.swa_host_hit_length, 2);
 }
@@ -2917,6 +2959,8 @@ fn new_leaf_after_a_cached_prefix_splits_at_the_leaf_relative_boundary() {
         /* swa_evicted_seqlen = */ 4,
     ));
     assert_eq!(result.prefix_len, 3);
+    // The leaf starts at prefix 3, so the boundary at seqlen 4 is
+    // leaf-relative offset 1: parent [4] tombstone, tail [5, 6] rebuilt.
     let p = child_of(&tc, a, &[4]);
     let leaf = child_of(&tc, p, &[5]);
     assert_eq!(tc.arena.node(p).key, vec![4]);
@@ -2954,6 +2998,8 @@ fn new_leaf_boundary_split_and_window_cap_compose_in_one_commit() {
         /* prev_prefix_len = */ 2,
         /* swa_evicted_seqlen = */ 3,
     ));
+    // Boundary split first ([3] tombstone), then the window cap splits the
+    // in-window run into [4, 5] + [6, 7], rebuilt older-prefix-first.
     let p = child_of(&tc, a, &[3]);
     let capped = child_of(&tc, p, &[4]);
     let leaf = child_of(&tc, capped, &[6]);
@@ -3053,6 +3099,8 @@ fn refresh_window_extends_by_a_full_page_beyond_the_sliding_window() {
         set_swa_device(&mut tc, node);
         tc.device_lru_list_mut(SWA).insert_mru(node);
     }
+    // The walk window is sliding_window_size + page_size = 6: c and b
+    // re-rank deepest first; a stays put.
     swa_component(2).refresh_lru(&mut tc, LRURefreshPhase::MatchEnd, c);
     assert_eq!(swa_lru_order(&tc), vec![c, b, a]);
 }
@@ -3070,6 +3118,7 @@ fn window_cap_skips_a_page_misaligned_leaf() {
             /* extra_key = */ None,
         )
         .unwrap();
+    // split_at = 5 - 2 = 3 is not page-aligned: the cap is skipped.
     let capped = swa_component(2).maybe_split_leaf_for_swa_lock_(&mut tc, leaf);
     assert_eq!(capped, None);
     assert_eq!(tc.arena.node(leaf).key, vec![1, 2, 3, 4, 5]);
@@ -3089,6 +3138,8 @@ fn new_leaf_with_the_boundary_above_its_start_skips_the_split() {
         /* swa_evicted_seqlen = */ 2,
     ));
     assert_eq!(result.prefix_len, 3);
+    // The boundary (2) sits above the leaf start (3): the whole leaf is
+    // in-window and stays unsplit.
     let leaf = child_of(&tc, a, &[4]);
     assert_eq!(tc.arena.node(leaf).key, vec![4, 5]);
     assert!(result.cache_actions.iter().any(|action| matches!(
@@ -3146,7 +3197,8 @@ fn insert_overlap_straddling_with_a_partial_prev_prefix_recovers_the_tail() {
     assert!(old_tail[0].equal(&Tensor::from_slice(&[12i64, 13])));
     assert_eq!(*node_id, tc.arena.node(node).id);
     assert!(source_value.equal(&Tensor::from_slice(&[22i64, 23])));
-    // The request already owns the first prev_prefix_len token.
+    // The request already owns the first prev_prefix_len token; only the
+    // stretch between prev and the boundary is duplicate.
     assert!(duplicates[0].equal(&Tensor::from_slice(&[21i64])));
 }
 
@@ -3432,7 +3484,8 @@ fn host_drive_ends_when_the_next_candidate_left_the_lru() {
             /* extra_key = */ None,
         )
         .unwrap();
-    // p holds only a transient SWA host chunk: c's teardown tombstone-walks p away.
+    // p holds only a transient SWA host chunk: c's teardown tombstone-walks
+    // p away, so the captured next candidate leaves the list mid-drive.
     set_swa_host(&mut tc, p);
     set_full_host(&mut tc, c);
     set_swa_host(&mut tc, c);
@@ -3715,7 +3768,7 @@ fn load_back_build_stops_at_the_window_boundary() {
         )
         .unwrap()
         .unwrap();
-    // Those-token window covers c and b; a stays out of the transfer.
+    // The two-token window covers c and b; a stays out of the transfer.
     let xfer = &transfers[0];
     assert!(
         xfer.host_indices
@@ -3891,7 +3944,7 @@ fn load_back_commit_asserts_the_loaded_length_matches_the_host_indices() {
         .set_device_value(a, FULL, Tensor::from_slice(&[40i64]));
     tc.arena
         .set_host_value(a, SWA, Tensor::from_slice(&[21i64]));
-    // Host indices but only one loaded token: the commit must fail loudly.
+    // Two host indices but only one loaded token: the commit must fail loudly.
     let transfer = PoolTransfer {
         name: PoolName::Swa,
         host_indices: Some(Tensor::from_slice(&[21i64, 22])),
@@ -4038,7 +4091,8 @@ fn prefetch_build_sizes_the_placeholder_keys_from_the_staging_tokens() {
             )
             .unwrap()
     };
-    // Staging is allocated once the hit is known: the build carries only the planned page count, never a host buffer.
+    // Staging is allocated once the hit is known: the build carries only the
+    // planned page count, never a host buffer.
     let transfers = build(2).unwrap();
     assert_eq!(transfers.len(), 1);
     assert_eq!(
@@ -4055,6 +4109,8 @@ fn prefetch_build_sizes_the_placeholder_keys_from_the_staging_tokens() {
 
 #[test]
 fn prefetch_commit_drops_the_whole_window_when_underloaded() {
+    // loaded_pages (1) < window_require_pages (2): all-or-nothing releases
+    // the full buffer and attaches nothing.
     let mut tc = swa_core(/* window = */ 4, /* page_size = */ 1);
     let [a] = chain::<1>(&mut tc);
     let mut cache_actions = Vec::new();
@@ -4149,7 +4205,8 @@ fn prefetch_commit_without_a_target_releases_the_whole_buffer() {
 
 #[test]
 fn prefetch_commit_releases_a_shortened_window_under_a_non_root_anchor() {
-    // root -> a -> b -> c, one token each.
+    // root -> a -> b -> c, one token each; anchor b, target c: the loaded
+    // window is missing its head and cannot be reused as a complete SWA window.
     let mut tc = swa_core(/* window = */ 4, /* page_size = */ 1);
     let [a, b, c] = chain::<3>(&mut tc);
     let mut cache_actions = Vec::new();
@@ -4188,7 +4245,8 @@ fn prefetch_commit_releases_a_shortened_window_under_a_non_root_anchor() {
 
 #[test]
 fn prefetch_commit_fills_tombstoned_nodes_and_releases_covered_ones() {
-    // Chain root -> a -> b (one token each); b holds SWA host already, a is a tombstone: b's slice releases, a's fills.
+    // Chain root -> a -> b (one token each); b holds SWA host already, a is
+    // a tombstone: b's slice releases, a's fills.
     let mut tc = swa_core(/* window = */ 4, /* page_size = */ 1);
     let [a, b] = chain::<2>(&mut tc);
     tc.arena
@@ -4217,6 +4275,7 @@ fn prefetch_commit_fills_tombstoned_nodes_and_releases_covered_ones() {
         Some(&mut insert_result),
         Some(&storage_result),
     );
+    // b (already hosted) released its slice [31]; a filled with [30].
     assert!(
         tc.arena
             .node(a)
@@ -4238,6 +4297,8 @@ fn prefetch_commit_fills_tombstoned_nodes_and_releases_covered_ones() {
 
 #[test]
 fn prefetch_commit_splits_a_partially_covered_tombstone() {
+    // One two-token tombstone node; the buffer covers only its tail token,
+    // so the node splits and the tail attaches.
     let mut tc = swa_core(/* window = */ 4, /* page_size = */ 1);
     let root = tc.arena.root();
     let a = tc
@@ -4275,6 +4336,7 @@ fn prefetch_commit_splits_a_partially_covered_tombstone() {
         Some(&mut insert_result),
         Some(&storage_result),
     );
+    // The node split at token 1; its tail (still node a) got the slice.
     let node = tc.arena.node(a);
     assert_eq!(node.key.atom_len(), 1);
     assert!(node.host_value(SWA).equal(&Tensor::from_slice(&[31i64])));
@@ -4753,7 +4815,7 @@ fn deep_swa_tree_survives_backup_evict_and_load_back_rounds() {
         vec![FULL, SWA],
     );
     // Varied topology: capped long leaf, decode-evicted chain, depth
-    // extension, and branches off the shared prefix.
+    // extension, and two branches off the shared prefix.
     let inserts: [(Vec<i64>, Vec<i64>, usize); 5] = [
         (vec![1, 2, 3, 4, 5, 6], vec![10, 11, 12, 13, 14, 15], 0),
         (
@@ -5138,7 +5200,8 @@ fn backup_host_build_stops_at_a_node_another_ack_owns() {
     tc.mark_write_through_pending(vec![b_id], /* ack_id = */ b_id)
         .expect("live test node");
 
-    // `b`'s ack already owns `b` and everything above it.
+    // `b`'s ack already owns `b` and everything above it, so this backup takes
+    // only what is left below it: two acks never claim the same node.
     let (nodes, device_indices) = backup_plan(&tc, /* window = */ 4, c);
     assert_eq!(nodes, vec![tc.arena.node(c).id]);
     assert_eq!(device_indices, vec![12]);
@@ -5165,7 +5228,8 @@ fn backup_host_build_walks_past_a_node_that_is_already_backed_up() {
     }
     set_swa_host(&mut tc, b);
 
-    // `b` is backed up already: it consumes window budget but is not re-sent.
+    // `b` is backed up already: it consumes window budget but is not re-sent,
+    // and the walk continues to the unbacked ancestor above it.
     let (nodes, device_indices) = backup_plan(&tc, /* window = */ 4, c);
     assert_eq!(nodes, vec![tc.arena.node(a).id, tc.arena.node(c).id]);
     assert_eq!(device_indices, vec![10, 12]);
@@ -5182,6 +5246,7 @@ fn backup_host_build_is_none_without_an_swa_host_pool() {
 #[test]
 fn backup_host_commit_scatters_the_host_span_across_the_covered_nodes() {
     let mut tc = swa_hicache_core(/* window = */ 4, /* page_size = */ 1);
+    // Spans 1 / 2 / 1: the scatter has to advance by each node's own length.
     let mut parent = tc.arena.root();
     let mut nodes = Vec::new();
     for key in [vec![1i64], vec![2, 3], vec![4]] {
@@ -5236,7 +5301,8 @@ fn needs_incremental_backup_tracks_the_unbacked_window() {
 
 #[test]
 fn buffer_mode_backup_window_is_the_target_alone_at_both_call_sites() {
-    // Cache mode walks the window: a host-only target still reaches the device-only ancestor above it.
+    // Cache mode walks the window: a host-only target still reaches the
+    // device-only ancestor above it. Buffer mode stages the target alone.
     let mut tc = swa_hicache_core(/* window = */ 4, /* page_size = */ 1);
     let [a, b] = chain::<2>(&mut tc);
     set_swa_device_value(&mut tc, a, 10);
@@ -5338,6 +5404,7 @@ fn finalize_branching(
 #[test]
 fn match_reports_the_page_aligned_swa_branching_seqlen() {
     let tc = swa_hicache_core(/* window = */ 4, /* page_size = */ 4);
+    // Full KV reaches 11 tokens, the SWA boundary only 2; 11 aligns down to 8.
     assert_eq!(
         finalize_branching(&tc, /* device = */ 2, /* host_hit = */ 0, 11),
         Some(8)
@@ -5352,6 +5419,7 @@ fn match_reports_the_page_aligned_swa_branching_seqlen() {
 #[test]
 fn swa_branching_seqlen_is_none_when_no_aligned_page_lies_beyond_the_window() {
     let tc = swa_hicache_core(/* window = */ 4, /* page_size = */ 4);
+    // Full KV reaches 3 tokens, which aligns down to 0: nothing to branch at.
     assert_eq!(
         finalize_branching(&tc, /* device = */ 0, /* host_hit = */ 0, 3),
         None

@@ -68,6 +68,7 @@ impl MockWorker {
         let config = self.config.clone();
         let port = config.read().await.port;
 
+        // If port is 0, find an available port
         let port = if port == 0 {
             let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
             let port = listener.local_addr()?.port();
@@ -157,7 +158,9 @@ async fn should_fail(config: &MockWorkerConfig) -> bool {
     rand::random::<f32>() < config.fail_rate
 }
 
-/// Pick the HTTP status used when `should_fail` triggers.
+/// Pick the HTTP status used when `should_fail` triggers. Defaults to 500
+/// for backwards compatibility; tests can override via
+/// [`set_fail_status_code`] to exercise 4xx/non-5xx failure paths.
 fn fail_status_code(port: u16) -> StatusCode {
     get_fail_status_code_for_port(port)
         .and_then(|s| StatusCode::from_u16(s).ok())
@@ -514,6 +517,9 @@ async fn chat_completions_handler(
         let request_id = format!("chatcmpl-{}", Uuid::new_v4());
 
         // Check for slow streaming mode (used by upstream cancel tests).
+        // Reads from the global SLOW_STREAM_CONFIG (set via set_slow_stream_chunks)
+        // rather than the payload, because the gateway deserializes/re-serializes
+        // the request body and drops unknown fields.
         let slow_chunks = get_slow_stream_chunks_for_port(config.port);
 
         if let Some(num_chunks) = slow_chunks {
@@ -523,8 +529,9 @@ async fn chat_completions_handler(
 
             init_stream_tracking(port, num_chunks);
 
-            // Small bounded capacity gives a bit of slack between the
-            // producer task and the SSE consumer.
+            // Small bounded capacity gives a bit of slack between the producer
+            // task and the SSE consumer; on receiver drop, send().await
+            // returns Err and the loop exits regardless of capacity.
             let (tx, rx) =
                 tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(MOCK_STREAM_BUFFER);
 
@@ -936,6 +943,8 @@ async fn responses_handler(
             && get_slow_stream_chunks_for_port(config.port).is_none()
         {
             // Second turn: emit streaming text response.
+            // If slow-stream is configured, fall through to the slow-stream
+            // branch below so cancel tests can disconnect mid second-turn.
             let rid = request_id.clone();
             let msg_id = format!(
                 "msg_{}",
@@ -1083,7 +1092,9 @@ async fn responses_handler(
                 .keep_alive(KeepAlive::default())
                 .into_response()
         } else if let Some(num_chunks) = get_slow_stream_chunks_for_port(config.port) {
-            // Slow-stream mode for /responses cancel tests.
+            // Slow-stream mode for /responses cancel tests. Mirrors the
+            // chat-completions slow-stream path so the same set_slow_stream_chunks
+            // helper drives both endpoints.
             let port = config.port;
             let delay_ms = config.response_delay_ms;
             let error_after = get_stream_error_after_for_port(port);
@@ -1401,6 +1412,7 @@ async fn responses_get_handler(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
+    // Only return 200 if this worker "stores" the response id
     if response_exists_for_port(config.port, &response_id) {
         Json(json!({
             "id": response_id,
@@ -1453,7 +1465,10 @@ async fn responses_cancel_handler(
     }
 }
 
-// --- Slow-stream configuration (for upstream cancel tests) --- Configured via a global map keyed by worker port.
+// --- Slow-stream configuration (for upstream cancel tests) ---
+// Configured via a global map keyed by worker port so that tests
+// can enable slow streaming WITHOUT relying on the request payload
+// (the gateway deserializes/re-serializes the body, dropping unknown fields).
 
 static SLOW_STREAM_CONFIG: OnceLock<Mutex<HashMap<u16, usize>>> = OnceLock::new();
 
@@ -1463,6 +1478,7 @@ fn get_slow_stream_config() -> &'static Mutex<HashMap<u16, usize>> {
 
 /// Configure a worker (by port) to send `num_chunks` chunks with
 /// `response_delay_ms` between each when handling a streaming request.
+/// Call this before making the request through the gateway.
 pub fn set_slow_stream_chunks(port: u16, num_chunks: usize) {
     let mut map = get_slow_stream_config().lock().unwrap();
     map.insert(port, num_chunks);
@@ -1479,7 +1495,11 @@ fn get_slow_stream_chunks_for_port(port: u16) -> Option<usize> {
     map.get(&port).copied()
 }
 
-// --- Stream error injection (for upstream cancel + error tests) --- When set for `port`.
+// --- Stream error injection (for upstream cancel + error tests) ---
+// When set for `port`, the slow-stream producer emits an io::Error to the
+// SSE stream after the configured number of successfully-sent chunks.
+// reqwest will surface this as a transport error, which exercises the
+// gateway's `Some(Err(_))` arm.
 
 static STREAM_ERROR_AFTER: OnceLock<Mutex<HashMap<u16, usize>>> = OnceLock::new();
 
@@ -1487,8 +1507,9 @@ fn get_stream_error_after_config() -> &'static Mutex<HashMap<u16, usize>> {
     STREAM_ERROR_AFTER.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Configure a worker (by port) to abort its SSE stream with an error after
-/// sending `n` chunks.
+/// Configure a worker (by port) to abort its SSE stream with an error
+/// after sending `n` chunks. Must be combined with
+/// [`set_slow_stream_chunks`] to take effect.
 pub fn set_stream_error_after_chunks(port: u16, n: usize) {
     let mut map = get_stream_error_after_config().lock().unwrap();
     map.insert(port, n);
@@ -1505,7 +1526,11 @@ fn get_stream_error_after_for_port(port: u16) -> Option<usize> {
     map.get(&port).copied()
 }
 
-// --- Failure-status override (for breaker attribution tests) --- When set for `port`.
+// --- Failure-status override (for breaker attribution tests) ---
+// When set for `port`, `should_fail`-triggered failures return this HTTP
+// status instead of the default 500. Lets a test pin breaker semantics for
+// the 4xx-from-worker case (the gateway treats 4xx as "not a worker fault")
+// without having to fabricate a separate mock worker.
 
 static FAIL_STATUS_CODE: OnceLock<Mutex<HashMap<u16, u16>>> = OnceLock::new();
 
@@ -1513,6 +1538,8 @@ fn get_fail_status_code_config() -> &'static Mutex<HashMap<u16, u16>> {
     FAIL_STATUS_CODE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Configure a worker (by port) to return `status` when `fail_rate`
+/// triggers a failure response, instead of the default 500.
 pub fn set_fail_status_code(port: u16, status: u16) {
     let mut map = get_fail_status_code_config().lock().unwrap();
     map.insert(port, status);
@@ -1545,7 +1572,11 @@ fn get_stream_tracker() -> &'static Mutex<HashMap<u16, StreamTrackingState>> {
     STREAM_CANCEL_TRACKER.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-// Per-port `Notify` fired when the worker's producer task exits.
+// Per-port `Notify` fired when the worker's producer task exits (either
+// because its outbound `send().await` failed — i.e. the gateway dropped
+// the upstream connection — or because the stream completed naturally).
+// Tests await this notification instead of polling counters, so cancel
+// assertions don't depend on timing windows.
 static STREAM_FINISH_NOTIFIERS: OnceLock<Mutex<HashMap<u16, Arc<Notify>>>> = OnceLock::new();
 
 fn get_stream_finish_notifier_map() -> &'static Mutex<HashMap<u16, Arc<Notify>>> {
@@ -1559,7 +1590,11 @@ fn get_stream_finish_notifier(port: u16) -> Arc<Notify> {
         .clone()
 }
 
-/// Bound on the per-stream mpsc buffer used by every slow-stream producer task in this mock worker.
+/// Bound on the per-stream mpsc buffer used by every slow-stream producer
+/// task in this mock worker. Tests assert that `chunks_sent` after a cancel
+/// grew by at most this many over the pre-drop snapshot, on the theory that
+/// anything more means the gateway did not propagate the disconnect
+/// upstream.
 pub const MOCK_STREAM_BUFFER: usize = 4;
 
 /// RAII guard that fires the per-port finish notifier on drop, so the
@@ -1587,6 +1622,7 @@ pub fn install_stream_exit_notifier(port: u16) -> StreamExitNotifier {
 }
 
 /// Reset the stream tracker for a given port before starting a new test.
+/// Also replaces the finish notifier so any unconsumed permit from a
 /// previous test doesn't satisfy this test's wait immediately.
 pub fn reset_stream_tracker(port: u16) {
     let mut map = get_stream_tracker().lock().unwrap();
@@ -1601,11 +1637,16 @@ pub fn get_stream_tracking_state(port: u16) -> Option<StreamTrackingState> {
     map.get(&port).cloned()
 }
 
+/// Wait until the worker's producer task for `port` exits — either because
+/// the gateway dropped the upstream connection (`send().await` failed) or
 /// because the stream finished naturally. Returns the final tracking state.
-/// The `timeout` is a safety net for hung tests.
-/// instant the producer task drops its exit guard. **Precondition:** call
-/// [`reset_stream_tracker`] before issuing the gateway request whose producer
-/// you intend to wait on.
+/// The `timeout` is a safety net for hung tests; a healthy run returns the
+/// instant the producer task drops its exit guard.
+///
+/// **Precondition:** call [`reset_stream_tracker`] before issuing the
+/// gateway request whose producer you intend to wait on. The reset
+/// installs a fresh `Notify` so a stale permit left by a previous test
+/// on the same port can't satisfy this wait immediately.
 pub async fn wait_for_stream_finish(
     port: u16,
     timeout: tokio::time::Duration,
@@ -1616,8 +1657,8 @@ pub async fn wait_for_stream_finish(
         .is_err()
     {
         // A hung producer would silently look like a successful cancel
-        // (chunks_sent < total_chunks, completed=false) if we returned what
-        // we have. Panic instead so the test fails loudly.
+        // (chunks_sent < total_chunks, completed=false) if we just
+        // returned what we have. Panic instead so the test fails loudly.
         panic!(
             "wait_for_stream_finish timed out after {:?} for port {} — \
              producer task never fired its exit notifier. Last tracker \
@@ -1630,7 +1671,9 @@ pub async fn wait_for_stream_finish(
     get_stream_tracking_state(port)
 }
 
-// Initialize tracking for a new stream.
+// Initialize tracking for a new stream. `map.insert` overwrites any prior
+// entry for this port, so callers don't need to reset first; we still expose
+// `reset_stream_tracker` so tests can opt into removing the entry entirely.
 fn init_stream_tracking(port: u16, total_chunks: usize) {
     let mut map = get_stream_tracker().lock().unwrap();
     map.insert(

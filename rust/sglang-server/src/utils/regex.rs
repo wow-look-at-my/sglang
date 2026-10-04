@@ -1,27 +1,57 @@
 //! `stop_regex` validation and bounding.
+//!
+//! The scheduler matches these patterns with CPython's `re` on the decode hot
+//! path, so this module has one job: admit only patterns that engine can compile
+//! and afford. See [`validate`] for the two rejection classes and why the
+//! invariant is one-directional.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 use super::error::Error;
 
-/// `MAX_LEN` from Python's `get_max_seq_length`: the bound for an *unbounded* stop regex (`\d+`, `.*`, …) or one we can't statically size.
+/// `MAX_LEN` from Python's `get_max_seq_length`: the bound for an *unbounded* stop
+/// regex (`\d+`, `.*`, …) or one we can't statically size — the scheduler then
+/// scans the whole output tail. A *bounded* regex gets its finite length instead
+/// (see [`regex_max_seq_length`]); assigning this to every regex made the scheduler
+/// re-scan the full accumulated output every token (O(T²)).
 const STOP_REGEX_MAX_LEN: usize = 1 << 30;
 
-/// Escapes that mean the same thing to `regex-syntax` and to Python's `re`. An allowlist, not a blocklist.
+/// Escapes that mean the same thing to `regex-syntax` and to Python's `re`.
+///
+/// An allowlist, not a blocklist. The blocklist version of this function is what
+/// shipped `\p{L}` and `(?<n>a)` to a scheduler that could not compile them: every
+/// escape either side adds lands in the gap by default. Here the default is
+/// "reject", so a new escape is a 400 until someone checks both dialects.
+/// Inline flags both dialects understand. Rust also has `R`/`U`, Python `a`/`L`;
+/// each errors on the other's.
 const PORTABLE_FLAGS: &[char] = &['i', 'm', 's', 'x', 'u', '-'];
 
-/// Cap on the PRODUCT of counted repeats along one path.
+/// Cap on the PRODUCT of counted repeats along one path. A literal `a{200}` is
+/// harmless — CPython compiles `{N}` to a counted repeat and never expands it
+/// (`a{4294967294}` measures 0.004 ms and 0 KB) — so this is not about the count
+/// itself. It bounds two count-shaped hazards the ambiguity predicate cannot see:
+/// `{4294967295}` is exactly CPython's `MAXREPEAT` and raises `OverflowError`
+/// (neither `re.error` nor `RecursionError`, so the scheduler's seatbelt misses
+/// it), and an EMPTY-body repeat like `(?:){1048575}` costs 36 ms and 56 MB.
+///
+/// Sized generously on purpose: a tighter value 400s `[a-f0-9]{40}` (a SHA-1) and
+/// `.{100}`, both of which measure ~0.005 ms. The compounding families that used to
+/// justify a small cap — `(?:a*){65535}` and friends — are repeats of a
+/// VARIABLE-length body, which [`ambiguity_degree`] rejects outright.
 const MAX_REPEAT_COUNT: u64 = 512;
 
-/// Limit on [`ambiguity_degree`].
+/// Limit on [`ambiguity_degree`]. Chosen by measurement, not argument: see that
+/// function's docs for the 3730-pattern sweep that rules out 2 and 3.
 const MAX_AMBIGUITY_DEGREE: u64 = 1;
 
 const REGEX_AST_NEST_LIMIT: u32 = 64;
 
 const SHARED_ESCAPES: &[char] = &[
     'A', 'b', 'B', 'd', 'D', 's', 'S', 'w', 'W', 'a', 'f', 'n', 'r', 't', 'v',
-    // `\xHH` (exactly hex digits) is shared.
+    // `\xHH` (exactly two hex digits) is shared; only the braced `\x{…}` form is
+    // Rust-only, and `check_escape` rejects that separately. Omitting `x` here
+    // contradicted this list's own doc comment and 400ed `\x41`.
     'x',
 ];
 
@@ -29,6 +59,8 @@ const SHARED_ESCAPES: &[char] = &[
 ///
 /// Everything else in this module rests on one property: **anything Rust admits,
 /// Python can compile.** The reverse is allowed to fail — rejecting a pattern
+/// Python would have accepted (`\Z`, backreferences, look-around) costs a client
+/// a 400, while admitting one it cannot compile costs the whole scheduler, since
 /// `re.search` runs on the decode hot path where nothing catches it.
 fn reject_python_incompatible(pattern: &str) -> Result<(), Error> {
     let reject = |what: String| {
@@ -36,7 +68,8 @@ fn reject_python_incompatible(pattern: &str) -> Result<(), Error> {
             "stop_regex {pattern:?} uses {what}, which Python's `re` cannot compile"
         )))
     };
-    // ASCII-only comparisons, so scanning bytes is safe: a UTF-8 continuation byte is >= 0x80 and matches no arm.
+    // ASCII-only comparisons, so scanning bytes is safe: a UTF-8 continuation byte
+    // is >= 0x80 and matches no arm.
     let b = pattern.as_bytes();
     let mut i = 0;
     // Still inside the run of leading `(?flags)` groups.
@@ -50,19 +83,23 @@ fn reject_python_incompatible(pattern: &str) -> Result<(), Error> {
                 leading = false;
                 i += 2; // skip the escaped character, so `\(` is not a group open
             }
-            // `(?<name>…)` is a named group to Rust; Python spells it
-            // `(?P<name>…)` and errors on this.
+            // `(?<name>…)` is a named group to Rust; Python spells it `(?P<name>…)`
+            // and errors on this one. `(?<=` / `(?<!` are look-behind, which
+            // `regex-syntax` rejects on its own.
             b'(' if b[i..].starts_with(b"(?<")
                 && !b[i..].starts_with(b"(?<=")
                 && !b[i..].starts_with(b"(?<!") =>
             {
                 return reject("a `(?<name>…)` group (Python spells it `(?P<name>…)`)".into());
             }
-            // A flag-setting group. The flag letters also differ: Rust adds `R`/`U`,
-            // Python adds `a`/`L`, so only their intersection is portable.
+            // A flag-setting group. Python 3.11+ reads these as GLOBAL flags: they
+            // must sit at position 0, and the clearing form (`(?-i)`) is invalid on
+            // its own — it wants `(?-i:…)`. The flag letters also differ: Rust adds
+            // `R`/`U`, Python adds `a`/`L`, so only their intersection is portable.
             b'(' if flag_group_bytes(&b[i..]).is_some() => {
                 let flags = flag_group_bytes(&b[i..]).expect("just matched");
-                // `(?flags:…)` is scoped: legal anywhere, and its clearing form is legal too.
+                // `(?flags:…)` is scoped: legal anywhere, and its clearing form is
+                // legal too. Only the GLOBAL form is position- and sign-restricted.
                 let scoped = b[i..].get(2 + flags.len()).is_some_and(|&c| c == b':');
                 // Python allows global flags only at the start, but allows SEVERAL
                 // (`(?i)(?m)a`); `leading` stays true while we are still in that run.
@@ -80,7 +117,9 @@ fn reject_python_incompatible(pattern: &str) -> Result<(), Error> {
                 {
                     return reject(format!("the inline flag `{}`", f as char));
                 }
-                // Advance past the WHOLE group, not one byte.
+                // Advance past the WHOLE group, not one byte: scanning its inner
+                // `?`/letters/`)` through the default arm would clear `leading` and
+                // make the next `(?m)` look like a mid-pattern flag change.
                 if scoped {
                     leading = false;
                     i += 1;
@@ -133,7 +172,8 @@ fn reject_python_incompatible(pattern: &str) -> Result<(), Error> {
 /// if `b` does not open one. A `(?i:…)` scoped group is not one of these.
 fn flag_group_bytes(b: &[u8]) -> Option<&[u8]> {
     let rest = b.strip_prefix(b"(?")?;
-    // Stop.
+    // Stop at `)` OR `:` — the scoped form `(?i:…)` carries the same flag letters
+    // and was falling through unvalidated, so `(?R:a)` reached the scheduler.
     let end = rest.iter().position(|&c| c == b')' || c == b':')?;
     let flags = &rest[..end];
     (!flags.is_empty() && flags.iter().all(|&c| c.is_ascii_alphabetic() || c == b'-'))
@@ -152,14 +192,20 @@ fn check_escape(b: &[u8], i: usize) -> Result<(), String> {
     if e == b'x' && b.get(i + 2) == Some(&b'{') {
         return Err("a braced `\\x{…}` escape".into());
     }
-    // `\b{start}` is one zero-width assertion to Rust, but `\b` followed by
-    // the literal "{start}" to Python.
+    // `\b{start}` is one zero-width assertion to Rust, but `\b` followed by the
+    // literal "{start}" to Python — 7 characters this side would score as 0, so
+    // the scheduler sizes a 1-token window and the stop silently never fires.
     if e == b'b' && b.get(i + 2) == Some(&b'{') {
         return Err("a `\\b{…}` assertion".into());
     }
     if e.is_ascii_alphanumeric() && !SHARED_ESCAPES.contains(&(e as char)) {
         return Err(format!("the escape `\\{}`", e as char));
     }
+    // `\<` / `\>` are GNU word-boundary ASSERTIONS to `regex-syntax` (width 0) but
+    // escaped LITERALS to Python (`\<END\>` needs 5 characters of tail). Scoring
+    // them 0 sizes the match window too small, so the stop silently never fires and
+    // the request runs to `max_new_tokens` — the one failure mode this module exists
+    // to prevent, and `\<WORD\>` is idiomatic from grep/vim.
     if e == b'<' || e == b'>' {
         return Err(format!("the escape `\\{}`", e as char));
     }
@@ -170,6 +216,25 @@ fn check_escape(b: &[u8], i: usize) -> Result<(), String> {
 const ADMISSION_CACHE_CAP: usize = 512;
 
 /// Memo of admitted patterns → their bound.
+///
+/// Admission is a pure function of the pattern text, and an expensive one: ~87% of
+/// it is HIR translation, which expands `\w`/`\W` into large Unicode class unions.
+/// A 256-byte `\W`-heavy pattern (exactly [`MAX_STOP_REGEX_LEN`]) measures 574 µs,
+/// and a request may carry [`MAX_STOP_REGEX_COUNT`] of them — 18 ms of admission on
+/// the single to-scheduler thread, re-derived from scratch on every request. It
+/// multiplies through a batch, because one `sampling_params` object broadcasts to
+/// every item: a 13.6 KB body measured **1.01 s**, during which that thread serves
+/// no other request, no abort and no health probe.
+///
+/// Only successes are memoized. A rejected pattern fails inside [`validate`], which
+/// is the cheap 8% — the expensive translate runs only after it passes — so the
+/// hazard is entirely on the admitted side, and this keeps the entry a plain
+/// `usize` rather than something that has to reconstruct an `Error` faithfully.
+///
+/// Cleared wholesale when full rather than evicted one at a time: that is what
+/// CPython's `re` does, and it keeps the hot path one lookup with no LRU
+/// bookkeeping. The lock is held across a hash lookup and nothing else, and is
+/// taken almost exclusively by the one to-scheduler thread.
 static ADMISSION_CACHE: LazyLock<Mutex<HashMap<Box<str>, usize>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -190,15 +255,21 @@ fn cache_bound(pattern: &str, max_len: usize) {
     c.insert(pattern.into(), max_len);
 }
 
-/// A `stop_regex` that has been admitted, together with the bound derived
-/// while admitting it.
+/// A `stop_regex` that has been admitted, together with the bound derived while
+/// admitting it.
+///
+/// Holding one is the proof: it cannot be built without passing [`validate`], and
+/// its [`max_len`](Self::max_len) came from *that* pattern's own AST. So no caller
+/// can pair one pattern's bound with another's, and there is no second route to a
+/// bound that could drift from the validated one.
 pub struct RegexPattern<'a> {
     pattern: &'a str,
     max_len: usize,
 }
 
-/// `TryFrom`, not `FromStr`: `FromStr::from_str` takes a `&str` whose
-/// lifetime the trait never names.
+/// `TryFrom`, not `FromStr`: `FromStr::from_str` takes a `&str` whose lifetime the
+/// trait never names, so it cannot be tied to `Self` — a borrowing type can never
+/// implement it. `TryFrom<&'a str>` carries the lifetime, so it can.
 impl<'a> TryFrom<&'a str> for RegexPattern<'a> {
     type Error = Error;
 
@@ -219,8 +290,12 @@ impl<'a> RegexPattern<'a> {
             return Ok(Self { pattern, max_len });
         }
         let ast = validate(pattern)?;
-        // Translate the AST `validate` already produced instead of
-        // re-parsing.
+        // Translate the AST `validate` already produced instead of re-parsing. The full
+        // `regex_syntax::Parser` parses AND translates, so calling it here would parse a
+        // second time — and, more importantly, through a SECOND builder whose settings
+        // can drift from the validating one. That would validate one AST while bounding
+        // a different one; the bound is what sizes the scheduler's match window, so a
+        // silent divergence there is the under-estimate class of bug.
         let hir = regex_syntax::hir::translate::TranslatorBuilder::new()
             .build()
             .translate(pattern, &ast)
@@ -298,9 +373,11 @@ fn validate(pattern: &str) -> Result<regex_syntax::ast::Ast, Error> {
 
 /// Reject repetitions whose cost compounds down the nesting.
 ///
-/// `outer` is the product of the counted repeats enclosing `ast`. Families die
+/// `outer` is the product of the counted repeats enclosing `ast`. Two families die
 /// here: a counted product over [`MAX_REPEAT_COUNT`] (memory), and an unbounded
-/// tail grows every step, so the loop is dead a bounded number of tokens).
+/// repeat nested inside another (`(?:a+)+b` — catastrophic backtracking, measured
+/// 2.3 s on a 26-character tail, and since its bound is the full-scan sentinel the
+/// tail grows every step, so the loop is dead within ~30 tokens).
 fn repetition_cost_too_large(ast: &regex_syntax::ast::Ast, outer: u64, unbounded: bool) -> bool {
     use regex_syntax::ast::{Ast, RepetitionKind, RepetitionRange};
     match ast {
@@ -330,8 +407,8 @@ fn repetition_cost_too_large(ast: &regex_syntax::ast::Ast, outer: u64, unbounded
 }
 
 /// Whether any repetition in `ast` applies to a zero-width assertion — `$*`,
-/// `\b{2}`, `^+`. `regex-syntax` accepts them.
-/// repeat". Found by fuzzing both parsers against each other, not by reading
+/// `\b{2}`, `^+`. `regex-syntax` accepts them; Python's `re` raises "nothing to
+/// repeat". Found by fuzzing the two parsers against each other, not by reading
 /// either one's docs.
 ///
 /// Checked on the AST, not the HIR: the HIR translator folds `$+` down to a bare
@@ -352,13 +429,30 @@ fn repeats_an_assertion(ast: &regex_syntax::ast::Ast) -> bool {
     }
 }
 
-/// How many independent length choices a backtracking engine must enumerate. `None` means unbounded (exponential). This is the predicate review rounds of structural rules kept missing, and it is the only one whose threshold was chosen by MEASUREMENT rather than argument. Only composition trips the limit — several in a row (`a*a*a*b`), or one over a body that is itself variable-length (`(?:a*){10}`). The check is also orthogonal to the returned bound: [`hir_max_len`] is untouched, so admitting a pattern never changes the window the scheduler sizes for it.
+/// How many independent length choices a backtracking engine must enumerate.
+/// `None` means unbounded (exponential).
+///
+/// This is the predicate eight review rounds of structural rules kept missing, and
+/// it is the only one whose threshold was chosen by MEASUREMENT rather than
+/// argument. Over 3730 hostile patterns, each admitted one timed against CPython:
+/// a limit of 3 still admitted patterns that never returned, a limit of 2 admitted
+/// one costing 190 ms per decode step, and a limit of 1 held every admitted pattern
+/// under 4 ms. Hence [`MAX_AMBIGUITY_DEGREE`] = 1.
+///
+/// Why this cannot repeat the round-8 regression that 400'd every `?`, `*` and `+`:
+/// each of those contributes exactly ONE unit of freedom here, never a saturating
+/// sentinel, so a single quantifier over a fixed-length body is always admitted.
+/// Only composition trips the limit — several in a row (`a*a*a*b`), or one over a
+/// body that is itself variable-length (`(?:a*){10}`). The check is also orthogonal
+/// to the returned bound: [`hir_max_len`] is untouched, so admitting a pattern never
+/// changes the window the scheduler sizes for it.
 fn ambiguity_degree(ast: &regex_syntax::ast::Ast) -> Option<u64> {
     use regex_syntax::ast::{Ast, RepetitionKind, RepetitionRange};
     match ast {
         Ast::Group(g) => ambiguity_degree(&g.ast),
-        // Siblings compose: `a*a*a*b` is independent choices, and every one
-        // multiplies the work.
+        // Siblings compose: `a*a*a*b` is three independent choices, and every one
+        // multiplies the work. Summing here is what catches the FLAT spelling that
+        // nesting-only rules (and every count cap) walk straight past.
         Ast::Concat(c) => c.asts.iter().try_fold(0u64, |acc, a| {
             Some(acc.saturating_add(ambiguity_degree(a)?))
         }),
@@ -388,7 +482,8 @@ fn ambiguity_degree(ast: &regex_syntax::ast::Ast) -> Option<u64> {
                         Some(1)
                     }
                 }
-                // Counted: the body's own freedom is paid once per iteration.
+                // Counted: the body's own freedom is paid once per iteration, plus
+                // one for choosing how many iterations when the count is a range.
                 Some(hi) => Some(hi.saturating_mul(body).saturating_add(u64::from(lo != hi))),
             }
         }
@@ -398,7 +493,9 @@ fn ambiguity_degree(ast: &regex_syntax::ast::Ast) -> Option<u64> {
 
 /// Whether any alternation sits inside a repetition body.
 ///
-/// parses. A top-level alternation (`and|or`.
+/// `(?:.|.)` and `(?:a|a)` are FIXED length per iteration, so no length-based
+/// predicate sees them — yet each iteration has two ways to match, giving 2^n
+/// parses. A top-level alternation (`and|or`, the pattern SGLang's own CI sends) is
 /// untouched: only a repetition of one is refused.
 fn alternation_under_repetition(ast: &regex_syntax::ast::Ast) -> bool {
     use regex_syntax::ast::Ast;
@@ -456,7 +553,7 @@ fn is_variable_length(ast: &regex_syntax::ast::Ast) -> bool {
 
 /// Saturating `(min, max)` match length of `ast`; `max = None` means unbounded.
 ///
-/// Deliberately on the AST rather than the HIR.
+/// Deliberately on the AST rather than the HIR: the translator folds `(?:a|a)` into
 /// a single class and `$+` into a bare `Look`, erasing exactly the shapes CPython's
 /// engine still has to enumerate.
 fn ast_len(ast: &regex_syntax::ast::Ast) -> (u64, Option<u64>) {
@@ -520,9 +617,17 @@ mod tests {
     }
 
     /// The admission memo must be indistinguishable from admitting afresh.
+    ///
+    /// It short-circuits the validator, so a wrong entry would admit a pattern
+    /// nobody checked or hand back another pattern's bound — and the bound sizes
+    /// the scheduler's match window, which is the under-estimate class of bug this
+    /// module exists to prevent. Three properties, one per way that could break:
+    /// a repeat agrees with a cold run, a rejection is never memoized, and the
+    /// wholesale clear at [`ADMISSION_CACHE_CAP`] loses nothing but the entries.
     #[test]
     fn admission_memo_agrees_with_admitting_afresh() {
-        // Distinct from any other test's patterns: the cache is process-wide.
+        // Distinct from any other test's patterns: the cache is process-wide, so a
+        // shared pattern would make this pass for the wrong reason.
         let admitted = r"memo\d{3}[a-f]+";
         let cold = RegexPattern::try_from(admitted).expect("valid").max_len();
         let warm = RegexPattern::try_from(admitted).expect("valid").max_len();
@@ -531,7 +636,8 @@ mod tests {
             "a memoized bound must equal a freshly derived one"
         );
 
-        // Rejections are re-validated every time, so the memo can never turn one into an admission.
+        // Rejections are re-validated every time, so the memo can never turn one
+        // into an admission.
         let rejected = r"memo(?:.|.)*Z";
         assert!(RegexPattern::try_from(rejected).is_err());
         assert!(
@@ -558,7 +664,12 @@ mod tests {
         assert_eq!(p.max_len(), 6);
     }
 
-    /// The property this whole design rests on: **anything Rust admits, Python can compile.**
+    /// The property this whole design rests on: **anything Rust admits, Python can
+    /// compile.** The reverse may fail — rejecting a pattern Python would accept
+    /// costs one client a 400, while admitting one it cannot compile costs the
+    /// scheduler, because `re.search` runs on the decode hot path where nothing
+    /// Budget for one `re.search` on the scheduler's decode thread. Every safe
+    /// pattern below measures under 0.1 ms; the cheapest unsafe one is 636 ms.
     const SEARCH_BUDGET_MS: f64 = 5.0;
 
     /// What the admission policy must do with a pattern.
@@ -566,13 +677,29 @@ mod tests {
     enum Policy {
         /// Admitting it kills the scheduler or silently misses the stop.
         MustReject,
-        /// Admitting it is REQUIRED.
+        /// Admitting it is REQUIRED. Deliberately small: the two patterns
+        /// SGLang's own `matched_stop_kit` sends over HTTP (five registered suites
+        /// assert on the result), plus three canaries. Without the canaries an
+        /// admission bug that rejects EVERYTHING would pass a table of nothing but
+        /// `MayReject` — which is how round 8 shipped a build that 400'd every
+        /// `?`, `*` and `+`.
         MustAdmit,
         /// Python compiles it; Rust may or may not, and either verdict passes.
+        /// Over-rejection is the design: a 400 costs the client a feature,
+        /// admitting the wrong thing costs the scheduler. These rows document
+        /// where the boundary currently sits, they do not constrain it.
         MayReject,
     }
 
-    /// One corpus row.
+    /// One corpus row. Every column except `policy` is a MEASURED fact, recorded
+    /// so a future edit cannot re-derive it by guessing:
+    ///   * `py_max_len`  — CPython `get_max_seq_length`, or `None` when that call
+    ///     itself raises. NOT the same as "`re.compile` rejects it": `(?<=a*)b`
+    ///     parses (so `get_max_seq_length` returns a number) but fails to compile.
+    ///     Safety never rests on this column alone — `worst_ms` is independent.
+    ///   * `worst_ms`    — worst `re.search` over a growing tail (16→88 chars of
+    ///     prose, or a matching run where the pattern needs one). `INFINITY` means
+    ///     it did not return inside 8 s under a 2 GiB cap.
     struct Case {
         pattern: String,
         policy: Policy,
@@ -592,19 +719,38 @@ mod tests {
         }
     }
 
-    /// The source of truth for `stop_regex` admission. The contract is ONE-SIDED: the admitted set must be a SUBSET of what CPython can compile and match cheaply. Rust does not reproduce Python's dialect — rejecting a pattern Python accepts costs the client a feature, admitting one Python chokes on costs the scheduler and the GPU state. So `MustReject` carries the whole safety burden, and `MustAdmit` is held to the few patterns the project's own tests send. This table exists because review rounds each found a NEW spelling of an already-fixed hazard, and the corpus could not catch any of them: its assertion was `!admitted || python_compiles`, which any row with `python_compiles = true` satisfies vacuously — including a few rows whose own comments called them scheduler-fatal. KEEP IN SYNC: adding a row means MEASURING `py_max_len` and `worst_ms`, not guessing them. `corpus_rows_are_self_consistent` refuses a row that records a fatal measurement and then claims the pattern is safe to admit.
+    /// The single source of truth for `stop_regex` admission.
+    ///
+    /// The contract is ONE-SIDED: the admitted set must be a SUBSET of what
+    /// CPython can compile and match cheaply. Rust does not reproduce Python's
+    /// dialect — rejecting a pattern Python accepts costs the client a feature,
+    /// admitting one Python chokes on costs the scheduler and the GPU state. So
+    /// `MustReject` carries the whole safety burden, and `MustAdmit` is held to
+    /// the few patterns the project's own tests actually send.
+    ///
+    /// This table exists because eight review rounds each found a NEW spelling of
+    /// an already-fixed hazard, and the previous corpus could not catch any of
+    /// them: its assertion was `!admitted || python_compiles`, which any row with
+    /// `python_compiles = true` satisfies vacuously — including four rows whose own
+    /// comments called them scheduler-fatal. It also could not fail on a spurious
+    /// 400, so a round that rejected `(?i)[a-z]+` and `colou?r` shipped green.
+    ///
+    /// KEEP IN SYNC: adding a row means MEASURING `py_max_len` and `worst_ms`, not
+    /// guessing them. `corpus_rows_are_self_consistent` refuses a row that records
+    /// a fatal measurement and then claims the pattern is safe to admit.
     fn corpus() -> Vec<Case> {
         const UNBOUNDED: usize = STOP_REGEX_MAX_LEN;
         const INF: f64 = f64::INFINITY;
         let mut c = vec![
-            // ---- Direction A: CPython cannot compile these.
-            case(r"\p{L}", Policy::MustReject, 0, None, INF),
+            // ---- Direction A: CPython cannot compile these. Admitting one puts a
+            // `re.error` in `_check_str_based_finish`, on the decode path, uncaught.
+            case(r"\p{L}", Policy::MustReject, 0, None, INF), // round 1
             case(r"\P{L}", Policy::MustReject, 0, None, INF),
             case(r"\pL", Policy::MustReject, 0, None, INF),
             case("(?<n>a)", Policy::MustReject, 0, None, INF),
             case(r"\x{1F600}", Policy::MustReject, 0, None, INF),
             case(r"\u{41}", Policy::MustReject, 0, None, INF),
-            case("(?<=a*)b", Policy::MustReject, 0, Some(1073741825), INF),
+            case("(?<=a*)b", Policy::MustReject, 0, Some(1073741825), INF), // round 2: variable-width lookbehind
             case("(", Policy::MustReject, 0, None, INF),
             case("[z-a]", Policy::MustReject, 0, None, INF),
             case("a{2,1}", Policy::MustReject, 0, None, INF),
@@ -616,22 +762,30 @@ mod tests {
             case("a(?i)b", Policy::MustReject, 0, None, INF),
             case("(?-i)a", Policy::MustReject, 0, None, INF),
             case("[a[:alpha:](?=-]", Policy::MustReject, 0, None, INF),
+            // Round 4: the escape check skipped character-class bodies entirely,
+            // so round 1's hole reopened one bracket pair away.
             case(r"[\p{L}]", Policy::MustReject, 0, None, INF),
             case(r"[\pL]", Policy::MustReject, 0, None, INF),
             case(r"[\P{L}]", Policy::MustReject, 0, None, INF),
             case(r"[\x{41}]", Policy::MustReject, 0, None, INF),
             case("[a--b]", Policy::MustReject, 0, None, INF),
-            case("(?R)a", Policy::MustReject, 0, None, INF),
+            case("(?R)a", Policy::MustReject, 0, None, INF), // round 4: Rust-only flag
             case("(?U)a", Policy::MustReject, 0, None, INF),
-            case("(?R:a)", Policy::MustReject, 0, None, INF),
+            case("(?R:a)", Policy::MustReject, 0, None, INF), // round 5: the scoped spelling
             case("(?U:a)", Policy::MustReject, 0, None, INF),
-            // `regex-syntax` parses counts as u32 and accepts up to u32::MAX.
-            case("a{4294967295}", Policy::MustReject, 0, None, INF),
-            case("a{5000000000}", Policy::MustReject, 0, None, INF),
-            // ---- Bound UNDER-estimates.
-            case(r"\<END\>", Policy::MustReject, 3, Some(5), 0.02),
-            case(r"\b{start}xyz", Policy::MustReject, 3, Some(10), 0.04),
-            // ---- Compounding repeat cost. Both compile in CPython; both are fatal there.
+            // `regex-syntax` parses counts as u32 and accepts up to u32::MAX;
+            // CPython's MAXREPEAT *is* u32::MAX and raises OverflowError, which is
+            // neither `re.error` nor `RecursionError` and so escapes every guard.
+            case("a{4294967295}", Policy::MustReject, 0, None, INF), // round 4
+            case("a{5000000000}", Policy::MustReject, 0, None, INF), // round 3
+            // ---- Bound UNDER-estimates. Both compile and run fast, so only the
+            // `rust_bound >= py_max_len` column catches them: `regex-syntax` reads
+            // a zero-width word boundary where CPython reads escaped literals, so
+            // the scheduler sizes too small a window and the stop never fires.
+            case(r"\<END\>", Policy::MustReject, 3, Some(5), 0.02), // round 5
+            case(r"\b{start}xyz", Policy::MustReject, 3, Some(10), 0.04), // round 4
+            // ---- Compounding repeat cost. Both compile in CPython; both are fatal
+            // there. `repetition_cost_too_large` covers these.
             case(
                 "(?:(?:a*){65535}){65535}",
                 Policy::MustReject,
@@ -640,6 +794,10 @@ mod tests {
                 INF,
             ),
             case("(?:){1048575}x", Policy::MustReject, 0, Some(1), INF),
+            // ---- AMBIGUITY (rounds 6-8). Every one compiles cleanly on both sides
+            // and raises nothing, so the `except (re.error, RecursionError)` seatbelt
+            // in `_check_str_based_finish` is irrelevant: the match simply never
+            // returns.
             case(
                 "(?:.|.)*Z",
                 Policy::MustReject,
@@ -683,7 +841,7 @@ mod tests {
                 Some(8589934593),
                 INF,
             ),
-            case("(?:.?){30}Z", Policy::MustReject, 31, Some(31), INF),
+            case("(?:.?){30}Z", Policy::MustReject, 31, Some(31), INF), // round 7
             case("(?:.?){255}Z", Policy::MustReject, 256, Some(256), INF),
             case(
                 "(?:.{0,1}.{0,1}.{0,1}){8}Z",
@@ -700,7 +858,12 @@ mod tests {
                 INF,
             ),
             case("(?:.?.?.?.?){60}Z", Policy::MustReject, 241, Some(241), INF),
-            // ---- MustAdmit.
+            // ---- MustAdmit. Only the first two are contractual: `matched_stop_kit`
+            // sends them over HTTP and five registered suites assert on the result.
+            // The next three are canaries — a plain literal, a bounded class repeat,
+            // a simple optional — so an admission bug that rejects everything cannot
+            // pass. The rest of this block is `MayReject`: nice to keep working, but
+            // the subset contract does not require it.
             case(
                 r"[.!?]\s*$",
                 Policy::MustAdmit,
@@ -732,9 +895,13 @@ mod tests {
                 Some(1073741824),
                 0.03,
             ),
+            // Round 8 regressed every `?`/`*`/`+` to a 400 by routing them into an
+            // "unbounded" catch-all that returned u64::MAX.
             case("colou?r", Policy::MustAdmit, 6, Some(6), 0.03),
             case("https?://", Policy::MayReject, 8, Some(8), 0.02),
             case("END(ING)?", Policy::MayReject, 6, Some(6), 0.02),
+            // Round 7 regressed these by scanning the whole pattern for `-` instead
+            // of just the flag bytes.
             case(
                 "(?i)[a-z]+",
                 Policy::MayReject,
@@ -754,7 +921,9 @@ mod tests {
             case(r"a\.b", Policy::MayReject, 3, Some(3), 0.03),
             case(r"\bword\b", Policy::MayReject, 4, Some(4), 0.03),
             case(r"[\d\s]{2}", Policy::MayReject, 2, Some(2), 0.03),
-            // ---- MayReject: CPython accepts, `regex-syntax` is stricter.
+            // ---- MayReject: CPython accepts, `regex-syntax` is stricter. A 400
+            // costs the client a feature; admitting costs nothing either. Listed so
+            // the set of deliberate over-rejections is visible rather than folklore.
             case(r"a\Z", Policy::MayReject, 1, Some(1), 0.03),
             case(r"(a)\1", Policy::MayReject, 0, Some(1073741825), 0.04),
             case("(?=x)y", Policy::MayReject, 0, Some(1073741825), 0.03),
@@ -762,7 +931,8 @@ mod tests {
             case(r"\N{SNOWMAN}", Policy::MayReject, 1, Some(1), 0.03),
             case(r"\0", Policy::MayReject, 1, Some(1), 0.03),
         ];
-        // Flat concatenations of optional atoms — the round-8 escape.
+        // Flat concatenations of optional atoms — the round-8 escape. Built rather
+        // than written out because they are 73-221 bytes of repetition.
         c.push(case(
             &format!("{}Z", ".{0,1}".repeat(20)),
             Policy::MustReject,
@@ -780,7 +950,11 @@ mod tests {
         c
     }
 
-    /// A row may not record a fatal measurement and then claim the pattern is safe to admit.
+    /// A row may not record a fatal measurement and then claim the pattern is safe
+    /// to admit. Without this, the table can be made green by editing a verdict
+    /// instead of fixing the code — which is exactly how round 8's `(?i)[a-z]+`
+    /// regression survived (the corpus row was left alone and a *different* test
+    /// was edited from `(?i)[a-z]+` to `(?i)[a-z]{1,8}` to keep it passing).
     #[test]
     fn corpus_rows_are_self_consistent() {
         for c in corpus() {
@@ -798,6 +972,16 @@ mod tests {
     }
 
     /// The corpus, asserted in BOTH directions plus the bound.
+    ///
+    /// Three independent invariants, each of which caught a real bug that the
+    /// others missed:
+    ///   1. `MustReject` really is rejected — Direction A (scheduler death) and the
+    ///      ambiguity family (scheduler wedge).
+    ///   2. `MustAdmit` really is admitted — a spurious 400 breaks working clients
+    ///      and, twice now, SGLang's own registered suites.
+    ///   3. an admitted pattern's bound is >= CPython's, so the scheduler's match
+    ///      window is never too small. This is the only mechanical check for the
+    ///      `\b{start}` / `\<` class, which nobody found by reading.
     #[test]
     fn stop_regex_corpus_holds_in_both_directions() {
         let mut failures: Vec<String> = Vec::new();
@@ -847,7 +1031,9 @@ mod tests {
         );
     }
 
-    /// The leading-flag check must look at the FLAG BYTES, not the rest of the pattern.
+    /// The leading-flag check must look at the FLAG BYTES, not the rest of the
+    /// pattern: scanning the whole tail for `-` made `(?i)[a-z]+` — about as
+    /// ordinary as a stop_regex gets — a 400.
     #[test]
     fn leading_inline_flags_are_accepted() {
         for pattern in [
@@ -870,13 +1056,16 @@ mod tests {
         }
     }
 
-    /// Patterns Python compiles fine that this validator used to.
+    /// Patterns Python compiles fine that this validator used to 400. A false
+    /// rejection is safe but it is still a bug: `(?i-s:a)` alone was 267 hits in
+    /// the review corpus, and `\x41` was rejected by the very list whose doc
+    /// comment calls `\xHH` shared.
     #[test]
     fn ordinary_python_patterns_are_not_spuriously_rejected() {
         for pattern in [
             "(?-i:abc)", // scoped clearing group: legal anywhere
             "(?i-s:a)",  // mixed set/clear inside a scoped group
-            r"\x41",
+            r"\x41",     // two-hex escape — shared with Python
             r"a\x41b",
             "(?i)(?m)a", // several LEADING global flag groups
             "(?i)abc",
@@ -895,7 +1084,10 @@ mod tests {
         }
     }
 
-    /// A repetition count Python cannot honour: `u32::MAX` is its `MAXREPEAT` sentinel (`OverflowError`).
+    /// A repetition count Python cannot honour: `u32::MAX` is its `MAXREPEAT`
+    /// sentinel (`OverflowError`), and a large count on a group exhausts memory at
+    /// compile time (`MemoryError`). Neither is an `re.error`, so the decode-loop
+    /// seatbelt would not catch either.
     #[test]
     fn oversized_repeat_counts_are_rejected() {
         for pattern in [
@@ -915,7 +1107,11 @@ mod tests {
         assert_eq!(stop_regex_bound("a{200}").unwrap(), 200);
     }
 
-    /// `\b{start}` is one zero-width assertion to Rust (bound) but `\b` plus the literal `{start}` to Python.
+    /// `\b{start}` is one zero-width assertion to Rust (bound 0) but `\b` plus the
+    /// literal `{start}` to Python (7 characters). Scoring it 0 would size a
+    /// 1-token match window where 7 characters are needed, and the stop would
+    /// silently never fire — an UNDER-estimate, the one failure mode the sentinel
+    /// design exists to prevent.
     #[test]
     fn b_brace_assertion_is_rejected_not_under_estimated() {
         assert!(stop_regex_bound(r"\b{start}xyz").is_err());
@@ -927,7 +1123,10 @@ mod tests {
         );
     }
 
-    /// Round 's under-estimate: `regex-syntax` reads `\<`/`\>` as GNU word-boundary assertions (width), CPython.
+    /// Round 5's under-estimate: `regex-syntax` reads `\<`/`\>` as GNU word-boundary
+    /// assertions (width 0), CPython as escaped literals. Scoring `\<END\>` as 3
+    /// instead of 5 sizes the scheduler's match window too small, so the stop never
+    /// fires and the request burns GPU to `max_new_tokens`.
     #[test]
     fn gnu_word_boundary_escapes_are_rejected() {
         for pattern in [r"\<END\>", r"\<word", r"end\>"] {
@@ -940,7 +1139,11 @@ mod tests {
         assert_eq!(stop_regex_bound("<END>").unwrap(), 5);
     }
 
-    /// Repetition cost compounds down the nesting, so a per-node cap misses `(?:(?:a*){65535}){65535}` — bytes, compiles fine in Python.
+    /// Repetition cost compounds down the nesting, so a per-node cap misses
+    /// `(?:(?:a*){65535}){65535}` — 22 bytes, compiles fine in Python, then eats
+    /// GiB inside `re.search` on the decode hot path (`MemoryError`, which the
+    /// seatbelt does not catch). Nested UNBOUNDED repeats are the backtracking
+    /// family, fatal in wall-clock rather than memory.
     #[test]
     fn compounding_repetition_cost_is_rejected() {
         for pattern in [
@@ -960,7 +1163,9 @@ mod tests {
         assert_eq!(stop_regex_bound(r"\d{6}").unwrap(), 6);
     }
 
-    /// Deep nesting is rejected here rather than blowing Python's parser stack.
+    /// Deep nesting is rejected here rather than blowing Python's parser stack:
+    /// CPython compiles up to ~495 levels and raises `RecursionError` past that, so
+    /// the parser's nest limit is pinned well below it.
     #[test]
     fn deep_nesting_is_rejected_below_pythons_limit() {
         let nest = |n: usize| format!("{}a{}", "(".repeat(n), ")".repeat(n));
@@ -975,7 +1180,8 @@ mod tests {
         assert!(stop_regex_bound(&nest(2000)).is_err());
     }
 
-    /// Bounded patterns get their real length.
+    /// Bounded patterns get their real length; unbounded ones the full-scan
+    /// sentinel, so the scheduler never under-buffers and misses a stop.
     #[test]
     fn stop_regex_bound_is_finite_when_bounded() {
         let len = |p: &str| stop_regex_bound(p).expect("valid pattern");

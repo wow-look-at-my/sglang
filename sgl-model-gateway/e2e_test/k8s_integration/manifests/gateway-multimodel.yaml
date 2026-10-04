@@ -1,5 +1,5 @@
-# Gateways with disjoint --selector values to verify per-model isolation. Both
-# watch the smg-test namespace, both use the namespace-scoped RBAC from
+# Two gateways with disjoint --selector values to verify per-model isolation.
+# Both watch the smg-test namespace, both use the namespace-scoped RBAC from
 # rbac.yaml, but each only matches workers carrying its own `model=...` label.
 apiVersion: apps/v1
 kind: Deployment

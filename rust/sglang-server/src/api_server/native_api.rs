@@ -1,4 +1,11 @@
-//! The native SGLang data-plane endpoints.
+//! The native SGLang data-plane endpoints: `/generate` (submit a request, then
+//! either fold decode frames to one unary JSON response or relay them as SSE
+//! `data: {json}` … `[DONE]`, byte-compatible with Python
+//! `http_server.generate_request`) and `/health` + `/health_generate` (which
+//! round-trip a 1-token generate probe). Frame shaping (`meta_info`, logprob
+//! tuples, cumulative vs incremental streams) lives here, as does
+//! generate-request submission (`submit`); the shared `AppState` lives in the
+//! parent `api_server` module.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -33,9 +40,15 @@ use crate::utils::{
 };
 
 /// API-local timing for one request.
+///
+/// Python records time-to-first-token on the first output batch and end-to-end
+/// latency when that request finishes. Keep both measurements here even though
+/// `/generate` currently exposes only `e2e_latency`; this avoids putting
+/// API-only timestamps onto scheduler messages.
 #[derive(Clone, Debug)]
 struct RequestTiming {
-    // TODO: Move request lifecycle timing into a dedicated tracing/metrics module and align its design.
+    // TODO: Move request lifecycle timing into a dedicated tracing/metrics
+    // module and align its design with Python's APIServerReqTimeStats.
     created_at: Instant,
     time_to_first_token: Option<Duration>,
     e2e_latency: Option<Duration>,
@@ -72,11 +85,19 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .merge(health_routes())
 }
 
+/// native api error response: unary → `code` plus the JSON `body`,
+/// streaming → 200 with one SSE error frame + `[DONE]`.
 pub(super) fn native_error(code: StatusCode, message: &str, stream: bool) -> Response {
     error_response(code, error_value(code.as_u16(), message), stream)
 }
 
-/// `/health` + `/health_generate`. Both env knobs are resolved ONCE here, at router build (server startup) — changing them on a live process needs a restart.
+/// `/health` + `/health_generate`. Both env knobs are resolved ONCE here, at
+/// router build (server startup) — changing them on a live process needs a
+/// restart. The deep-probe handler is built once with
+/// `SGLANG_HEALTH_CHECK_TIMEOUT` frozen in and serves `/health_generate`
+/// always; `SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION` (default true, mirroring
+/// Python) decides whether `/health` shares it or, after startup warmup, is a
+/// plain 200 (routing the request proves the frontend is up).
 fn health_routes() -> Router<Arc<AppState>> {
     let timeout = std::time::Duration::from_secs(
         environ::env_i64("SGLANG_HEALTH_CHECK_TIMEOUT", 20).max(0) as u64,
@@ -100,16 +121,20 @@ async fn health_without_generation(State(state): State<Arc<AppState>>) -> Respon
     }
 }
 
-/// Sentinel host that makes the KV connector no-op. Parity with `sglang.srt.disaggregation.utils.FAKE_BOOTSTRAP_HOST`.
+/// Sentinel host that makes the KV connector no-op. Parity with
+/// `sglang.srt.disaggregation.utils.FAKE_BOOTSTRAP_HOST`.
 const FAKE_BOOTSTRAP_HOST: &str = "2.2.2.2";
 
 /// `GET /health_generate` — deep health: confirm the scheduler → detok path is
-/// producing output.
-/// (`/health` uses the same
+/// producing output. 200 if the response heartbeat advances within `timeout`
+/// (from `SGLANG_HEALTH_CHECK_TIMEOUT`, frozen at router build), else 503.
+/// It also returns 503 until startup warmup completes. (`/health` uses the same
 /// handler when its env gate is on.)
 ///
-/// Fires a pre-tokenized 1-token probe (`input_ids = [0]`.
+/// Fires a pre-tokenized 1-token probe (`input_ids = [0]`, skips the tokenizer) so
 /// an idle pipeline produces a frame, then watches the *global*
+/// [`AppState::response_activity`] counter (not the probe's own rid) — so a busy
+/// server passes immediately and a backlog never false-503s (the analogue of
 /// Python's `last_receive_tstamp`).
 async fn health_generate(
     State(state): State<Arc<AppState>>,
@@ -123,7 +148,12 @@ async fn health_generate(
         .response_activity
         .load(std::sync::atomic::Ordering::Relaxed);
 
-    // Fire the probe (the heartbeat is the signal, not its own response).
+    // Fire the probe (the heartbeat is the signal, not its own response). A busy
+    // scheduler skips it with no terminal frame, so its detok registration is
+    // cleaned up only by the `AbortGuard` below.
+    //
+    // On a PD node the scheduler 400-aborts room-less requests, so inject the
+    // same fake bootstrap pair Python uses (`FAKE_BOOTSTRAP_HOST` / room 0).
     let pd = state.server_args.is_disaggregation();
     let probe = GenerateRequest {
         // The `HEALTH_CHECK_<uuid>` rid form
@@ -146,7 +176,8 @@ async fn health_generate(
             Ok(v) => v,
             Err(resp) => return resp,
         };
-    // Deregister on drop (never disarmed): a busy-skipped probe has no terminal frame.
+    // Deregister on drop (never disarmed): a busy-skipped probe has no terminal
+    // frame, so without this abort it leaks one detok entry per call.
     let _abort_guard = AbortGuard::new(state.senders.clone(), rid);
 
     // Watch the heartbeat advance (timeout frozen at router build, default 20s).
@@ -166,17 +197,23 @@ async fn health_generate(
     }
 }
 
-/// `POST /generate` — the native generation endpoint. Splits the body into
-/// per-request payloads (a scalar body → one.
+/// `POST /generate` — the native generation endpoint. Splits the body
+/// into per-request payloads (a scalar body → one, a list body → a batch) and
+/// dispatches to the single or batch path; a malformed body is a 400 before
+/// anything reaches the scheduler.
 ///
 /// The body is extracted as a `Result` so a deserialization failure is answered
+/// with **400** (Python's status for a bad request) carrying serde's field-level
+/// message, instead of axum's default 422.
 async fn generate(
     State(state): State<Arc<AppState>>,
     body: Result<Json<GenerateBody>, JsonRejection>,
 ) -> Response {
     let mut body = match body {
         Ok(Json(body)) => body,
-        // A body that fails to parse has no readable `stream` flag.
+        // A body that fails to parse has no readable `stream` flag, so this one
+        // can only answer unary — as Python's does (FastAPI rejects before its
+        // handler runs).
         Err(rejection) => {
             return native_error(StatusCode::BAD_REQUEST, &rejection.body_text(), false);
         }
@@ -195,12 +232,16 @@ async fn generate(
     // payloads. `is_batch` = list form → the response is a JSON array.
     let (mut payloads, is_batch) = match body.into_requests() {
         Ok(v) => v,
+        // The error carries its own status (a bad batch is `Validation` → 400).
         Err(e) => {
             let code = StatusCode::from_u16(e.http_status()).unwrap_or(StatusCode::BAD_REQUEST);
             return native_error(code, &e.to_string(), stream);
         }
     };
-    // Python starts APIServerReqTimeStats after request normalization.
+    // Python starts APIServerReqTimeStats after request normalization and before
+    // tokenization / multimodal preprocessing / scheduler dispatch. Start at the
+    // equivalent boundary: into_requests() has normalized the body, while prefetch
+    // and every downstream stage are still ahead of us.
     let timing = RequestTiming::new();
     // Media I/O (URL downloads, file reads) happens here, on the API runtime
     // — never on the MM worker pool (see `prefetch`).
@@ -233,26 +274,30 @@ async fn generate_single(
     stream: bool,
     timing: RequestTiming,
 ) -> Response {
-    // `return_text_in_logprobs` is decoded on the detok shard into `*_txt`,
-    // so `frame_value` reads them — no tokenizer needed here.
+    // `return_text_in_logprobs` is decoded on the detok shard into `*_txt`, so
+    // `frame_value` just reads them — no tokenizer needed here.
     let (rid_str, mut rx) = match submit(state, RequestKind::Generate(Box::new(req)), stream).await
     {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    // Abort on client disconnect: the guard fires when dropped before the request finishes.
+    // Abort on client disconnect: the guard fires when dropped before the request
+    // finishes (axum drops the handler/SSE stream). Disarmed on a natural terminal.
+    // `rid_str` is the response `meta_info.id`, reused for every frame.
     let mut guard = AbortGuard::new(state.senders.clone(), rid_str.clone());
     // Cumulative frames (SGLang default) vs per-step deltas.
     let incremental = state.server_args.incremental_streaming_output;
 
     if stream {
-        // A single request is a 1-element batch without the `index` field — reuse the same stream so the frame/abort/truncation logic lives.
+        // A single request is a 1-element batch without the `index` field — reuse
+        // the same stream so the frame/abort/truncation logic lives in one place.
         use futures::StreamExt;
         let s = generation_event_stream(vec![(rid_str, rx, timing)], guard, incremental, false)
             .map(|data| Ok::<_, Infallible>(Event::default().data(data)));
         Sse::new(s).into_response()
     } else {
-        // Unary: fold to the terminal, respond once.
+        // Unary: fold to the terminal, respond once. Disarm only on a real terminal
+        // (a truncation leaves the guard armed so the scheduler work is aborted).
         let (status, value, terminal) = drain_unary(&mut rx, rid_str.client_facing(), timing).await;
         if terminal {
             guard.disarm(&rid_str);
@@ -304,7 +349,8 @@ async fn drain_unary(
             ResponseItem::Control(_) | ResponseItem::Data(_) => continue, // never on `/generate`
         }
     }
-    // Sender dropped without a terminal item.
+    // Sender dropped without a terminal item: the shard dropped this request (a
+    // truncation — a client disconnect would have dropped the handler future).
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         error_value(500, "response truncated before completion"),
@@ -316,14 +362,17 @@ async fn drain_unary(
 /// then either (unary) drain them concurrently into a request-ordered JSON array,
 /// or (streaming) multiplex their streams into one SSE response, each frame carrying
 /// its `index`.
-/// One [`AbortGuard`] covers the batch.
+/// One [`AbortGuard`] covers the batch. A failed unary item is its own
+/// `{ "error": … }` entry; the batch response is 200.
 async fn generate_batch(
     state: &AppState,
     requests: Vec<GenerateRequest>,
     stream: bool,
     timing: RequestTiming,
 ) -> Response {
-    // No cross-item rid collision to worry about: `into_requests` rejected duplicate rids within this batch.
+    // No cross-item rid collision to worry about: `into_requests` rejected duplicate
+    // rids within this batch, and `Rid::from_client` made each one unique against
+    // every other in-flight request.
     let mut guard = AbortGuard::new_empty(state.senders.clone());
     let mut receivers = Vec::with_capacity(requests.len());
     for req in requests {
@@ -337,7 +386,8 @@ async fn generate_batch(
     }
 
     if stream {
-        // Multiplex the N streams (mirrors the Python `_handle_batch_request` path); `guard` moves into the stream.
+        // Multiplex the N streams (mirrors the Python `_handle_batch_request` path);
+        // `guard` moves into the stream so a disconnect aborts what's unfinished.
         use futures::StreamExt;
         let incremental = state.server_args.incremental_streaming_output;
         let s = generation_event_stream(receivers, guard, incremental, true)
@@ -412,7 +462,8 @@ fn generation_event_stream(
         // Batch position, tagged onto every frame (a single request omits it).
         let idx = |i: usize| with_index.then_some(i);
 
-        // Poll all receivers concurrently.
+        // Poll all receivers concurrently; re-arm a receiver's future after each
+        // non-terminal frame so its stream keeps flowing.
         let mut futs = futures::stream::FuturesUnordered::new();
         for (i, (_, rx, _)) in receivers.into_iter().enumerate() {
             futs.push(recv_indexed(i, rx));
@@ -420,12 +471,14 @@ fn generation_event_stream(
 
         while let Some((i, rx, items)) = futs.next().await {
             if items.is_empty() {
-                // Channel closed with no terminal → truncation for this item.
+                // Channel closed with no terminal → truncation for this item;
+                // leave its rid armed so the scheduler work is aborted.
                 yield tag_value(error_value(500, "response truncated before completion"), idx(i));
                 continue;
             }
 
-            // Cumulative frames supersede one another, so a drained backlog collapses to its last (Python's `out_list[-1]`).
+            // Cumulative frames supersede one another, so a drained backlog collapses
+            // to its last (Python's `out_list[-1]`); deltas can't be dropped.
             let mut coalesced = false; // a cumulative frame is pending
             let mut terminal = None;   // (finish_reason) of a `Done` in this batch
             let mut failed = None;     // an `Error` in this batch
@@ -459,7 +512,8 @@ fn generation_event_stream(
                 yield tag_value(error_value(e.http_status(), &e.to_string()), idx(i));
                 guard.disarm(&rid_strs[i]);
             } else if let Some(out) = terminal {
-                // A validation abort → an error object, not a frame.
+                // A validation abort → an error object, not a frame. The final frame
+                // carries the full cumulative state, so any coalesced ones are moot.
                 yield match out.finish_reason.as_ref().and_then(|f| f.abort_status()) {
                     Some((code, message)) => tag_value(error_value(code, message), idx(i)),
                     None => terminal_stream_frame_string(
@@ -614,7 +668,10 @@ mod tests {
         );
     }
 
-    /// The native unary response uses the same names and meanings as Python's TokenizerManager metadata.
+    /// The native unary response uses the same names and meanings as Python's
+    /// TokenizerManager metadata, and adds e2e_latency only on the terminal
+    /// result. The timer is seconds from normalized-request acceptance through
+    /// terminal-output handling.
     #[tokio::test]
     async fn unary_terminal_meta_info_matches_python_semantics() {
         let (tx, mut rx) = mpsc::channel(2);
@@ -660,7 +717,9 @@ mod tests {
         );
     }
 
-    /// sub-requests' frames interleave into one stream, each tagged with its batch `index`; text accumulates per item.
+    /// Two sub-requests' frames interleave into one stream, each tagged with its
+    /// batch `index`; text accumulates per item; `[DONE]` comes only after both
+    /// terminate, then the stream ends.
     #[tokio::test]
     async fn interleaves_indexes_and_accumulates() {
         let (tx0, rx0) = mpsc::channel(8);
@@ -698,7 +757,8 @@ mod tests {
         assert!(stream.next().await.is_none());
     }
 
-    /// A per-item error is surfaced with its `index` and doesn't end the batch.
+    /// A per-item error is surfaced with its `index` and doesn't end the batch;
+    /// `[DONE]` still waits for the other item.
     #[tokio::test]
     async fn per_item_error_carries_index() {
         let (tx0, rx0) = mpsc::channel(8);
@@ -722,7 +782,8 @@ mod tests {
         assert_eq!(stream.next().await.unwrap(), "[DONE]");
     }
 
-    /// `incremental=true`: each frame carries this step's **delta** text/output_ids.
+    /// `incremental=true`: each frame carries this step's **delta** text/output_ids,
+    /// but `meta_info.completion_tokens` stays cumulative (matching Python).
     #[tokio::test]
     async fn incremental_emits_deltas_with_cumulative_count() {
         let (tx, rx) = mpsc::channel(8);
@@ -756,7 +817,8 @@ mod tests {
         assert_eq!(stream.next().await.unwrap(), "[DONE]");
     }
 
-    /// The single-request shape (`with_index=false`, one receiver) omits the `index` field entirely.
+    /// The single-request shape (`with_index=false`, one receiver) omits the
+    /// `index` field entirely, and still terminates with `[DONE]`.
     #[tokio::test]
     async fn single_shape_omits_index() {
         let (tx, rx) = mpsc::channel(8);
@@ -774,7 +836,10 @@ mod tests {
         assert_eq!(stream.next().await.unwrap(), "[DONE]");
     }
 
-    /// A backlog of cumulative chunks collapses to a single frame carrying the latest state — each cumulative frame supersedes the last.
+    /// A backlog of cumulative chunks collapses to a single frame carrying the latest
+    /// state — each cumulative frame supersedes the last, so emitting the intermediate
+    /// ones ships the full O(T) payload again for nothing. Mirrors the Python waiter's
+    /// `out = out_list[-1]`. This is the whole point of draining in `recv_indexed`.
     #[tokio::test]
     async fn cumulative_backlog_coalesces_to_latest() {
         let (tx, rx) = mpsc::channel(8);
@@ -783,7 +848,7 @@ mod tests {
             generation_event_stream(receivers, AbortGuard::new_empty(senders()), false, false);
         futures::pin_mut!(stream);
 
-        // Chunks queued before the stream is ever polled (a client falling behind).
+        // Three chunks queued before the stream is ever polled (a client falling behind).
         tx.send(frame(10, "a")).await.unwrap();
         tx.send(frame(10, "b")).await.unwrap();
         tx.send(frame(10, "c")).await.unwrap();
@@ -800,7 +865,8 @@ mod tests {
         assert_eq!(stream.next().await.unwrap(), "[DONE]");
     }
 
-    /// Incremental frames are *deltas*, so a backlog must emit every one — dropping any would silently lose tokens.
+    /// Incremental frames are *deltas*, so a backlog must emit every one — dropping
+    /// any would silently lose tokens. Only the cumulative protocol may coalesce.
     #[tokio::test]
     async fn incremental_backlog_emits_every_delta() {
         let (tx, rx) = mpsc::channel(8);

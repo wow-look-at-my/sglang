@@ -12,6 +12,7 @@ using half2 = __half2;
 
 namespace sgl_hip {
 
+// half x 1
 template <>
 struct vec_t<half, 1> {
   half data;
@@ -49,6 +50,7 @@ SGL_HIP_INLINE void vec_t<half, 1>::store(half* ptr) const {
   *ptr = data;
 }
 
+// half x 2
 template <>
 struct vec_t<half, 2> {
   half2 data;
@@ -86,6 +88,7 @@ SGL_HIP_INLINE void vec_t<half, 2>::store(half* ptr) const {
   *((half2*)ptr) = data;
 }
 
+// half x 4
 
 template <>
 struct vec_t<half, 4> {
@@ -124,6 +127,7 @@ SGL_HIP_INLINE void vec_t<half, 4>::store(half* ptr) const {
   *((uint2*)ptr) = data;
 }
 
+// half x 8 or more
 
 template <size_t vec_size>
 struct vec_t<half, vec_size> {

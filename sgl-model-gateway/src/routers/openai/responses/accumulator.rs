@@ -7,7 +7,8 @@ use super::common::{extract_output_index, get_event_type};
 use crate::protocols::event_types::{OutputItemEvent, ResponseEvent};
 
 // ============================================================================
-// Streaming Response Accumulator.
+// Streaming Response Accumulator
+// ============================================================================
 
 /// Helper that parses SSE frames from the OpenAI responses stream and
 /// accumulates enough information to persist the final response locally.
@@ -16,7 +17,8 @@ pub(super) struct StreamingResponseAccumulator {
     initial_response: Option<Value>,
     /// The final `response.completed` payload (if emitted).
     completed_response: Option<Value>,
-    /// Collected output items keyed by the upstream output index.
+    /// Collected output items keyed by the upstream output index, used when
+    /// a final response payload is absent and we need to synthesize one.
     output_items: Vec<(usize, Value)>,
     /// Captured error payload (if the upstream stream fails midway).
     encountered_error: Option<Value>,

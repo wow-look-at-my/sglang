@@ -1,9 +1,9 @@
 # MI355X GLM-5.2 (MXFP4) 4-node 2P1D disaggregation recipe -- narrow-prefill EP8 + MTP
 # + wide-decode EP16 (mirrors the DSV4-Pro / Kimi Oren config: wide EP only helps decode).
 #
-# Prefill engines (EP8, one node each) + one decode engine (EP16) spanning nodes,
-# nodes total. Prefill EP8 keeps MoE all-to-all INTRA-node (XGMI); decode gets wide
-# EP16 across nodes over mori. KV (prefill TP8 -> decode TP16) over mori.
+# Two prefill engines (EP8, one node each) + one decode engine (EP16) spanning 2
+# nodes, 4 nodes total. Prefill EP8 keeps MoE all-to-all INTRA-node (XGMI); decode
+# gets wide EP16 across nodes over mori. KV (prefill TP8 -> decode TP16) over mori.
 #
 # GLM-specific bits vs the Kimi EP16 recipe: DSA attention is auto-selected for
 # GlmMoeDsaForCausalLM (no explicit --attention-backend), GLM parsers (glm45),

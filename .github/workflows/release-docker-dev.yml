@@ -53,7 +53,8 @@ jobs:
       - name: Compute build configuration
         id: config
         env:
-          # Inject multi-line/free-text inputs via env to avoid ${{ }} injection breaking the bash script on quotes or $ in the Dockerfile snippet.
+          # Inject multi-line/free-text inputs via env to avoid ${{ }} injection
+          # breaking the bash script on quotes or $ in the Dockerfile snippet.
           OVERLAY_DOCKERFILE_INPUT: ${{ inputs.overlay_dockerfile }}
           OVERLAY_CUDAS_INPUT: ${{ inputs.overlay_cudas }}
           OVERLAY_SUFFIX_INPUT: ${{ inputs.overlay_tag_suffix }}
@@ -236,20 +237,25 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build and push overlay image (amd64 + arm64)
+        env:
+          REPO: ${{ inputs.image_repo || 'lmsysorg/sglang' }}
+          TAGS: ${{ needs.prepare.outputs.overlay_tags_json }}
+          CUDA: ${{ matrix.cuda }}
           # Injected via env to keep Dockerfile quotes/$ verbatim.
+          SNIPPET: ${{ inputs.overlay_dockerfile }}
         run: |
           set -euo pipefail
-          BASE="$(printf '%s' "${{ needs.prepare.outputs.overlay_tags_json }}" | jq -r --arg c "${{ matrix.cuda }}" '.[$c].bases[0]')"
-          mapfile -t OUTS < <(printf '%s' "${{ needs.prepare.outputs.overlay_tags_json }}" | jq -r --arg c "${{ matrix.cuda }}" '.[$c].outs[]')
+          BASE="$(printf '%s' "$TAGS" | jq -r --arg c "$CUDA" '.[$c].bases[0]')"
+          mapfile -t OUTS < <(printf '%s' "$TAGS" | jq -r --arg c "$CUDA" '.[$c].outs[]')
           {
-            printf 'FROM %s:%s\n' "${{ inputs.image_repo || 'lmsysorg/sglang' }}" "$BASE"
-            printf '%s\n' "${{ inputs.overlay_dockerfile }}"
+            printf 'FROM %s:%s\n' "$REPO" "$BASE"
+            printf '%s\n' "$SNIPPET"
           } > Dockerfile.overlay
-          echo "::group::overlay Dockerfile (${{ matrix.cuda }})"
+          echo "::group::overlay Dockerfile ($CUDA)"
           cat Dockerfile.overlay
           echo "::endgroup::"
           OUT_ARGS=""
-          for o in "${OUTS[@]}"; do OUT_ARGS="$OUT_ARGS -t ${{ inputs.image_repo || 'lmsysorg/sglang' }}:$o"; done
+          for o in "${OUTS[@]}"; do OUT_ARGS="$OUT_ARGS -t $REPO:$o"; done
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             -f Dockerfile.overlay \

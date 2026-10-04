@@ -612,7 +612,8 @@ jobs:
             --target-dir "${{ env.PUBLISH_TARGET_DIR }}"
 
   multimodal-diffusion-gen-5090:
-    # The 5090 canary suite is six cases; it is generated whole rather than partitioned, so it needs no entry in the partition plan.
+    # The 5090 canary suite is six cases; it is generated whole rather than
+    # partitioned, so it needs no entry in the partition plan.
     needs: compute-diffusion-partitions
     if: github.repository == 'sgl-project/sglang' && (needs.compute-diffusion-partitions.result == 'success')
     runs-on: 1-gpu-5090

@@ -1,6 +1,13 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//! `/metrics` endpoint — Prometheus 0.0.4 exposition.
+//!
+//! Returns the live snapshot of [`crate::server::metrics::MetricsRegistry`].
+//! Plain-text body; charset is utf-8. We deliberately don't gate this on
+//! readiness — scrapers should be able to read the metrics surface even
+//! while the router is warming up so the "router started but no workers
+//! discovered" failure mode is observable.
 
 use crate::discovery::WorkerMode;
 use crate::server::app_context::AppContext;
@@ -24,7 +31,8 @@ pub async fn metrics(State(ctx): State<Arc<AppContext>>) -> impl IntoResponse {
         .all()
         .into_iter()
         .map(|w| {
-            // One lock acquisition for both health + state so both gauges can't report a torn (self-contradictory) pair.
+            // One lock acquisition for both health + state so the two gauges
+            // can't report a torn (self-contradictory) pair for one scrape.
             let cb = w.breaker.snapshot();
             WorkerSnapshot {
                 worker_url: w.url.clone(),
@@ -35,7 +43,9 @@ pub async fn metrics(State(ctx): State<Arc<AppContext>>) -> impl IntoResponse {
                 },
                 healthy: cb.admit,
                 cb_state: cb.state_code,
-                // Saturating rather than `as i64`: a guard-accounting underflow would wrap usize and render as a nonsensical negative gauge.
+                // Saturating rather than `as i64`: a guard-accounting
+                // underflow would wrap usize and render as a nonsensical
+                // negative gauge; clamp to a large positive ceiling instead.
                 inflight: i64::try_from(w.router_inflight_load()).unwrap_or(i64::MAX),
             }
         })
@@ -44,6 +54,9 @@ pub async fn metrics(State(ctx): State<Arc<AppContext>>) -> impl IntoResponse {
     // Pull-on-scrape, like the worker gauges above: the tree and the tally
     // own the numbers, so a worker that goes away stops emitting series
     // without anything having to reset a pushed counter.
+    // Emitted unconditionally: without it, "no kv series" is indistinguishable
+    // between the intended metadata-only mode, a broken `kv_metrics` wiring,
+    // and a regressed endpoint.
     body.push_str(
         "# HELP sgl_router_kv_tree_maintained 1 when this router maintains its own cache-aware KV tree and therefore emits the sgl_router_kv_* series; 0 when placement comes from an external Indexer, where those series would be a structural zero and are omitted rather than reported as an empty tier stream.\n",
     );
@@ -65,7 +78,27 @@ pub async fn metrics(State(ctx): State<Arc<AppContext>>) -> impl IntoResponse {
     )
 }
 
-/// Render the storage-tier series: what the tree holds per worker and tier, the block size to convert it to tokens, and the tagged event stream it consumed. These exist to make a router-vs-engine tier mismatch a number instead of an inference. `sgl_router_kv_tree_blocks * sgl_router_kv_block_size` for a worker and tier, divided by that pod's own occupancy of the tier (device: `sglang_kv_used_tokens + sglang_kv_evictable_tokens`; host: `sglang_hicache_host_used_tokens`; `tp_rank="0"`), is the tree's coverage of the tier. The event counters show whether the tagged stream that should feed the tree is arriving at all. Emitted only when the router maintains a local tree; in metadata-only mode (external Indexer) the tier and event series here would be a structural zero, which the HELP text below would have the operator read as a missing tier stream. See `KvEventIndex::metrics_source`.
+/// Render the storage-tier series: what the tree holds per worker and tier,
+/// the block size to convert it to tokens, and the tagged event stream it
+/// consumed.
+///
+/// These exist to make a router-vs-engine tier mismatch a number instead of
+/// an inference. `sgl_router_kv_tree_blocks * sgl_router_kv_block_size`
+/// for a worker and tier, divided by that pod's own occupancy of the tier
+/// (device: `sglang_kv_used_tokens + sglang_kv_evictable_tokens`; host:
+/// `sglang_hicache_host_used_tokens`; `tp_rank="0"`), is the tree's coverage
+/// of the tier. About 1 means the tree mirrors the engine; about 0 means the
+/// engine holds a tier that routing cannot see; a missing series means the
+/// worker publishes nothing. The event counters show whether the tagged
+/// stream that should feed the tree is arriving at all.
+/// Emitted only when the router maintains a local tree; in metadata-only mode
+/// (external Indexer) the tier and event series here would be a structural
+/// zero, which the HELP text below would have the operator read as a missing
+/// tier stream. See `KvEventIndex::metrics_source`.
+///
+/// `block_size` is 0 until the first worker reports, and a coverage panel
+/// multiplies by it, so such a panel reads 0 rather than NaN on a fleet that
+/// has not registered yet.
 fn render_kv_tiers(kv: &KvIndexMetrics, block_size: u32) -> String {
     let mut out = String::new();
 
@@ -75,6 +108,9 @@ fn render_kv_tiers(kv: &KvIndexMetrics, block_size: u32) -> String {
     out.push_str("# TYPE sgl_router_kv_block_size gauge\n");
     out.push_str(&format!("sgl_router_kv_block_size {block_size}\n"));
 
+    // Every tier is emitted per carrier, zeros included: a host row at 0 next
+    // to a device row in the millions is the mismatch signature, and an
+    // absent series cannot be told from a tier the tree never tracked.
     out.push_str(
         "# HELP sgl_router_kv_tree_blocks Blocks the cache-aware tree attributes to a worker rank, by the storage tier the worker holds them on (a block held on device and host counts under both). Times sgl_router_kv_block_size, and divided by the engine's own occupancy of that tier for the same pod (device: sglang_kv_used_tokens + sglang_kv_evictable_tokens; host: sglang_hicache_host_used_tokens; tp_rank=\"0\"), this is the tree's coverage of the tier: ~1 mirrors the engine, ~0 means the engine holds a tier routing cannot see.\n",
     );
@@ -114,7 +150,8 @@ fn render_kv_tiers(kv: &KvIndexMetrics, block_size: u32) -> String {
     }
 
     // A tagged removal clears only its own tier, so a batch lost in transit
-    // can strand a tier bit the tree will never clear on its own.
+    // can strand a tier bit the tree will never clear on its own. Nonzero
+    // here is the explanation for tree coverage drifting above 1.
     out.push_str(
         "# HELP sgl_router_kv_event_batches_lost_total KV-event batches dropped in transit, inferred from gaps in each publisher's dense sequence number (ZMQ drops at the publisher's high-water mark). Nonzero means the tree may hold tiers a worker has already released, which shows up as sgl_router_kv_tree_blocks exceeding the engine's own occupancy of that tier.\n",
     );
@@ -145,7 +182,10 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    /// The tier series are what a coverage dashboard joins on, so their names and label keys are contract.
+    /// The tier series are what a coverage dashboard joins on, so their names
+    /// and label keys are contract: per-worker blocks by tier with zeros
+    /// emitted, the block size to convert them, and every (event, medium)
+    /// cell of the tally.
     #[tokio::test]
     async fn kv_tier_series_render_per_worker_and_per_medium() {
         use crate::state::kv_events::{EventKind, EventTally, HashTree, KvWorkerId};
@@ -185,7 +225,10 @@ mod tests {
         }
     }
 
-    /// The series are pulled from the tree on every scrape.
+    /// The series are pulled from the tree on every scrape, so dropping a
+    /// worker must make its rows disappear rather than freeze at their last
+    /// value. This is what `KvEventIndex::remove_worker` relies on when it
+    /// calls `clear_worker`.
     #[tokio::test]
     async fn kv_tree_blocks_drop_with_the_worker() {
         use crate::state::kv_events::{EventTally, HashTree, KvWorkerId};
@@ -205,7 +248,10 @@ mod tests {
         assert!(out.contains("# TYPE sgl_router_kv_tree_blocks gauge"));
     }
 
-    /// The route wiring itself: `render_kv_tiers` had direct unit tests but nothing exercised `ctx.kv_metrics`.
+    /// The route wiring itself: `render_kv_tiers` had two direct unit tests
+    /// but nothing exercised `ctx.kv_metrics`, so deleting the `if let` in the
+    /// handler left the suite green while `/metrics` silently stopped emitting
+    /// all four families.
     #[tokio::test]
     async fn metrics_endpoint_emits_kv_series_when_a_tree_is_maintained() {
         use crate::state::kv_events::{EventTally, HashTree, KvWorkerId};
@@ -243,7 +289,9 @@ mod tests {
         );
     }
 
-    /// The other half of the gate: with no local tree the families are absent.
+    /// The other half of the gate: with no local tree the families are absent,
+    /// but the mode gauge still says so rather than leaving the operator to
+    /// guess whether the endpoint regressed.
     #[tokio::test]
     async fn metrics_endpoint_reports_the_mode_when_no_tree_is_maintained() {
         let ctx = Arc::new(AppContext::stub());
@@ -352,6 +400,8 @@ mod tests {
             .unwrap();
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let body = std::str::from_utf8(&body).unwrap();
+        // Pool size reflects the registered prefill worker, and the per-worker
+        // gauges are sampled (fresh breaker => healthy, closed, 0 inflight).
         assert!(
             body.contains(r#"sgl_router_workers{mode="prefill"} 1"#),
             "got:\n{body}"

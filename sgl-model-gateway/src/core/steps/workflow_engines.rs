@@ -1,4 +1,7 @@
-//! Typed workflow engines.
+//! Typed workflow engines collection
+//!
+//! This module provides a collection of typed workflow engines for different workflow types.
+//! Each workflow type has its own engine with compile-time type safety.
 
 use std::sync::Arc;
 
@@ -45,7 +48,10 @@ pub type WasmRegistrationEngine =
 pub type WasmRemovalEngine =
     WorkflowEngine<WasmRemovalWorkflowData, InMemoryStore<WasmRemovalWorkflowData>>;
 
-/// Collection of typed workflow engines Each workflow type has its own engine with compile-time type safety.
+/// Collection of typed workflow engines
+///
+/// Each workflow type has its own engine with compile-time type safety.
+/// This replaces the old `WorkflowEngine<AnyWorkflowData, ...>` approach.
 #[derive(Clone, Debug)]
 pub struct WorkflowEngines {
     /// Engine for local worker registration workflows

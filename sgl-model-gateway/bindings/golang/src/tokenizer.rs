@@ -24,7 +24,17 @@ pub struct TokenizerHandle {
     pub(crate) tokenizer: Arc<dyn TokenizerTrait>,
 }
 
-/// Create a tokenizer from a file path # Arguments * `path` - Path to tokenizer.json file (null-terminated C string) * `error_out`.
+/// Create a tokenizer from a file path
+///
+/// # Arguments
+/// * `path` - Path to tokenizer.json file (null-terminated C string)
+/// * `error_out` - Optional pointer to receive error message (must be freed with sgl_free_string)
+///
+/// # Returns
+/// * Pointer to TokenizerHandle on success, null on failure
+///
+/// # Safety
+/// The returned handle must be freed with `sgl_tokenizer_free`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_create_from_file(
     path: *const c_char,
@@ -55,7 +65,21 @@ pub unsafe extern "C" fn sgl_tokenizer_create_from_file(
     }
 }
 
-/// Encode text to token IDs # Arguments * `handle` - Tokenizer handle (must not be null) * `text` - Input text (null-terminated C string).
+/// Encode text to token IDs
+///
+/// # Arguments
+/// * `handle` - Tokenizer handle (must not be null)
+/// * `text` - Input text (null-terminated C string)
+/// * `add_special_tokens` - Whether to add special tokens
+/// * `token_ids_out` - Pointer to receive array of token IDs (must be freed with sgl_free_token_ids)
+/// * `token_count_out` - Pointer to receive token count
+/// * `error_out` - Optional pointer to receive error message
+///
+/// # Returns
+/// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// The token_ids_out array must be freed with sgl_free_token_ids() after use.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_encode(
     handle: *mut TokenizerHandle,
@@ -103,7 +127,21 @@ pub unsafe extern "C" fn sgl_tokenizer_encode(
     }
 }
 
-/// Apply chat template to messages with tools support # Arguments * `handle` - Tokenizer handle * `messages_json` - JSON string.
+/// Apply chat template to messages with tools support
+///
+/// # Arguments
+/// * `handle` - Tokenizer handle
+/// * `messages_json` - JSON string of messages array
+/// * `tools_json` - Optional JSON string of tools array (null or empty string for no tools)
+/// * `result_out` - Pointer to receive result string (must be freed with sgl_free_string)
+/// * `error_out` - Optional pointer to receive error message
+///
+/// # Returns
+/// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `messages_json` must be NUL-terminated UTF-8 and
+/// `tools_json` null or UTF-8; `result_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
     handle: *mut TokenizerHandle,
@@ -209,7 +247,20 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
     }
 }
 
-/// Apply chat template to messages # Arguments * `handle` - Tokenizer handle * `messages_json` - JSON string.
+/// Apply chat template to messages
+///
+/// # Arguments
+/// * `handle` - Tokenizer handle
+/// * `messages_json` - JSON string of messages array
+/// * `result_out` - Pointer to receive result string (must be freed with sgl_free_string)
+/// * `error_out` - Optional pointer to receive error message
+///
+/// # Returns
+/// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `messages_json` must be NUL-terminated UTF-8;
+/// `result_out` must be writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
     handle: *mut TokenizerHandle,
@@ -245,7 +296,9 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
 
     // Try to downcast to HuggingFaceTokenizer
     if let Some(hf_tokenizer) = tokenizer.as_any().downcast_ref::<HuggingFaceTokenizer>() {
-        // Apply chat template with default parameters Use empty arrays instead of None to avoid template errors Set add_generation_prompt to true.
+        // Apply chat template with default parameters
+        // Use empty arrays instead of None to avoid template errors
+        // Set add_generation_prompt to true so the model knows to start generating
         let empty_tools: [Value; 0] = [];
         let empty_docs: [Value; 0] = [];
         let params = ChatTemplateParams {
@@ -285,7 +338,22 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
     }
 }
 
-/// Decode token IDs to text # Arguments * `handle` - Tokenizer handle * `token_ids` - Array of token IDs * `token_count` - Number.
+/// Decode token IDs to text
+///
+/// # Arguments
+/// * `handle` - Tokenizer handle
+/// * `token_ids` - Array of token IDs
+/// * `token_count` - Number of tokens
+/// * `skip_special_tokens` - Whether to skip special tokens
+/// * `result_out` - Pointer to receive result string (must be freed with sgl_free_string)
+/// * `error_out` - Optional pointer to receive error message
+///
+/// # Returns
+/// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `token_ids` must point to at least `token_count`
+/// readable `u32`s; `result_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_decode(
     handle: *mut TokenizerHandle,
@@ -331,7 +399,10 @@ pub unsafe extern "C" fn sgl_tokenizer_decode(
     }
 }
 
-/// Free a tokenizer handle # Safety This function must only be called once per handle.
+/// Free a tokenizer handle
+///
+/// # Safety
+/// This function must only be called once per handle, and the handle must not be used after calling.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_free(handle: *mut TokenizerHandle) {
     if !handle.is_null() {

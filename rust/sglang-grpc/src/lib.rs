@@ -46,9 +46,11 @@ struct TokenizerInfo {
     context_len: i32,
 }
 
-/// Extract tokenizer path/mode and context_len from the Python RuntimeHandle
-/// (one-time GIL). Missing `tokenizer_manager` indicates a misconfigured
-/// runtime handle and should surface at startup.
+/// Extract tokenizer path/mode and context_len from the Python RuntimeHandle (one-time GIL).
+///
+/// Missing `tokenizer_manager` indicates a misconfigured runtime handle and should surface at
+/// startup. Sub-fields are best-effort because unsupported native tokenizer backends can still
+/// fall back to Python tokenization.
 fn try_get_attr(
     py: Python<'_>,
     obj: &Py<PyAny>,
@@ -137,6 +139,14 @@ fn extract_tokenizer_info(runtime_handle: &Py<PyAny>) -> PyResult<TokenizerInfo>
 }
 
 /// Start the gRPC server in a background thread with its own Tokio runtime.
+///
+/// Args:
+///     host: Bind address (e.g., "0.0.0.0")
+///     port: Port number (e.g., 40000)
+///     runtime_handle: Python RuntimeHandle object with submit_generate, submit_embed, abort, etc.
+///
+/// Returns:
+///     GrpcServerHandle that can be used to shut down the server.
 #[pyfunction]
 #[pyo3(signature = (host, port, runtime_handle, worker_threads=4, response_channel_capacity=64, response_timeout_secs=300))]
 fn start_server(

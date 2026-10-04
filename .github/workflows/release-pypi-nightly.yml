@@ -46,7 +46,8 @@ jobs:
             auditwheel build patchelf wheel "setuptools>=61.0" \
             "setuptools-rust>=1.11" "setuptools-scm>=8.0" "torch==2.13.0"
 
-      # Needed by setuptools-rust to build the bundled native gRPC extension (rust/sglang-grpc) when `python -m build` builds the sglang wheel.
+      # Needed by setuptools-rust to build the bundled native gRPC extension
+      # (rust/sglang-grpc) when `python -m build` builds the sglang wheel.
       - name: Install protoc
         run: sudo bash scripts/ci/utils/install_protoc.sh
 
@@ -113,7 +114,10 @@ jobs:
     environment: 'prod'
     strategy:
       fail-fast: false
-      # The wheel is CUDA-agnostic and built once — we just register it under the cu130/sglang/ wheel index so users can install via --extra-index-url. Serialize because matrix runs clone and push to the same sgl-whl branch.
+      # The wheel is CUDA-agnostic and built once — we just register it under
+      # the cu130/sglang/ wheel index so users can install via
+      # --extra-index-url. Serialize because matrix runs clone and push to the
+      # same sgl-whl branch.
       max-parallel: 1
       matrix:
         cuda_version: ['130']

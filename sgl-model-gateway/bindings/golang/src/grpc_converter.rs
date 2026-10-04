@@ -57,7 +57,26 @@ pub struct GrpcResponseConverterHandle {
     pub(crate) skip_special_tokens: bool,          // Whether to skip special tokens when decoding
 }
 
-/// Create a gRPC response converter handle # Arguments * `tokenizer_handle` - Tokenizer handle (must be valid) * `model`.
+/// Create a gRPC response converter handle
+///
+/// # Arguments
+/// * `tokenizer_handle` - Tokenizer handle (must be valid)
+/// * `model` - Model name
+/// * `request_id` - Request ID
+/// * `tools_json` - Optional JSON array of tools
+/// * `tool_choice_json` - Optional JSON object for tool_choice
+/// * `stop` - Optional stop sequences (JSON array)
+/// * `stop_token_ids` - Optional stop token IDs (JSON array)
+/// * `skip_special_tokens` - Whether to skip special tokens
+/// * `initial_prompt_tokens` - Prompt token count for this request; negative means unknown
+/// * `error_out` - Optional pointer to receive error message
+///
+/// # Returns
+/// * Pointer to GrpcResponseConverterHandle on success, null on failure
+///
+/// # Safety
+/// `tokenizer_handle` must be live; `model` and `request_id` must be
+/// NUL-terminated UTF-8; the optional JSON arguments must be null or valid C strings.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_create(
     tokenizer_handle: *mut TokenizerHandle,
@@ -192,7 +211,20 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
     }))
 }
 
-/// Convert a gRPC GenerateResponse chunk to OpenAI format # Arguments * `handle` - Converter handle * `response_json` - JSON string.
+/// Convert a gRPC GenerateResponse chunk to OpenAI format
+///
+/// # Arguments
+/// * `handle` - Converter handle
+/// * `response_json` - JSON string of proto.GenerateResponse
+/// * `result_json_out` - Pointer to receive OpenAI format JSON (must be freed with sgl_free_string)
+/// * `error_out` - Optional pointer to receive error message
+///
+/// # Returns
+/// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `handle` must be live; `response_json` must be NUL-terminated UTF-8;
+/// `result_json_out` must be writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_convert_chunk(
     handle: *mut GrpcResponseConverterHandle,
@@ -410,16 +442,23 @@ pub(crate) async fn convert_proto_chunk_to_openai(
             let first_chunk = *is_first;
             *is_first = false;
 
+            // Track token counts from chunks (cumulative values from proto)
+            // These are cumulative values, so we always use the latest value
+            // For prompt_tokens, if chunk value is 0, preserve existing value or use initial_prompt_tokens
+            // This prevents overwriting valid prompt_tokens with 0
             if chunk.prompt_tokens > 0 {
                 handle.prompt_tokens.insert(index, chunk.prompt_tokens);
             } else {
+                // If chunk.prompt_tokens is 0, try to preserve existing value or use initial_prompt_tokens
                 if !handle.prompt_tokens.contains_key(&index) {
                     // No existing value, try to use initial_prompt_tokens
                     if let Some(initial_prompt) = handle.initial_prompt_tokens {
                         handle.prompt_tokens.insert(index, initial_prompt);
                     }
                 }
+                // If existing value exists, keep it (don't overwrite with 0)
             }
+            // For completion_tokens, always update (even if 0) as it's cumulative
             handle
                 .completion_tokens
                 .insert(index, chunk.completion_tokens);
@@ -609,7 +648,8 @@ pub(crate) async fn convert_proto_chunk_to_openai(
         Some(Complete(complete)) => {
             let index = complete.index;
 
-            // Flush any remaining text Flush any remaining text from decode stream
+            // Flush any remaining text
+            // Flush any remaining text from decode stream
             let mut final_text = handle.stream_buffers.remove(&index).unwrap_or_default();
             if let Some(ref mut decode_stream) = handle.decode_streams.get_mut(&index) {
                 if let Ok(Some(remaining)) = decode_stream.flush() {
@@ -659,7 +699,9 @@ pub(crate) async fn convert_proto_chunk_to_openai(
                 None => None,
             };
 
-            // Build usage - prefer values from complete message.
+            // Build usage - prefer values from complete message, but fallback to accumulated values from chunks
+            // Complete message should have the final values, but sometimes they might be 0 or missing
+            // Always use the latest cumulative value from chunks if available, otherwise use complete message value
             let mut prompt_tokens = handle
                 .prompt_tokens
                 .get(&index)
@@ -673,13 +715,18 @@ pub(crate) async fn convert_proto_chunk_to_openai(
                 .filter(|&v| v > 0)
                 .unwrap_or(complete.completion_tokens);
 
+            // Always try to use initial_prompt_tokens if prompt_tokens is 0 or missing
+            // This is the most reliable source for prompt tokens since we calculate it from the request
             if prompt_tokens == 0 {
                 if let Some(initial_prompt) = handle.initial_prompt_tokens {
                     prompt_tokens = initial_prompt;
                 }
             }
 
+            // If completion_tokens is 0, try to infer from output_ids or accumulated chunks
             if completion_tokens == 0 {
+                // Try to use completion_tokens from complete message even if 0
+                // Or calculate from output_ids
                 if complete.completion_tokens > 0 {
                     completion_tokens = complete.completion_tokens;
                 } else if !complete.output_ids.is_empty() {
@@ -689,6 +736,8 @@ pub(crate) async fn convert_proto_chunk_to_openai(
                 }
             }
 
+            // Final fallback: if both are still 0, try to use initial_prompt_tokens for prompt
+            // and calculate completion from output_ids
             if prompt_tokens == 0 && completion_tokens == 0 {
                 // Try to infer from output_ids if available
                 let output_ids_len = complete.output_ids.len() as i32;
@@ -708,6 +757,7 @@ pub(crate) async fn convert_proto_chunk_to_openai(
                 }
             }
 
+            // Always create usage, even if values are 0 (defensive)
             let usage = Some(Usage {
                 prompt_tokens: prompt_tokens.max(0) as u32,
                 completion_tokens: completion_tokens.max(0) as u32,
@@ -750,7 +800,11 @@ pub(crate) async fn convert_proto_chunk_to_openai(
     }
 }
 
-/// Free a gRPC response converter handle # Safety `handle` must be null or a pointer returned by `sgl_grpc_response_converter_create`.
+/// Free a gRPC response converter handle
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by
+/// `sgl_grpc_response_converter_create` that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_free(
     handle: *mut GrpcResponseConverterHandle,

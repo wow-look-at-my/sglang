@@ -6,11 +6,11 @@ Implementation of [Efficient Video Sampling: Pruning Temporally Redundant Tokens
 
 > NOTE: The current implementation in sglang is cannot work with VLMs that use positional embeddings [Such as Qwen2.5VL]. Further work is warranted.
 
-Video frames often contain redundant information, as consecutive frames may be nearly identical. EVS exploits this in the latent space [=embedding space] by computing similarity between adjacent frame token embeddings and pruning tokens that are highly similar. This is to the frames. This reduces the token count while preserving informative content.
+Video frames often contain redundant information, as consecutive frames may be nearly identical. EVS exploits this in the latent space [=embedding space] by computing similarity between adjacent frame token embeddings and pruning tokens that are highly similar to the previous frames. This reduces the token count while preserving informative content.
 
 Key properties:
 - The first frame is always fully retained (provides complete initial context)
-- Configurable via `video_pruning_rate` in model config.json (0 = disabled, 0.7 = ~70% reduction. ~30% retained.)
+- Configurable via `video_pruning_rate` in model config.json (0 = disabled, 0.7 = ~70% reduction; ~30% retained.)
 
 
 ## Performance Characteristics VS. Accuracy - Example
@@ -31,7 +31,7 @@ Example Request:
 
 - `1XH100 95GiB`
 - `BS=1`
-- All videos of `https://huggingface.co/datasets/lmms-lab/Video-MME/blob/main/videos_chunked_01.zip`
+- All 30 videos of `https://huggingface.co/datasets/lmms-lab/Video-MME/blob/main/videos_chunked_01.zip`
 - Default [for this model] pruning rate of `--json-model-override-args '{"video_pruning_rate": 0.7}'` [i.e., 30% of tokens are preserved] VS. `--json-model-override-args '{"video_pruning_rate": 0.0}'` [EVS off]
 
 | Scenario\ Metric                	| Online TTFT (Seconds) stderr: ±0.38 	| VideoMME Accuracy       	|
@@ -47,7 +47,7 @@ Example Request:
 ### Request Flow
 
 1. Prompt Construction (EVSProcessor)
-    * Calculates estimated tokens per frame based on pruning rate. As a result, the emitted input_ids tensor's length will by definition match the final sequence length post pruning. This is necessary for 3.
+    * Calculates estimated tokens per frame based on pruning rate, so the emitted input_ids tensor's length will by definition match the final sequence length post pruning. This is necessary for 3.
 2. Embedding Generation (EVS)
     * Calls original model `get_video_feature()` for full embeddings
     * Retains top-k dissimilar tokens

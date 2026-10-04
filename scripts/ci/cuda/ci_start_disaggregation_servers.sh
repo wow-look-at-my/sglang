@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Optional: set DISAGG_READY_FILE to a filepath; when all servers are healthy.
+# Optional: set DISAGG_READY_FILE to a filepath; when all servers are healthy, the script will
+# create this file as a readiness signal (useful for CI to proceed to next steps).
 DISAGG_READY_FILE="${DISAGG_READY_FILE:-}"
 
 MODEL_PATH="/raid/models/meta-llama/Llama-3.1-8B-Instruct"
@@ -25,6 +26,7 @@ find_active_ib_device() {
 DEVICE=$(find_active_ib_device)
 echo "Using IB device: $DEVICE"
 
+# Launch prefill servers on GPU 0–3
 for i in {0..3}; do
   PORT=$((30001 + i))
   BOOTSTRAP_PORT=$((9001 + i))
@@ -40,6 +42,7 @@ for i in {0..3}; do
     --disaggregation-bootstrap-port "$BOOTSTRAP_PORT" &
 done
 
+# Launch decode servers on GPU 4–7
 for i in {4..7}; do
   PORT=$((30001 + i))
   HOST="127.0.0.$((i + 1))"
@@ -72,6 +75,7 @@ while true; do
     fi
 
     HEALTHY_COUNT=0
+    # Check all 8 servers (127.0.0.1-8:30001-30008)
     for i in {1..8}; do
         if curl -s -f "http://127.0.0.$i:$((30000 + i))/health" >/dev/null 2>&1; then
             HEALTHY_COUNT=$((HEALTHY_COUNT + 1))
@@ -91,11 +95,11 @@ while true; do
         fi
         break
     else
-        sleep 10  # Wait several seconds before next
+        sleep 10  # Wait 10 seconds before next check
     fi
 done
 
-# Don't launch router here - keep servers running
+# Don't launch router here - just keep servers running
 echo "✅ All disaggregation servers are ready and waiting for router connections"
 
 # Keep the script running

@@ -1,4 +1,10 @@
 //! Resolve chat-template names and files to chat prompt formatters.
+//
+//! Hugging Face tokenizer configs contain Jinja templates. SGLang also accepts
+//! legacy conversation JSON files and the names in Python's template registry.
+//! Legacy definitions are rendered by a Rust implementation of Python's
+//! `Conversation.get_prompt()` so there is exactly one implementation of the
+//! per-style formatting logic (no Jinja translation to drift).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +27,9 @@ pub(super) use super::template_loader::load_chat_formatter;
 /// Extra variables for the chat template (`chat_template_kwargs`).
 pub type ChatTemplateKwargs = HashMap<String, serde_json::Value>;
 
-/// A chat prompt formatter: either the model's HuggingFace Jinja template (or Dynamo's built-in encoder for models that ship none).
+/// A chat prompt formatter: either the model's HuggingFace Jinja template (or
+/// Dynamo's built-in encoder for models that ship none) or a legacy SGLang
+/// conversation template.
 #[derive(Clone)]
 pub enum ChatFormatter {
     HuggingFace(PromptFormatter),
@@ -45,8 +53,10 @@ impl ChatFormatter {
         }
     }
 
-    /// The template's stop strings — Python `Conversation.stop_str` (`str |
-    /// list[str] | None`).
+    /// The template's stop strings — Python `Conversation.stop_str`
+    /// (`str | list[str] | None`). Legacy/builtin templates define them (e.g.
+    /// chatml's `<|im_end|>`); the HuggingFace renderer carries none, matching
+    /// Python's jinja path, which keeps only the request's own stops.
     pub(super) fn stop_strs(&self) -> Option<OneOrMany<String>> {
         match self {
             ChatFormatter::HuggingFace(_) => None,
@@ -237,6 +247,8 @@ mod tests {
     }
 
     /// Every separator style renders exactly like Python's `Conversation.get_prompt()`.
+    /// Messages: system "sys", user "Hello", assistant "World", then the
+    /// unconditional assistant opening.
     #[test]
     fn all_separator_styles_render_like_python() {
         let cases = [
@@ -339,7 +351,8 @@ mod tests {
         }
     }
 
-    /// LLAMA2's no-system path starts with `[INST] ` and tags messages by index parity — the opening.
+    /// LLAMA2's no-system path starts with `[INST] ` and tags messages by
+    /// index parity — the opening at an even index takes the user tag.
     #[test]
     fn llama2_without_system_starts_with_inst() {
         let request: CreateChatCompletionRequest = serde_json::from_value(serde_json::json!({
@@ -373,7 +386,8 @@ mod tests {
         assert_eq!(rendered, "USER: Hello|sep|ASSISTANT: World|sep|ASSISTANT:");
     }
 
-    /// QWEN2_AUDIO indexes each audio-token occurrence (Python `audio_token.format(idx=counter)`).
+    /// QWEN2_AUDIO indexes each audio-token occurrence (Python
+    /// `audio_token.format(idx=counter)`).
     #[test]
     fn qwen2_audio_indexes_audio_tokens() {
         let mut spec = spec("QWEN2_AUDIO");
@@ -421,7 +435,8 @@ mod tests {
             "messages": [{"role": "user", "content": "hi"}]
         }))
         .unwrap();
-        // QWEN2_VL_EMBED requires a single string stop (Python raises TypeError on a list / None).
+        // QWEN2_VL_EMBED requires a single string stop (Python raises TypeError
+        // on a list / None) — error deliberately.
         let mut spec = spec("QWEN2_VL_EMBED");
         spec.stop_str = Some(OneOrMany::Many(vec!["a".into(), "b".into()]));
         let error = LegacyFormatter { spec }.render(&request).unwrap_err();
@@ -501,7 +516,9 @@ mod tests {
         let _ = std::fs::remove_file(legacy);
     }
 
-    /// Content extraction matches `generate_chat_conv`: system/assistant arrays must be a single text part.
+    /// Content extraction matches `generate_chat_conv`: system/assistant arrays
+    /// must be a single text part; user arrays concatenate text parts; tool
+    /// roles are rejected.
     #[test]
     fn content_extraction_matches_python() {
         let formatter = LegacyFormatter {
@@ -532,7 +549,7 @@ mod tests {
         assert!(!rendered.starts_with("sys|sep|")); // overridden by "Be brief."
         assert!(rendered.contains("Be brief."));
 
-        // System array with parts is rejected.
+        // System array with two parts is rejected.
         let request = serde_json::from_value::<CreateChatCompletionRequest>(serde_json::json!({
             "model": "test",
             "messages": [
@@ -597,7 +614,10 @@ mod tests {
         assert_eq!(formatter.spec.name, "chatml");
     }
 
-    /// Python `load_chat_template`: without `--chat-template`, the model path infers a legacy template before the HF fallback —.
+    /// Python `load_chat_template`: without `--chat-template`, the model path
+    /// infers a legacy template before the HF fallback — so a legacy model
+    /// with no `chat_template` in its config still gets one, and even a config
+    /// that HAS one loses to the inference.
     #[test]
     fn model_path_inference_precedes_tokenizer_config() {
         let base = std::env::temp_dir().join(format!(
@@ -651,7 +671,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(model_dir);
     }
 
-    /// Every name the model-path matchers can produce must exist in the built-in table.
+    /// Every name the model-path matchers can produce must exist in the
+    /// built-in table (parity guard for `MODEL_TYPE_TO_TEMPLATE`).
     #[test]
     fn inferred_template_names_resolve_to_builtins() {
         for model_path in [
@@ -678,7 +699,8 @@ mod tests {
         }
     }
 
-    /// MiniCPM.6+ must NOT fall back to the template.
+    /// MiniCPM 4.6+ must NOT fall back to the legacy template; with no config
+    /// and nothing else to try, that surfaces as the missing-config error.
     #[test]
     fn minicpm_4_6_skips_legacy_inference() {
         assert!(infer_legacy_template_from_model_path("minicpm-v-4.6").is_none());

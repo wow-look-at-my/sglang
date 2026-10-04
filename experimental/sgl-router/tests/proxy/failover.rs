@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::body::Body;
@@ -18,7 +18,9 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn failover_when_one_worker_dies() {
-    // Mock workers.
+    // Three mock workers. Each advertises served_model_name = "tiny" on
+    // /server_info, so the worker manager's introspect step resolves the
+    // registry's model_ids without us having to hand-declare them here.
     let w1 = crate::common::mock_worker::MockWorker::start(vec![]).await;
     let w2 = crate::common::mock_worker::MockWorker::start(vec![]).await;
     let w3 = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -68,8 +70,10 @@ async fn failover_when_one_worker_dies() {
         None,
     ));
 
-    // Poll for the registry to converge — `register_one` introspect is a per-task spawn (manager.rs:127), so order of registration is non-deterministic under load. Cap the wait so a real hang
-    // surfaces instead of becoming a flake.
+    // Poll for the registry to converge — `register_one` introspect is
+    // a per-task spawn (manager.rs:127), so order of registration is
+    // non-deterministic under load. Cap the wait so a real hang surfaces
+    // instead of becoming a flake.
     let converged = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if registry.workers_for(&ModelId("tiny".into())).len() == 3 {
@@ -96,7 +100,10 @@ async fn failover_when_one_worker_dies() {
     ctx.mark_ready();
     let app = build_router(ctx);
 
-    // Kill w2 by dropping its handle, then poll until its socket refuses connections.
+    // Kill w2 by dropping its handle, then poll until its socket
+    // actually refuses connections. Without this, the first request
+    // routed to w2 can race against the listener's graceful shutdown
+    // and succeed, masking the failover assertion below.
     let w2_url = w2.url.clone();
     drop(w2);
     let host_port = w2_url.trim_start_matches("http://");
@@ -111,6 +118,9 @@ async fn failover_when_one_worker_dies() {
     .await;
     assert!(down.is_ok(), "w2 socket never went down");
 
+    // Send 6 requests; round-robin would route 2 to w2 → connection refused →
+    // breaker opens (threshold=1); subsequent round-robin picks rotate among
+    // the 2 healthy workers (#1 and #3) because healthy_workers_for filters out w2.
     let mut errs = 0usize;
     let mut oks = 0usize;
     for i in 0..6 {
@@ -132,6 +142,9 @@ async fn failover_when_one_worker_dies() {
             errs += 1;
         }
     }
+    // We expect exactly 1 error — the first call routed to w2 fails and opens
+    // its breaker; subsequent round-robin picks rotate among the 2 healthy
+    // workers since registry.healthy_workers_for filters out the open breaker.
     assert_eq!(errs, 1, "exactly the first w2 pick should error");
     assert_eq!(oks, 5, "remaining 5 picks should succeed via filtered RR");
 }

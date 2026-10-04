@@ -1,6 +1,6 @@
-/* Copyright SGLang Team. All Rights Reserved.
+/* Copyright 2025 SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version.0 (the "License");
+Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -69,6 +69,7 @@ class EpilogueVisitorPerRowPerCol {
 
     //
     // Methods
+    //
     Arguments() : batch_stride_alpha(0), batch_stride_C(0), batch_stride_D(0) {}
 
     Arguments(typename ElementwiseFunctor::Params elementwise_)
@@ -93,6 +94,7 @@ class EpilogueVisitorPerRowPerCol {
 
     //
     // Methods
+    //
     CUTLASS_HOST_DEVICE
     Params() {}
 

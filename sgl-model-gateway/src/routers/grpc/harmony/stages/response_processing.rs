@@ -19,7 +19,9 @@ use crate::{
 };
 
 /// Harmony Response Processing stage: Parse and format Harmony responses
-/// Takes output tokens from execution.
+///
+/// Takes output tokens from execution and parses them using HarmonyParserAdapter
+/// to extract analysis, tool calls, and final response text from Harmony channels.
 pub(crate) struct HarmonyResponseProcessingStage {
     processor: HarmonyResponseProcessor,
     streaming_processor: Arc<HarmonyStreamingProcessor>,

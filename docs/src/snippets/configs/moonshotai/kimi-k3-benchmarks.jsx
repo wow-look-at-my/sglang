@@ -92,6 +92,9 @@ export const benchmarks = [
     ],
   },
   {
+    // DSPARK acceptance pinned to 5 of 8 draft tokens (SGLANG_SIMULATE_ACC_LEN=5
+    // SGLANG_SIMULATE_ACC_METHOD=match-expected SGLANG_RAGGED_VERIFY_MODE=static), so the
+    // rows are independent of the benchmark's random prompts; measured accept length 5.00.
     match: { hw: "mi350x", pdMode: "unified", strategy: "balanced", quant: "mxfp4", spec: "dspark" },
     sglang_version: "v0.5.19 @ 12771786",
     speed: [

@@ -22,8 +22,8 @@ use smg_grpc_client::sglang_scheduler::SglangSchedulerClient;
 static RUNTIME: Lazy<Runtime> =
     Lazy::new(|| Runtime::new().expect("Failed to create tokio runtime for client FFI"));
 
-/// Handle for complete client SDK (gRPC client + tokenizer) This handle
-/// manages the connection to sglang.
+/// Handle for complete client SDK (gRPC client + tokenizer)
+/// This handle manages the connection to sglang and provides a complete SDK interface
 pub struct SglangClientHandle {
     pub(crate) client: Arc<SglangSchedulerClient>,
     pub(crate) tokenizer: Arc<dyn Tokenizer>,
@@ -35,7 +35,19 @@ pub struct StreamRequestState {
     pub(crate) prompt_tokens: i32, // Number of prompt tokens for this request
 }
 
-/// Create a new SGLang client handle # Arguments * `endpoint` - gRPC endpoint (e.g., "grpc://localhost:20000") * `tokenizer_path` - Path.
+/// Create a new SGLang client handle
+///
+/// # Arguments
+/// * `endpoint` - gRPC endpoint (e.g., "grpc://localhost:20000")
+/// * `tokenizer_path` - Path to tokenizer directory
+/// * `error_out` - Optional pointer to receive error message
+///
+/// # Returns
+/// * Pointer to SglangClientHandle on success, null on failure
+///
+/// # Safety
+/// `endpoint` and `tokenizer_path` must be valid NUL-terminated UTF-8 strings;
+/// `error_out` must be null or a writable `char**`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_create(
     endpoint: *const c_char,
@@ -85,7 +97,11 @@ pub unsafe extern "C" fn sgl_client_create(
     Box::into_raw(Box::new(SglangClientHandle { client, tokenizer }))
 }
 
-/// Free a client handle # Safety `handle` must be null or a pointer returned by `sgl_client_create`.
+/// Free a client handle
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by `sgl_client_create` that has
+/// not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_free(handle: *mut SglangClientHandle) {
     if !handle.is_null() {
@@ -93,7 +109,20 @@ pub unsafe extern "C" fn sgl_client_free(handle: *mut SglangClientHandle) {
     }
 }
 
-/// Send a chat completion request and start streaming # Arguments * `client_handle` - Client handle * `request_json`.
+/// Send a chat completion request and start streaming
+///
+/// # Arguments
+/// * `client_handle` - Client handle
+/// * `request_json` - OpenAI ChatCompletionRequest as JSON string
+/// * `stream_handle_out` - Pointer to receive stream handle
+/// * `error_out` - Optional pointer to receive error message
+///
+/// # Returns
+/// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// `client_handle` must be live; `request_json` must be NUL-terminated UTF-8;
+/// `stream_handle_out` and `error_out` must be null or writable pointers.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_client_chat_completion_stream(
     client_handle: *mut SglangClientHandle,

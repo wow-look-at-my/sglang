@@ -22,7 +22,7 @@ features = ["python", "parallel"]
 # which renames the built artifact.
 name = "sglang_mm_core"
 # cdylib: the PyO3 module (`sglang.srt.rust_extensions._multimodal`).
-# rlib: pure-Rust core linked by sglang-server's Rust MM path.
+# rlib:   pure-Rust core linked by sglang-server's Rust MM path.
 crate-type = ["cdylib", "rlib"]
 
 [features]
@@ -60,4 +60,6 @@ image = { version = "0.25", default-features = false, features = [
 rayon = { version = "1.10", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Native media fetch (stage 1 of the server MM pipeline); rustls so the
+# extension never links the system OpenSSL.
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }

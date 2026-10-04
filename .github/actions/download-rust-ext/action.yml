@@ -23,7 +23,8 @@ outputs:
 runs:
   using: composite
   steps:
-    # continue-on-error: the artifact expires in a day, so a re-run falls through to the cache below.
+    # continue-on-error: the artifact expires in a day, so a re-run falls through
+    # to the cache below.
     - name: Download prebuilt Rust extensions
       id: artifact
       if: inputs.artifact_name != ''
@@ -33,13 +34,17 @@ runs:
         name: ${{ inputs.artifact_name }}
         path: python/sglang/srt/
 
-    # Gated with the restore below, not run unconditionally: a job whose artifact arrived never reads the cache, so it should not pay an apt-get for it. The self-hosted images ship without zstd, and the entries were saved with it.
+    # Gated with the restore below, not run unconditionally: a job whose artifact
+    # arrived never reads the cache, so it should not pay an apt-get for it. The
+    # self-hosted images ship without zstd, and the entries were saved with it.
     - name: Ensure zstd so the cache entry is readable
       if: steps.artifact.outcome != 'success'
       shell: bash
       run: bash scripts/ci/utils/ensure_zstd.sh
 
-    # Second, not first: the cache is evictable and this repo sits at its 10 GB limit. A run reads its own branch's entries plus the default branch's, so seed-rust-ext-cache.yml and the branch's own rust-ext-build both land here.
+    # Second, not first: the cache is evictable and this repo sits at its 10 GB
+    # limit. A run reads its own branch's entries plus the default branch's, so
+    # seed-rust-ext-cache.yml and the branch's own rust-ext-build both land here.
     - name: Restore prebuilt Rust extensions from cache
       id: cache
       if: steps.artifact.outcome != 'success'
@@ -50,7 +55,10 @@ runs:
           python/sglang/srt/mem_cache/rust_tree_core/mem_cache*.so
         key: ${{ inputs.cache_key_prefix }}-${{ hashFiles('rust/**', 'proto/**', 'python/setup.py', 'python/pyproject.toml', 'python/sglang/srt/rust_extensions/torch_build.py', '.github/workflows/_pr-test-rust-ext-build.yml', 'scripts/ci/utils/stage_rust_ext_modules.sh') }}
 
-    # Job-wide, but only setup.py reads it, and only while building. Whether the modules suit this interpreter is not decided here: require_prebuilt_rust_exts checks them against the local EXT_SUFFIX and clears this back to a source build on a mismatch.
+    # Job-wide, but only setup.py reads it, and only while building.
+    # Whether the modules suit this interpreter is not decided here:
+    # require_prebuilt_rust_exts checks them against the local EXT_SUFFIX and
+    # clears this back to a source build on a mismatch.
     - name: Decide whether to skip the cargo build
       id: decide
       shell: bash

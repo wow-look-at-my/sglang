@@ -37,6 +37,7 @@ void fused_experts_fp_kernel_impl(
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
 
+  // stage 1: intermediate_cache0 = hidden_states @ w1
   const int64_t MB = div_up(num_tokens_post_pad, BLOCK_M);
   const int64_t NB = div_up(2 * N, BLOCK_N);
   int64_t scale_size_N = div_up(2 * N, block_size_N);
@@ -82,6 +83,7 @@ void fused_experts_fp_kernel_impl(
       int64_t m_size = offsets[mb + 1] - offsets[mb];
 
       if (nb_offset == 0) {
+        // 1.a load A
         const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
         for (int64_t m = 0; m < m_size; ++m) {
           int32_t index = A_ids[m] / topk;
@@ -114,6 +116,7 @@ void fused_experts_fp_kernel_impl(
     }
   });
 
+  // stage 1.5: intermediate_cache1 = activation(intermediate_cache0)
   if (act_func == CPUActMethod::silu_and_mul) {
     at::parallel_for(0, M * topk, 0, [&](int64_t begin, int64_t end) {
       for (int64_t m = begin; m < end; ++m) {
@@ -134,6 +137,7 @@ void fused_experts_fp_kernel_impl(
       }
     });
   }
+  // stage 2: intermediate_cache2 = intermediate_cache1 @ w2
   //   w2 : [E, K, N] as [E, OC, IC]
   const int64_t OC = K;  // rename K as OC
   const int64_t IC = N;  // rename N as IC
@@ -202,6 +206,7 @@ void fused_experts_fp_kernel_impl(
     }
   });
 
+  // stage 3: out = intermediate_cache2.sum(dim=1)
   //   from [M, topk, K] to [M, K]
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
@@ -270,6 +275,7 @@ void shared_expert_fp8_kernel_impl(
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
 
+  // stage 1: intermediate_cache0 = hidden_states @ w1
   const int64_t MB = div_up(M, BLOCK_M);
   const int64_t NB = div_up(2 * N, BLOCK_N);
   int64_t scale_size_K = div_up(K, block_size_K);
@@ -314,12 +320,14 @@ void shared_expert_fp8_kernel_impl(
     }
   });
 
+  // stage 1.5: intermediate_cache1 = silu(intermediate_cache0)
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
       silu_and_mul_stub(ic1 + m * N, ic0 + m * 2 * N, ic0 + m * 2 * N + N, N);
     }
   });
 
+  // stage 2: intermediate_cache2 = intermediate_cache1 @ w2
   //   w2 : [K, N] as [OC, IC]
   const int64_t OC = K;  // rename K as OC
   const int64_t IC = N;  // rename N as IC

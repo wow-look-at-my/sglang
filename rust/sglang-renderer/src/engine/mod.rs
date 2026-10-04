@@ -21,8 +21,11 @@ pub(crate) use types::{
 pub(crate) type TokenStream =
     futures::stream::BoxStream<'static, Result<TokenDelta, ResponseError>>;
 
-/// Backend generation from prepared token requests to normalized token
-/// deltas. Successful streams carry a finish reason on their terminal output.
+/// Backend generation from prepared token requests to normalized token deltas.
+///
+/// Successful streams carry a finish reason on their terminal output. The caller
+/// owns the submission future and response stream; dropping either must release the
+/// corresponding transport work. HTTP health checks and proxying are separate.
 pub(crate) trait GenerateTransport: Send + Sync {
     fn generate(
         &self,

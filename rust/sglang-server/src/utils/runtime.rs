@@ -1,4 +1,18 @@
-//! Runtime bootstrap: wires channels, pins CPU-bound pools, starts the tokio API server.
+//! Runtime bootstrap: wires channels, pins CPU-bound pools, starts the tokio
+//! API server, and returns a handle the Python boundary uses for
+//! `recv_requests` and `push_decode_result_batch`.
+//!
+//! Thread layout:
+//!   * API server     — tokio multi-thread runtime (I/O bound), pinned core set A
+//!   * Tokenizer      — N pinned OS threads (CPU bound), core set B
+//!   * Detokenizer    — M pinned OS threads (CPU bound), core set C
+//!   * To_scheduler   — 1 thread driving the FSM
+//!   * From_scheduler — 1 thread draining the scheduler → detok shards
+//!   * MM workers     — K unpinned OS threads, spawned late via
+//!     [`Runtime::start_mm_workers`] (multimodal models only)
+//!
+//! Keeping CPU-bound tokenize/detokenize off the async executor avoids stalling
+//! axum's worker threads.
 
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -27,7 +41,8 @@ pub trait Runnable: Send + 'static {
 pub struct Runtime {
     pub to_scheduler_rx: ToSchedulerRx,
     pub from_scheduler_tx: FromSchedulerTx,
-    /// MM results parked between a worker's `MmEncoded` and the scheduler drain (`Server.take_mm_result`).
+    /// MM results parked between a worker's `MmEncoded` and the scheduler drain
+    /// (`Server.take_mm_result`).
     pub mm_results: crate::multi_modality::result_store::MmResultStore,
     /// Wiring for the late-spawned MM pool ([`Runtime::start_mm_workers`]).
     mm_wiring: crate::multi_modality::worker::MmWiring,
@@ -37,13 +52,20 @@ pub struct Runtime {
     shutdown_tx: Mutex<Option<flume::Sender<()>>>,
 }
 
-/// Deadline for joining worker threads on shutdown.
+/// Deadline for joining worker threads on shutdown. Past it we abandon the join
+/// so process teardown can't deadlock on a worker that somehow failed to exit.
 const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Runtime {
     /// Build the family context from `spec` and spawn `workers`
-    /// `mm-worker-{i}` threads into the shutdown join set — late, once
-    /// Python has built the mm spec (`Server.start_mm_workers`).
+    /// `mm-worker-{i}` threads into the shutdown join set — late, once Python
+    /// has built the mm spec (`Server.start_mm_workers`).
+    ///
+    /// Deliberately unpinned: the threads inherit the launch thread's affinity,
+    /// already narrowed by `RustServer.launch` to the server cores, so bursty
+    /// MM preprocessing floats over that whole set (rather than owning cores
+    /// that idle between bursts) and never preempts the scheduler's reserved
+    /// cores.
     pub fn start_mm_workers(
         &self,
         spec: crate::message::config::MmSpec,
@@ -133,7 +155,8 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
         detokenizer_rx.push(rx);
     }
 
-    // Aborts get their own UNBOUNDED lane: on the bounded inbox they are dropped exactly under the overload that makes them necessary.
+    // Aborts get their own UNBOUNDED lane: on the bounded inbox they are dropped
+    // exactly under the overload that makes them necessary (see `Senders::abort`).
     let (abort_tx, abort_rx) = flume::unbounded::<crate::tokenizer_manager::wiring::AbortSource>();
     let senders = Senders {
         tok_manager_tx: tok_manager_tx.clone(),
@@ -142,13 +165,16 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
         detokenizer_tx,
     };
 
-    // `skip_tokenizer_init`: clients send token ids and receive token ids — no tokenizer is loaded.
+    // `skip_tokenizer_init`: clients send token ids and receive token ids — no
+    // tokenizer is loaded, and the server emits raw `output_ids` (no decode).
     let skip_tokenizer_init = cfg.server_args.skip_tokenizer_init;
 
     // The same instance is shared by the tokenizer pool (encode) and the detok
     // shards (decode); `None` only under `skip_tokenizer_init`.
     let dyn_tokenizer = tokenizer::load_tokenizer(
-        // Empty only in standalone (test) configs (the Python handoff always resolves it); empty → no tokenizer.
+        // Empty only in standalone (test) configs (the Python handoff always
+        // resolves it); empty → no tokenizer, allowed only under
+        // `skip_tokenizer_init`.
         (!cfg.server_args.tokenizer_path.is_empty()).then_some(&*cfg.server_args.tokenizer_path),
         cfg.server_args.revision.as_deref(),
         skip_tokenizer_init,
@@ -164,13 +190,16 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
 
     // --- Detokenizer shards (pinned, CPU bound) ---
     {
-        // Default: a real tokenizer decodes to text.
+        // Default: a real tokenizer decodes to text. `None` (→ `Skip`, raw
+        // `output_ids`) only happens under `skip_tokenizer_init` —
+        // `load_tokenizer` rejects a non-skip server with no tokenizer.
         let backend = match &dyn_tokenizer {
             Some(t) => detokenizer::DetokenizerBackend::Dynamo(t.clone()),
             None => detokenizer::DetokenizerBackend::Skip,
         };
         let detok_cores = plan.as_ref().map(|p| p.detok.clone());
-        // Each shard owns its receiver outright (one consumer per shard).
+        // Each shard owns its receiver outright (one consumer per shard), so the
+        // owned `detok_rx` Vec is moved out element-by-element via the iterator.
         let count = detokenizer_rx.len();
         let mut detokenizer_rxs = detokenizer_rx.into_iter();
         spawn_pool("detokenizer", detok_cores, count, &mut threads, |i| {
@@ -213,8 +242,9 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
 
     // --- Response dispatcher: drains from_scheduler channel → routes chunks to shards ---
     {
-        // First TM core; from_scheduler is the hotter router (every output
-        // token).
+        // First TM core; from_scheduler is the hotter router (every output token). One
+        // worker today via `spawn_pool`, so sharding by `Rid::shard` later (see
+        // `TM_CORES`) is just a larger count + per-shard receivers.
         let cores = plan
             .as_ref()
             .and_then(|p| p.tm.first().copied())
@@ -269,7 +299,9 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
         let senders = senders.clone();
         let response_activity = response_activity.clone();
         let shutdown_rx = shutdown_rx.clone();
-        // Bind synchronously so an unavailable port (EADDRINUSE) is a hard startup error.
+        // Bind synchronously so an unavailable port (EADDRINUSE) is a hard
+        // startup error. The `?` drops `shutdown_tx`/`senders`, which stops the
+        // launcher process.
         let http_addr = cfg.rust_server_args.http_addr;
         let listener = bind_tcp_listener(http_addr)
             .map_err(|e| format!("binding API listener on {} failed: {e}", http_addr))?;
@@ -332,9 +364,12 @@ mod tests {
         }
     }
 
-    /// Regression: `request_shutdown` must actually stop the API server — it joins the api thread once the listener closes.
+    /// Regression: `request_shutdown` must actually stop the API server — it joins
+    /// the api thread once the listener closes, so the port stops accepting.
+    /// (Previously it set an unread flag and the port kept accepting.)
     #[test]
     fn request_shutdown_closes_listener() {
+        // Pick a free port: bind :0, read the assigned addr, release it.
         let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = probe.local_addr().unwrap();
         drop(probe);
@@ -365,7 +400,8 @@ mod tests {
         );
     }
 
-    /// Regression: shutdown must return promptly even with an in-flight `/generate`.
+    /// Regression: shutdown must return promptly even with an in-flight
+    /// `/generate`.
     #[test]
     fn shutdown_returns_with_in_flight_request() {
         use std::io::Write;
@@ -386,7 +422,8 @@ mod tests {
         };
         let rt = start(cfg).expect("start runtime");
 
-        // Fire a request that will block.
+        // Fire a request that will block (already-tokenized → valid → pushed to the
+        // ring, then the handler awaits decode frames that never arrive).
         let mut conn = std::net::TcpStream::connect(addr).expect("connect");
         let body = r#"{"input_ids":[1,2,3],"stream":false,"sampling_params":{"max_new_tokens":8}}"#;
         let req = format!(
@@ -409,7 +446,8 @@ mod tests {
         drop(conn);
     }
 
-    /// Regression: a >2MB body must reach the JSON layer and fail on its *content* (unknown field → 4xx).
+    /// Regression: a >2MB body must reach the JSON layer and fail on its
+    /// *content* (unknown field → 4xx), never on size (413).
     #[test]
     fn accepts_multi_megabyte_generate_body() {
         use std::io::{Read, Write};
@@ -429,7 +467,13 @@ mod tests {
         };
         let rt = start(cfg).expect("start runtime");
 
-        // ~3MB of input_ids plus a `text`, which is mutually exclusive with them.
+        // ~3MB of input_ids plus a `text`, which is mutually exclusive with them:
+        // the body parses in full and is then rejected by `into_requests` with a
+        // 400, proving it got past any size limit (a 413 would fire before
+        // parsing). The rejection must come from OUR validation, not from serde —
+        // an unknown field used to serve here, but unknown fields are now ignored
+        // to match Python, so such a body would be accepted, dispatched to a ring
+        // nobody drains in this test, and hang the connection.
         let ids = "1,".repeat(1_500_000);
         let body = format!(
             r#"{{"input_ids":[{}1],"text":"x","sampling_params":{{"max_new_tokens":1}}}}"#,
@@ -455,6 +499,8 @@ mod tests {
             .nth(1)
             .and_then(|c| c.parse().ok())
             .unwrap_or(0);
+        // A 400 from the mutually-exclusive-inputs check proves the body was read
+        // and parsed in full; 413 would mean it was rejected on size beforehand.
         assert!(
             (400..500).contains(&code) && code != 413,
             "expected a JSON-layer 4xx (not 413), got: {status_line}"
@@ -463,7 +509,8 @@ mod tests {
         rt.request_shutdown();
     }
 
-    /// Regression: a port conflict must fail `start` (so the scheduler doesn't advertise ready).
+    /// Regression: a port conflict must fail `start` (so the scheduler doesn't
+    /// advertise ready), not return an `Ok` runtime whose listener never binds.
     #[test]
     fn start_fails_on_port_conflict() {
         // Hold the port so the runtime's bind conflicts (EADDRINUSE).

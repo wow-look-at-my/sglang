@@ -1,6 +1,11 @@
 #!/bin/bash
 
-# OpenAI-compatible server runner Usage: ./run.sh [tokenizer_path] [endpoint] [port] [--profile] [--pprof-port PORT] Options.
+# OpenAI-compatible server runner
+# Usage: ./run.sh [tokenizer_path] [endpoint] [port] [--profile] [--pprof-port PORT]
+#
+# Options:
+#   --profile          Enable pprof profiling (default port: 6060)
+#   --pprof-port PORT  Set pprof port (default: 6060, requires --profile)
 
 # Set library path for Rust FFI library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +21,9 @@ fi
 # Get Python LDFLAGS (needed for Rust FFI that depends on Python)
 PYTHON_LDFLAGS=$(python3-config --ldflags --embed 2>/dev/null || python3-config --ldflags 2>/dev/null || echo "")
 
-# Set CGO_LDFLAGS to link with the Rust library Note: -lsgl_model_gateway_go and -ldl are already in the #cgo directive.
+# Set CGO_LDFLAGS to link with the Rust library
+# Note: -lsgl_model_gateway_go and -ldl are already in the #cgo directive in internal/ffi/client.go
+# We only need to add the library path (-L) and Python flags
 export CGO_LDFLAGS="-L${LIB_DIR} ${PYTHON_LDFLAGS}"
 
 # macOS uses DYLD_LIBRARY_PATH, Linux uses LD_LIBRARY_PATH

@@ -1,6 +1,18 @@
 name: PR Test (sgl-router)
 
-# Trigger contract — modeled on `pr-test.yml`: * No `paths:` filter at the trigger level. The workflow ALWAYS fires on every PR synchronize / push, so the run record always appears as a check on the PR (no more "workflow silently didn't fire" mystery debugging). Path-based skip decisions are made inside the `sgl-router-gate` job below, where we can log the reason. Same for the `run-ci` label gate — moved off the workflow trigger and into the gate job so its outcome is observable. * `push` on `main` keeps firing so post-merge runs still record against the default branch.
+# Trigger contract — modeled on `pr-test.yml`:
+#
+#   * No `paths:` filter at the trigger level. The workflow ALWAYS
+#     fires on every PR synchronize / push, so the run record always
+#     appears as a check on the PR (no more "workflow silently didn't
+#     fire" mystery debugging). Path-based skip decisions are made
+#     inside the `sgl-router-gate` job below, where we can log the
+#     reason. Same for the `run-ci` label gate — moved off the
+#     workflow trigger and into the gate job so its outcome is
+#     observable.
+#
+#   * `push` on `main` keeps firing so post-merge runs still record
+#     against the default branch.
 on:
   push:
     branches: [main]
@@ -17,7 +29,14 @@ env:
   SGLANG_IS_IN_CI: true
 
 jobs:
-  # Stage 0 — decide whether to run the heavy tiers. Always runs (cheap, ubuntu-latest), and emits a single `should_run` output consumed by every tier below. Reasons it might evict downstream work: * `pull_request` event without the `run-ci` label (budget gate) * No files matching the sgl-router paths changed in this PR. Either outcome is logged on the gate job's page, so operators can see *why* the tiers were skipped instead of guessing.
+  # Stage 0 — decide whether to run the heavy tiers. Always runs
+  # (cheap, ubuntu-latest), and emits a single `should_run` output
+  # consumed by every tier below. Reasons it might evict downstream
+  # work:
+  #   * `pull_request` event without the `run-ci` label (budget gate)
+  #   * No files matching the sgl-router paths changed in this PR
+  # Either outcome is logged on the gate job's page, so operators can
+  # see *why* the tiers were skipped instead of guessing.
   sgl-router-gate:
     name: gate
     runs-on: ubuntu-latest
@@ -27,7 +46,11 @@ jobs:
       has_run_ci_label: ${{ steps.label.outputs.has_run_ci }}
     steps:
       - uses: actions/checkout@v4
-      # `dorny/paths-filter` computes the diff against the PR base (for pull_request) or the push's `before` SHA (for push) and exposes `sgl_router=true|false` on whether any tracked path changed. Replaces the old workflow-level `paths:` filter so the gate is observable.
+      # `dorny/paths-filter` computes the diff against the PR base
+      # (for pull_request) or the push's `before` SHA (for push) and
+      # exposes `sgl_router=true|false` on whether any tracked path
+      # changed. Replaces the old workflow-level `paths:` filter so
+      # the gate is observable.
       - name: Detect sgl-router path changes
         id: paths
         uses: dorny/paths-filter@v3
@@ -37,7 +60,10 @@ jobs:
               - 'experimental/sgl-router/**'
               - '.github/workflows/pr-test-sgl-router.yml'
               - 'scripts/ci/cuda/ci_install_dependency.sh'
-      # `run-ci` label gate. Cheap workflow runs (e.g. docs-only PRs that happen to touch the sgl-router dir) still need the opt-in label before consuming the H100 / kind tiers below. `push` events on main and `workflow_dispatch` skip this gate.
+      # `run-ci` label gate. Cheap workflow runs (e.g. docs-only PRs
+      # that happen to touch the sgl-router dir) still need the
+      # opt-in label before consuming the H100 / kind tiers below.
+      # `push` events on main and `workflow_dispatch` skip this gate.
       - name: Check run-ci label
         id: label
         run: |
@@ -72,7 +98,8 @@ jobs:
     if: needs.sgl-router-gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     env:
-      # Scoped per-job (not workflow-wide) to avoid SMG's documented breakage of self-hosted-runner pip installs that compile Rust extensions.
+      # Scoped per-job (not workflow-wide) to avoid SMG's documented breakage
+      # of self-hosted-runner pip installs that compile Rust extensions.
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
     steps:
@@ -81,7 +108,10 @@ jobs:
       - name: Install protoc
         run: sudo bash scripts/ci/utils/install_protoc.sh
 
-      # sccache install is best-effort: the GitHub release CDN intermittently returns 5xx and the action's built-in retry is shallow. If it fails, we unset RUSTC_WRAPPER below and proceed without compile caching — rust-cache still covers the bulk of warm-cache wins.
+      # sccache install is best-effort: the GitHub release CDN intermittently
+      # returns 5xx and the action's built-in retry is shallow. If it fails,
+      # we unset RUSTC_WRAPPER below and proceed without compile caching —
+      # rust-cache still covers the bulk of warm-cache wins.
       - name: Configure sccache
         id: sccache
         continue-on-error: true
@@ -151,7 +181,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config
 
-      # sccache install is best-effort: the GitHub release CDN intermittently returns 5xx and the action's built-in retry is shallow. If it fails, we unset RUSTC_WRAPPER below and proceed without compile caching — rust-cache still covers the bulk of warm-cache wins.
+      # sccache install is best-effort: the GitHub release CDN intermittently
+      # returns 5xx and the action's built-in retry is shallow. If it fails,
+      # we unset RUSTC_WRAPPER below and proceed without compile caching —
+      # rust-cache still covers the bulk of warm-cache wins.
       - name: Configure sccache
         id: sccache
         continue-on-error: true
@@ -187,10 +220,26 @@ jobs:
 
       - name: cargo test
         working-directory: experimental/sgl-router
-        # Skip the tokenizer parity_matrix test here: ubuntu-latest has no HuggingFace cache, so the matrix would hard-fail (see the test docstring). The e2e job runs it after pytest populates the Qwen3-0.6B tokenizer.json. Filter is matched against the full test path `tokenizer::parity::parity_matrix`; substring `parity_matrix` is unique to that test.
+        # Skip the tokenizer parity_matrix test here: ubuntu-latest has
+        # no HuggingFace cache, so the matrix would hard-fail (see the
+        # test docstring). The e2e job runs it after pytest populates
+        # the Qwen3-0.6B tokenizer.json. Filter is matched against the
+        # full test path `tokenizer::parity::parity_matrix`; substring
+        # `parity_matrix` is unique to that test.
         run: cargo test --locked --release --workspace -- --skip parity_matrix
 
-      # Regenerate the cross-impl block-hash parity fixture and fail if it differs from the committed file.  The Python script replicates. SGLang's `radix_cache.hash_page` algorithm verbatim (no `import sglang`); a diff here means EITHER the Rust port's algorithm drifted from the script, OR the script drifted from SGLang's actual code — in both cases the operator must investigate and re-commit the fixture in the same PR as the algorithm change. `set -euo pipefail` makes a Python-side failure (syntax error, missing import) cause this step to fail instead of falling through to a no-diff "pass" when no fixture was actually regenerated.
+      # Regenerate the cross-impl block-hash parity fixture and fail if it
+      # differs from the committed file.  The Python script replicates
+      # SGLang's `radix_cache.hash_page` algorithm verbatim (no
+      # `import sglang`); a diff here means EITHER the Rust port's algorithm
+      # drifted from the script, OR the script drifted from SGLang's actual
+      # code — in both cases the operator must investigate and re-commit
+      # the fixture in the same PR as the algorithm change.
+      #
+      # `set -euo pipefail` makes a Python-side failure (syntax error,
+      # missing import) cause this step to fail instead of falling
+      # through to a no-diff "pass" when no fixture was actually
+      # regenerated.
       - name: kv_events hash parity fixture (drift check)
         working-directory: experimental/sgl-router
         run: |
@@ -225,7 +274,12 @@ jobs:
           echo "docker-build-test not implemented yet."
           exit 0
 
-  # tier-3 k8s integration is decoupled from tier-3 e2e: each runs on a different runner type (ubuntu kind cluster vs H100), each manages its own test scope (k8s_integration/ vs everything-else-in-e2e), and each is allowed to fail without blocking the other. They both still gate on tier-2's build+test passing — a Rust compile failure blocks the GPU/cluster runners from spinning up.
+  # tier-3 k8s integration is decoupled from tier-3 e2e: each runs on a
+  # different runner type (ubuntu kind cluster vs H100), each manages its
+  # own test scope (k8s_integration/ vs everything-else-in-e2e), and
+  # each is allowed to fail without blocking the other. They both still
+  # gate on tier-2's build+test passing — a Rust compile failure blocks
+  # the GPU/cluster runners from spinning up.
   sgl-router-k8s-integration:
     name: tier-3 — k8s integration
     needs: [sgl-router-gate, sgl-router-build-and-test]
@@ -294,7 +348,13 @@ jobs:
           source "$HOME/.cargo/env"
           cargo build --locked --release --workspace
 
-      # Install SGLang from the local checkout in editable mode (no PyPI version pin) — mirrors `pr-test-rust.yml` so the router e2e runs against whatever SGLang version is on the branch. Replaces the previous `pip install sglang[srt]==X.Y.Z` pin, which forced the e2e to test against a stale wheel and would silently miss any new ServerArgs field (e.g. `disaggregation_mode` / `disaggregation_bootstrap_port`) added in the branch.
+      # Install SGLang from the local checkout in editable mode (no PyPI
+      # version pin) — mirrors `pr-test-rust.yml` so the router e2e runs
+      # against whatever SGLang version is on the branch. Replaces the
+      # previous `pip install sglang[srt]==X.Y.Z` pin, which forced the
+      # e2e to test against a stale wheel and would silently miss any
+      # new ServerArgs field (e.g. `disaggregation_mode` /
+      # `disaggregation_bootstrap_port`) added in the branch.
       - name: Install SGLang dependencies
         run: |
           bash scripts/ci/cuda/ci_install_dependency.sh
@@ -303,7 +363,14 @@ jobs:
         run: |
           python3 -m pip install -r experimental/sgl-router/tests/e2e/requirements.txt
 
-      # IMPORTANT: --ignore=tests/e2e/k8s_integration. The k8s integration suite is owned by the `sgl-router-k8s-integration` job which has kind + kubectl installed and a real cluster running. The e2e GPU runner has neither, so pytest's recursive collection of tests/e2e/ would ERROR every k8s test at setup. Both tiers must be allowed to fail independently — k8s flakes (cluster boot, image pull) must not surface as e2e failures on H100, and e2e flakes (model load, HF auth) must not surface as k8s failures.
+      # IMPORTANT: --ignore=tests/e2e/k8s_integration. The k8s integration
+      # suite is owned by the `sgl-router-k8s-integration` job which has
+      # kind + kubectl installed and a real cluster running. The e2e GPU
+      # runner has neither, so pytest's recursive collection of
+      # tests/e2e/ would ERROR every k8s test at setup. Both tiers must
+      # be allowed to fail independently — k8s flakes (cluster boot,
+      # image pull) must not surface as e2e failures on H100, and e2e
+      # flakes (model load, HF auth) must not surface as k8s failures.
       - name: Run e2e
         working-directory: experimental/sgl-router
         env:
@@ -329,7 +396,13 @@ jobs:
       - sgl-router-docker-build-test
       - sgl-router-k8s-integration
       - sgl-router-e2e
-    # `always()` lets `finish` run after upstream `skipped` outcomes (when the gate decided to skip). The downstream-skipped path is an explicit success — the workflow was correctly bypassed for a PR that didn't need full CI. The downstream-failure / downstream-cancelled path is a real fail. We also accept the gate's `skipped` (impossible today, kept for symmetry) and require the gate itself to have succeeded.
+    # `always()` lets `finish` run after upstream `skipped` outcomes
+    # (when the gate decided to skip). The downstream-skipped path is
+    # an explicit success — the workflow was correctly bypassed for a
+    # PR that didn't need full CI. The downstream-failure /
+    # downstream-cancelled path is a real fail. We also accept the
+    # gate's `skipped` (impossible today, kept for symmetry) and
+    # require the gate itself to have succeeded.
     if: |
       always() &&
       needs.sgl-router-gate.result == 'success' &&

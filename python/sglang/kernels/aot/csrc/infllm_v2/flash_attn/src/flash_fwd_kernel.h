@@ -1,4 +1,6 @@
-/***************************************************************************** */
+/******************************************************************************
+ * Copyright (c) 2024, Tri Dao.
+ ******************************************************************************/
 
 #pragma once
 
@@ -53,12 +55,16 @@ __forceinline__ __device__ void hdim16_reduce(
     const int col_idx_offset_,
     const int row_idx_offset_,
     const int warp_row_stride) {
+  // Reshape tensor_ from (MMA=4, MMA_M, MMA_N) (or (_2,_2),_2,_16) for D=32) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
   auto tensor = make_tensor(acc_S.data(), flash::convert_layout_acc_rowcol(acc_S.layout()));
   const int warp_id = threadIdx.x / 32;
   const int lane_id = threadIdx.x % 32;
+  // const int col_idx_offset = col_idx_offset_ + (lane_id % 4) * 2;
+  // const int row_idx_offset = row_idx_offset_ + warp_id * 16 + lane_id / 4;
   const int col_idx_offset = 0 + (lane_id % 4) * 2;
   const int row_idx_offset = 0 + warp_id * 16 + lane_id / 4;
 
+  // step 1: 线程内部求和 (v0 + v2)
   using TensorT = decltype(make_tensor<float>(Shape<Int<size<0, 1>(tensor)>, Int<size<1>(tensor)>>{}));
   TensorT v02;
   clear(v02);
@@ -76,11 +82,13 @@ __forceinline__ __device__ void hdim16_reduce(
     }
   }
 
+  // step 2: warp 内部蝶形求和
   SumOp<float> sum_op;
   thread_element_wise_reduce_<16>(v02, sum_op);
   thread_element_wise_reduce_<8>(v02, sum_op);
   thread_element_wise_reduce_<4>(v02, sum_op);
 
+  // step 3: copy 到 global mem
   cutlass::NumericConverter<Element, float> converter;
   if (lane_id < 4) {
 #pragma unroll
@@ -93,7 +101,7 @@ __forceinline__ __device__ void hdim16_reduce(
         for (int j = 0; j < size<1, 0>(tensor); ++j) {
           const int col_idx = col_idx_base + j;
           const int col_idx_v02 = j * size<1, 1>(tensor) + nj;
-          g_Sh(row_idx_base / 16, col_idx) = converter(v02(mi, col_idx_v02));
+          g_Sh(row_idx_base / 16, col_idx) = converter(v02(mi, col_idx_v02));  // ignore /16 since it's too slow
         }
       }
     }
@@ -186,6 +194,7 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
     //     printf("m_block = %d, n_block_max = %d\n", m_block, n_block_max);
     // }
   }
+  // We exit early and write 0 to gO and gLSE. This also covers the case where actual_seqlen_k == 0.
   // Otherwise we might read OOB elements from gK and gV.
   if ((Is_causal || Is_local || !Is_even_MN) && n_block_max <= n_block_min) {
     Tensor mO = make_tensor(
@@ -204,6 +213,7 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
     Tensor tOgO = gmem_thr_copy_O.partition_D(gO);
     Tensor tOrO = make_tensor<Element>(shape(tOgO));
     clear(tOrO);
+    // Construct identity layout for sO
     Tensor cO = make_identity_tensor(make_shape(size<0>(gO), size<1>(gO)));  // (BLK_M,BLK_K) -> (blk_m,blk_k)
     // Repeat the partitioning with identity layouts
     Tensor tOcO = gmem_thr_copy_O.partition_D(cO);
@@ -229,7 +239,8 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
   // if (tidx == 0) { printf("m_block = %d, n_block_min = %d, n_block_max = %d\n", m_block, n_block_min, n_block_max); }
 
   // We iterate over the blocks in reverse order. This is because the last block is the only one
-  // that needs masking when we read K and V from global memory.
+  // that needs masking when we read K and V from global memory. Moreover, iterating in reverse
+  // might save us 1 register (we just need n_block instead of both n_block and n_block_max).
 
   const index_t row_offset_p =
       ((bidb * params.h + bidh) * params.seqlen_q_rounded + m_block * kBlockM) * params.seqlen_k_rounded +
@@ -295,6 +306,7 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
 
   //
   // Copy Atom retiling
+  //
 
   auto smem_tiled_copy_Q = make_tiled_copy_A(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
   auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(tidx);
@@ -312,12 +324,17 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
 
   //
   // PREDICATES
+  //
 
+  // // Allocate predicate tensors for m and n
+  // Tensor tQpQ = make_tensor<bool>(make_shape(size<1>(tQsQ), size<2>(tQsQ)), Stride<_1,_0>{});
+  // Tensor tKVpKV = make_tensor<bool>(make_shape(size<1>(tKsK), size<2>(tKsK)), Stride<_1,_0>{});
 
   // Construct identity layout for sQ and sK
   Tensor cQ = make_identity_tensor(make_shape(size<0>(sQ), size<1>(sQ)));   // (BLK_M,BLK_K) -> (blk_m,blk_k)
   Tensor cKV = make_identity_tensor(make_shape(size<0>(sK), size<1>(sK)));  // (BLK_N,BLK_K) -> (blk_n,blk_k)
-  // Tensor tScQ = thr_mma.partition_A(cQ); // (MMA,MMA_M,MMA_K) if (cute::thread0()) {
+  // Tensor tScQ = thr_mma.partition_A(cQ);                           // (MMA,MMA_M,MMA_K)
+  // if (cute::thread0()) {
   //     print(tScQ.layout()); printf("\n");
   //     for (int i = 0; i < size(tScQ); ++i) {
   //         printf("%d ", get<0>(tScQ(i)));
@@ -358,6 +375,10 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
     cute::cp_async_fence();
   }
 
+  // // if (cute::thread(1, 0)) { print(tQsQ); }
+  // // Tensor sQNoSwizzle = make_tensor(make_smem_ptr(reinterpret_cast<Element *>(smem_)), typename
+  // Kernel_traits::SmemLayoutQNoSwizzle{});
+  // // if (cute::thread0()) { print(sQNoSwizzle); }
 
   if (Kernel_traits::Share_Q_K_smem) {
     flash::cp_async_wait<0>();
@@ -406,12 +427,14 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
   int next_block_idx = blockmask.max_no_larger(n_block_max - 1);
   int leap = 0;
 
-  // For performance reason, we separate out kinds of iterations: those that need masking on S,
-  // and those that don't. We need masking on S for the very last block when K and V has length
-  // not multiple of kBlockN. We also need masking on S if it's causal, for the last
-  // ceil_div(kBlockM, kBlockN) blocks.
+  // For performance reason, we separate out two kinds of iterations:
+  // those that need masking on S, and those that don't.
+  // We need masking on S for the very last block when K and V has length not multiple of kBlockN.
+  // We also need masking on S if it's causal, for the last ceil_div(kBlockM, kBlockN) blocks.
+  // We will have at least 1 "masking" iteration.
 
-  // If not even_N, then seqlen_k might end in the middle of a block.
+  // If not even_N, then seqlen_k might end in the middle of a block. In that case we need to
+  // mask 2 blocks (e.g. when kBlockM == kBlockN), not just 1.
   constexpr int n_masking_steps =
       (!Is_causal && !Is_local)
           ? 1
@@ -495,12 +518,15 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
         dropout.apply_dropout(rP, block_row_idx, block_col_idx, kNWarps);
       }
 
+      // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
+      // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
       Tensor tOrP = make_tensor(rP.data(), flash::convert_layout_acc_Aregs<Kernel_traits::TiledMma>(rP.layout()));
       // if (cute::thread0()) { print(tOrP); }
       flash::gemm_rs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
       // if (cute::thread0()) { print(scores); }
     }
 
+    // This check is at the end of the loop since we always have at least 1 iteration
     if (n_masking_steps > 1 && n_block <= n_block_min) {
       --n_block;
       break;
@@ -567,6 +593,8 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
       dropout.apply_dropout(rP, block_row_idx, block_col_idx, kNWarps);
     }
 
+    // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
+    // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
     Tensor tOrP = make_tensor(rP.data(), flash::convert_layout_acc_Aregs<Kernel_traits::TiledMma>(rP.layout()));
     flash::gemm_rs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
   }
@@ -613,6 +641,7 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
   Tensor caccO = make_identity_tensor(Shape<Int<kBlockM>, Int<kHeadDim>>{});  // (BLK_M,BLK_K) -> (blk_m,blk_k)
   Tensor taccOcO = thr_mma.partition_C(caccO);                                // (MMA,MMA_M,MMA_K)
   static_assert(decltype(size<0>(taccOcO))::value == 4);
+  // Convert to ((2, 2), MMA_M, MMA_K) then take only the row indices.
   Tensor taccOcO_row = logical_divide(taccOcO, Shape<_2>{})(make_coord(0, _), _, 0);
   CUTE_STATIC_ASSERT_V(size(lse) == size(taccOcO_row));  // MMA_M
   if (get<1>(taccOcO_row(0)) == 0) {
@@ -625,6 +654,7 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
     }
   }
 
+  // Construct identity layout for sO
   Tensor cO = make_identity_tensor(make_shape(size<0>(sO), size<1>(sO)));  // (BLK_M,BLK_K) -> (blk_m,blk_k)
   // Repeat the partitioning with identity layouts
   Tensor tOcO = gmem_thr_copy_O.partition_D(cO);  // (ACPY,ACPY_M,ACPY_K) -> (blk_m,blk_k)
@@ -683,7 +713,8 @@ inline __device__ void compute_attn_1rowblock_splitkv(
   // if (threadIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { printf("Is_even_MN = %d, is_cumulativ = %d,
   // seqlen_k_cache = %d, actual_seqlen_k = %d\n", Is_even_MN, params.is_seqlens_k_cumulative, binfo.seqlen_k_cache,
   // binfo.actual_seqlen_k); } if (threadIdx.x == 0 && blockIdx.y == 1 && blockIdx.z == 0) { printf("params.knew_ptr =
-  // %p, seqlen_k_cache + seqlen_knew = %d\n", params.knew_ptr, binfo.seqlen_k_cache + (params.knew_ptr == nullptr ?
+  // %p, seqlen_k_cache + seqlen_knew = %d\n", params.knew_ptr, binfo.seqlen_k_cache + (params.knew_ptr == nullptr ? 0 :
+  // params.seqlen_knew)); }
   if (m_block * kBlockM >= binfo.actual_seqlen_q) return;
 
   const int n_blocks_per_split = ((params.seqlen_k + kBlockN - 1) / kBlockN + num_n_splits - 1) / num_n_splits;
@@ -703,8 +734,9 @@ inline __device__ void compute_attn_1rowblock_splitkv(
             kBlockN));
   }
   if (n_block_min >= n_block_max) {  // This also covers the case where n_block_max <= 0
-    // Otherwise we might read OOB elements from gK and gV, or get wrong
-    // results when we combine gOaccum from different blocks.
+    // We exit early and write 0 to gOaccum and -inf to gLSEaccum.
+    // Otherwise we might read OOB elements from gK and gV,
+    // or get wrong results when we combine gOaccum from different blocks.
     const index_t row_offset_o = binfo.q_offset(params.o_batch_stride, params.o_row_stride, bidb) +
                                  m_block * kBlockM * params.o_row_stride + bidh * params.o_head_stride;
     const index_t row_offset_oaccum =
@@ -729,6 +761,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(
     Tensor tOgOaccum = gmem_thr_copy_Oaccum.partition_D(gOaccum);
     Tensor tOrOaccum = make_tensor<ElementO>(shape(tOgOaccum));
     clear(tOrOaccum);
+    // Construct identity layout for sO
     Tensor cO = make_identity_tensor(make_shape(size<0>(gOaccum), size<1>(gOaccum)));  // (BLK_M,BLK_K) -> (blk_m,blk_k)
     // Repeat the partitioning with identity layouts
     Tensor tOcO = gmem_thr_copy_Oaccum.partition_D(cO);
@@ -753,7 +786,8 @@ inline __device__ void compute_attn_1rowblock_splitkv(
   }
 
   // We iterate over the blocks in reverse order. This is because the last block is the only one
-  // that needs masking when we read K and V from global memory.
+  // that needs masking when we read K and V from global memory. Moreover, iterating in reverse
+  // might save us 1 register (we just need n_block instead of both n_block and n_block_max).
 
   // We move K and V to the last block.
   const int bidb_cache = params.cache_batch_idx == nullptr ? bidb : params.cache_batch_idx[bidb];
@@ -819,6 +853,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(
 
   //
   // Copy Atom retiling
+  //
 
   auto smem_tiled_copy_Q = make_tiled_copy_A(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
   auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(tidx);
@@ -833,7 +868,11 @@ inline __device__ void compute_attn_1rowblock_splitkv(
   Tensor tOsVt = smem_thr_copy_V.partition_S(sVt);
 
   // PREDICATES
+  //
 
+  // // Allocate predicate tensors for m and n
+  // Tensor tQpQ = make_tensor<bool>(make_shape(size<1>(tQsQ), size<2>(tQsQ)), Stride<_1,_0>{});
+  // Tensor tKVpKV = make_tensor<bool>(make_shape(size<1>(tKsK), size<2>(tKsK)), Stride<_1,_0>{});
 
   // Construct identity layout for sQ and sK
   Tensor cQ = make_identity_tensor(make_shape(size<0>(sQ), size<1>(sQ)));   // (BLK_M,BLK_K) -> (blk_m,blk_k)
@@ -893,6 +932,9 @@ inline __device__ void compute_attn_1rowblock_splitkv(
     Tensor tRgSin = gmem_thr_copy_rotary.partition_S(gSin);
     Tensor tRgCosCont = gmem_thr_copy_rotary_cont.partition_S(gCosCont);
     Tensor tRgSinCont = gmem_thr_copy_rotary_cont.partition_S(gSinCont);
+    // if (cute::thread(0, 0)) { printf("rotary_cos_ptr = %p, gCos.data() = %p, tRgCos.data() = %p, rotary_dim = %d\n",
+    // params.rotary_cos_ptr, gCos.data(), tRgCos.data(), params.rotary_dim); } if (cute::thread(8, 0)) {
+    // print_tensor(gCos); } if (cute::thread(0, 0)) { print_tensor(tRgCos); }
 
     // const index_t row_offset_knew = binfo.k_offset(params.knew_batch_stride, params.knew_row_stride, bidb)
     const index_t row_offset_knew = bidb * params.knew_batch_stride +
@@ -902,8 +944,9 @@ inline __device__ void compute_attn_1rowblock_splitkv(
     const index_t row_offset_vnew = bidb * params.vnew_batch_stride +
                                     ((n_block_max - 1) * kBlockN) * params.vnew_row_stride +
                                     (bidh / params.h_h_k_ratio) * params.vnew_head_stride;
-    // Subtract seqlen_k_cache * row stride so that conceptually gK and gKnew "line up". This maps to
-    // accessing the first many rows of knew_ptr.
+    // Subtract seqlen_k_cache * row stride so that conceptually gK and gKnew "line up". When we access them,
+    // e.g. if gK has 128 rows and gKnew has 64 rows, we access gK[:128] and gKNew[128:128 + 64].
+    // This maps to accessing the first 64 rows of knew_ptr.
     Tensor gKnew = make_tensor(
         make_gmem_ptr(
             reinterpret_cast<Element*>(params.knew_ptr) + row_offset_knew -
@@ -1006,6 +1049,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(
          (Is_causal || Is_local ? m_block * kBlockM : 0)) *
         (params.rotary_dim / 2);
     // If not causal, all the queries get the same the cos/sin, taken at location seqlen_k_cache.
+    // We do this by setting the row stride of gCos / gSin to 0.
     Tensor gCos = make_tensor(
         make_gmem_ptr(reinterpret_cast<Element*>(params.rotary_cos_ptr) + row_offset_cossin),
         Shape<Int<kBlockM>, Int<kHeadDim / 2>>{},
@@ -1074,12 +1118,14 @@ inline __device__ void compute_attn_1rowblock_splitkv(
   int next_block_idx = blockmask.max_no_larger(n_block_max - 1);
   int leap = 0;
 
-  // For performance reason, we separate out kinds of iterations: those that need masking on S,
-  // and those that don't. We need masking on S for the very last block when K and V has length
-  // not multiple of kBlockN. We also need masking on S if it's causal, for the last
-  // ceil_div(kBlockM, kBlockN) blocks.
+  // For performance reason, we separate out two kinds of iterations:
+  // those that need masking on S, and those that don't.
+  // We need masking on S for the very last block when K and V has length not multiple of kBlockN.
+  // We also need masking on S if it's causal, for the last ceil_div(kBlockM, kBlockN) blocks.
+  // We will have at least 1 "masking" iteration.
 
-  // If not even_N, then seqlen_k might end in the middle of a block.
+  // If not even_N, then seqlen_k might end in the middle of a block. In that case we need to
+  // mask 2 blocks (e.g. when kBlockM == kBlockN), not just 1.
   constexpr int n_masking_steps =
       (!Is_causal && !Is_local)
           ? 1
@@ -1175,11 +1221,14 @@ inline __device__ void compute_attn_1rowblock_splitkv(
     if (!skip) {
       // Convert acc_s from fp32 to fp16/bf16
       Tensor rP = flash::convert_type<Element>(acc_s);
+      // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
+      // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
       Tensor tOrP = make_tensor(rP.data(), flash::convert_layout_acc_Aregs<Kernel_traits::TiledMma>(rP.layout()));
 
       flash::gemm_rs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
     }
 
+    // This check is at the end of the loop since we always have at least 1 iteration
     if (n_masking_steps > 1 && n_block <= n_block_min) {
       --n_block;
       break;
@@ -1255,6 +1304,8 @@ inline __device__ void compute_attn_1rowblock_splitkv(
         acc_s, acc_o, params.scale_softmax_log2);
 
     Tensor rP = flash::convert_type<Element>(acc_s);
+    // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
+    // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
     Tensor tOrP = make_tensor(rP.data(), flash::convert_layout_acc_Aregs<Kernel_traits::TiledMma>(rP.layout()));
 
     flash::gemm_rs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
@@ -1320,6 +1371,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(
   Tensor caccO = make_identity_tensor(Shape<Int<kBlockM>, Int<kHeadDim>>{});  // (BLK_M,BLK_K) -> (blk_m,blk_k)
   Tensor taccOcO = thr_mma.partition_C(caccO);                                // (MMA,MMA_M,MMA_K)
   static_assert(decltype(size<0>(taccOcO))::value == 4);
+  // Convert to ((2, 2), MMA_M, MMA_K) then take only the row indices.
   Tensor taccOcO_row = logical_divide(taccOcO, Shape<_2>{})(make_coord(0, _), _, 0);
   CUTE_STATIC_ASSERT_V(size(lse) == size(taccOcO_row));  // MMA_M
   if (get<1>(taccOcO_row(0)) == 0) {
@@ -1332,6 +1384,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(
     }
   }
 
+  // Construct identity layout for sO
   Tensor cO = make_identity_tensor(make_shape(size<0>(sOaccum), size<1>(sOaccum)));  // (BLK_M,BLK_K) -> (blk_m,blk_k)
   // Repeat the partitioning with identity layouts
   Tensor tOcO = gmem_thr_copy_Oaccum.partition_D(cO);  // (ACPY,ACPY_M,ACPY_K) -> (blk_m,blk_k)
@@ -1386,7 +1439,8 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
   // if (threadIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { printf("Is_even_MN = %d, is_cumulativ = %d,
   // seqlen_k_cache = %d, actual_seqlen_k = %d\n", Is_even_MN, params.is_seqlens_k_cumulative, binfo.seqlen_k_cache,
   // binfo.actual_seqlen_k); } if (threadIdx.x == 0 && blockIdx.y == 1 && blockIdx.z == 0) { printf("params.knew_ptr =
-  // %p, seqlen_k_cache + seqlen_knew = %d\n", params.knew_ptr, binfo.seqlen_k_cache + (params.knew_ptr == nullptr ?
+  // %p, seqlen_k_cache + seqlen_knew = %d\n", params.knew_ptr, binfo.seqlen_k_cache + (params.knew_ptr == nullptr ? 0 :
+  // params.seqlen_knew)); }
   if (m_block * kBlockM >= binfo.actual_seqlen_q) return;
 
   const int n_blocks_per_split = ((params.seqlen_k + kBlockN - 1) / kBlockN + num_n_splits - 1) / num_n_splits;
@@ -1411,6 +1465,10 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
   }
 
   if (Is_local || Is_causal) {
+    // 注意到存在q_len比k_len短的情况，避免截断原本需要的k
+    // k对应以16为步长移动的, 计算q的长度对应的k, 然后计算偏移
+    // 用 len - 15 / 16 这样计算是因为 block_size = 32
+    // (len - 32) / 16 + 1
     const int _ori_actual_seqlen_q = binfo.actual_seqlen_q / params.m_block_dim;
     const int _k_stride = 16;
     const int _k_actual_seqlen_q = (_ori_actual_seqlen_q - _k_stride + 1) / _k_stride;
@@ -1423,6 +1481,7 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
     // 分析可知上下界算出来的_max_seqlen_c是一样的
     const int _max_seqlen_c = ((_max_seqlen_k * 16 + 15) - phase_1_stride + 1) / phase_1_stride;
     const int _offset_c = _max_seqlen_c - _c_actual_seqlen_q;
+    // 如果q原本和k等长，可以_k_actual_seqlen_q == _max_seqlen_k, _c_actual_seqlen_q == _max_seqlen_k / 4
 
     const int max_q = (m_block + 1) * kBlockM / params.m_block_dim - 1;
     const int max_k = (max_q - 16 + 1) / 16 + _offset_k;
@@ -1439,13 +1498,15 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
     // flash::cp_async_wait<0>(); __syncthreads();
   }
   if (n_block_min >= n_block_max_c) {  // This also covers the case where n_block_max <= 0
-    // Otherwise we might read OOB elements from gK and gV, or get wrong
-    // results when we combine gOaccum from different blocks.
+    // We exit early and write 0 to gOaccum and -inf to gLSEaccum.
+    // Otherwise we might read OOB elements from gK and gV,
+    // or get wrong results when we combine gOaccum from different blocks.
     return;
   }
 
   // We iterate over the blocks in reverse order. This is because the last block is the only one
-  // that needs masking when we read K and V from global memory.
+  // that needs masking when we read K and V from global memory. Moreover, iterating in reverse
+  // might save us 1 register (we just need n_block instead of both n_block and n_block_max).
 
   // We move K and V to the last block.
   const int bidb_cache = params.cache_batch_idx == nullptr ? bidb : params.cache_batch_idx[bidb];
@@ -1467,6 +1528,7 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
           : block_table[block_table_idx] * params.v_batch_stride + block_table_offset * params.v_row_stride +
                 (bidh / params.h_h_k_ratio) * params.v_head_stride;
 
+  // const index_t row_offset_p = ((bidb * params.h + bidh) * params.seqlen_q_rounded/16 // TODO 16 is m_block_dim
   //     + m_block * kBlockM/16) * params.seqlen_k_rounded + (n_block_max - 1) * kBlockN;
   // 获取当前 batch 在 total_query 中的起始位置
   const index_t query_offset_in_total = binfo.sum_s_q == -1 ? bidb * params.seqlen_q  // 固定长度序列
@@ -1497,7 +1559,7 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
   // %p\n", params.k_ptr, row_offset_k, gK.data()); }
   Tensor gP = make_tensor(
       make_gmem_ptr(reinterpret_cast<Element*>(params.p_ptr) + row_offset_p),
-      Shape<Int<kBlockM / 16>, Int<kBlockN>>{},
+      Shape<Int<kBlockM / 16>, Int<kBlockN>>{},  // TODO 16 is m_block_dim
       make_stride(params.seqlen_k_rounded, _1{}));
 
   Tensor sQ = make_tensor(make_smem_ptr(reinterpret_cast<Element*>(smem_)), typename Kernel_traits::SmemLayoutQ{});
@@ -1520,6 +1582,7 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
 
   //
   // Copy Atom retiling
+  //
 
   auto smem_tiled_copy_Q = make_tiled_copy_A(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
   auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(tidx);
@@ -1530,7 +1593,11 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
   Tensor tSsK = smem_thr_copy_K.partition_S(sK);
 
   // PREDICATES
+  //
 
+  // // Allocate predicate tensors for m and n
+  // Tensor tQpQ = make_tensor<bool>(make_shape(size<1>(tQsQ), size<2>(tQsQ)), Stride<_1,_0>{});
+  // Tensor tKVpKV = make_tensor<bool>(make_shape(size<1>(tKsK), size<2>(tKsK)), Stride<_1,_0>{});
 
   // Construct identity layout for sQ and sK
   Tensor cQ = make_identity_tensor(make_shape(size<0>(sQ), size<1>(sQ)));   // (BLK_M,BLK_K) -> (blk_m,blk_k)
@@ -1575,6 +1642,7 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
          (Is_causal || Is_local ? m_block * kBlockM : 0)) *
         (params.rotary_dim / 2);
     // If not causal, all the queries get the same the cos/sin, taken at location seqlen_k_cache.
+    // We do this by setting the row stride of gCos / gSin to 0.
     Tensor gCos = make_tensor(
         make_gmem_ptr(reinterpret_cast<Element*>(params.rotary_cos_ptr) + row_offset_cossin),
         Shape<Int<kBlockM>, Int<kHeadDim / 2>>{},
@@ -1636,12 +1704,14 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
   int next_block_idx = blockmask.max_no_larger(n_block_max_c - 1);
   int leap = 0;
 
-  // For performance reason, we separate out kinds of iterations: those that need masking on S,
-  // and those that don't. We need masking on S for the very last block when K and V has length
-  // not multiple of kBlockN. We also need masking on S if it's causal, for the last
-  // ceil_div(kBlockM, kBlockN) blocks.
+  // For performance reason, we separate out two kinds of iterations:
+  // those that need masking on S, and those that don't.
+  // We need masking on S for the very last block when K and V has length not multiple of kBlockN.
+  // We also need masking on S if it's causal, for the last ceil_div(kBlockM, kBlockN) blocks.
+  // We will have at least 1 "masking" iteration.
 
-  // If not even_N, then seqlen_k might end in the middle of a block.
+  // If not even_N, then seqlen_k might end in the middle of a block. In that case we need to
+  // mask 2 blocks (e.g. when kBlockM == kBlockN), not just 1.
   constexpr int n_masking_steps =
       (!Is_causal && !Is_local)
           ? 1
@@ -1722,8 +1792,11 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
     if (!skip) {
       // Convert acc_s from fp32 to fp16/bf16
       Tensor rP = flash::convert_type<Element>(acc_s);
+      // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
+      // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
     }
 
+    // This check is at the end of the loop since we always have at least 1 iteration
     if (n_masking_steps > 1 && n_block <= n_block_min) {
       --n_block;
       break;
@@ -1785,6 +1858,8 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
         acc_s, params.scale_softmax_log2);
 
     Tensor rP = flash::convert_type<Element>(acc_s);
+    // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
+    // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
   }
 
   // Epilogue
@@ -1812,12 +1887,14 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
     next_block_idx = blockmask.max_no_larger(n_block_max - 1);
     leap = 0;
 
-// For performance reason, we separate out kinds of iterations: those that need masking on S,
-// and those that don't. We need masking on S for the very last block when K and V has length
-// not multiple of kBlockN. We also need masking on S if it's causal, for the last
-// ceil_div(kBlockM, kBlockN) blocks.
+// For performance reason, we separate out two kinds of iterations:
+// those that need masking on S, and those that don't.
+// We need masking on S for the very last block when K and V has length not multiple of kBlockN.
+// We also need masking on S if it's causal, for the last ceil_div(kBlockM, kBlockN) blocks.
+// We will have at least 1 "masking" iteration.
 
-// If not even_N, then seqlen_k might end in the middle of a block.
+// If not even_N, then seqlen_k might end in the middle of a block. In that case we need to
+// mask 2 blocks (e.g. when kBlockM == kBlockN), not just 1.
 #pragma unroll
     for (int masking_step = 0; masking_step < n_masking_steps; ++masking_step, --n_block) {
       const bool skip = (n_block != next_block_idx);
@@ -1885,6 +1962,8 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
       if (!skip) {
         // Convert acc_s from fp32 to fp16/bf16
         Tensor rP = flash::convert_type<Element>(acc_s);
+        // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
+        // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
 
         if (params.p_ptr != nullptr) {
           hdim16_reduce<Element>(acc_s, gP, n_block * kBlockN, m_block * kBlockM, kNWarps * 16);
@@ -1892,6 +1971,7 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
         }
       }
 
+      // This check is at the end of the loop since we always have at least 1 iteration
       if (n_masking_steps > 1 && n_block <= n_block_min) {
         --n_block;
         break;
@@ -1953,6 +2033,8 @@ inline __device__ void compute_attn_1rowblock_splitkv_stage1(
       softmax.template softmax_rescale_gt(acc_s, params.scale_softmax_log2);
 
       Tensor rP = flash::convert_type<Element>(acc_s);
+      // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
+      // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
 
       if (params.p_ptr != nullptr) {
         hdim16_reduce<Element>(acc_s, gP, n_block * kBlockN, m_block * kBlockM, kNWarps * 16);
@@ -1981,8 +2063,10 @@ inline __device__ void compute_attn(const Params& params) {
   // The block index for the head.
   const int bidh = blockIdx.z;
 
-  // In the Philox RNG, we use the offset to store the batch, head, and the lane id (within a
-  // warp).
+  // In the Philox RNG, we use the offset to store the batch, head, and the lane id
+  // (within a warp). We use the subsequence to store the location of the 16 x 32 blocks within
+  // the attention matrix. This way, as long as we have the batch, head, and the location of
+  // the 16 x 32 block within the attention matrix, we can generate the exact same dropout pattern.
 
   flash::compute_attn_1rowblock<
       Kernel_traits,
@@ -2074,6 +2158,8 @@ inline __device__ void combine_attn_seqk_parallel(const Params& params) {
   static_assert(kMaxSplits <= 128, "kMaxSplits must be <= 128");
   static_assert(kBlockM == 4 || kBlockM == 8 || kBlockM == 16 || kBlockM == 32, "kBlockM must be 4, 8, 16 or 32");
 
+  // Shared memory.
+  // kBlockM + 1 instead of kBlockM to reduce bank conflicts.
   __shared__ ElementAccum sLSE[kMaxSplits][kBlockM + 1];
 
   // The thread and block index.
@@ -2125,8 +2211,11 @@ inline __device__ void combine_attn_seqk_parallel(const Params& params) {
   __syncthreads();
   Tensor lse_accum = make_tensor<ElementAccum>(Shape<Int<kNLsePerThread>>{});
   constexpr int kRowsPerLoadTranspose = std::min(kRowsPerLoadLSE, kMaxSplits);
-  // To make sure that kMaxSplits is a bounded number of warp: we decide how many elements within
-  // kMaxSplits each thread should hold.
+  // To make sure that kMaxSplits is within 1 warp: we decide how many elements within kMaxSplits
+  // each thread should hold. If kMaxSplits = 16, then each thread holds 2 elements (128 threads,
+  // kBlockM rows, so each time we load we can load 128 / kBlockM rows).
+  // constexpr int kThreadsPerSplit = kMaxSplits / kRowsPerLoadTranspose;
+  // static_assert(kThreadsPerSplit <= 32);
   static_assert(kRowsPerLoadTranspose <= 32);
   static_assert(kNLsePerThread * kRowsPerLoadTranspose <= kMaxSplits);
 #pragma unroll
@@ -2154,7 +2243,8 @@ inline __device__ void combine_attn_seqk_parallel(const Params& params) {
   }
   SumOp<float> sum_op;
   lse_sum = Allreduce<kRowsPerLoadTranspose>::run(lse_sum, sum_op);
-  // For the case where all local lse == -INFINITY, we want to set lse_logsum to INFINITY.
+  // For the case where all local lse == -INFINITY, we want to set lse_logsum to INFINITY. Otherwise
+  // lse_logsum is log(0.0) = -INFINITY and we get NaN when we do lse_accum(l) - lse_logsum.
   ElementAccum lse_logsum = (lse_sum == 0.f || lse_sum != lse_sum) ? INFINITY : logf(lse_sum) + lse_max;
   // if (bidx == 0 && tidx < 32) { printf("tidx = %d, lse = %f, lse_max = %f, lse_logsum = %f\n", tidx, lse_accum(0),
   // lse_max, lse_logsum); }
@@ -2189,7 +2279,7 @@ inline __device__ void combine_attn_seqk_parallel(const Params& params) {
   using GmemTiledCopyOaccum = decltype(make_tiled_copy(
       Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, ElementAccum>{},
       GmemLayoutAtomOaccum{},
-      Layout<Shape<_1, _4>>{}));  // Val layout, vals per store
+      Layout<Shape<_1, _4>>{}));  // Val layout, 4 vals per store
   GmemTiledCopyOaccum gmem_tiled_copy_Oaccum;
   auto gmem_thr_copy_Oaccum = gmem_tiled_copy_Oaccum.get_thread_slice(tidx);
   Tensor tOgOaccum = gmem_thr_copy_Oaccum.partition_S(gOaccum);
@@ -2228,6 +2318,7 @@ inline __device__ void combine_attn_seqk_parallel(const Params& params) {
           tOrO(i, m, k) += lse_scale * tOrOaccum(i, m, k);
         }
       }
+      // if (cute::thread0()) { printf("lse_scale = %f, %f\n", sLSE[split][0], sLSE[split][1]); print(tOrOaccum); }
     }
     tOgOaccum.data() = tOgOaccum.data() + params.b * params.h * params.seqlen_q * params.d_rounded;
   }
@@ -2252,6 +2343,9 @@ inline __device__ void combine_attn_seqk_parallel(const Params& params) {
           Tensor gO = make_tensor(make_gmem_ptr(o_ptr + col), Shape<Int<decltype(size<0>(rO))::value>>{}, Stride<_1>{});
           // TODO: Should check if this is using vectorized store, but it seems pretty fast
           copy(rO(_, m, k), gO);
+          // if (bidx == 0 && tidx == 0) { printf("tidx = %d, idx = %d, batch_idx = %d, head_idx = %d, row = %d, col =
+          // %d\n", tidx, idx, batch_idx, head_idx, row, col); print(rO(_, m, k)); print(gO); }
+          // reinterpret_cast<uint64_t *>(o_ptr)[col / 4] = recast<uint64_t>(rO)(0, m, k);
         }
       }
     }

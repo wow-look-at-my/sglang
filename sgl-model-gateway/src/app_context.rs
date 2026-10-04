@@ -94,8 +94,8 @@ impl AppContext {
         AppContextBuilder::new()
     }
 
-    /// Create AppContext from config with all components initialized This is the main entry
-    /// point that replaces many lines of initialization in server.rs
+    /// Create AppContext from config with all components initialized
+    /// This is the main entry point that replaces ~194 lines of initialization in server.rs
     pub async fn from_config(
         router_config: RouterConfig,
         request_timeout_secs: u64,
@@ -284,8 +284,8 @@ impl AppContextBuilder {
         })
     }
 
-    /// Initialize AppContext from config - creates ALL components This
-    /// replaces many lines of initialization logic from server.rs
+    /// Initialize AppContext from config - creates ALL components
+    /// This replaces ~194 lines of initialization logic from server.rs
     pub async fn from_config(
         router_config: RouterConfig,
         request_timeout_secs: u64,
@@ -311,6 +311,21 @@ impl AppContextBuilder {
     /// Create HTTP client with TLS/mTLS configuration
     fn with_client(mut self, config: &RouterConfig, timeout_secs: u64) -> Result<Self, String> {
         // FIXME: Current implementation creates a single HTTP client for all workers.
+        // This works well for single security domain deployments where all workers share
+        // the same CA and can accept the same client certificate.
+        //
+        // For multi-domain deployments (e.g., different model families with different CAs),
+        // this architecture needs significant refactoring:
+        // 1. Move client creation into worker registration workflow (per-worker clients)
+        // 2. Store client per worker in WorkerRegistry
+        // 3. Update PDRouter and other routers to fetch client from worker
+        // 4. Add per-worker TLS spec in WorkerConfigRequest
+        //
+        // Current single-domain approach is sufficient for most deployments.
+        //
+        // Use rustls TLS backend when TLS/mTLS is configured (client cert or CA certs provided).
+        // This ensures proper PKCS#8 key format support. For plain HTTP workers, use default
+        // backend to avoid unnecessary TLS initialization overhead.
         let has_tls_config = config.client_identity.is_some() || !config.ca_certificates.is_empty();
 
         let mut client_builder = Client::builder()
@@ -388,8 +403,14 @@ impl AppContextBuilder {
         self
     }
 
-    /// Create empty tokenizer registry Tokenizers are loaded via the
-    /// tokenizer_registration workflow, which is triggered.
+    /// Create empty tokenizer registry
+    ///
+    /// Tokenizers are loaded via the tokenizer_registration workflow, which is triggered:
+    /// - At startup (if --tokenizer-path or --model-path is provided)
+    /// - When workers connect (registers under model_id)
+    /// - Via POST /v1/tokenizers API (registers under user-specified name)
+    ///
+    /// This unified approach ensures consistent behavior (caching, validation) across all paths.
     fn with_tokenizer_registry(mut self, _config: &RouterConfig) -> Result<Self, String> {
         self.tokenizer_registry = Some(Arc::new(TokenizerRegistry::new()));
         Ok(self)

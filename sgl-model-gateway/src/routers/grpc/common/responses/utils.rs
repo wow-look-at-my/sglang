@@ -21,7 +21,7 @@ use crate::{
 
 /// Ensure MCP connection succeeds if MCP tools are declared
 ///
-/// Checks if request declares MCP tools, and if so.
+/// Checks if request declares MCP tools, and if so, validates that
 /// the MCP clients can be created and connected.
 /// Returns Ok((has_mcp_tools, server_keys)) on success.
 pub(crate) async fn ensure_mcp_connection(
@@ -79,12 +79,20 @@ pub(crate) fn validate_worker_availability(
     None
 }
 
-/// ResponseTools. It's used by both Harmony and Regular routers for different
-/// purposes: - **Harmony router**: Extracts both Function and MCP tools (with
-/// `include_mcp: true`)
+/// Extract function tools (and optionally MCP tools) from ResponseTools
+///
+/// This utility consolidates the logic for extracting tools with schemas from ResponseTools.
+/// It's used by both Harmony and Regular routers for different purposes:
+///
+/// - **Harmony router**: Extracts both Function and MCP tools (with `include_mcp: true`)
 ///   because MCP schemas are populated by convert_mcp_tools_to_response_tools() before the
 ///   pipeline runs. These tools are used to generate structural constraints in the
 ///   Harmony preparation stage.
+///
+/// - **Regular router**: Extracts only Function tools (with `include_mcp: false`) during
+///   the initial conversion from ResponsesRequest to ChatCompletionRequest. MCP tools
+///   are merged later by the tool loop before being sent to the chat pipeline, where
+///   tool_choice constraints are generated for ALL tools (function + MCP combined).
 pub(crate) fn extract_tools_from_response_tools(
     response_tools: Option<&[ResponseTool]>,
     include_mcp: bool,

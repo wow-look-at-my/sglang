@@ -39,6 +39,7 @@ impl Default for ProxyConfig {
 /// Request-tracking timeout; defaults above the proxy timeout.
 #[derive(Debug, Clone, Copy)]
 pub struct InflightLoadConfig {
+    /// Maximum request-entry lifetime before cancellation with 504 `stale_request_expired`.
     pub stale_request_timeout_secs: u64,
 }
 
@@ -207,6 +208,7 @@ impl std::fmt::Display for ScoreTermKind {
 }
 
 /// Policy choices that can initialize or handle a keyless sticky request.
+/// These policies have no request-scoped cache or sticky-state dependency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum StickyFallbackKind {
     #[value(name = "round_robin")]
@@ -231,6 +233,9 @@ impl std::fmt::Display for StickyFallbackKind {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    /// Pause after SIGTERM with `/readyz` returning 503 before stopping accepts.
+    /// Allows endpoint removal or readiness-probe failures to reach load balancers.
+    /// Leave time in the pod grace period for in-flight draining; 0 disables the pause.
     pub shutdown_drain_secs: u64,
     /// Declared pod termination grace period; `None` uses the Kubernetes default for advisories.
     pub termination_grace_secs: Option<u64>,
@@ -274,7 +279,8 @@ pub struct ObservabilityConfig {
     pub log_format: LogFormat,
 }
 
-/// `text` for human-readable dev output, `json` for one-line-per-record JSON suitable for k8s log aggregators.
+/// `text` for human-readable dev output, `json` for one-line-per-record
+/// JSON suitable for k8s log aggregators (fluent-bit / vector / Loki).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum LogFormat {
     #[default]
@@ -300,9 +306,11 @@ impl Default for ObservabilityConfig {
 #[derive(Debug, Clone)]
 pub struct ModelConfig {
     pub id: String,
-    /// Local tokenizer.json or HuggingFace repo id; defaults to `id`. Resolved by [`crate::tokenizer::adapter::load`].
+    /// Local tokenizer.json or HuggingFace repo id; defaults to `id`.
+    /// Resolved by [`crate::tokenizer::adapter::load`].
     pub tokenizer_path: String,
     /// Disable router-generated input IDs for this model; keep routing tokenization.
+    /// Use when workers have rendering defaults or template stops the router cannot see.
     pub disable_input_ids_forwarding: bool,
     pub policy: PolicyKind,
     /// Selection policy for the decode pool.
@@ -409,6 +417,8 @@ pub const DEFAULT_SESSION_ID_HEADER: &str = "x-session-id";
 pub const DEFAULT_KV_INDEXER_QUERY_MAX_INFLIGHT: usize = 32;
 
 /// Default min-load sample size: the pre-existing power-of-2 behavior.
+/// Every code path that has no `AffinityConfig` to read must fall back to
+/// this, so the no-affinity path never drifts from the configured default.
 pub const DEFAULT_MIN_LOAD_CHOICES: usize = 2;
 
 /// Controls whether admission may select a session-affinity backup.
@@ -458,9 +468,22 @@ pub struct AffinityConfig {
     pub cache_candidate_max_workers: usize,
     pub cache_switch_margin_tokens: u64,
     /// Waiting-request limit for cache affinity; `None` disables.
+    /// Gates on the engine-published *waiting* count rather than total depth because
+    /// waiting is the question the request cares about — will it sit behind other work —
+    /// while depth proxies it badly (an engine can queue far below its running cap on
+    /// long-prompt traffic). Fails open without a fresh sample: the router-side
+    /// in-flight counter cannot separate running from waiting requests.
+    /// Counts sum across DP ranks, so scale the limit with `dp_size`.
     pub worker_queue_limit: Option<u64>,
-    /// Keep the least-pressured prefix owner when the queue gate rejects all admitted cache candidates.
+    /// Keep the least-pressured prefix owner when the queue gate rejects all admitted
+    /// cache candidates and no fresh fleet queue is below this floor. Unknown queues
+    /// do not count as idle — the opposite of the gate's fail-open, deliberately: the
+    /// pin asks whether a provably better destination exists, and an unknown queue is
+    /// not proof. Requires `floor <= worker_queue_limit`; scale with `dp_size`.
     pub saturation_queue_floor: Option<u64>,
+    /// Min-load fallback sample size; defaults to power-of-two. At least the pool
+    /// size chooses the exact minimum with random ties; 1 draws uniformly without
+    /// a backup for admission or pressure guards. Separate from cache-owner limits.
     pub min_load_choices: usize,
 }
 
@@ -494,11 +517,13 @@ impl Default for AffinityConfig {
 /// Sticky routing settings; the CLI validates the header name and positive durations.
 #[derive(Debug, Clone)]
 pub struct StickyConfig {
-    /// Request header carrying the routing key. Validated to parse as a `http::HeaderName` at config-build time.
+    /// Request header carrying the routing key. Validated to parse as a
+    /// `http::HeaderName` at config-build time.
     pub header_name: String,
     /// Fallback for new or missing routing keys.
     pub fallback_policy: StickyFallbackKind,
-    /// Evict an assignment after it has been idle (unreferenced) this many seconds.
+    /// Evict an assignment after it has been idle (unreferenced) this many
+    /// seconds. Bounds the map against unbounded routing-key cardinality.
     pub idle_secs: u64,
     /// Wall-clock cadence of the background eviction sweep.
     pub eviction_interval_secs: u64,
@@ -541,13 +566,15 @@ pub enum DiscoveryBackend {
     K8s(K8sDiscoveryConfig),
 }
 
-/// Workers registered at startup.
+/// Workers registered at startup. Roles, models, and bootstrap ports come from
+/// `/server_info`; topology changes require a restart.
 #[derive(Debug, Clone)]
 pub struct StaticUrlsDiscoveryConfig {
     pub urls: Vec<String>,
 }
 
-/// Kubernetes EndpointSlice discovery.
+/// Kubernetes EndpointSlice discovery. Selectors classify slices; worker roles
+/// and bootstrap ports come from `/server_info` introspection.
 #[derive(Debug, Clone)]
 pub struct K8sDiscoveryConfig {
     pub namespace: String,
@@ -555,20 +582,23 @@ pub struct K8sDiscoveryConfig {
     pub mode: K8sDiscoveryMode,
 }
 
-/// Validated selector mode. Plain selectors run server-side; PD selectors classify EndpointSlices client-side.
+/// Validated selector mode. Plain selectors run server-side; PD selectors
+/// classify EndpointSlices client-side.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum K8sDiscoveryMode {
-    /// One global label selector; every matched EndpointSlice becomes a `WorkerMode::Plain` worker.
+    /// One global label selector; every matched EndpointSlice becomes a
+    /// `WorkerMode::Plain` worker.
     Plain { label_selector: String },
-    /// Label selectors; an EndpointSlice's labels are matched against
-    /// each to classify it as `WorkerMode::Prefill`.
+    /// Two label selectors; an EndpointSlice's labels are matched against
+    /// each to classify it as `WorkerMode::Prefill` or `WorkerMode::Decode`.
     PdDisaggregation {
         prefill_selector: String,
         decode_selector: String,
     },
 }
 
-/// Error returned by [`resolve_mode`] when the selector combination is invalid.
+/// Error returned by [`resolve_mode`] when the selector combination is
+/// invalid.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error(
@@ -635,7 +665,8 @@ fn is_equality_selector(selector: &str) -> bool {
     for term in selector.split(',') {
         let term = term.trim();
         if term.is_empty() {
-            // Treat lone trailing commas / whitespace as fine; the runtime splitter ignores empty terms.
+            // Treat lone trailing commas / whitespace as fine; the runtime
+            // splitter ignores empty terms.
             continue;
         }
         if let Some((k, _)) = term.split_once("==") {
@@ -665,8 +696,8 @@ pub fn resolve_mode(
 ) -> Result<K8sDiscoveryMode, ConfigError> {
     match (label_selector, prefill_selector, decode_selector) {
         (Some(label), None, None) => {
-            // Plain selectors run on the Kubernetes API, which supports the
-            // full grammar.
+            // Plain selectors run on the Kubernetes API, which supports the full grammar.
+            // PD selectors are checked client-side and only support equality.
             Ok(K8sDiscoveryMode::Plain {
                 label_selector: label.to_string(),
             })
@@ -764,6 +795,7 @@ mod k8s_discovery_config_tests {
     }
 
     /// Plain selectors run on the Kubernetes API, which supports the full grammar.
+    /// PD selectors are checked client-side and only support equality.
     #[test]
     fn mode_accepts_set_based_selector_in_plain_mode() {
         let m = resolve_mode(Some("app in (sglang,sglang-small)"), None, None)
@@ -912,7 +944,8 @@ mod k8s_discovery_config_tests {
         );
     }
 
-    /// Trailing whitespace must not be a loophole that bypasses the identical-selector check.
+    /// Trailing whitespace must not be a loophole that bypasses the
+    /// identical-selector check.
     #[test]
     fn mode_pd_rejects_identical_selectors_under_whitespace_normalization() {
         let err = resolve_mode(None, Some("app=sglang"), Some("  app=sglang  ")).unwrap_err();

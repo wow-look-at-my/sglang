@@ -8,7 +8,9 @@ export const KimiK3MambaRatioCalculator = () => {
   const [isDark, setIsDark] = useState(false);
   const [requestLength, setRequestLength] = useState("11264");
   const [copied, setCopied] = useState(false);
-  // Effective serving config.
+  // Effective serving config; empty until the Playground's first broadcast
+  // (the parse below then falls back to the stock defaults: tp8, bf16 KV,
+  // fp32 state, extra_buffer, NOSPEC, no DCP).
   const [cfg, setCfg] = useState({ flags: [], env: [], baseFlags: [], baseEnv: [] });
 
   useEffect(() => {
@@ -51,7 +53,9 @@ export const KimiK3MambaRatioCalculator = () => {
   // The state side (S main slots plus D verify intermediates) is per-GPU and
   // never DCP-sharded. The KV side is per-GPU per logical token: DCP shards the
   // MLA latent KV across its ranks, while the DSPARK draft model's own KV is
-  // replicated on every rank, so it stays a flat term.
+  // replicated on every rank, so it stays a flat term. Without DCP the draft
+  // term is ~10% noise; once DCP shards MLA it is the same order as the MLA
+  // share, which is why it cannot be folded into a plain x dcp factor.
   const derive = (flags, env) => {
     const flagArg = (name) => {
       for (const f of flags) {
@@ -65,12 +69,15 @@ export const KimiK3MambaRatioCalculator = () => {
     const tp = Number(flagArg("--tp-size")) || 8;
     const dp = hasFlag("--enable-dp-attention") ? Number(flagArg("--dp-size")) || 1 : 1;
     // KDA state and the replicated MLA KV both live per attention-TP group.
+    // PP needs no term: it splits the layers of both pools equally.
     const attnTp = Math.max(1, Math.round(tp / dp));
     const dcp = Number(flagArg("--dcp-size")) || 1;
     const kvDtype = flagArg("--kv-cache-dtype") === "fp8_e4m3" ? "fp8_e4m3" : "bfloat16";
     const specOn = hasFlag("--speculative-algorithm");
     const replaySpec = hasFlag("--enable-linear-replayssm-spec");
-    // ReplaySSM removes the D intermediate states but does NOT pin the state dtype: an unset --mamba-ssm-dtype defaults to fp32 either way.
+    // ReplaySSM removes the D intermediate states but does NOT pin the state
+    // dtype: an unset --mamba-ssm-dtype defaults to fp32 either way, and an
+    // explicit 16-bit state is accepted (warned for drift), so read the flag.
     const ssmFlag = flagArg("--mamba-ssm-dtype");
     const ssmDtype =
       ssmFlag === "bfloat16" || ssmFlag === "float16" ? ssmFlag : "float32";
@@ -83,10 +90,16 @@ export const KimiK3MambaRatioCalculator = () => {
         : "extra_buffer";
     const skipLock = env.some((e) => e.startsWith("SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1"));
     const pdRole = flagArg("--disaggregation-mode");
-    // Pipeline parallelism is incompatible with the overlap scheduler, so pp
-    // > 1 turns it off for you — and the track buffer then costs one slot.
+    // Pipeline parallelism is incompatible with the overlap scheduler, so pp > 1
+    // turns it off for you — and the track buffer then costs one slot, not two.
     const overlapOff =
       hasFlag("--disable-overlap-schedule") || (Number(flagArg("--pp-size")) || 1) > 1;
+    // Mirrors kv_cache_configurator._calculate_mamba_ratio: base 3, minus 1 under
+    // the decode-lock skip, plus the ping-pong track buffer (2 under the overlap
+    // scheduler, 1 for lazy or without overlap). no_buffer has no track buffer and
+    // adds the skip's drop back, so it stays 3; a disabled radix cache is 1.
+    // A PD decode server runs a chunk cache: one live slot per request, and the
+    // radix-strategy knobs are inert there.
     const slots = pdRole === "decode"
       ? 1
       : radixOff
@@ -101,10 +114,15 @@ export const KimiK3MambaRatioCalculator = () => {
 
     const ssmBytes = ssmDtype === "float32" ? 4 : 2;
     const kvBytes = kvDtype === "fp8_e4m3" ? 1 : 2;
+    // Fixed K3 geometry:
+    // KDA: 69 layers, 96 heads, head_dim 128, conv kernel 4 (conv state always bf16).
+    // MLA: 24 layers, kv_lora_rank 512, qk_rope_head_dim 64.
     const stateBytesPerSlot =
       69 * ((96 / attnTp) * 128 * 128 * ssmBytes + 3 * 3 * (96 / attnTp) * 128 * 2);
     const kvBytesPerToken = 24 * (512 + 64) * kvBytes;
-    // DCP shards the MLA latent KV across its ranks.
+    // DCP shards the MLA latent KV across its ranks; the DSPARK draft model's KV
+    // is replicated on every rank (~1.4 KB/token on trtllm_mha), so it does not
+    // shard and is added flat.
     const draftKvBytesPerToken = specOn ? 1400 : 0;
     const kvBytesPerTokenPerRank = kvBytesPerToken / dcp + draftKvBytesPerToken;
     const ratio =
@@ -112,11 +130,16 @@ export const KimiK3MambaRatioCalculator = () => {
     return { ratio, tp, dp, attnTp, dcp, kvDtype, ssmDtype, radixOff, strategy, skipLock, slots, specOn, replaySpec, block, pdRole };
   };
 
-  // Evaluations: `eff` matches the Playground's composed command.
+  // Two evaluations: `eff` matches the Playground's composed command, `bs`
+  // matches the Deploy command (cell + overlays only).
   const eff = derive(cfg.flags, cfg.env);
   const bs = derive(cfg.baseFlags.length ? cfg.baseFlags : cfg.flags,
                     cfg.baseFlags.length ? cfg.baseEnv : cfg.env);
-  // Recipes that size the dual pool without the ratio neither render one nor broadcast one.
+  // Recipes that size the dual pool without the ratio neither render one nor
+  // broadcast one:
+  //   - a --max-mamba-cache-size cell pins the KDA slot count explicitly;
+  //   - the Ascend NPU recipes size both pools internally and never set
+  //     --mamba-full-memory-ratio (every NPU recipe carries --device npu).
   const baseFlagList = cfg.baseFlags.length ? cfg.baseFlags : cfg.flags;
   const explicitSizing = baseFlagList.some((f) => f.startsWith("--max-mamba-cache-size"));
   const npuRecipe = baseFlagList.some((f) => {
@@ -140,7 +163,10 @@ export const KimiK3MambaRatioCalculator = () => {
   const cliFlag = valid ? `--mamba-full-memory-ratio ${result}` : "";
 
   // Broadcast both results: the Deploy command takes the base-config value,
-  // the Playground's composed command takes the effective one.
+  // the Playground's composed command takes the effective one. On a recipe
+  // that does not use the ratio, broadcast nulls instead of skipping the
+  // dispatch — the panels must drop a ratio pinned for a recipe the reader
+  // has since left rather than keep injecting it.
   useEffect(() => {
     window.dispatchEvent(
       new CustomEvent("sglang-k3-mamba-ratio", {
@@ -204,7 +230,8 @@ export const KimiK3MambaRatioCalculator = () => {
       ? "DSPARK + ReplaySSM (D folded)"
       : `DSPARK (D = ${block + 1})`;
   const derivedChips = [
-    // With DP attention on, show the whole topology so a large-scale preset is visibly understood.
+    // With DP attention on, show the whole topology so a large-scale preset is
+    // visibly understood: total GPUs = DP replicas x attention-TP group width.
     dp > 1
       ? `${tp} GPUs = DP ${dp} × Attention TP ${attnTp}`
       : `Attention TP ${attnTp}`,

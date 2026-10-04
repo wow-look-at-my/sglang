@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Align CUDA wheel filenames (+cu130) with internal METADATA Version and WHEEL tags after build.
+# Align CUDA wheel filenames (+cu130) with internal METADATA Version and
+# WHEEL tags after build (fixes pip "inconsistent version" when only the .whl name changed).
+# Unpack → patch WHEEL/METADATA → wheel pack (RECORD regenerated; no hand-editing).
 set -ex
 
 WHEEL_DIR="dist"

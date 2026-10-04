@@ -88,6 +88,7 @@ pub fn create_local_worker_workflow(
     };
 
     WorkflowDefinition::new("local_worker_registration", "Local Worker Registration")
+        // Step 1: Detect connection mode (HTTP vs gRPC)
         .add_step(
             StepDefinition::new(
                 "detect_connection_mode",
@@ -134,6 +135,7 @@ pub fn create_local_worker_workflow(
             .with_failure_action(FailureAction::FailWorkflow)
             .depends_on(&["discover_metadata"]),
         )
+        // Step 3: Create worker(s)
         .add_step(
             StepDefinition::new(
                 "create_worker",
@@ -144,6 +146,7 @@ pub fn create_local_worker_workflow(
             .with_failure_action(FailureAction::FailWorkflow)
             .depends_on(&["discover_dp_info"]),
         )
+        // Step 4: Register workers (shared step)
         .add_step(
             StepDefinition::new(
                 "register_workers",

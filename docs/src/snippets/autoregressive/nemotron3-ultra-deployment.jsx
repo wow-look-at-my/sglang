@@ -29,6 +29,9 @@ export const Nemotron3UltraDeployment = () => {
   const verifiedTpForModelHardware = (model, hardware) =>
     [...new Set(VERIFIED_CONFIGS.filter((c) => c.model === model && c.hardware === hardware).map((c) => c.tp))];
 
+  // DP attention is verified at dp=2 for BF16, and dp in {2,4,8} for NVFP4. SGLang
+  // requires tp_size % dp_size == 0, so dp is capped at both the selected TP and the
+  // max verified TP for this model+hardware (whichever is smaller).
   const dpCandidatesForModel = (model) => (model === 'bf16' ? ['2'] : ['2', '4', '8']);
 
   const maxVerifiedTpForModelHardware = (model, hardware) => {

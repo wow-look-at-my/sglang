@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
@@ -42,10 +42,18 @@ use tokio::{
 };
 
 const DRAIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-/// Heartbeat escalates INFO -> WARN here: earlier is a routine rollout draining a long response.
+/// Heartbeat escalates INFO -> WARN here: earlier is a routine rollout draining
+/// a long response; later the pod risks SIGKILL with work still open.
 const DRAIN_WARN_AFTER: Duration = Duration::from_secs(30);
 
-// Main components started by this binary: - Engine monitor (`KvEventIndex`).
+// Main components started by this binary:
+// - Engine monitor (`KvEventIndex`): receives load statistics over ZMQ and, without a
+//   remote KV indexer, KV events to maintain a local radix tree. Remote prefix lookups
+//   use `GrpcPrefixIndex` over gRPC.
+// - Engine discovery (`spawn_discovery`): watches Kubernetes pods or loads static URLs,
+//   sending `DiscoveryEvent`s to `manager::run_with_config` to update `WorkerRegistry`.
+// - HTTP server (`axum::serve`): serves OpenAI APIs, health/readiness, and metrics
+//   through routes built by `build_router`, sharing state via `AppContext`.
 #[tokio::main]
 async fn main() -> Result<()> {
     // Resolve CLI configuration and set up startup logging.
@@ -250,6 +258,7 @@ fn start_local_inflight_tracker(
         Arc::new(SystemTimeClock),
         Duration::from_secs(timeout_secs),
     );
+    // Reap stale requests at one tenth of their timeout, bounded to 1–60 seconds.
     let sweep_interval = Duration::from_secs((timeout_secs / 10).clamp(1, 60));
     let inflight_cleanup = spawn_janitor(Arc::clone(&local_inflight_requests), sweep_interval);
     (local_inflight_requests, inflight_cleanup)
@@ -457,8 +466,9 @@ fn handle_further_signal(
     expedite_tx: &mut Option<oneshot::Sender<()>>,
     sigterm_first: bool,
 ) -> FurtherSignal {
-    // A failed `send` means the pause already elapsed; it must fall through
-    // to the notice below.
+    // A failed `send` means the pause already elapsed; it must fall through to
+    // the notice below. Discarding the `Err` once swallowed the first
+    // post-pause signal (see the regression test).
     if let Some(tx) = expedite_tx.take() {
         if tx.send(()).is_ok() {
             return FurtherSignal::Expedited;

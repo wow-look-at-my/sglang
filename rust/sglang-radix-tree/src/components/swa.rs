@@ -1,4 +1,7 @@
-//! SWA (sliding-window attention) component driver: overrides the methods SWA customizes and inherits the rest.
+//! SWA (sliding-window attention) component driver: overrides the methods SWA
+//! customizes and inherits the rest from the `TreeComponent` defaults.
+//! SWA values arrive pool-resolved; the full->SWA index translation happens at
+//! the cache boundary.
 
 use std::collections::HashMap;
 
@@ -45,7 +48,7 @@ impl SwaComponent {
 
     /// Cap a fresh in-window SWA leaf at one page-aligned window so locking it pins
     /// only one window of SWA pool, not the whole (long chunked-prefill) leaf; return
-    /// the split-off parent (older window) or None. The SWA value is stamped later.
+    /// the split-off parent (older window) or None. The SWA value is stamped later, so
     /// this runs on the tombstone leaf.
     fn maybe_split_leaf_for_swa_lock_<K: ChildKeyType>(
         &self,
@@ -171,9 +174,9 @@ impl SwaComponent {
     }
 
     /// Nodes within one sliding window of `node_id` whose SWA data sits on
-    /// device with no host copy, deepest first. in-flight backup already
-    /// covers: that ack owns everything above it.
-    /// acks can never claim the same node.
+    /// device with no host copy, deepest first. The walk stops at a node an
+    /// in-flight backup already covers: that ack owns everything above it, so
+    /// two acks can never claim the same node.
     fn collect_unbacked_swa_nodes_in_window_<K: ChildKeyType>(
         &self,
         tree_core: &UnifiedTreeCore<K>,
@@ -250,7 +253,7 @@ impl SwaComponent {
     /// Fill the prefetched SWA window onto the leaf→anchor path.
     ///
     /// All-or-nothing over one full window: `loaded_pages` is the cross-rank
-    /// MIN.
+    /// MIN, so `loaded_pages < window_pages` drops the whole window (keeps the
     /// tree identical across TP ranks). Otherwise map the buffer to token range
     /// `[loaded_start, total_len)` and walk leaf→anchor, filling SWA
     /// tombstones and releasing slices that already have host_value.
@@ -373,7 +376,9 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         node_id: NodeIdx_,
     ) {
         match phase {
-            // Walk-down would refresh every visited ancestor to MRU.
+            // Walk-down would refresh every visited ancestor to MRU, but most
+            // are outside the active sliding window and must stay evictable.
+            // Window-bounded refresh runs at MATCH_END / INSERT_END instead.
             LRURefreshPhase::Walkdown => {}
             LRURefreshPhase::MatchEnd | LRURefreshPhase::InsertEnd => {
                 let window = self.sliding_window_size + tree_core.page_size;
@@ -391,7 +396,8 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         match_device_only: bool,
     ) -> Box<dyn FnMut(&UnifiedTreeCore<K>, NodeIdx_) -> bool> {
         let sliding_window_size = self.sliding_window_size;
-        // unified_kv never caches the SWA ring (per-request, not content-stable).
+        // unified_kv never caches the SWA ring (per-request, not
+        // content-stable), so SWA bookkeeping must not gate the match here.
         let swa_device_only_hicache = !tree_core.has_swa_host_pool && tree_core.enable_hicache;
         let mut contiguous_len = usize::MAX;
         Box::new(move |tree_core: &UnifiedTreeCore<K>, node_id: NodeIdx_| {
@@ -425,7 +431,9 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         result.swa_branching_seqlen =
             (page_aligned_full_hit_len > swa_boundary_len).then_some(page_aligned_full_hit_len);
 
-        // Sum the SWA tokens backing the match, walking up from the best match until one sliding window is covered.
+        // Sum the SWA tokens backing the match, walking up from the best match
+        // until one sliding window is covered; host-resident chunks count
+        // toward the SWA host hit.
         let mut n_swa = 0;
         let mut swa_host_hit = 0;
         let mut node = tree_core.arena.node(best_match_node_idx);
@@ -433,7 +441,10 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
             if node.has_device_value(SWA) {
                 n_swa += node.device_value_len(SWA);
             } else if node.has_host_value(SWA) {
-                // TODO(hzh): once load_back is constrained to fetch only one sliding window worth of pages.
+                // TODO(hzh): once load_back is constrained to fetch only one
+                // sliding window worth of pages, cap swa_host_hit at
+                // sliding_window_size so the scheduler budget matches the
+                // actual device-pool consumption.
                 let host_len = node.host_value_len(SWA);
                 swa_host_hit += host_len;
                 n_swa += host_len;
@@ -470,7 +481,9 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         }
 
         let swa_evicted_seqlen = params.swa_evicted_seqlen;
-        // A locked tombstone is legal (segment locks count every node).
+        // A locked tombstone is legal (segment locks count every node); the
+        // full-value swap below is safe because full lock_ref >= swa
+        // lock_ref, so a locked-SWA node always takes the Recover branch.
         assert_eq!(
             swa_evicted_seqlen % tree_core.page_size,
             0,
@@ -478,6 +491,7 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         );
 
         if swa_evicted_seqlen <= total_prefix_len {
+            // Branch 1: entire value_slice is within SWA window — recover
             result.record_adopted_range(SWA, total_prefix_len, total_prefix_len + prefix_len);
             if node.device_lock_ref(FULL) > 0 {
                 cache_actions.push(CacheAction::RecoverSwaWithLockedFull {
@@ -497,6 +511,7 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
             });
             0
         } else if swa_evicted_seqlen < total_prefix_len + prefix_len {
+            // Branch 2: value_slice[start_idx:] is within SWA window — partial recover
             let start_idx = swa_evicted_seqlen - total_prefix_len;
             result.record_adopted_range(SWA, swa_evicted_seqlen, total_prefix_len + prefix_len);
             let node_ext_id = node.id;
@@ -529,6 +544,7 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
             });
             start_idx
         } else {
+            // Branch 3: entire value_slice is outside SWA window — not consumed
             prefix_len
         }
     }
@@ -543,7 +559,9 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         result: &mut InsertResult,
         cache_actions: &mut Vec<CacheAction>,
     ) {
-        // _unevict_node_on_insert already wrote the request's fresh KV slice into the base value.
+        // _unevict_node_on_insert already wrote the request's fresh KV slice
+        // into the base value. We just need to rebuild SWA from that slice for
+        // the in-window portion. There is no old SWA slot to free here.
         let node = tree_core.arena.node(node_id);
         if node.has_device_value(SWA) {
             return;
@@ -556,6 +574,7 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         );
 
         if swa_evicted_seqlen <= total_prefix_len {
+            // entire node is within the SWA window
         } else if swa_evicted_seqlen < total_prefix_len + prefix_len {
             let start_idx = swa_evicted_seqlen - total_prefix_len;
             let (_, action) = tree_core.split_node_(node_id, start_idx);
@@ -603,13 +622,16 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
                 return;
             }
             if split_pos > 0 {
-                // Node straddles the boundary: split into an out-of-window parent (tombstone) and an in-window child.
+                // Node straddles the boundary: split into an out-of-window parent
+                // (tombstone) and an in-window child; `node` becomes the child.
                 let (_, action) = tree_core.split_node_(node_id, split_pos);
                 assert!(action.is_none(), "new leaf cannot be write-through-pending");
             }
         }
         result.record_adopted_range(SWA, node_start.max(params.swa_evicted_seqlen), node_end);
-        // Cap the in-window leaf at one window for lock granularity, then rebuild SWA onto the in-window node(s) at apply time.
+        // Cap the in-window leaf at one window for lock granularity, then rebuild SWA
+        // onto the in-window node(s) at apply time; rebuild the older prefix first so
+        // the in-window tail lands more-MRU.
         let capped_parent = self.maybe_split_leaf_for_swa_lock_(tree_core, node_id);
         if let Some(capped_parent) = capped_parent {
             cache_actions.push(CacheAction::SwaRebuild {
@@ -641,7 +663,9 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         }
         if child.has_host_value(SWA) {
             Node::redistribute_child_host_value(new_parent, child, SWA, split_len);
-            // Device-tombstoned sides park in the host LRU.
+            // Device-tombstoned sides park in the host LRU. Host-locked
+            // halves stay out of it: in-flight IO holds them, and host
+            // acquire removed the node at 0->1.
             let parent_parks =
                 !new_parent.has_device_value(SWA) && new_parent.host_lock_ref(SWA) == 0;
             let child_parks = !child.has_device_value(SWA) && child.host_lock_ref(SWA) == 0;
@@ -658,7 +682,8 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
             }
         }
 
-        // The window-boundary uuids mark the node's older edge.
+        // The window-boundary uuids mark the node's older edge, which the
+        // split moves to the parent — both tiers migrate with it.
         let swa_uuid = tree_core.arena.node_mut(child_id).swa_uuid.take();
         tree_core.arena.node_mut(new_parent_id).swa_uuid = swa_uuid;
         let swa_host_uuid = tree_core.arena.node_mut(child_id).swa_host_uuid.take();
@@ -681,7 +706,8 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         // Device layer
         if target.contains(EvictLayer::Device) && node.has_device_value(SWA) {
             // Pass full indices to free_swa so slots with no SWA pair are
-            // skipped.
+            // skipped. Freeing swa_value directly would double free those
+            // entries since they all map to the same sentinel slot.
             device_frees
                 .entry(ct)
                 .or_default()
@@ -746,8 +772,8 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
             "Swa device eviction not started"
         );
         let mut cursor = tree_core.component_state(SWA).evict_device_cursor;
-        // The cursor is re-validated (reset to LRU head) if the node's
-        // eviction removed it.
+        // The cursor is re-validated (reset to LRU head) if the previous
+        // node's eviction removed it.
         if cursor.is_some_and(|c| !tree_core.device_lru_list(SWA).in_list(Some(c))) {
             cursor = tree_core
                 .device_lru_list(SWA)
@@ -936,7 +962,8 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
                 }])
             }
             CacheTransferPhase::LoadBack => {
-                // `node` is best_match_node; the SWA validator guarantees every ancestor within `sliding_window_size` has value.
+                // `node` is best_match_node; the SWA validator guarantees every
+                // ancestor within `sliding_window_size` has value or host_value.
                 let mut n_swa = 0;
                 let mut backed_up: Vec<Tensor> = Vec::new();
                 let mut nodes_to_load: Vec<NodeId> = Vec::new();
@@ -998,7 +1025,9 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
                 }])
             }
             CacheTransferPhase::Prefetch => {
-                // Staging is allocated once the hit is known.
+                // Staging is allocated once the hit is known; the placeholders
+                // carry the planned page count and the trailing hashes fill in
+                // at commit.
                 let num_pages = staging_tokens / tree_core.page_size;
                 if num_pages == 0 {
                     return Ok(None);
@@ -1161,6 +1190,14 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
         lock_host: bool,
     ) -> IncLockRefResult {
         // Lock the contiguous segment covering the trailing window.
+        //
+        // Every node in [node, boundary] is counted, tombstones included, so
+        // the paired release decrements the same contiguous segment with no
+        // carried skip state. Coverage is position-based (key length); the
+        // boundary node is always uuid-stamped, so a release without a uuid
+        // means the segment reached the root. Ledger/LRU transitions track
+        // only data-bearing nodes; a value materialized later under lock is
+        // credited to protected by set_component_device_value.
         let sliding_window_size = self.sliding_window_size;
         let mut covered = 0;
         let mut swa_uuid = None;
@@ -1243,7 +1280,9 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
             }
             Self::dec_lock_ref(tree_core.arena.node_mut(cur), lock_host);
             if lock_ref == 1 {
-                // This may have been the last lock holding the node out of the evictable-leaf sets.
+                // This may have been the last lock holding the node out of
+                // the evictable-leaf sets; refresh it here rather than rely
+                // on the Full walk running after this one.
                 tree_core.update_evictable_leaf_sets_(cur);
             }
             if swa_uuid_for_lock.is_some()
@@ -1256,11 +1295,12 @@ impl<K: ChildKeyType> TreeComponent<K> for SwaComponent {
     }
 
     /// Early-release the SWA lock along [node, swa_uuid_for_lock]; this
-    /// method touches only SWA state.
+    /// method touches only SWA state. The wrapping `dec_swa_lock_only` also
+    /// drops strictly-lower-priority co-located locks (e.g. Mamba) per the
     /// receipt; the Full lock stays so the request's prefix is protected.
     ///
     /// Called when a request's decode position has advanced past the sliding
-    /// window.
+    /// window. The caller must invoke this at most once per
     /// (node, swa_uuid_for_lock) pair.
     fn release_window_lock(
         &self,

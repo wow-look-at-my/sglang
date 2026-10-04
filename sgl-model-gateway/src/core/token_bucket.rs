@@ -8,6 +8,14 @@ use tokio::sync::Notify;
 use tracing::{debug, trace};
 
 /// Token bucket for rate limiting.
+///
+/// This implementation provides:
+/// - Smooth rate limiting with configurable refill rate
+/// - Burst capacity handling
+/// - Fair queuing for waiting requests via Notify
+/// - Sync token return for Drop handlers (via `return_tokens_sync`)
+///
+/// Uses `parking_lot::Mutex` for sync-compatible locking (no async required).
 #[derive(Clone)]
 pub struct TokenBucket {
     inner: Arc<Mutex<TokenBucketInner>>,
@@ -25,9 +33,12 @@ impl TokenBucket {
     /// Create a new token bucket
     ///
     /// # Arguments
+    /// * `capacity` - Maximum number of tokens (burst capacity)
+    /// * `refill_rate` - Tokens added per second (0 for pure concurrency limiting)
     pub fn new(capacity: usize, refill_rate: usize) -> Self {
         let capacity = capacity as f64;
-        // Allow refill_rate=0 for pure concurrency limiting (semaphore behavior) When refill_rate=0, tokens are only returned.
+        // Allow refill_rate=0 for pure concurrency limiting (semaphore behavior)
+        // When refill_rate=0, tokens are only returned via return_tokens()
         let refill_rate = refill_rate as f64;
 
         Self {

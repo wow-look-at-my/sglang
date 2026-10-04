@@ -49,12 +49,12 @@ Consolidated utility classes:
 - **NixlFileManager** - Handles file system operations
 
 ### NixlRegistry (`nixl_registry.py`)
-Owns the `(agent, mem_type, file_manager)` triple and exposes `host(...)` and `storage(...)` context managers that register on entry, yield the NIXL `xfer_descs`, and deregister + close fds on exit. Internally composes single-resource primitives (`_open_files` and `_registered`) so leak-freeness is verifiable per primitive.
+Owns the `(agent, mem_type, file_manager)` triple and exposes `host(...)` and `storage(...)` context managers that register on entry, yield the NIXL `xfer_descs`, and deregister + close fds on exit. Internally composes two single-resource primitives (`_open_files` and `_registered`) so leak-freeness is verifiable per primitive.
 
 The current implementation performs per-transfer registration for file / object targets and explicitly closes FILE descriptors after registration / transfer setup to avoid descriptor leaks.
 
 ### L3 Cleaner (`nixl_cleaner.py`)
-For FILE-backed plugins, TP rank 0 starts a best-effort background cleaner that scans the bucketed storage directories. FILE-backed deletes the oldest logical cache-key groups when disk usage exceeds the configured high watermark. Deleted files are handled by the cache layer as ordinary storage misses and can be recomputed.
+For FILE-backed plugins, TP rank 0 starts a best-effort background cleaner that scans the bucketed storage directories and deletes the oldest logical cache-key groups when disk usage exceeds the configured high watermark. Deleted files are handled by the cache layer as ordinary storage misses and can be recomputed.
 
 Set the top-level `l3_cleaner_enabled` config key to `false` when an external cleaner is responsible for L3 cache eviction.
 
@@ -65,7 +65,7 @@ Set the top-level `l3_cleaner_enabled` config key to `false` when an external cl
 The NIXL backend can support **multiple storage plugins** (e.g., POSIX, GDS, GDS_MT, 3FS, object store, etc).
 
 * Each plugin has its own configuration section in the TOML file.
-* The connector accepts configuration in multiple forms:
+* The connector accepts configuration in two forms:
 
   * a **fully qualified** form such as `{"plugin": {"posix": {...}, "gds": {...}}}`
   * a **flat** form such as `{"use_uring": "true"}`, which applies to the selected plugin
@@ -96,7 +96,7 @@ These directories are used only for **FILE-backed** plugins. **OBJ-backed** plug
 
 ### 3. How to Provide Configuration for Backends
 
-There are ways to specify configurations for the backends: default config, file based config, and command-line (JSON string based) config.
+There are three ways to specify configurations for the backends: default config, file based config, and command-line (JSON string based) config.
 
 #### 1. Using Default Configuration
 
@@ -126,7 +126,7 @@ export AWS_DEFAULT_BUCKET=<bucket-name>
 
 #### 2. Using a Configuration File (Recommended)
 
-For non-trivial setups with complex configurations, it is recommended to use a **TOML configuration file** to define which backend plugin to use. This is its configurations, via `--hicache-storage-backend-extra-config`:
+For non-trivial setups with complex configurations, it is recommended to use a **TOML configuration file** to define which backend plugin to use and its configurations, via `--hicache-storage-backend-extra-config`:
 
 Below is an example command (note: detailed configs are defined in the config file):
 
@@ -157,9 +157,9 @@ The structure of the config file is described in further details in [Configurati
 
 For debugging or quick testing, you may pass a **JSON-style string** directly via `--hicache-storage-backend-extra-config`.
 
-This requires explicitly specifying the plugin type via an environment variable. This method can be applicable to **only a few** plugins (e.g., POSIX, GDS, GDS_MT)
+This requires explicitly specifying the plugin type via an environment variable, and this method can be applicable to **only a few** plugins (e.g., POSIX, GDS, GDS_MT)
 
-The below example shows how to use command-line string to use the POSIX plugin where URING is enabled for async POSIX storage. This is with O_DIRECT enabled (the default).
+The below example shows how to use command-line string to use the POSIX plugin where URING is enabled for async POSIX storage, with O_DIRECT enabled (the default).
 
 ```bash
 export SGLANG_HICACHE_NIXL_BACKEND_PLUGIN=POSIX
@@ -187,9 +187,10 @@ python3 -m sglang.launch_server \
   --hicache-storage-backend-extra-config '{"use_direct_io": false, "use_uring": "true"}'
 ```
 
-⚠️ **Note**: This method is convenient for testing / experimenting. For production or multi-plugin setups, it is always recommended to use the config file based approach.
+⚠️ **Note**:
+This method is convenient for testing / experimenting. For production or multi-plugin setups, it is always recommended to use the config file based approach.
 
-Also the flat inline config form is interpreted as plugin-specific parameters for the selected plugin.
+Also note that the flat inline config form is interpreted as plugin-specific parameters for the selected plugin.
 
 ### 4. Validated Hybrid-Model Example
 
@@ -254,7 +255,7 @@ Minimal end-to-end validation flow:
 3. Restart the server against the same `SGLANG_HICACHE_NIXL_BACKEND_STORAGE_DIR`.
 4. Send the same long prompt again and confirm that `meta_info.cached_tokens` is high.
 
-A reusable local validation script is available at `~/TestEnv/nixl_hicache_hybrid_e2e.py`. It starts this server, sends a long request, and checks both NIXL backend selection and Mamba sidecar storage files.
+A reusable local validation script is available at `~/TestEnv/nixl_hicache_hybrid_e2e.py`; it starts this server, sends a long request, and checks both NIXL backend selection and Mamba sidecar storage files.
 
 
 
@@ -310,7 +311,7 @@ Tests for this integration, a test suite can be found at `test_hicache_nixl_stor
 
 ## Expected Output
 
-When tests run successfully, you must see:
+When tests run successfully, you should see:
 - NIXL agent initialization messages
 - Backend selection messages (e.g., "Backend POSIX was instantiated")
 - Test results with "ok" for passed tests
@@ -320,7 +321,7 @@ When tests run successfully, you must see:
 
 ### Import Errors
 If you encounter `ModuleNotFoundError`, ensure:
-- You are running from the correct directory
+- You're running from the correct directory
 - `PYTHONPATH` is set correctly
 - NIXL library is properly installed
 
@@ -330,7 +331,7 @@ If NIXL operations fail:
 - Verify that required plugins are available
 - Ensure file permissions are correct for test directories
 - For OBJ plugins, verify `bucket` or `AWS_DEFAULT_BUCKET` is set
-- Check the NIXL diagnostic log emitted when the mem pool is registered. It includes:
+- Check the NIXL diagnostic log emitted when the mem pool is registered; it includes:
   - `mem_pool_device_type`
   - `is_mla_model`
   - `tp_rank`
@@ -338,7 +339,7 @@ If NIXL operations fail:
 
 ### MLA Write Behavior
 For MLA models, the NIXL backend now mirrors HF3FS's backend-local protection:
-- TP rank performs the actual storage write
+- TP rank 0 performs the actual storage write
 - non-zero TP ranks skip backup writes locally in `batch_set` / `batch_set_v1`
 - MLA storage names omit TP rank so all ranks refer to the same logical storage object or file
 
@@ -367,7 +368,7 @@ python/sglang/srt/mem_cache/storage/nixl/
 ### Memory Types
 - **Tensor side**: multi-dimensional tensors of all numeric types (int32, int64, float32, float64) are supported.
   - Tensors can be on CPU or GPU (as long as a GPU capable backend such as GDS_MT is available).
-  - Each tensor is mapped to a file or key. However, it can be extended to support multiple keys per file or key.
+  - Currently each tensor is mapped to a file or key, but it can be extended to support multiple keys per file or key.
   - The page-oriented `*_v1` path also supports zero-copy transfers using `(address, size)` metadata from the host memory pool.
 
 - **Storage side**: file and object are supported through their relevant backends (e.g., 3FS or OBJ).
@@ -405,7 +406,8 @@ The NIXL backend selection follows this priority order:
     - Direct GPU-storage data path
     - Best for filesystems benefiting from batch operations and smaller IOs.
 5. **OBJ** - Amazon S3 based Object Storage
-    - Key-value based storage The system automatically selects the best available backend, with POSIX as the default fallback.
+    - Key-value based storage
+The system automatically selects the best available backend, with POSIX as the default fallback.
 
 
 
@@ -413,7 +415,7 @@ The NIXL backend selection follows this priority order:
 
 This section defines the structure, supported sections, configuration keys, data types, defaults, and semantics for the NIXL HiCache backend configuration file (`config.nixl.toml`).
 
-The configuration file is written in **TOML** and consists of multiple **plugin-specific sections** under the `plugin.*` namespace. Each section configures one storage backend plugin. Only one plugin must be enabled via setting `active = true` in the corresponding plugin-specific section.
+The configuration file is written in **TOML** and consists of multiple **plugin-specific sections** under the `plugin.*` namespace. Each section configures one storage backend plugin. Only one plugin should be enabled via setting `active = true` in the corresponding plugin-specific section.
 
 An example of the configuration is provided in [`nixl.config.toml.sample`](./nixl.config.toml.sample).
 
@@ -498,7 +500,8 @@ active = true
 
 #### Description
 
-Configures the POSIX file-system-based backend. This backend supports multiple asynchronous I/O mechanisms and automatically selects the most performant option supported by the system.
+Configures the POSIX file-system-based backend.
+This backend supports multiple asynchronous I/O mechanisms and automatically selects the most performant option supported by the system.
 
 **Backend priority (highest to lowest):**
 
@@ -519,7 +522,7 @@ Configures the POSIX file-system-based backend. This backend supports multiple a
 **Notes**
 
 * Boolean-like options use **string values** (`"true"` / `"false"`) for compatibility.
-* **Only one backend** (i.e., only one of `use_uring`, `use_aio`, `use_posix_aio`) must be included in the config.
+* **Only one backend** (i.e., only one of `use_uring`, `use_aio`, `use_posix_aio`) should be included in the config.
 
 
 ### 3. NVIDIA GPUDirect Storage Backend (`plugin.gds`)
@@ -532,7 +535,8 @@ Configures the POSIX file-system-based backend. This backend supports multiple a
 
 #### Description
 
-Configures NVIDIA GPUDirect Storage (GDS) backend. This backend enables direct data transfers between storage and GPU memory.
+Configures NVIDIA GPUDirect Storage (GDS) backend.
+This backend enables direct data transfers between storage and GPU memory.
 
 **Requirements**
 
@@ -685,4 +689,4 @@ This is v0 of the NIXL connector. The current implementation favors correctness 
 - MLA uses shared storage naming and backend-local write skipping on non-zero TP ranks
 - zero-copy is driven by HiCache host-memory layout rather than a separate NIXL flag
 
-Future versions will focus on further performance optimizations such as memory pre-registration (pre-allocating and registering memory buffers to reduce registration overhead during transfers) and block merging (combining related blocks as offsets within the same file to reduce file operations and improve throughput). These optimizations require changes at a higher layer, as the current HiCache API does not expose information like. Block relationships or hash patterns that will enable these optimizations.
+Future versions will focus on further performance optimizations such as memory pre-registration (pre-allocating and registering memory buffers to reduce registration overhead during transfers) and block merging (combining related blocks as offsets within the same file to reduce file operations and improve throughput). These optimizations require changes at a higher layer, as the current HiCache API doesn't expose information like block relationships or hash patterns that would enable these optimizations.

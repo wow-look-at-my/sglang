@@ -1,6 +1,7 @@
 # LMCache Connector for SGLang
 
-This document describes how to use LMCache as KV Cache Management Backend for SGLang engine. For more details about LMCache, please refer to: https://lmcache.ai
+This document describes how to use LMCache as KV Cache Management Backend for SGLang engine.
+For more details about LMCache, please refer to: https://lmcache.ai
 
 ## Install LMCache
 
@@ -28,7 +29,9 @@ pip install -e . --no-build-isolation
 
 ## Use LMCache
 
-SGLang uses `LMCacheUnifiedRadixCache` with LMCache's multiprocess connector. The standalone LMCache daemon owns the external cache and can survive SGLang process restarts. Daemon host and port come from the LMCache YAML config.
+SGLang uses `LMCacheUnifiedRadixCache` with LMCache's multiprocess connector.
+The standalone LMCache daemon owns the external cache and can survive SGLang
+process restarts. Daemon host and port come from the LMCache YAML config.
 
 Terminal 1 — start the LMCache daemon:
 

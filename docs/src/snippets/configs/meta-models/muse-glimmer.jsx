@@ -4,9 +4,16 @@ export const config = {
   supportedHardware: ["b200", "h200", "rtx5090", "rtx6000", "dgx-spark", "mac"],
 
   hardware: [
+    // RTX 5090 and RTX PRO 6000 are Blackwell-generation but not in the shared
+    // HARDWARE_CATALOG (consumer/workstation cards, not the datacenter SKUs
+    // that catalog covers), so they need a local vendor override here.
     { id: "rtx5090",   label: "RTX 5090",     vram: "32GB",  vendor: "blackwell" },
     { id: "rtx6000",   label: "RTX PRO 6000", vram: "96GB",  vendor: "blackwell" },
-    // dgx-spark is NOT listed here -- it's already in the shared HARDWARE_CATALOG under blackwell (with its multi-node docker flags).
+    // dgx-spark is NOT listed here -- it's already in the shared
+    // HARDWARE_CATALOG under blackwell (with its multi-node docker flags),
+    // so this model just inherits that entry.
+    // Apple Silicon Mac (MLX backend, unified memory). Benchmarked on an
+    // M5 Pro 64GB; the q4km-gs128 artifact fits a 48GB machine.
     { id: "mac",       label: "Apple Silicon", vram: "48GB+", vendor: "apple" },
   ],
 
@@ -16,7 +23,9 @@ export const config = {
     { id: "bf16",         label: "BF16" },
     { id: "gguf",         label: "GGUF Q4_K_M" },
     { id: "nvfp4",        label: "NVFP4" },
-    // MLX artifacts, all Apple-Silicon-only. gs128 is the one with a measured GSM8K / CIMemories round (see the cookbook §3.4 table).
+    // Three MLX artifacts, all Apple-Silicon-only. gs128 is the one with a
+    // measured GSM8K / CIMemories round (see the cookbook §3.4 table); the
+    // other two serve with the same recipe but are not benchmarked yet.
     { id: "mlx-q4",       label: "MLX Q4" },
     { id: "mlx-q4km",     label: "MLX Q4_K_M (gs128)" },
     { id: "mlx-q4k-dyn",  label: "MLX Q4_K (dynamic)" },
@@ -40,7 +49,8 @@ export const config = {
       // GGUF and every MLX artifact are text-only; no modality choice there.
       showWhen: (s) => s.quant !== "gguf" && !(s.quant || "").startsWith("mlx-"),
       options: [
-        // NVFP4 ships with no vision weights despite config.json declaring vision_config.
+        // NVFP4 ships with no vision weights despite config.json declaring
+        // vision_config, so "Image + text" only shows for bf16.
         { id: "mm", label: "Image + text", showWhen: (s) => s.quant === "bf16" },
         {
           id: "text",
@@ -138,6 +148,12 @@ export const config = {
     },
     {
       match: { hw: "rtx5090", variant: "default", quant: "gguf", strategy: "dflash", nodes: "single" },
+      // Measured on a single RTX 5090 (PR #8, config B): AIME pass@1 93.75%
+      // (SEM +/-0.42, maj@8 93.33%, pass@8 96.67%, 0% truncation) and GSM8K
+      // 97.12%; KV pool 87099 vs 241189 for GGUF standard, since the draft
+      // takes its share. --speculative-draft-load-format auto is what makes a
+      // GGUF *target* work here: without it the draft inherits the target's
+      // gguf load format and the loader rejects the draft dir.
       verified: true,
       env: [],
       flags: [
@@ -167,8 +183,25 @@ export const config = {
         "--port {{PORT}}",
       ],
     },
-    // Margin is tight though -- ~1.1GB free after CUDA graph capture --
-    // so this is the ceiling, not a value with headroom to spare.
+    // 0.9 confirmed on real hardware (single RTX 5090, 32GB): boots and
+    // survives batch sizes 1/4/8 at 512in/256out with no OOM. Margin is
+    // tight though -- ~1.1GB free after CUDA graph capture -- so this is
+    // the ceiling, not a value with headroom to spare.
+    //
+    // --kv-cache-dtype fp8_e4m3 confirmed on the same hardware: doubles
+    // max_total_num_tokens (57462 -> 114925) with no meaningful accuracy
+    // cost -- GSM8K (200q, real sgl-eval) scored 0.905 fp8 vs 0.885 bf16,
+    // a gap well within normal run-to-run noise at this sample size.
+    //
+    // --speculative-draft-model-quantization fp8 dynamically quantizes the
+    // draft's bf16 linears to fp8 at load time (draft weights 4.83GB ->
+    // 3.03GB) and, on this SM120 GPU, disables DFlash's fused KV
+    // materialization fast path (quantized qkv_proj isn't supported there),
+    // which changes the KV sizing math enough to push max_total_num_tokens
+    // 114925 -> 180193. Confirmed on the same hardware: accept length and
+    // decode speed are statistically identical to the unquantized draft
+    // across batch sizes 1/4/8 and 5 varied prompts (radix cache flushed
+    // between runs) -- no measurable regression.
     {
       match: { hw: "rtx5090", variant: "default", quant: "nvfp4", strategy: "dflash", nodes: "single" },
       verified: true,
@@ -229,6 +262,16 @@ export const config = {
         "--port {{PORT}}",
       ],
     },
+    // --kv-cache-dtype fp8_e4m3 directly confirmed on RTX 5090 (doubles
+    // max_total_num_tokens, no meaningful accuracy cost -- see the rtx5090
+    // nvfp4 cell above); not independently re-benchmarked on this SKU, but
+    // the mechanism (halving KV cache bytes/token) is hardware-independent.
+    //
+    // --speculative-draft-model-quantization fp8 directly confirmed on
+    // RTX 5090 (no accept-length or speed regression, more KV cache
+    // headroom -- see the rtx5090 nvfp4 cell above); not independently
+    // re-benchmarked on this SKU, but the mechanism (dynamically quantizing
+    // the draft's bf16 linears to fp8 at load time) is hardware-independent.
     {
       match: { hw: "rtx6000", variant: "default", quant: "nvfp4", strategy: "dflash", nodes: "single" },
       verified: true,
@@ -293,6 +336,16 @@ export const config = {
         "--port {{PORT}}",
       ],
     },
+    // --kv-cache-dtype fp8_e4m3 directly confirmed on RTX 5090 (doubles
+    // max_total_num_tokens, no meaningful accuracy cost -- see the rtx5090
+    // nvfp4 cell above); not independently re-benchmarked on this SKU, but
+    // the mechanism (halving KV cache bytes/token) is hardware-independent.
+    //
+    // --speculative-draft-model-quantization fp8 directly confirmed on
+    // RTX 5090 (no accept-length or speed regression, more KV cache
+    // headroom -- see the rtx5090 nvfp4 cell above); not independently
+    // re-benchmarked on this SKU, but the mechanism (dynamically quantizing
+    // the draft's bf16 linears to fp8 at load time) is hardware-independent.
     {
       match: { hw: "dgx-spark", variant: "default", quant: "nvfp4", strategy: "dflash", nodes: "single" },
       verified: true,
@@ -428,6 +481,16 @@ export const config = {
         "--port {{PORT}}",
       ],
     },
+    // --kv-cache-dtype fp8_e4m3 directly confirmed on RTX 5090 (doubles
+    // max_total_num_tokens, no meaningful accuracy cost -- see the rtx5090
+    // nvfp4 cell above); not independently re-benchmarked on this SKU, but
+    // the mechanism (halving KV cache bytes/token) is hardware-independent.
+    //
+    // --speculative-draft-model-quantization fp8 directly confirmed on
+    // RTX 5090 (no accept-length or speed regression, more KV cache
+    // headroom -- see the rtx5090 nvfp4 cell above); not independently
+    // re-benchmarked on this SKU, but the mechanism (dynamically quantizing
+    // the draft's bf16 linears to fp8 at load time) is hardware-independent.
     {
       match: { hw: "b200", variant: "default", quant: "nvfp4", strategy: "dflash", nodes: "single" },
       verified: true,

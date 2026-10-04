@@ -32,6 +32,7 @@ mod rate_limiting_tests {
 
         let app = ctx.create_app().await;
 
+        // Send 5 concurrent requests (within limit of 10)
         let mut handles = Vec::new();
         let success_count = Arc::new(AtomicUsize::new(0));
 
@@ -89,7 +90,7 @@ mod rate_limiting_tests {
             .worker_startup_timeout_secs(5)
             .worker_startup_check_interval_secs(1)
             .max_concurrent_requests(100)
-            .rate_limit_tokens_per_second(50) // Tokens/sec
+            .rate_limit_tokens_per_second(50) // 50 tokens/sec
             .queue_timeout_secs(60)
             .build_unchecked();
 
@@ -129,7 +130,7 @@ mod rate_limiting_tests {
         ctx.shutdown().await;
     }
 
-    /// Test unlimited concurrent requests when set to
+    /// Test unlimited concurrent requests when set to 0
     #[tokio::test]
     async fn test_unlimited_concurrent_requests() {
         let config = TestRouterConfig::with_concurrency(3402, 0); // Unlimited

@@ -46,8 +46,8 @@ void act_and_mul_kernel_impl(
   });
 }
 
-// Input: [num_tokens, dim] contiguous gate: [num_tokens, num_heads, head_dim]
-// 2d or 3d, maybe strided
+// input : [num_tokens, dim] contiguous
+// gate : [num_tokens, num_heads, head_dim] 2d or 3d, maybe strided
 template <typename scalar_t>
 void fused_sigmoid_mul_kernel_impl(
     scalar_t* __restrict__ output,
@@ -96,6 +96,8 @@ void fused_sigmoid_mul_kernel_impl(
 
 }  // anonymous namespace
 
+// input   : {num_tokens, 2 * d}
+// output  : {num_tokens, d}
 at::Tensor silu_and_mul_cpu(at::Tensor& input) {
   auto sizes = input.sizes().vec();
   int64_t last_dim = input.ndimension() - 1;

@@ -1,7 +1,10 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Observable contract for decode policies.
+//!
+//! Decode guards require complete, fresh native monitor samples. Short frames
+//! fall back to local load and must not appear as monitor-backed decisions.
 
 use sgl_router::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
 use sgl_router::policies::admission::{resolve_decode, CandidateDomain, DecisionReason};

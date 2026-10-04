@@ -1,4 +1,7 @@
 # Dedicated gateway used by the gateway-restart test in test_lifecycle.py.
+# Runs on its own ports (30005/29005) so killing this gateway's pod does
+# not invalidate the session-scoped port-forward against the default
+# smg-gateway used by test_reconciliation.py.
 #
 # This gateway's selector requires `app=fake-worker,lifecycle=restart`, so
 # pods from test_reconciliation.py (which carry only `app=fake-worker`) are

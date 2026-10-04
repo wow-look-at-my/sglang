@@ -1,6 +1,10 @@
 name: PR Test - Build sgl-kernel Wheels
 
-# Reusable workflow that builds the sgl-kernel CUDA wheels for one architecture / runner pool. Called twice from pr-test.yml: once for the x86_64 runner pool, once for arm64. All architecture-specific values (runner label, display name, artifact name suffix) are passed in via inputs.
+# Reusable workflow that builds the sgl-kernel CUDA wheels for one
+# architecture / runner pool. Called twice from pr-test.yml: once for the
+# x86_64 runner pool, once for arm64. All architecture-specific values
+# (runner label, display name, artifact name suffix) are passed in via
+# inputs.
 
 on:
   workflow_call:
@@ -25,7 +29,12 @@ on:
         type: boolean
         default: false
 
-# Mirror the caller workflow's top-level env block. GitHub Actions does NOT automatically inherit workflow-level env vars across the workflow_call boundary, so anything pr-test.yml defines must be redeclared here for the reusable jobs to see the same context. Most of these are not read by the wheel-build path, but PR_TEST_BYPASS_MAINTENANCE_ON_MAIN is consumed by the check-maintenance composite action and would otherwise be unset.
+# Mirror the caller workflow's top-level env block. GitHub Actions does NOT
+# automatically inherit workflow-level env vars across the workflow_call
+# boundary, so anything pr-test.yml defines must be redeclared here for the
+# reusable jobs to see the same context. Most of these are not read by the
+# wheel-build path, but PR_TEST_BYPASS_MAINTENANCE_ON_MAIN is consumed by the
+# check-maintenance composite action and would otherwise be unset.
 env:
   SGLANG_IS_IN_CI: true
   SGLANG_CUDA_COREDUMP: "1"

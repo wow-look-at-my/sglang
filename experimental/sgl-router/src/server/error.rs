@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::{HeaderName, HeaderValue, StatusCode};
@@ -10,18 +10,37 @@ use thiserror::Error;
 pub const X_ROUTER_ERROR_CODE: HeaderName = HeaderName::from_static("x-router-error-code");
 
 /// Carries the worker's *own* HTTP status when the router had to synthesize a
-/// status of its own over a worker that did respond.
+/// status of its own over a worker that did respond (today: a mid-body drop,
+/// where headers arrived but the body did not). Lets a gateway / operator
+/// recover what the engine actually said instead of seeing only the router's
+/// synthesized 502. Absent on every other response: a forwarded worker response
+/// already carries the worker's status in the status line, and a router-only
+/// condition (no workers, breaker open, ...) has no upstream status to report.
 pub const X_ROUTER_UPSTREAM_STATUS: HeaderName =
     HeaderName::from_static("x-router-upstream-status");
 
-/// Coarse failure class for a router-originated error.
+/// Coarse failure class for a router-originated error. The router's HTTP status
+/// is a pure function of the class, so two conditions that mean the same thing
+/// — e.g. a per-request timeout and a stale-deadline cancel — can never drift to
+/// different status codes. The *precise* condition travels in
+/// `x-router-error-code` (see [`ApiError::error_code`]): a gateway in front
+/// converts on that header (the authoritative signal), while the status stays a
+/// self-sufficient HTTP-honest default for a direct caller. The class never
+/// contradicts the precise code — it only generalizes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ErrorClass {
+    /// 400 — request rejected at ingress as malformed / invalid.
     BadRequest,
+    /// 404 — requested model / resource not found.
     NotFound,
+    /// 502 — a selected worker failed to return a usable response (unreachable,
+    /// or started a response then dropped the body).
     Upstream,
+    /// 503 — the router had no worker to dispatch to, or declined to.
     NoTarget,
+    /// 504 — the router gave up waiting (any timeout / deadline).
     Timeout,
+    /// 500 — internal router fault.
     Internal,
 }
 
@@ -46,11 +65,29 @@ pub enum ApiError {
     #[error("model not found: {0}")]
     ModelNotFound(String),
 
-    /// A request refused by the fleet-wide sampling contract.
+    /// A request refused by the fleet-wide sampling contract
+    /// (`--override-sampling-params` under `--sampling-param-conflict
+    /// reject`).
+    ///
+    /// Distinct from [`Self::BadRequest`] on purpose: rolling a contract out
+    /// across a fleet turns previously-served client traffic into 400s, and
+    /// the operator's first question is how much and on which parameter.
+    /// Folded into `bad_request` that is unanswerable — the code would be the
+    /// same one malformed JSON and a missing `model` field already emit.
+    /// `param` is a `&'static str` from
+    /// [`crate::config::SamplingField::wire_name`], which keeps it usable as a
+    /// bounded metric label.
     #[error("{param} violates this deployment's sampling contract: {detail}")]
     SamplingContract { param: &'static str, detail: String },
 
-    /// Could not reach the upstream worker (connect refused, DNS, TLS, request build error).
+    /// Could not reach the upstream worker (connect refused, DNS, TLS, request
+    /// build error). `source` captures the full anyhow chain for server-side
+    /// logging; clients see a generic message.
+    ///
+    /// `worker` is the typed `reqwest::Url` so we don't re-stringify a value
+    /// that is already a `Url` at the construction site. Rendering goes
+    /// through `Display`, which produces the same canonical form as
+    /// `Url::as_str()`.
     #[error("upstream unreachable: worker {worker}")]
     UpstreamUnreachable {
         worker: reqwest::Url,
@@ -58,39 +95,75 @@ pub enum ApiError {
         source: anyhow::Error,
     },
 
-    /// The worker started a response (status + headers received) but failed to deliver the full body — mid-body socket drop, framing error.
+    /// The worker started a response (status + headers received) but failed
+    /// to deliver the full body — mid-body socket drop, framing error, etc.
+    /// Distinct from `UpstreamUnreachable` (no reply at all) and from a
+    /// well-formed non-2xx (which `Proxy` forwards verbatim with the worker's
+    /// own body).
     #[error("upstream response body incomplete after status {status}")]
     UpstreamStatus { status: StatusCode },
 
-    /// Wall-clock timeout exceeded while waiting for the upstream worker's response (per-request `request_timeout`).
+    /// Wall-clock timeout exceeded while waiting for the upstream worker's
+    /// response (per-request `request_timeout`).
+    ///
+    /// `worker` is the typed `reqwest::Url` for the same reason as
+    /// `UpstreamUnreachable`.
     #[error("upstream timed out: worker {worker}")]
     UpstreamTimeout { worker: reqwest::Url },
 
-    /// No healthy worker is available for `model`: either none were ever registered.
+    /// No healthy worker is available for `model`: either none were ever
+    /// registered, or every candidate's circuit breaker is open.  Clients
+    /// should retry; operators should check discovery + worker health.
     #[error("no healthy workers for model {model}")]
     NoHealthyWorkers { model: String },
 
     /// PD-mode deployment whose prefill pool has zero healthy workers.
+    /// Distinct from `NoHealthyWorkers` because the decode pool may
+    /// still be healthy — the failure is pool-specific, and surfacing
+    /// the distinct code lets operators alert on prefill-fleet outages
+    /// independently of full-model outages.
     #[error("no prefill workers available for model {model}")]
     NoPrefillWorkersAvailable { model: String },
 
-    /// PD-mode deployment whose decode pool has zero healthy workers. Mirror of [`Self::NoPrefillWorkersAvailable`].
+    /// PD-mode deployment whose decode pool has zero healthy workers.
+    /// Mirror of [`Self::NoPrefillWorkersAvailable`].
     #[error("no decode workers available for model {model}")]
     NoDecodeWorkersAvailable { model: String },
 
-    /// A request whose lifetime exceeded `stale_request_timeout` — the active-load janitor force-expired the in-flight bookkeeping.
+    /// A request whose lifetime exceeded `stale_request_timeout` — the
+    /// active-load janitor force-expired the in-flight bookkeeping
+    /// AND fired the per-request cancellation token, which the chat
+    /// handler `select!`-races against the upstream fetch.  When the
+    /// token wins, the handler returns this variant → HTTP 504 →
+    /// client sees `stale_request_expired`.
+    ///
+    /// Classed as [`ErrorClass::Timeout`] (→ 504), the same class as
+    /// `UpstreamTimeout`: from the client's perspective both are a router-side
+    /// gateway timeout. Here the upstream worker is still potentially fine — the
+    /// router gave up because the per-request budget elapsed. The shared class
+    /// is what keeps the two timeouts on the same status; they stay tellable
+    /// apart only by `x-router-error-code`.
     #[error("stale request expired for model {model}")]
     StaleRequestExpired { model: String },
 
-    /// The per-model policy returned `None` despite the candidate set being non-empty.
+    /// The per-model policy returned `None` despite the candidate set
+    /// being non-empty.  Almost always a router bug or an unsupported
+    /// policy state; surfaced as 503 (not 500) so retry-on-failure clients
+    /// can drain through a rotation rather than fail-fast on internal_error.
     #[error("policy selected no worker for model {model}")]
     PolicySelectionFailed { model: String },
 
     /// The worker's circuit breaker was open at the moment of dispatch.
+    /// Surfaced post-policy-selection (race with `healthy_workers_for`);
+    /// the next selection will skip this worker.
     #[error("worker circuit breaker open: {worker}")]
     BreakerOpen { worker: String },
 
-    /// The worker URL emitted by discovery failed to parse.
+    /// The worker URL emitted by discovery failed to parse.  Always a
+    /// config / discovery-backend bug, not a transient infra issue — but
+    /// from the client's perspective the worker is unreachable, so 503.
+    /// The forwarder trips the circuit breaker before returning so the
+    /// malformed worker drops out of subsequent selection.
     #[error("worker misconfigured: {worker}")]
     WorkerMisconfigured {
         worker: String,
@@ -104,7 +177,7 @@ pub enum ApiError {
 
 impl ApiError {
     /// The failure class — the sole determinant of the HTTP status. Grouping by
-    /// class is what makes the status non-divergent.
+    /// class is what makes the status non-divergent: every timeout is
     /// [`ErrorClass::Timeout`], so a per-request timeout and a stale-deadline
     /// cancel are guaranteed the same status, and no future variant can quietly
     /// pick a different one.
@@ -128,14 +201,22 @@ impl ApiError {
     }
 
     /// Stable, machine-readable `x-router-error-code` — the authoritative signal
-    /// a gateway converts on. Distinct per condition even when conditions
+    /// a gateway converts on. Distinct per condition even when two conditions
+    /// share a class (and thus a status): `upstream_timeout` and
+    /// `stale_request_expired` both map to 504 but stay tellable apart here.
     fn error_code(&self) -> &'static str {
         match self {
             ApiError::BadRequest(_) => "bad_request",
+            // Shares `ErrorClass::BadRequest` (and thus the 400) with
+            // `BadRequest`, but keeps its own code: an operator rolling a
+            // sampling contract across a fleet has to be able to alert on
+            // contract rejections separately from malformed client requests.
             ApiError::SamplingContract { .. } => "sampling_contract_violation",
             ApiError::ModelNotFound(_) => "model_not_found",
             ApiError::UpstreamUnreachable { .. } => "upstream_unreachable",
-            // Mid-body drop: headers (incl. a status) arrived, then the body didn't.
+            // Mid-body drop: headers (incl. a status) arrived, then the body
+            // didn't. We surface a 502 but echo the worker's status in
+            // `x-router-upstream-status` (see `into_response`).
             ApiError::UpstreamStatus { .. } => "upstream_body_incomplete",
             ApiError::UpstreamTimeout { .. } => "upstream_timeout",
             ApiError::NoHealthyWorkers { .. } => "no_healthy_workers",
@@ -152,7 +233,7 @@ impl ApiError {
     /// The worker's *own* status to echo in `x-router-upstream-status`, for the
     /// case where the router synthesized its own status over a worker that did
     /// respond. Today only the mid-body-drop (`UpstreamStatus`) carries one. This
-    /// is an exhaustive.
+    /// is an exhaustive, wildcard-free match (not an `if let` at the call site) so
     /// a future "synthesized over a responding worker" variant is forced to decide
     /// whether it echoes a status, rather than silently inheriting `None`.
     fn upstream_status(&self) -> Option<StatusCode> {
@@ -174,8 +255,9 @@ impl ApiError {
         }
     }
 
-    /// The HTTP status this error maps to — the same value the client
-    /// receives via `into_response`.
+    /// The HTTP status this error maps to — the same value the client receives
+    /// via `into_response`. Exposed so a caller holding the error, rather than
+    /// the response, can label it with the status the client actually saw.
     pub fn status_code(&self) -> StatusCode {
         self.class().status()
     }
@@ -206,7 +288,8 @@ impl IntoResponse for ApiError {
         // source chains; full structured details are logged server-side.
         let message = match &self {
             ApiError::Internal(e) => {
-                // `{:#}` prints the anyhow chain (top error + sources) — `?e` would only show the outermost message.
+                // `{:#}` prints the anyhow chain (top error + sources) — `?e`
+                // would only show the outermost message.
                 tracing::error!("internal error serving request: {e:#}");
                 "internal error".to_string()
             }
@@ -219,6 +302,9 @@ impl IntoResponse for ApiError {
                 "upstream unavailable".to_string()
             }
             ApiError::UpstreamStatus { status } => {
+                // The worker's status is usually 200 here — it answered, then
+                // dropped the body — so neither message may call it an error
+                // status.
                 tracing::warn!(
                     upstream_status = %status,
                     "upstream response body did not complete",
@@ -283,7 +369,9 @@ impl IntoResponse for ApiError {
             .into_response();
         resp.headers_mut()
             .insert(X_ROUTER_ERROR_CODE, HeaderValue::from_static(code));
-        // Preserve the worker's real status when we synthesized our own.
+        // Preserve the worker's real status when we synthesized our own (today,
+        // only the mid-body-drop case: the worker sent a status, then dropped the
+        // body, so we report a 502 but don't throw away what it said).
         if let Some(upstream) = self.upstream_status() {
             resp.headers_mut().insert(
                 X_ROUTER_UPSTREAM_STATUS,
@@ -308,7 +396,10 @@ mod tests {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
-    /// Pin the exact JSON envelope shape that clients see.
+    /// Pin the exact JSON envelope shape that clients see. Renaming any of
+    /// these fields (or removing one) breaks every downstream consumer
+    /// silently, so we deserialize into a fixed struct rather than
+    /// regex-matching the rendered JSON.
     #[derive(Deserialize)]
     struct ErrEnv {
         error: ErrField,
@@ -363,6 +454,9 @@ mod tests {
 
     #[test]
     fn upstream_body_incomplete_preserves_worker_status_in_header() {
+        // Mid-body drop: the worker sent a status (here 500) then dropped the
+        // body. The router synthesizes its own 502, but the worker's real status
+        // is preserved in `x-router-upstream-status` rather than silently lost.
         let err = ApiError::UpstreamStatus {
             status: StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -396,6 +490,8 @@ mod tests {
             worker: worker.clone(),
         };
         let resp = err.into_response();
+        // A timeout is a gateway timeout (504), not a bad gateway (502): the
+        // same class — and so the same status — as the stale-deadline cancel.
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(
             resp.headers()
@@ -480,13 +576,16 @@ mod tests {
             body_str.contains("\"type\":\"server_error\""),
             "body: {body_str}"
         );
-        // No leak of the anyhow message:
+        // No leak of the original anyhow message:
         assert!(
             !body_str.contains(secret_msg),
             "ApiError::Internal must not leak anyhow chain to client; got: {body_str}"
         );
     }
-    /// A sampling-contract rejection must not be filed under `bad_request`.
+    /// A sampling-contract rejection must not be filed under `bad_request`:
+    /// an operator rolling `--sampling-param-conflict reject` across a fleet
+    /// has to be able to alert on contract rejections without them being
+    /// indistinguishable from clients sending malformed JSON.
     #[test]
     fn sampling_contract_has_a_distinct_code_from_other_bad_requests() {
         let err = ApiError::SamplingContract {
@@ -498,6 +597,8 @@ mod tests {
         assert_eq!(code_header.as_deref(), Some("sampling_contract_violation"));
         assert_eq!(env.error.code, "sampling_contract_violation");
         assert_ne!(env.error.code, "bad_request");
+        // The parameter and both values reach the client: a 400 here is
+        // actionable without an operator explaining it.
         assert!(
             env.error.message.contains("temperature") && env.error.message.contains("0.5"),
             "got: {}",
@@ -505,8 +606,8 @@ mod tests {
         );
     }
 
-    /// Those client-facing signals of the router status-code contract: the
-    /// HTTP status, `x-router-error-code`, and `x-router-upstream-status`.
+    /// The three client-facing signals of the router status-code contract:
+    /// the HTTP status, `x-router-error-code`, and `x-router-upstream-status`.
     fn signals(err: ApiError) -> (StatusCode, Option<String>, Option<String>) {
         let resp = err.into_response();
         let status = resp.status();
@@ -523,7 +624,13 @@ mod tests {
         )
     }
 
-    /// Every router-*originated* condition maps to a fixed (status, error-code) pair.
+    /// Every router-*originated* condition maps to a fixed (status, error-code)
+    /// pair, and ONLY the mid-body-drop case echoes the worker's real status in
+    /// `x-router-upstream-status`. This pins the router half of the status-code
+    /// contract:
+    ///   * same condition class → same status — both timeouts are 504, so the
+    ///     per-request timeout and the stale-deadline cancel cannot diverge;
+    ///   * a worker's real status is preserved, never silently rewritten.
     #[test]
     fn router_originated_scenarios_match_status_and_headers() {
         let worker = reqwest::Url::parse("http://host:1/").unwrap();

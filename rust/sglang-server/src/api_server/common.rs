@@ -1,5 +1,9 @@
-//! Common control-plane endpoints — `/server_info`, `/get_model_info` (+
-//! `/model_info` alias).
+//! Common control-plane endpoints — `/server_info`, `/get_model_info`
+//! (+ `/model_info` alias), plus the control-request submission path
+//! (`await_control_result`, on the shared `submit`). Data-plane endpoints (incl. `/health*`,
+//! which round-trips a generate probe) live in the sibling `native_api` and
+//! `openai` modules; the shared `AppState` lives in the parent
+//! `api_server` module.
 
 use axum::{
     Router,
@@ -22,22 +26,28 @@ use crate::message::response::ResponseItem;
 /// The routes this module owns, mounted by `api_server::serve`.
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        // Control-plane: reuses the request FSM (no tokenization), returns one non-streamed JSON result.
+        // Control-plane: reuses the request FSM (no tokenization), returns one
+        // non-streamed JSON result. Adding one = a route line + its struct tag.
         .route("/server_info", get(server_info))
-        // Static config, no scheduler round-trip. `/get_model_info` (+ `/model_info` alias).
+        // Static config, no scheduler round-trip. `/get_model_info` (+ `/model_info`
+        // alias).
         .route("/get_model_info", get(model_info))
         .route("/model_info", get(model_info))
 }
 
 /// Submit a control request through the request FSM (no tokenization) and await the
-/// scheduler's single msgpack result (a `structs.asdict` named map).
+/// scheduler's single msgpack result (a `structs.asdict` named map). Returns the
 /// raw bytes, or an error `Response` to return as-is.
 async fn await_control_result(
     state: &AppState,
     control: ControlRequest,
 ) -> Result<bytes::Bytes, Response> {
     let (rid, mut rx) = submit(state, RequestKind::Control(Box::new(control)), false).await?;
-    // Control requests register a detok entry like any other.
+    // Control requests register a detok entry like any other, and only
+    // `handle_result` removes it — so a request that never produces one (a stalled
+    // scheduler, a client that hangs up mid-await) leaves the entry behind. A
+    // monitor polling `/server_info` then leaks one `DetokState` per poll, forever.
+    // The guard deregisters on drop; it is disarmed below when the result lands.
     let mut guard = AbortGuard::new(state.senders.clone(), rid.clone());
     let received = rx.recv().await;
     if received.is_some() {
@@ -71,12 +81,17 @@ async fn model_info(State(state): State<Arc<AppState>>) -> Response {
         "served_model_name": sa.served_model_name,
         "tokenizer_path": sa.tokenizer_path,
         "is_generation": true,
-        // Python's `TokenizerManager` merges this into every request (`{**preferred, **client}`).
+        // Python's `TokenizerManager` merges this into every request
+        // (`{**preferred, **client}`); this server has no equivalent yet, so
+        // `RustServer.launch` REFUSES to start when it is set. It can therefore
+        // only be null here — echoing it keeps the field's shape.
         "preferred_sampling_params": sa.preferred_sampling_params,
-        // Python answers this through `config_value`, so a control-plane write moves it there.
+        // Python answers this through `config_value`, so a control-plane write
+        // moves it there; here it is the launch value.
         "weight_version": sa.weight_version,
         "load_format": sa.load_format,
-        // `auto` never reaches the blob.
+        // `auto` never reaches the blob: `resolve_auto_parsers` writes the
+        // selected parser into `server_args` before the scheduler forks.
         "reasoning_parser": sa.reasoning_parser,
         "tool_call_parser": sa.tool_call_parser,
         "disaggregation_mode": sa.disaggregation_mode,
@@ -117,7 +132,9 @@ async fn server_info(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// Runtime-metric keys `get_internal_state` adds atop the server-args dump.
+/// Runtime-metric keys `get_internal_state` adds atop the server-args dump. We copy
+/// ONLY these out of `internal_state` (an allowlist), so the co-mingled
+/// `api_key`/`admin_api_key` can never reach the response.
 const INTERNAL_STATE_ALLOWLIST: &[&str] = &[
     "last_gen_throughput",
     "memory_usage",
@@ -127,8 +144,8 @@ const INTERNAL_STATE_ALLOWLIST: &[&str] = &[
 ];
 
 fn shape_server_info(msgpack: &[u8], server_args: &ServerArgs) -> Result<Vec<u8>, String> {
-    // GetInternalStateReqOutput asdict → `{ "internal_state": { server-args
-    // dump + metrics }, ... }`.
+    // GetInternalStateReqOutput asdict → `{ "internal_state": { server-args dump +
+    // metrics }, ... }`. Pull that inner map out (it is NOT safe to expose whole).
     let mut obj: serde_json::Map<String, serde_json::Value> =
         rmp_serde::from_slice(msgpack).map_err(|e| e.to_string())?;
     let internal = match obj.remove("internal_state") {
@@ -166,7 +183,10 @@ fn shape_server_info(msgpack: &[u8], server_args: &ServerArgs) -> Result<Vec<u8>
 mod tests {
     use super::*;
 
-    /// The scheduler's `internal_state` embeds the full server-args dump (incl. `api_key`/`admin_api_key`).
+    /// The scheduler's `internal_state` embeds the full server-args dump (incl.
+    /// `api_key`/`admin_api_key`). `/server_info` must surface only the allowlisted
+    /// runtime metrics + curated config — never the secrets — and must not re-nest
+    /// the dump under `internal_states[].internal_state`.
     #[test]
     fn shape_server_info_excludes_secrets_and_dump() {
         // GetInternalStateReqOutput.asdict → { "internal_state": { …dump+metrics… } }.
@@ -193,8 +213,9 @@ mod tests {
         let mut msgpack = Vec::new();
         rmpv::encode::write_value(&mut msgpack, &outer).unwrap();
 
-        // `api_key` is deliberately NOT a `ServerArgs` field — the typed
-        // schema cannot carry it.
+        // `api_key` is deliberately NOT a `ServerArgs` field — the typed schema
+        // cannot carry it — so the only place it could leak from is the raw
+        // scheduler dump shaped above.
         let sa = ServerArgs {
             model_path: "/m".into(),
             ..Default::default()

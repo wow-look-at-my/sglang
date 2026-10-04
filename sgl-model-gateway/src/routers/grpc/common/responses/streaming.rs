@@ -48,8 +48,25 @@ struct OutputItemState {
     item_data: Option<serde_json::Value>,
 }
 
-/// OpenAI-compatible event emitter for /v1/responses streaming Manages state
-/// and sequence numbers to emit proper event types.
+/// OpenAI-compatible event emitter for /v1/responses streaming
+///
+/// Manages state and sequence numbers to emit proper event types:
+/// - response.created
+/// - response.in_progress
+/// - response.output_item.added
+/// - response.content_part.added
+/// - response.output_text.delta (multiple)
+/// - response.output_text.done
+/// - response.content_part.done
+/// - response.output_item.done
+/// - response.completed
+/// - response.mcp_list_tools.in_progress
+/// - response.mcp_list_tools.completed
+/// - response.mcp_call.in_progress
+/// - response.mcp_call_arguments.delta
+/// - response.mcp_call_arguments.done
+/// - response.mcp_call.completed
+/// - response.mcp_call.failed
 pub(crate) struct ResponseStreamEventEmitter {
     sequence_number: u64,
     pub response_id: String,

@@ -1,4 +1,5 @@
-# Launch trtllm https://github.com/sgl-project/tensorrt-demo
+# Launch trtllm
+# https://github.com/sgl-project/tensorrt-demo
 
 # offline
 python3 ../../python/sglang/bench_serving.py --backend trt --dataset-name random --num-prompt 3000 --random-input 1024 --random-output 1024 --model /root/Meta-Llama-3-8B-Instruct > trtllm_log11

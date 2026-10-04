@@ -11,6 +11,7 @@ namespace {
 //   2. `q_a_layernorm` and `kv_a_layernorm` fused into one parallel loop.
 //   3. k_input and v_input share the same storage, the torch API did
 //      this in `set_kv_buffer`. No additional memory movement.
+//
 
 // [C0, C1] = A @ [B0, B1]
 template <typename scalar_t>
@@ -101,6 +102,7 @@ void segment_gemm_kernel_impl(
 
   const bool use_brgemm = can_use_brgemm<int8_t>(M);
 
+  // K + 4 after compensation
   const int64_t packed_row_size = get_row_size<int8_t>(K);
 
   // parallel on [MB, NB0 + NB1]
@@ -126,7 +128,7 @@ void segment_gemm_kernel_impl(
 
       tinygemm_kernel<scalar_t>(
           /*   A */ A + mb_start * K,
-          /*   B */ B + local_nb_start * packed_row_size /* nb * BLOCK_N * (K +) */,
+          /*   B */ B + local_nb_start * packed_row_size /* nb * BLOCK_N * (K + 4) */,
           /*   C */ C + mb_start * ldc + local_nb_start,
           /* Ctmp*/ Ctmp,
           /*  As */ As + mb_start,
@@ -304,7 +306,7 @@ inline void rotary<at::BFloat16>(
   const __m512i idy1 = _mm512_set_epi32(23, 7, 22, 6, 21, 5, 20, 4, 19, 3, 18, 2, 17, 1, 16, 0);
   const __m512i idy2 = _mm512_set_epi32(31, 15, 30, 14, 29, 13, 28, 12, 27, 11, 26, 10, 25, 9, 24, 8);
 
-// rotary dim is iters
+// rotary dim is 64, just 2 iters
 #pragma GCC unroll 2
   for (int64_t d = 0; d < size; d += 32) {
     int64_t d2 = d >> 1;
@@ -315,11 +317,14 @@ inline void rotary<at::BFloat16>(
     __m512i a16 = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(input + d));
     __m512 a = CVT_BF16_TO_FP32(_mm512_extracti32x8_epi32(a16, 0));
     __m512 b = CVT_BF16_TO_FP32(_mm512_extracti32x8_epi32(a16, 1));
+    // from [16, 2] to [2, 16]
     __m512 in1 = _mm512_mask_permutex2var_ps(a, 0xffff, idx1, b);
     __m512 in2 = _mm512_mask_permutex2var_ps(a, 0xffff, idx2, b);
-    // out1 = in1 * cos - in2 * sin; out2 = in2 * cos + in1 * sin
+    // out1 = in1 * cos - in2 * sin;
+    // out2 = in2 * cos + in1 * sin
     __m512 out1 = _mm512_sub_ps(_mm512_mul_ps(in1, vcos), _mm512_mul_ps(in2, vsin));
     __m512 out2 = _mm512_add_ps(_mm512_mul_ps(in2, vcos), _mm512_mul_ps(in1, vsin));
+    // from [2, 16] to [16, 2]
     a = _mm512_mask_permutex2var_ps(out1, 0xffff, idy1, out2);
     b = _mm512_mask_permutex2var_ps(out1, 0xffff, idy2, out2);
 
@@ -348,6 +353,8 @@ void rotary_emb_kernel_impl(
   TORCH_CHECK(rotary_dim % 32 == 0, "rotary_dim is not 32x.");
   const int64_t rotary_offset = rotary_dim / 2;
 
+  // parallel on [num_seqs, num_heads + 1]
+  // top [num_heads] handle q_pe and bottom [1] handle k_pe
   at::parallel_for(0, num_seqs * (num_heads + 1), GRAIN_SIZE / rotary_dim, [&](int64_t begin, int64_t end) {
     int64_t seq{0}, head_id{0};
     data_index_init(begin, seq, num_seqs, head_id, num_heads + 1);
@@ -405,6 +412,7 @@ extern at::Tensor fp8_scaled_mm_cpu(
 //   w_kc             : [num_heads, kv_lora_rank, qk_nope_head_dim] [22, 512, 128]
 //   q_a_layernorm_weight  : [q_lora_rank] [1536]
 //   kv_a_layernorm_weight : [kv_lora_rank] [512]
+//
 std::tuple<at::Tensor, at::Tensor, at::Tensor> qkv_proj_with_rope(
     at::Tensor& hidden_states,
     at::Tensor& q_a_proj_weight,
@@ -483,6 +491,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> qkv_proj_with_rope(
   // outputs of q_a_proj and q_b_proj
   auto qa = at::empty({num_seqs, q_lora_rank}, options);
 
+  // stage 1: q_a_proj and kv_a_proj
   AT_DISPATCH_REDUCED_FLOATING_TYPES(st, "qkv_proj_kernel_impl", [&] {
     if (use_int8_w8a8) {
       auto q_a_proj_s = q_a_proj_scale.value();
@@ -556,6 +565,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> qkv_proj_with_rope(
     }
   });
 
+  // stage 2: apply rmsnorm inplace
   AT_DISPATCH_REDUCED_FLOATING_TYPES(st, "rms_norm_kernel_impl", [&] {
     rms_norm_kernel_impl<scalar_t>(
         qa.data_ptr<scalar_t>(),
@@ -569,6 +579,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> qkv_proj_with_rope(
         eps);
   });
 
+  // stage 3: q_b_proj
   at::Tensor qb;
   std::optional<at::Tensor> bias;
   if (use_int8_w8a8) {
@@ -581,10 +592,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> qkv_proj_with_rope(
   }
   qb.as_strided_({num_seqs, num_heads, qk_head_dim}, {num_heads * qk_head_dim, qk_head_dim, 1});
 
+  // stage 4: bmm
   auto q_nope = qb.narrow(2, 0, qk_nope_head_dim).transpose_(0, 1);
   auto q_nope_out = q_input.narrow(2, 0, kv_lora_rank).transpose_(0, 1);
   bmm_cpu(q_nope_out, q_nope, w_kc, is_vnni, w_scale);
 
+  // stage 5: rope
   AT_DISPATCH_REDUCED_FLOATING_TYPES(st, "rotary_emb_kernel_impl", [&] {
     rotary_emb_kernel_impl<scalar_t>(
         q_input.data_ptr<scalar_t>() + kv_lora_rank,

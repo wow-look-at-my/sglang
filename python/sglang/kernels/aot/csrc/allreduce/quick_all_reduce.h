@@ -154,7 +154,8 @@ struct DeviceComms {
     // Clear the flags buffer.
     HIP_CHECK(hipMemset(dbuffer, 0, flags_buffer_size));
 
-    // A per-block color counter that the kernel advances itself.
+    // A per-block color counter that the kernel advances itself. Seed it with
+    // 1 rather than 0 so it never matches the freshly zeroed flags buffer.
     HIP_CHECK(hipMalloc(&d_flag_counters, kMaxNumBlocks * sizeof(uint32_t)));
     {
       std::vector<uint32_t> init_color(kMaxNumBlocks, 1u);

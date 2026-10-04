@@ -1,4 +1,11 @@
-# Weekly CPU tests. Holds the CPU-only unit tests that are not worth a per-commit slot -- debug tooling (dump comparator, source patcher) whose breakage is fine to notice once a week. Separate from weekly-test-nvidia.yml because CPU goes through a different reusable workflow, and `uses:` takes no expressions -- so it cannot be another row in that file's matrix. Both run the same shared stage their per-commit counterparts do, so a test behaves identically in a PR and in the weekly run.
+# Weekly CPU tests. Holds the CPU-only unit tests that are not worth a
+# per-commit slot -- debug tooling (dump comparator, source patcher) whose
+# breakage is fine to notice once a week.
+#
+# Separate from weekly-test-nvidia.yml because CPU goes through a different
+# reusable workflow, and `uses:` takes no expressions -- so it cannot be another
+# row in that file's matrix. Both run the same shared stage their per-commit
+# counterparts do, so a test behaves identically in a PR and in the weekly run.
 name: Weekly Test (CPU)
 
 on:
@@ -17,7 +24,8 @@ permissions:
   pull-requests: read
 
 jobs:
-  # run_all_tests skips the paths-filter, so every test runs regardless of what the last commit touched.
+  # run_all_tests skips the paths-filter, so every test runs regardless of what
+  # the last commit touched.
   check-changes:
     uses: ./.github/workflows/_pr-test-check-changes.yml
     with:
@@ -26,7 +34,8 @@ jobs:
       force_continue_on_error: true
     secrets: inherit
 
-  # No rust_ext_artifact: nothing builds one here, so the stage falls back to its cache and compiles on a miss.
+  # No rust_ext_artifact: nothing builds one here, so the stage falls back to
+  # its cache and compiles on a miss.
   weekly-test-cpu:
     needs: check-changes
     if: github.repository == 'sgl-project/sglang'

@@ -1,4 +1,7 @@
 //! Shared MCP utilities for routers.
+//!
+//! This module provides shared MCP-related functionality that can be
+//! used across different router implementations (OpenAI, gRPC regular, gRPC harmony).
 
 use std::sync::Arc;
 
@@ -7,19 +10,30 @@ use tracing::warn;
 
 use crate::protocols::responses::{ResponseTool, ResponseToolType};
 
-// ============================================================================ Constants.
+// ============================================================================
+// Constants
+// ============================================================================
 
-/// Default maximum tool loop iterations (safety limit). Used as fallback when user doesn't specify `max_tool_calls`.
+/// Default maximum tool loop iterations (safety limit).
+///
+/// Used as fallback when user doesn't specify `max_tool_calls`.
+/// All routers use this same value.
 pub const DEFAULT_MAX_ITERATIONS: usize = 10;
 
-// ============================================================================ Configuration.
+// ============================================================================
+// Configuration
+// ============================================================================
 
-/// Configuration for MCP tool calling loops. Provides a common structure for loop configuration across routers.
+/// Configuration for MCP tool calling loops.
+///
+/// Provides a common structure for loop configuration across routers.
 #[derive(Debug, Clone)]
 pub struct McpLoopConfig {
     /// Maximum iterations as safety limit (default: DEFAULT_MAX_ITERATIONS).
+    /// Prevents infinite loops when max_tool_calls is not set by user.
     pub max_iterations: usize,
-    /// Server keys for filtering MCP tools. Contains keys for dynamic servers that were connected for this request.
+    /// Server keys for filtering MCP tools.
+    /// Contains keys for dynamic servers that were connected for this request.
     pub server_keys: Vec<String>,
 }
 
@@ -133,6 +147,7 @@ pub async fn ensure_request_mcp_client(
                         "Failed to get/create MCP connection for {}: {}",
                         server_key, err
                     );
+                    // Continue processing other tools
                 }
             }
         }

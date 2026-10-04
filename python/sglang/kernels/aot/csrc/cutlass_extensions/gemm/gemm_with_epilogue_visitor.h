@@ -1,6 +1,6 @@
-/* Copyright SGLang Team. All Rights Reserved.
+/* Copyright 2025 SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version.0 (the "License");
+Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -88,11 +88,13 @@ struct GemmWithEpilogueVisitor {
 
   //
   // Structures
+  //
 
   /// Argument structure
   struct Arguments {
     //
     // Data members
+    //
 
     GemmUniversalMode mode;
     GemmCoord problem_size;
@@ -113,6 +115,7 @@ struct GemmWithEpilogueVisitor {
 
     //
     // Methods
+    //
 
     Arguments() : mode(GemmUniversalMode::kGemm), batch_count(1) {}
 
@@ -143,6 +146,7 @@ struct GemmWithEpilogueVisitor {
 
   //
   // Structure for precomputing values in host memory and passing to kernels
+  //
 
   /// Parameters structure
   struct Params {
@@ -175,6 +179,7 @@ struct GemmWithEpilogueVisitor {
 
     //
     // Methods
+    //
 
     CUTLASS_HOST_DEVICE
     Params()
@@ -250,6 +255,7 @@ struct GemmWithEpilogueVisitor {
  public:
   //
   // Methods
+  //
 
   CUTLASS_DEVICE
   GemmWithEpilogueVisitor() {}
@@ -349,6 +355,7 @@ struct GemmWithEpilogueVisitor {
 #if SPLIT_K_ENABLED
     //
     // Fetch pointers based on mode.
+    //
     if (params.mode == GemmUniversalMode::kGemm || params.mode == GemmUniversalMode::kGemmSplitKParallel) {
       if (threadblock_tile_offset.k() + 1 < params.grid_tiled_shape.k()) {
         problem_size_k = (threadblock_tile_offset.k() + 1) * params.gemm_k_size;
@@ -382,12 +389,15 @@ struct GemmWithEpilogueVisitor {
     typename Mma::IteratorB iterator_B(
         params.params_B, ptr_B, {problem_size_k, params.problem_size.n()}, thread_idx, tb_offset_B);
 
+    // Broadcast the warp_id computed by lane 0 to ensure dependent code
+    // is compiled as warp-uniform.
     int warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
 
     int lane_idx = threadIdx.x % 32;
 
     //
     // Main loop
+    //
 
     // Construct thread-scoped matrix multiply
     Mma mma(shared_storage.main_loop, thread_idx, warp_idx, lane_idx);
@@ -404,6 +414,7 @@ struct GemmWithEpilogueVisitor {
 
     //
     // Masked tile iterators constructed from members
+    //
 
     threadblock_tile_offset = threadblock_swizzle.get_tile_offset(params.swizzle_log_tile);
 
@@ -415,6 +426,7 @@ struct GemmWithEpilogueVisitor {
 
     //
     // Construct the epilogue visitor
+    //
 
     bool with_bias = true;
     if (params.ptr_C == nullptr) {

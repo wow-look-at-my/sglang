@@ -51,11 +51,24 @@ void fused_experts_int4_w4a8_kernel_impl(
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
   int num_threads = at::get_num_threads();
+  // int64_t buffer_size_nbytes = M * topk * N * 2
+  //                              M * topk * K * 2 +
+  //                              num_threads * BLOCK_M * K +
+  //                              num_threads * 2 * BLOCK_M * BLOCK_N * sizeof(float)  +
+  //                              M * topk * 2 * N * 2 +
+  //                              max(M * K, M * topk * N)  +
+  //                              M * topk * sizeof(float);
 
-  // intermediate_cache1 (scalar_t): START + M * topk * N intermediate_cache2
-  // (scalar_t): + M * topk * K A_tmp (uint8_t): + num_threads * BLOCK_M * K
-  // C_tmp (float).
+  // intermediate_cache1 (scalar_t):     START + M * topk * N
+  // intermediate_cache2 (scalar_t):     + M * topk * K
+  // A_tmp (uint8_t):                    + num_threads * BLOCK_M * K
+  // C_tmp (float):                      + num_threads * 2 * BLOCK_M * BLOCK_N
+  // intermediate_cache0 (scalar_t):     + M * topk * 2 * N
+  // Aq_tmp (uint8_t):                   + max(M * K, M * topk * N)
+  // As_tmp (float):                     + M * topk
+  // dqB_tmp (int8_t)                    + num_threads * _block_k * BlOCK_N
 
+  // stage 0: quantize input to uint8, [M, K]
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
       quantize_row_int8<scalar_t>(Aq_tmp + m * K, As_tmp[m], input + m * K, K);
@@ -64,6 +77,7 @@ void fused_experts_int4_w4a8_kernel_impl(
   int64_t _block_k = get_4bit_block_k_size(group_size);
   auto Azp = at::ones({M * topk}).to(at::kInt).mul(128);
   auto Azp_ptr = Azp.data_ptr<int32_t>();
+  // stage 1: intermediate_cache0 = hidden_states @ w1
   const int64_t MB = div_up(num_tokens_post_pad, BLOCK_M);
   const int64_t NB = div_up(N, BLOCK_N);
 
@@ -73,6 +87,8 @@ void fused_experts_int4_w4a8_kernel_impl(
 
   const int64_t stride_e = 2 * NB * Kc * (BLOCK_N * (_block_k / 2 + sizeof(int32_t)));
   const bool sym_quant_act = false;
+  // weight + compensation shape = [E, Nc, Kc, block_n * _block_k / 2 + block_n*sizeof(int32_t)]
+  // scales/qzeros shape = [E, Nc, G, block_n]
 
   // here we only parallel on half of 2N to fuse silu_and_mul with gemm
   at::parallel_for(0, MB * NB, 0, [&](int64_t begin, int64_t end) {
@@ -97,6 +113,7 @@ void fused_experts_int4_w4a8_kernel_impl(
       const int8_t* __restrict__ Bz = w1z + expert_id * (num_groups) * (2 * N);
       const float* __restrict__ Bs = w1s + expert_id * (num_groups) * (2 * N);
 
+      // 1.a load A
       const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
       int64_t m_size = offsets[mb + 1] - offsets[mb];
       const bool use_brgemm = can_use_brgemm<int8_t>(m_size);
@@ -166,17 +183,21 @@ void fused_experts_int4_w4a8_kernel_impl(
     }
   });
 
+  // stage 1.5: intermediate_cache1 = silu(intermediate_cache0)
   at::parallel_for(0, M * topk, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
       silu_and_mul_stub(ic1 + m * N, ic0 + m * 2 * N, ic0 + m * 2 * N + N, N);
     }
   });
 
+  // stage 1.5: quantize ic1 to uint8, [M * topk, N]
   at::parallel_for(0, M * topk, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
       quantize_row_int8<scalar_t>(Aq_tmp + m * N, As_tmp[m], ic1 + m * N, N);
     }
   });
+  // stage 2: intermediate_cache2 = intermediate_cache1 @ w2
+  //   w2 : [E, K, N] as [E, OC, IC]
   const int64_t OC = K;  // rename K as OC
   const int64_t IC = N;  // rename N as IC
   const int64_t MB2 = MB;
@@ -209,7 +230,8 @@ void fused_experts_int4_w4a8_kernel_impl(
       const int8_t* __restrict__ Bz = w2z + expert_id * (num_groups)*OC;
       const float* __restrict__ Bs = w2s + expert_id * (num_groups)*OC;
 
-      // A ptr from ic1 of [M * topk, N] in sorted order so as to avoid copy A to tmp buffer again
+      // A ptr from ic1 of [M * topk, N] in sorted order
+      // so as to avoid copy A to tmp buffer again
       const uint8_t* __restrict__ A = Aq_tmp + offsets[mb] * IC;
       const float* __restrict__ As = As_tmp + offsets[mb];
       copy_bias<BLOCK_N>(nullptr, C2, m_size, BLOCK_N);
@@ -252,6 +274,7 @@ void fused_experts_int4_w4a8_kernel_impl(
     }
   });
 
+  // stage 3: out = intermediate_cache2.sum(dim=1)
   //   from [M, topk, K] to [M, K]
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {

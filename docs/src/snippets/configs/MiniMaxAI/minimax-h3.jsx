@@ -8,15 +8,31 @@
 
 // Single-GPU consumer cards run H3 lossless through layerwise offload. The
 // flags carry only what differs from the defaults; what changes with the
-// machine is the expectation, which the hints spell out per budget.
+// machine is the expectation, which the hints spell out per budget. Measured
+// on one RTX 4090 (denoise medians across interleaved runs, outputs verified
+// end to end); 48-64 GB hosts sit between the measured points.
 export const config = (() => {
+// One recipe per VRAM tier, measured under a hard allocator cap of that
+// size: the figures were taken at 12/16/24 GiB caps, so every card of a
+// tier shares them. 30-series cards run the same recipe; their step times
+// land above the measured 40/50-series figures.
 const CONSUMER_12G = ["rtx4070", "rtx5070", "rtx3060"];
 const CONSUMER_16G = ["rtx4080", "rtx5080", "rtx5070ti", "rtx4060ti"];
 const CONSUMER_24G = ["rtx4090", "rtx3090"];
+// The only tier measured on a physical desktop rather than under an allocator
+// cap: an RTX 5090 with 60 GB of host RAM and a PCIe 5.0 NVMe, where the VRAM,
+// the host RAM and the drive are all real at once.
 const CONSUMER_32G = ["rtx5090"];
-// Workstation cards a home builder can buy.
+// Workstation cards a home builder can actually buy. No hard-cap anchor was
+// measured for these sizes (the lab card is 24 GB and caps only shrink), so
+// their recipes are derived from the tier logic, not verified runs.
 const WORKSTATION_48G = ["rtx6000ada"];
 const WORKSTATION_96G = ["rtxpro6000"];
+// GB10 unified memory: 128 GB shared between CPU and GPU (121.7 GB visible
+// to torch), so the VRAM/host split that shapes every tier above does not
+// exist. The 134 GiB deployment still exceeds the pool, and the loader's
+// automatic placement handles that split better than any explicit flag set:
+// verified on DGX Spark, see unified128Flags().
 const UNIFIED_128G = ["dgx-spark"];
 const CONSUMER_SINGLE = [
   ...CONSUMER_12G,
@@ -30,7 +46,9 @@ const CONSUMER_SINGLE = [
 const CONSUMER_VRAM_16_PLUS = [...CONSUMER_16G, ...CONSUMER_24G, ...CONSUMER_32G];
 const CONSUMER_AMPERE = ["rtx3060", "rtx3090"];
 
-// The consumer recipes below are single-card.
+// The consumer recipes below are single-card. The 5090 is the one consumer
+// card with a verified two-card recipe (TP2, twenty resident layers -- half a
+// layer per GPU), so a two-card selection keeps the generic offload path.
 function consumerSingleCard(s) {
   return (
     CONSUMER_SINGLE.includes(s.hw)
@@ -42,7 +60,11 @@ function consumerFlags(s) {
   if (UNIFIED_128G.includes(s.hw)) return unified128Flags();
   if (WORKSTATION_96G.includes(s.hw)) return workstation96Flags();
   // The whole video decoder held for the decode only: residency arms at the
-  // decoder's first block and releases when it finishes.
+  // decoder's first block and releases when it finishes, so the denoise still
+  // runs on an empty card. All 36 blocks fit 12 GB because decoder weights are
+  // held in their decode compute dtype (fp16, ~4.9 GiB) from load -- the
+  // rounding was already in every output, so the result is bit-identical --
+  // and the decode drops from 60 s streamed to ~10 s.
   const flags = [
     "--performance-mode memory",
     "--layerwise-offload-components dit,text_encoder,vae",
@@ -51,9 +73,19 @@ function consumerFlags(s) {
   if (CONSUMER_VRAM_16_PLUS.includes(s.hw) && s.host_ram === "ram96") {
     flags.push("--dit-layerwise-resident-layers 4");
   }
+  // A 24 GB card has headroom for resident DiT layers, but their benefit
+  // flattened once the decoder went fp16 and the courier overlapped the
+  // streaming: measured at a 22 GiB cap (2 GiB desktop headroom), r10/r6/r4
+  // land at 8.41/8.48/8.51 s/step. Six layers keep ~2.4 GiB more free than
+  // ten for under 1% of speed -- the desktop-safe point. A 16 GB card keeps
+  // the plain recipe; even four resident layers measured slower there.
   if (CONSUMER_24G.includes(s.hw) && s.host_ram === "ram32") {
     flags.push("--dit-layerwise-resident-layers 6");
   }
+  // Fourteen layers (~17 GiB) leave the decode its room on a 32 GB card and
+  // shrink the streamed set the host has to pin. Measured at a 60 GB host;
+  // a smaller host does not change what fits on the card, so the count holds
+  // there too and matters more, since fewer streamed layers get pinned.
   if (CONSUMER_32G.includes(s.hw) && s.host_ram !== "ram96") {
     flags.push("--dit-layerwise-resident-layers 14");
   }
@@ -64,11 +96,16 @@ function consumerFlags(s) {
 }
 
 function unified128Flags() {
-  // Measured on DGX Spark.
+  // No flags: the deployment (134 GiB) exceeds the pool, automatic offload
+  // engages on its own and pins 42 of 50 DiT layers. Measured on DGX Spark,
+  // the explicit discrete-GPU recipe (--performance-mode memory + offload
+  // components + video_vae=36) ran the same denoise 2.1x slower (25.8 vs
+  // 12.1 s/it) -- do not carry discrete-card flags onto unified memory.
   return [];
 }
 
 function workstation96Flags() {
+  // 96 GB holds the whole 61.7 GB DiT; only the encoders and VAEs step aside.
   return [
     "--performance-mode memory",
     "--layerwise-offload-components text_encoder,vae",

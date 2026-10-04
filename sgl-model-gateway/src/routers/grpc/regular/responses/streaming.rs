@@ -1,4 +1,9 @@
 //! Streaming execution for Regular Responses API
+//!
+//! This module handles streaming request execution:
+//! - `execute_tool_loop_streaming` - MCP tool loop with streaming
+//! - `convert_chat_stream_to_responses_stream` - Non-MCP streaming conversion
+//! - Streaming accumulators for response building
 
 use std::{
     collections::HashMap,
@@ -56,9 +61,12 @@ use crate::{
 
 /// Convert chat streaming response to responses streaming format
 ///
-/// Gets chat SSE stream from pipeline
-/// Converts ChatCompletionStreamResponse → ResponsesResponse delta
-/// Emits transformed SSE events in responses format
+/// This function:
+/// 1. Gets chat SSE stream from pipeline
+/// 2. Intercepts and parses each SSE event
+/// 3. Converts ChatCompletionStreamResponse → ResponsesResponse delta
+/// 4. Accumulates response state for final persistence
+/// 5. Emits transformed SSE events in responses format
 pub(super) async fn convert_chat_stream_to_responses_stream(
     ctx: &ResponsesContext,
     chat_request: Arc<ChatCompletionRequest>,
@@ -406,7 +414,7 @@ impl StreamingResponseAccumulator {
 /// Execute MCP tool loop with streaming support
 ///
 /// This streams each iteration's response to the client while accumulating
-/// to check for tool calls. If tool calls are found.
+/// to check for tool calls. If tool calls are found, executes them and
 /// continues with the next streaming iteration.
 pub(super) async fn execute_tool_loop_streaming(
     ctx: &ResponsesContext,
@@ -604,8 +612,8 @@ async fn execute_tool_loop_streaming_internal(
             )
             .await;
 
-        // Convert chat stream to Responses API events while accumulating for
-        // tool call detection Stream text naturally - it only appears.
+        // Convert chat stream to Responses API events while accumulating for tool call detection
+        // Stream text naturally - it only appears on final iteration (tool iterations have empty content)
         let accumulated_response =
             convert_and_accumulate_stream(response.into_body(), &mut emitter, &tx).await?;
 

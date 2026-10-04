@@ -10,6 +10,10 @@
 #define GGML_CUDA_DMMV_X 32
 #define GGML_CUDA_MMV_Y 1
 
+// Data Structures
+// QK = number of values after dequantization
+// QR = QK / number of values before dequantization
+// QI = number of 32 bit integers before dequantization
 
 #define QK4_0 32
 #define QR4_0 2
@@ -64,7 +68,7 @@ typedef struct {
 #define QR2_K 4
 #define QI2_K (QK_K / (4 * QR2_K))
 typedef struct {
-  uint8_t scales[QK_K / 16];  // scales and mins, quantized with a few
+  uint8_t scales[QK_K / 16];  // scales and mins, quantized with 4 bits
   uint8_t qs[QK_K / 4];       // quants
   half2 dm;                   // super-block scale for quantized scales/mins
 } block_q2_K;
@@ -73,8 +77,8 @@ typedef struct {
 #define QI3_K (QK_K / (4 * QR3_K))
 typedef struct {
   uint8_t hmask[QK_K / 8];       // quants - high bit
-  uint8_t qs[QK_K / 4];
-  uint8_t scales[K_SCALE_SIZE];  // scales.
+  uint8_t qs[QK_K / 4];          // quants - low 2 bits
+  uint8_t scales[K_SCALE_SIZE];  // scales, quantized with 6 bits
   half d;                        // super-block scale
 } block_q3_K;
 
@@ -82,24 +86,24 @@ typedef struct {
 #define QI4_K (QK_K / (4 * QR4_K))
 typedef struct {
   half2 dm;                       // super-block scale for quantized scales/mins
-  uint8_t scales[3 * QK_K / 64];  // scales.
-  uint8_t qs[QK_K / 2];
+  uint8_t scales[3 * QK_K / 64];  // scales, quantized with 6 bits
+  uint8_t qs[QK_K / 2];           // 4--bit quants
 } block_q4_K;
 
 #define QR5_K 2
 #define QI5_K (QK_K / (4 * QR5_K))
 typedef struct {
   half2 dm;                      // super-block scale for quantized scales/mins
-  uint8_t scales[K_SCALE_SIZE];  // scales and mins.
+  uint8_t scales[K_SCALE_SIZE];  // scales and mins, quantized with 6 bits
   uint8_t qh[QK_K / 8];          // quants, high bit
-  uint8_t qs[QK_K / 2];          // quants, low a few
+  uint8_t qs[QK_K / 2];          // quants, low 4 bits
 } block_q5_K;
 
 #define QR6_K 2
 #define QI6_K (QK_K / (4 * QR6_K))
 typedef struct {
-  uint8_t ql[QK_K / 2];      // quants, lower a few
-  uint8_t qh[QK_K / 4];      // quants.
+  uint8_t ql[QK_K / 2];      // quants, lower 4 bits
+  uint8_t qh[QK_K / 4];      // quants, upper 2 bits
   int8_t scales[QK_K / 16];  // scales
   half d;                    // delta
 } block_q6_K;
@@ -146,6 +150,7 @@ typedef struct {
   uint8_t scales[IQ3S_N_SCALE];
 } block_iq3_s;
 
+// 1.5625 bpw
 #define QR1_S 8
 #define QI1_S (QK_K / (4 * QR1_S))
 typedef struct {
@@ -154,11 +159,12 @@ typedef struct {
   uint16_t qh[QK_K / 32];
 } block_iq1_s;
 
+// 1.75 bpw
 #define QR1_M 8
 #define QI1_M (QK_K / (4 * QR1_M))
 typedef struct {
-  uint8_t qs[QK_K / 8];       // grid index, low
-  uint8_t qh[QK_K / 16];
+  uint8_t qs[QK_K / 8];       // grid index, low 8 bits
+  uint8_t qh[QK_K / 16];      // grid index, high 3 bits + grid shift bit (for two groups of 8)
   uint8_t scales[QK_K / 32];  // 3-bit block scales (4-bit if QK_K == 64)
 } block_iq1_m;
 

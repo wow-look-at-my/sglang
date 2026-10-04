@@ -1,7 +1,17 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Power-of-k-choices load balancing.
+//! Power-of-k-choices load balancing. Each selection samples `choices`
+//! random distinct candidates and dispatches to the least-pressured one,
+//! so N router replicas reading the same load snapshot do not converge on
+//! one shared fleet minimum. When a queue limit is configured the sample
+//! is drawn from the tier of workers the queue gate admits, and only from
+//! the whole pool when every worker is queueing (the second tier keeps an
+//! all-queueing fleet routable).
+//!
+//! `select` and `propose` share one scan so they cannot disagree on the
+//! same pool: see [`best_two_of_sample`] for why it is a linear scan and
+//! never a sort.
 
 use crate::config::DEFAULT_MIN_LOAD_CHOICES;
 use crate::policies::admission::{compare_prefill_pressure, queue_gate_admits};
@@ -34,6 +44,7 @@ impl PowerOfTwoChoicesPolicy {
     }
 
     /// Sets the sample size and the queue gate for the fallback path.
+    /// `choices` is clamped to at least 1.
     pub fn with_load_control(mut self, choices: usize, queue_limit: Option<u64>) -> Self {
         self.choices = choices.max(1);
         self.queue_limit = queue_limit;
@@ -80,7 +91,7 @@ pub(crate) fn select_k_with_snapshot(
 
 /// The tier the sample is drawn from: workers the queue gate admits,
 /// or the whole pool when every worker is queueing (the second tier
-/// keeps an all-queueing fleet routable).
+/// keeps an all-queueing fleet routable). A sample must never land on
 /// a queueing worker while an unqueued one exists.
 fn sample_pool<'w>(
     workers: &'w [Arc<Worker>],
@@ -104,15 +115,27 @@ fn sample_pool<'w>(
     }
 }
 
-/// The sample's least-pressured members, best first, as pool indices
-/// resolved to workers.
-/// whole pool from a random offset. `pool[0]`; a smaller `choices` draws
-/// that many distinct indices.
-/// `rand`'s `sample` returns fully shuffled, so ties inside a sample resolve
-/// randomly too. Tie-breaking is not a detail of the large-`k` path: an idle
-/// fallback dispatch to the first worker. Both tiers scan linearly and never
-/// estimate, and any other pair on the waiting-token tuple.
-/// total order across a mixed set (an idle worker publishes no estimate).
+/// The sample's two least-pressured members, best first, as pool indices
+/// resolved to workers. `choices >= pool` skips the shuffle and scans the
+/// whole pool from a random offset, so the winner is the exact minimum
+/// whenever pressures differ and ties resolve randomly rather than always
+/// at `pool[0]`; a smaller `choices` draws that many distinct indices,
+/// which `rand`'s `sample` returns fully shuffled, so ties inside a sample
+/// resolve randomly too.
+///
+/// Tie-breaking is not a detail of the large-`k` path: an idle fleet ties
+/// on every comparison, and the default `k = 2` is already `>= pool` on a
+/// two-worker fleet, so a fixed scan order would pin every fallback
+/// dispatch to the first worker.
+///
+/// Both tiers scan linearly and never sort. `compare_prefill_pressure`
+/// is only a pairwise comparison: two workers that both publish
+/// `estimated_prefill_queue_ms` are ordered on that estimate, and any
+/// other pair on the waiting-token tuple, so it is not a total order
+/// across a mixed set (an idle worker publishes no estimate). Handing it
+/// to `sort_by` makes the standard library panic with "user-provided
+/// comparison function does not correctly implement a total order",
+/// unwinding whichever request task was selecting at the time.
 fn best_two_of_sample(
     pool: &[Arc<Worker>],
     snapshot: Option<&EngineReportedLoadSnapshot>,
@@ -124,7 +147,10 @@ fn best_two_of_sample(
     }
     let choices = choices.max(1);
     let drawn: Vec<usize> = if choices >= len {
-        // The whole pool, presented from a random offset.
+        // The whole pool, presented from a random offset. The scan below
+        // keeps the incumbent on a tie, so a fixed start would hand every
+        // tie to `pool[0]`; one rotation is O(1) randomness and leaves the
+        // exact minimum intact whenever the pressures actually differ.
         let start = rand::thread_rng().gen_range(0..len);
         (0..len).map(|offset| (start + offset) % len).collect()
     } else if choices == 1 {
@@ -203,10 +229,10 @@ mod tests {
     }
 
     /// A fleet where only some workers publish `estimated_prefill_queue_ms`.
-    /// An idle worker has no throughput delta to derive one from.
+    /// An idle worker has no throughput delta to derive one from, so this is
     /// the steady state, not an edge case - and it makes
     /// `compare_prefill_pressure` intransitive: a slow worker with a shallow
-    /// queue loses to a fast worker with a deep one on the estimate.
+    /// queue loses to a fast worker with a deep one on the estimate, while
     /// both are ordered against an estimate-less worker on waiting tokens.
     fn mixed_estimate_snapshot(workers: &[Arc<Worker>]) -> EngineReportedLoadSnapshot {
         EngineReportedLoadSnapshot::from_native_cache_workers(
@@ -239,7 +265,12 @@ mod tests {
         )
     }
 
-    /// `compare_prefill_pressure` is a pairwise comparison, not a total order.
+    /// `compare_prefill_pressure` is a pairwise comparison, not a total
+    /// order, so the k-way minimum must be a linear scan. Sorting a sample
+    /// this size panics with "user-provided comparison function does not
+    /// correctly implement a total order" - every request that samples a
+    /// mixed idle-and-busy fleet under a large `--min-load-choices` dies
+    /// with its task.
     #[test]
     fn a_large_sample_over_mixed_estimates_never_panics() {
         let model = ModelId("model".into());
@@ -295,7 +326,8 @@ mod tests {
         );
     }
 
-    /// A one-member sample has no runner-up, so admission loses its backup paths entirely.
+    /// A one-member sample has no runner-up, so admission loses its backup
+    /// paths entirely. Documented on `--min-load-choices`; pinned here.
     #[test]
     fn one_choice_proposes_no_backup() {
         let model = ModelId("model".into());
@@ -357,6 +389,8 @@ mod tests {
                 "the whole-pool tier must rank the all-queueing fleet by pressure"
             );
         }
+        // With a two-member sample the winner is still never the worker the
+        // other two both beat on pressure.
         for _ in 0..64 {
             let selected = select_k_with_snapshot(&workers, Some(&loads), 2, Some(4))
                 .expect("an all-queueing fleet must still route");
@@ -386,14 +420,23 @@ mod tests {
         }
     }
 
-    /// A fleet with nothing in flight ties on every pressure comparison, and the scan keeps its incumbent on a tie.
+    /// A fleet with nothing in flight ties on every pressure comparison,
+    /// and the scan keeps its incumbent on a tie, so the scan order alone
+    /// decides where the request goes. Resolving that in pool order sends
+    /// every tied dispatch to `pool[0]` — and with the default `k = 2` on
+    /// a two-worker fleet the `choices >= pool` path takes every dispatch,
+    /// so the whole fallback pins to one worker. Caught by the hicache
+    /// storage-tier e2e test: all of its filler traffic landed on a single
+    /// engine, turning that engine's host tier over before the probe could
+    /// read the primed prefix back from it.
     #[test]
     fn a_tied_pool_spreads_instead_of_pinning_the_first_worker() {
         let model = ModelId("model".into());
         let first = worker("first");
         let second = worker("second");
         let workers = vec![Arc::clone(&first), Arc::clone(&second)];
-        // Equal pressure on both: an idle fleet's steady state, not an edge case.
+        // Equal pressure on both: an idle fleet's steady state, not an
+        // edge case.
         let loads = snapshot(&[(&first, 0), (&second, 0)]);
         let ctx = SelectionContext::new(&model, None).with_load_snapshot(&loads);
         let policy = PowerOfTwoChoicesPolicy::new().with_load_control(2, None);
@@ -427,7 +470,9 @@ mod tests {
         let deep = worker("deep");
         let shallow = worker("shallow");
         let workers = vec![Arc::clone(&deep), Arc::clone(&shallow)];
-        // Both sit under the gate, so the tier is the whole pool and a single draw must reach the deeper worker too.
+        // Both sit under the gate, so the tier is the whole pool and a
+        // single draw must reach the deeper worker too - that is exactly
+        // what stops N replicas converging on one shared minimum.
         let loads = snapshot(&[(&deep, 3), (&shallow, 0)]);
 
         let mut saw_deep = false;

@@ -1,7 +1,10 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared ZMQ wire-format helpers for the `state::kv_events` component tests.
+//! Shared ZMQ wire-format helpers for the `state::kv_events` component
+//! tests. Encodes events in the same msgspec layout SGLang emits, builds
+//! the two-frame `[seq, payload]` ZMQ message a real publisher sends, and
+//! binds a loopback PUB socket on an OS-assigned port.
 
 #![allow(dead_code)]
 
@@ -9,7 +12,8 @@ use bytes::Bytes;
 use rmp::encode as mp;
 use zeromq::{Endpoint, PubSocket, Socket, ZmqMessage};
 
-/// Returns `(socket, port)`.
+/// Bind a PUB socket to an OS-assigned 127.0.0.1 port. Returns
+/// `(socket, port)`.
 pub async fn make_pub_bound() -> (PubSocket, u16) {
     let mut sock = PubSocket::new();
     let endpoint = sock
@@ -81,7 +85,7 @@ pub fn encode_event_batch(ts: f64, events: Vec<Vec<u8>>, attn_dp_rank: Option<u3
     buf
 }
 
-/// Build those-frame ZMQ message a real KV publisher sends:
+/// Build the two-frame ZMQ message a real KV publisher sends:
 /// `[seq (big-endian i64), payload]`.
 pub fn build_multipart(seq: i64, payload: Vec<u8>) -> ZmqMessage {
     let mut msg = ZmqMessage::from(Bytes::new());

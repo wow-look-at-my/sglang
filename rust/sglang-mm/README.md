@@ -1,11 +1,19 @@
 # sglang-mm
 
-Rust-accelerated multimodal preprocessing for SGLang. Fused image decode, fetch, resize, patchify, normalize, and content hash — all parallel and GIL-released.
+Rust-accelerated multimodal preprocessing for SGLang. Fused image decode,
+fetch, resize, patchify, normalize, and content hash — all parallel and
+GIL-released.
 
-Built ways:
+Built two ways:
 
-- **PyO3 extension** `sglang.srt.rust_extensions._multimodal` (features `python,parallel`, requested by the wheel build) via setuptools-rust when installing sglang — used by Python processors and parity tests.
-- **Pure-Rust `rlib`** (default features, i.e. neither) linked by `sglang-server`'s MM worker path — that copy needs no pyo3, no libpython, and no rayon: it spawns no threads. It runs inline on the calling thread, because the server supplies concurrency across requests and pins its own cores. `tests/rlib_is_single_threaded.rs` guards that from the outside.
+- **PyO3 extension** `sglang.srt.rust_extensions._multimodal` (features
+  `python,parallel`, requested by the wheel build) via setuptools-rust when
+  installing sglang — used by Python processors and parity tests.
+- **Pure-Rust `rlib`** (default features, i.e. neither) linked by
+  `sglang-server`'s MM worker path — that copy needs no pyo3, no libpython, and
+  no rayon: it spawns no threads and runs inline on the calling thread, because
+  the server supplies concurrency across requests and pins its own cores.
+  `tests/rlib_is_single_threaded.rs` guards that from the outside.
 
 ## Architecture
 
@@ -31,7 +39,8 @@ src/
 
 ## Server pipeline architecture
 
-`sglang-server`'s MM workers process an image request entirely in Rust. `driver::process` runs the same fixed steps for every model family:
+`sglang-server`'s MM workers process an image request entirely in Rust.
+`driver::process` runs the same fixed steps for every model family:
 
 ```
 MmInput { text?, input_ids?, images }
@@ -45,29 +54,63 @@ MmInput { text?, input_ids?, images }
   4. Output { input_ids, items: [{feature, aux, hash}], offsets, positions }
 ```
 
-The driver owns these steps and their failure semantics — any `Err` at any step rejects the request as a 400 (there is no Python fallback path). A model family fills in only the `family.*` calls, by implementing `MmFamilyProcessor` (`pipeline.rs`): it describes its data, it never runs the request. With qwen as the example:
+The driver owns these steps and their failure semantics — any `Err` at any
+step rejects the request as a 400 (there is no Python fallback path). A
+model family fills in only the `family.*` calls, by implementing
+`MmFamilyProcessor` (`pipeline.rs`): it describes its data, it never runs
+the request. With qwen as the example:
 
 - **`process_item`** — one decoded image → `ProcessedItem`:
-  - `feature`: the model's feature tensor. Qwen: `pixel_values`, from smart_resize → bicubic → normalize → patchify. The item identity is the driver's hash of the raw encoded source bytes, taken before decode — the same role as Python's `hash_feature`. However, this is a different algorithm over different input, so never comparable across paths.
-  - `aux`: named tensors for the model runner. Qwen: `image_grid_thw`. Other families: `image_sizes`, `tgt_sizes`, ... (Python: `model_specific_data`).
-  - `geometry`: whatever this family's `layout`/`positions` need later. Qwen: the `[t, h, w]` patch grid.
-- **`layout`** — how the prompt expands, described as a value. Example: the prompt `[A, <pad>, B]` with one 4-token image becomes
+  - `feature`: the model's feature tensor. Qwen: `pixel_values`, from
+    smart_resize → bicubic → normalize → patchify. The item identity is the
+    driver's hash of the raw encoded source bytes, taken before decode — the
+    same role as Python's `hash_feature`, but a different algorithm over
+    different input, so never comparable across paths.
+  - `aux`: named tensors for the model runner. Qwen: `image_grid_thw`;
+    other families: `image_sizes`, `tgt_sizes`, ... (Python:
+    `model_specific_data`).
+  - `geometry`: whatever this family's `layout`/`positions` need later.
+    Qwen: the `[t, h, w]` patch grid.
+- **`layout`** — how the prompt expands, described as a value. Example: the
+  prompt `[A, <pad>, B]` with one 4-token image becomes
 
   ```
   [Text(0..1), Media { item: 0, Repeat(<pad> × 4) }, Text(2..3)]
   ```
 
-  which the driver expands to `[A, <pad>, <pad>, <pad>, <pad>, B]` with offsets `[(1, 4)]`. Qwen builds this with the `layout_by_placeholder` helper. Families that interleave tile markers or row separators (internvl/minicpm-style) use `Explicit` id sequences instead. Expansion, offsets, and position inputs all derive from this value, so a family cannot get them out of sync.
-- **`positions`** — `Rope1D` (default: the scheduler needs nothing extra) or `MRope` (qwen's image-only fast path).
-- **`capabilities`** — which modalities the family accepts. The server rejects everything else per family.
+  which the driver expands to `[A, <pad>, <pad>, <pad>, <pad>, B]` with
+  offsets `[(1, 4)]`. Qwen builds this with the `layout_by_placeholder`
+  helper; families that interleave tile markers or row separators
+  (internvl/minicpm-style) use `Explicit` id sequences instead. Expansion,
+  offsets, and position inputs all derive from this one value, so a family
+  cannot get them out of sync.
+- **`positions`** — `Rope1D` (default: the scheduler needs nothing extra)
+  or `MRope` (qwen's image-only fast path).
+- **`capabilities`** — which modalities the family accepts; the server
+  rejects everything else per family.
 
-Why not give each family the whole request, like Python's per-family `process_mm_data_async` override? In the server core, every request must resolve to exactly one accept/reject with its buffers parked in order — that invariant only holds structurally. This is if the driver owns the flow.
+Why not give each family the whole request, like Python's per-family
+`process_mm_data_async` override? In the server core, every request must
+resolve to exactly one accept/reject with its buffers parked in order —
+that invariant only holds structurally if the driver owns the flow.
 
-Things stay in Python permanently: HF config parsing (a family is configured by a spec JSON of already-resolved params, selected via `registry::pipeline_from_spec`) and the thin drain adapter mapping feature/aux tensors to model kwargs. The carriers grow by need, not speculation: `DecodedMedia` gains a variant per modality (video/audio), `Geometry` per family style (tile sets), `TensorData` per dtype.
+Two things stay in Python permanently: HF config parsing (a family is
+configured by a spec JSON of already-resolved params, selected via
+`registry::pipeline_from_spec`) and the thin drain adapter mapping
+feature/aux tensors to model kwargs. The carriers grow by need, not
+speculation: `DecodedMedia` gains a variant per modality (video/audio),
+`Geometry` per family style (tile sets), `TensorData` per dtype.
 
-Supported families: `qwen_vl` (Qwen2-VL / 2.5-VL / 3-VL / 3.5. Images only). Adding one = a `MmFamilyProcessor` impl in `src/<model>/mod.rs` plus a `family` arm in `pipeline_from_spec`.
+Supported families: `qwen_vl` (Qwen2-VL / 2.5-VL / 3-VL / 3.5; images only).
+Adding one = a `MmFamilyProcessor` impl in `src/<model>/mod.rs` plus a
+`family` arm in `pipeline_from_spec`.
 
-`common::fetch` matches the Python `get_image_bytes` semantics (`REQUEST_TIMEOUT` env, `HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY` including IPv4-CIDR and `host:port` entries) with deliberate safety bounds. Every media source contributes to a shared 64-item / 1.25 GiB request budget, and each remote I/O stream has an additional 64 MiB cap. `file://` URLs also work (the Python helper passes the un-stripped URL to `open()`).
+`common::fetch` matches the Python `get_image_bytes` semantics
+(`REQUEST_TIMEOUT` env, `HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY` including
+IPv4-CIDR and `host:port` entries) with deliberate safety bounds: every media
+source contributes to a shared 64-item / 1.25 GiB request budget, and each
+remote I/O stream has an additional 64 MiB cap. `file://` URLs also work (the
+Python helper passes the un-stripped URL to `open()`).
 
 ## Python API
 
@@ -131,7 +174,8 @@ impl ImageProcessorSpec for MyModelProcessor {
 
 4. Wire up in `src/lib.rs`: `mod my_model;` and `my_model::register(m)?;`.
 
-5. Add Python processor class that calls `from sglang.srt.rust_extensions._multimodal import my_model`.
+5. Add Python processor class that calls
+   `from sglang.srt.rust_extensions._multimodal import my_model`.
 
 ## Available transform primitives (`common::transforms`)
 
@@ -144,11 +188,26 @@ impl ImageProcessorSpec for MyModelProcessor {
 
 ## Design notes
 
-- All fan-out goes through `common::par`, so whether this crate owns threads is decided by the `parallel` feature alone. With it on: CPU pool capped at `min(8, cores)` (override `SGL_MM_RS_THREADS`). With it off: no rayon, no threads, everything inline. Output is bit-identical either way — the fan-outs are order-preserving maps and writes into disjoint slices, not reductions. Note that sizing a pool to 1 is *not* the same as off: `install` blocks the caller and will serialize every concurrent request in the process.
-- Media fetch is blocking I/O and deliberately never enters the CPU pool. It runs inline and sequentially in `driver::process`. Contract: callers on a fixed worker pool (sglang-server) must resolve I/O-backed string sources — URLs *and* file paths (a network mount can hang far longer than any HTTP timeout). This is on their own I/O layer. Pass bytes, so workers never block on I/O. `data:`/base64 sources are pure CPU and stay on the worker.
-- PNG decode is bit-exact vs PIL. JPEG may differ by ±1 LSB. WebP/GIF/BMP also decode (GIF: first frame). Their parity is not bit-audited. Samples deeper than several bits are rejected rather than rescaled (PIL clips instead).
-- Lanczos and Bicubic resize are bit-exact clones of PIL's fixed-point implementations.
-- `common::content_hash_u64` is blake3, *not* Python's SHA-256 `mm_utils.data_hash`. Hashes are consistent within one path only.
+- All fan-out goes through `common::par`, so whether this crate owns threads is
+  decided by the `parallel` feature alone. With it on: CPU pool capped at
+  `min(8, cores)` (override `SGL_MM_RS_THREADS`). With it off: no rayon, no
+  threads, everything inline. Output is bit-identical either way — the fan-outs
+  are order-preserving maps and writes into disjoint slices, never reductions.
+  Note that sizing a pool to 1 is *not* the same as off: `install` blocks the
+  caller and would serialize every concurrent request in the process.
+- Media fetch is blocking I/O and deliberately never enters the CPU pool; it
+  runs inline and sequentially in `driver::process`. Contract: callers on a
+  fixed worker pool (sglang-server) must resolve I/O-backed string sources —
+  URLs *and* file paths (a network mount can hang far longer than any HTTP
+  timeout) — on their own I/O layer and pass bytes, so workers never block on
+  I/O. `data:`/base64 sources are pure CPU and stay on the worker.
+- PNG decode is bit-exact vs PIL; JPEG may differ by ±1 LSB. WebP/GIF/BMP also
+  decode (GIF: first frame); their parity is not bit-audited. Samples deeper
+  than 8 bits are rejected rather than rescaled (PIL clips instead).
+- Lanczos and Bicubic resize are bit-exact clones of PIL's fixed-point
+  implementations.
+- `common::content_hash_u64` is blake3, *not* Python's SHA-256
+  `mm_utils.data_hash`. Hashes are consistent within one path only.
 
 ## Build
 
@@ -157,7 +216,8 @@ Automatically built when installing sglang:
 pip install -e "python"
 ```
 
-Or standalone for development (the PyO3 bindings are behind a non-default feature — see `[features]` in `Cargo.toml` for why):
+Or standalone for development (the PyO3 bindings are behind a non-default
+feature — see `[features]` in `Cargo.toml` for why):
 ```bash
 cd rust/sglang-mm
 pip install maturin
@@ -174,4 +234,5 @@ pytest tests/test_golden.py       # regression tests
 python bench/bench_parity.py      # parity + benchmark
 ```
 
-Scheduler-boundary parity tests against the real HF processors live in `test/registered/unit/multimodal/rust/`.
+Scheduler-boundary parity tests against the real HF processors live in
+`test/registered/unit/multimodal/rust/`.

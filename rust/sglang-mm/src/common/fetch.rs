@@ -1,16 +1,26 @@
+//! Stage 1 of the server MM pipeline: resolve one media source to raw bytes.
+//!
+//! Mirrors the Python `get_image_bytes` source handling (and its precedence):
+//! raw bytes, `http(s)://` (bounded download, `REQUEST_TIMEOUT` and the proxy
+//! env vars like Python), `file://` / absolute path, `data:` URL, else bare
+//! base64.
 
 use std::io::Read;
 use std::sync::OnceLock;
 
 use base64::Engine;
 
-/// Cap on one remotely fetched payload.
+/// Cap on one remotely fetched payload. Inline base64 and trusted local files
+/// use their caller's whole-request budget instead.
 pub const MAX_FETCH_BYTES: u64 = 64 << 20;
 
-/// Charge granularity of a streaming read: the most an in-flight source can over-charge a shared [`ByteBudget`] by.
+/// Charge granularity of a streaming read: the most an in-flight source can
+/// over-charge a shared [`ByteBudget`] by.
 const CHUNK_BYTES: u64 = 256 << 10;
 
-/// A byte allowance shared by every source of one request, charged *as they stream*.
+/// A byte allowance shared by every source of one request, charged *as they
+/// stream*, so concurrent fetches stop at their combined size rather than each
+/// stopping at [`MAX_FETCH_BYTES`].
 #[derive(Debug)]
 pub struct ByteBudget(std::sync::atomic::AtomicU64);
 
@@ -33,7 +43,8 @@ impl ByteBudget {
     }
 
     /// Charge bytes which were already materialized by an earlier pipeline
-    /// stage.
+    /// stage. This lets the consumer apply one whole-request bound across
+    /// prefetched I/O and inline payloads without reading the source twice.
     pub fn charge_existing(&self, n: usize, what: &str) -> Result<(), String> {
         self.claim(n as u64).map_err(|()| over_budget(what))
     }
@@ -45,13 +56,16 @@ impl ByteBudget {
 }
 
 /// Resolve one string-typed image source into raw encoded-image bytes.
+/// An `Err` rejects the request, matching the Python per-request
+/// exception → 400.
 pub fn fetch_bytes(src: &str) -> Result<Vec<u8>, String> {
     fetch_bytes_budgeted(src, &ByteBudget::new(MAX_FETCH_BYTES))
 }
 
 /// Read a trusted local media path without applying the per-source remote cap.
 ///
-/// Python's media security limit is specifically a URL-download limit.
+/// Python's media security limit is specifically a URL-download limit. Local
+/// video fixtures and mounted production assets are commonly larger than 64
 /// MiB, so applying [`MAX_FETCH_BYTES`] to them breaks requests which the Python
 /// frontend accepts. They still consume the caller's whole-request budget.
 /// Reject non-regular files and charge their size before reading so a request
@@ -105,7 +119,7 @@ pub fn fetch_bytes_budgeted(src: &str, budget: &ByteBudget) -> Result<Vec<u8>, S
 
 /// Reserve the maximum decoded size before allocating. The reservation is
 /// reconciled with the exact size afterwards because trailing padding can
-/// reduce the result by a bounded number of bytes.
+/// reduce the result by up to two bytes.
 fn decode_base64_budgeted(encoded: &str, budget: &ByteBudget) -> Result<Vec<u8>, String> {
     let encoded = encoded.trim();
     let padding = encoded
@@ -186,7 +200,9 @@ fn http_agent() -> &'static ureq::Agent {
 }
 
 /// Companion agent that ignores the proxy env vars, for hosts matched by
-/// `NO_PROXY`. ureq has no `NO_PROXY` support of its own.
+/// `NO_PROXY`. ureq has no `NO_PROXY` support of its own, and silently sending
+/// an internal image host through a corporate proxy breaks deployments that
+/// work on the Python path, so the match is applied here.
 fn direct_agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| ureq::AgentBuilder::new().build())
@@ -224,9 +240,9 @@ fn bypasses_proxy(host: &str, port: Option<u16>) -> bool {
 }
 
 /// `NO_PROXY` semantics as `requests` implements them: comma-separated
-/// entries; `*` matches everything.
+/// entries; `*` matches everything; an IPv4 CIDR entry matches an IPv4 host in
 /// that network (requests supports IPv4 networks only); a `host:port` entry
-/// matches only that explicit port.
+/// matches only that explicit port; otherwise an entry matches a host that
 /// equals it or is a subdomain of it (leading dots ignored). Kept pure so it
 /// is testable without mutating process-global env.
 fn no_proxy_matches(no_proxy: &str, host: &str, port: Option<u16>) -> bool {
@@ -322,7 +338,8 @@ mod tests {
         assert!(err.contains("exceeds"), "{err}");
     }
 
-    /// The convenience API keeps its MiB budget.
+    /// The convenience API keeps its 64 MiB budget, while a server request may
+    /// supply a larger bounded allowance for already-resident inline media.
     #[test]
     fn inline_base64_uses_the_supplied_request_budget() {
         let encoded = "A".repeat((MAX_FETCH_BYTES / 3 * 4 + 8) as usize);
@@ -356,7 +373,8 @@ mod tests {
         assert!(err.contains("request media byte budget"), "{err}");
     }
 
-    /// Unused claims come back, so small sources fit in a budget their worst-case sizes would have exhausted.
+    /// Unused claims come back, so small sources fit in a budget their
+    /// worst-case sizes would have exhausted.
     #[test]
     fn short_reads_release_their_claim() {
         let path = std::env::temp_dir().join(format!("sglang-budget-{}", std::process::id()));
@@ -398,7 +416,9 @@ mod tests {
         assert!(host_port_of("data:image/png;base64,AAA").is_none());
     }
 
-    /// `NO_PROXY` must bypass the proxy for exact hosts and subdomains but not for lookalike suffixes — sending an internal host.
+    /// `NO_PROXY` must bypass the proxy for exact hosts and subdomains but not
+    /// for lookalike suffixes — sending an internal host to a corporate proxy
+    /// is a silent failure that works fine on the Python path.
     #[test]
     fn no_proxy_matches_host_and_subdomains_only() {
         let list = " .internal ,localhost";
@@ -440,7 +460,8 @@ mod tests {
         assert!(no_proxy_matches("internal", "internal", Some(8443)));
     }
 
-    /// End-to-end HTTP download against a local one-shot server, and the capped rejection of an oversized response.
+    /// End-to-end HTTP download against a local one-shot server, and the
+    /// capped rejection of an oversized response.
     #[test]
     fn http_download_and_cap() {
         let serve = |body: Vec<u8>, content_length: u64| {

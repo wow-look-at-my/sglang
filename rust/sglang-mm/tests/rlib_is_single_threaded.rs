@@ -1,4 +1,11 @@
-//! The pure-Rust `rlib` that `sglang-server` links must not own worker threads.
+//! The pure-Rust `rlib` that `sglang-server` links must not own worker
+//! threads: the server supplies concurrency across requests and pins its own
+//! cores, so a library spawning pools behind its back would fight it.
+//!
+//! Guarding this from the outside (thread count of the process) rather than by
+//! inspecting the code, so it stays true no matter how the fan-out seam in
+//! `common::par` is refactored. Runs only in the default (rayon-less) build;
+//! under `--features parallel` the pools are expected.
 
 #![cfg(not(feature = "parallel"))]
 
@@ -31,7 +38,7 @@ fn processing_a_request_spawns_no_worker_threads() {
     let before = thread_names().len();
     let family = pipeline_from_spec(SPEC).unwrap();
 
-    // Images, so the per-item fan-out seam is exercised, not bypassed.
+    // Two images, so the per-item fan-out seam is exercised, not bypassed.
     let out = process(
         family.as_ref(),
         MmInput {

@@ -38,8 +38,13 @@ void inline update_conv_state(
   }
 }
 
+// A : [M, BLOCK_N]
+// B : [BLOCK_N, K], prepacked as [K/2, BLOCK_N, 2]
+// C : [M, BLOCK_N]
+// bias : [BLOCK_N]
 //
-// Lda: leading dimension of `input` and `out`
+// lda : leading dimension of `input` and `out`
+//
 template <typename scalar_t, int K, int BLOCK_N, bool has_bias, bool has_silu>
 struct tinygemm_kernel {
   static inline void apply(
@@ -73,12 +78,14 @@ struct tinygemm_kernel<at::BFloat16, K, BLOCK_N, has_bias, has_silu> {
     constexpr int ROWS = K;
     constexpr int COLS = BLOCK_N / block_size_n();
 
+    // leading dimension size for b for next block [K/2, 32, 2]
     constexpr int ldb = block_size_n() * K;
 
     __m512bh va[ROWS * COLS];
     __m512bh vb[ROWS * COLS];
     __m512 vc[COLS * 2];
 
+    // k: {-3, -2, -1} -> {0, 1, 2}
     auto set_conv_states = [&](int k, int col) -> __m512i {
       return has_initial_state ? _mm512_loadu_si512(conv_states + (k + K - 1) * lda + col * 32)
                                : _mm512_setzero_si512();
@@ -100,6 +107,7 @@ struct tinygemm_kernel<at::BFloat16, K, BLOCK_N, has_bias, has_silu> {
     (bp) = (__m512bh)_mm512_shuffle_i32x4(r0, r1, 0xdd); \
   } while (0)
 
+    // step 0 : preload a at time step [-3][-2][-1]
     auto preloada = [&](auto i) {
       constexpr int col = i;
       int64_t m = 0;
@@ -119,6 +127,7 @@ struct tinygemm_kernel<at::BFloat16, K, BLOCK_N, has_bias, has_silu> {
       va[3 * COLS + col] = MM512_LOAD_A(m);
     };
 
+    // step 1 : load weight for just once
     auto loadb = [&](auto i) {
       constexpr int row = i / COLS;
       constexpr int col = i % COLS;
@@ -139,7 +148,8 @@ struct tinygemm_kernel<at::BFloat16, K, BLOCK_N, has_bias, has_silu> {
     //
     //  * va and vb shares the same memory layout
     //  * block_n 32 with 4 rows equals to 4 registers
-    //  * 37 uops with avx512bf16 v.s. 57 uops with avx512f.
+    //  * 37 uops with avx512bf16 v.s. 57 uops with avx512f
+    //
     auto compute = [&](auto i) {
       constexpr int col = i;
 
@@ -180,10 +190,11 @@ struct tinygemm_kernel<at::BFloat16, K, BLOCK_N, has_bias, has_silu> {
     };
 
     for (int64_t m = 0; m < M; ++m) {
-      // step 3.a: load a at current time step
+      // step 3.a : load a at current time step
       Unroll<COLS>{}(loada, m);
+      // step 3.b : accumulate for window size (4)
       Unroll<COLS>{}(compute);
-      // step 3.c: store c at current time step
+      // step 3.c : store c at current time step
       Unroll<COLS>{}(storec, m);
     }
   }
@@ -217,6 +228,7 @@ void causal_conv1d_fwd_kernel_impl(
     int64_t seqlen,
     int64_t width,
     int64_t num_seq_blocks) {
+  // handle 32 x 64 per block
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n() * 2;
   const int64_t NB = div_up(dim, BLOCK_N);
@@ -299,6 +311,7 @@ void causal_conv1d_fwd_varlen_kernel_impl(
     int64_t dim,
     int64_t width,
     int64_t num_seq_blocks) {
+  // handle 32 x 64 per block
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n() * 2;
   const int64_t NB = div_up(dim, BLOCK_N);
@@ -371,6 +384,7 @@ void causal_conv1d_update_kernel_impl(
     int64_t dim,
     int64_t seqlen,
     int64_t width) {
+  // handle 32 x 64 per block
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n() * 2;
   const int64_t NB = div_up(dim, BLOCK_N);
@@ -415,6 +429,7 @@ void causal_conv1d_update_kernel_impl(
   // update conv_states
   at::parallel_for(0, batch, 0, [&](int64_t begin, int64_t end) {
     for (int64_t bs = begin; bs < end; ++bs) {
+      // update old states, range [1, width - 1)
       int32_t conv_state_index = has_conv_indices ? conv_indices[bs] : bs;
       for (int64_t w = 1; w < width - 1; ++w) {
         std::memcpy(CONV_STATE_INDEXR(w - 1), CONV_STATE_INDEXR(w), dim * sizeof(scalar_t));
@@ -427,6 +442,8 @@ void causal_conv1d_update_kernel_impl(
 
 }  // anonymous namespace
 
+// from [dim, width] or [N, K]
+// to [N/BLOCK_N, K/2, BLOCK_N, 2]
 at::Tensor causal_conv1d_weight_pack(const at::Tensor& weight) {
   CHECK_INPUT(weight);
 
@@ -441,6 +458,7 @@ at::Tensor causal_conv1d_weight_pack(const at::Tensor& weight) {
 
   auto packed_weight = at::empty_like(weight);
   AT_DISPATCH_REDUCED_FLOATING_TYPES(weight.scalar_type(), "causal_conv1d_fwd_kernel_impl", [&] {
+    // cast to float32 as vnni size is 2
     const float* w_data = reinterpret_cast<float*>(weight.data_ptr<scalar_t>());
     float* packed_data = reinterpret_cast<float*>(packed_weight.data_ptr<scalar_t>());
 
@@ -519,6 +537,7 @@ at::Tensor get_block_indices(const std::optional<at::Tensor>& offsets, int64_t n
 //   conv_states: (..., dim, width - 1) itype
 //   activation: either None or "silu" or "swish"
 //   pad_slot_id: int
+//
 at::Tensor causal_conv1d_fwd_cpu(
     const at::Tensor& x,
     const at::Tensor& weight,
@@ -558,7 +577,8 @@ at::Tensor causal_conv1d_fwd_cpu(
     CHECK_EQ(conv_states_val.size(1), dim);
     CHECK_EQ(conv_states_val.size(2), width - 1);
 
-    // adjust `conv_states` to be contiguous on `dim` should happen only once
+    // adjust `conv_states` to be contiguous on `dim`
+    // should happen only once
     if (conv_states_val.stride(-2) != 1) {
       auto conv_states_copy = conv_states_val.clone();
       conv_states_val.as_strided_({padded_batch, dim, width - 1}, {(width - 1) * dim, 1, dim});
@@ -566,6 +586,7 @@ at::Tensor causal_conv1d_fwd_cpu(
     }
   }
 
+  // block size for sequence blocks, 32
   constexpr int64_t BLOCK_M = block_size_m();
 
   // total number of sequence blocks
@@ -574,6 +595,7 @@ at::Tensor causal_conv1d_fwd_cpu(
   at::Tensor out = at::empty_like(x);
   AT_DISPATCH_REDUCED_FLOATING_TYPES(scalar_type, "causal_conv1d_fwd_kernel_impl", [&] {
     if (is_var_seqlen) {
+      // record seq blocks in Coordinate format, aka [num_seq_blocks, 2]
       at::Tensor block_indices = get_block_indices<BLOCK_M>(query_start_loc, num_seq_blocks);
 
       causal_conv1d_fwd_varlen_kernel_impl(
@@ -621,6 +643,7 @@ at::Tensor causal_conv1d_fwd_cpu(
 //   conv_state_indices: (batch,), dtype int32
 //   pad_slot_id: int
 //   out: (batch, dim) or (batch, dim, seqlen)
+//
 at::Tensor causal_conv1d_update_cpu(
     const at::Tensor& x,
     const at::Tensor& conv_states,

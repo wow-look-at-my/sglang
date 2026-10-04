@@ -1,4 +1,15 @@
-//! sglang-server: a multi-threaded Rust frontend (HTTP server → TokenizerManager → Tokenizer/Detokenizer) embedded.
+//! sglang-server: a multi-threaded Rust frontend (HTTP server → TokenizerManager
+//! → Tokenizer/Detokenizer) embedded in the Python scheduler process.
+//!
+//! This file is the Python↔Rust boundary: it registers the pyo3 module
+//! (`_server`) and the classes exposed to the scheduler — the boot config
+//! ([`ServerArgs`] and its parts, constructed by keyword from Python; their
+//! `#[pyclass]`es and constructors live in `message::config`), [`Server`]
+//! (boot, `recv_requests`/`wait_request`, `push_*`, MM results, shutdown),
+//! [`RequestBatch`] and [`MmEncodedResult`]. Everything behind that boundary —
+//! receiving requests, encoding multimodal inputs, tokenizing, detokenizing,
+//! SSE streaming, and so on — is implemented purely in Rust and never touches
+//! a `PyObject`.
 
 mod api_server;
 mod message;
@@ -32,22 +43,36 @@ use crate::utils::startup::{listen_addr, value_error};
 use crate::utils::{logging, runtime};
 
 /// One drained MM result (see [`Server::take_mm_result`]).
+///
+/// Built-in results are consumed by `RustMmProcessor.wrap_encoded` to build
+/// `MultimodalProcessorOutput`. External integrations consume `external_items`
+/// and `external_token_ids` in their own Python wrappers; the built-in fields
+/// are empty in that case.
 #[pyclass(frozen, get_all)]
 pub struct MmEncodedResult {
     // General fields for the built-in processor path.
+    /// All items' `pixel_values` concatenated as flat `f32` with logical shape
+    /// `[sum(t*h*w), feature_dim]`; present on the inline (single-rank) path.
     features: Option<Py<numpy::PyArray1<f32>>>,
-    /// Per-item POSIX shared-memory segment holding `[t*h*w, feature_dim]` f32 features.
+    /// Per-item POSIX shared-memory segment holding `[t*h*w, feature_dim]` f32
+    /// features; present on the TP-broadcast path.
     shm_names: Option<Vec<String>>,
-    /// Per-item content hash of the raw source bytes, or the caller-provided `mm_hashes` override.
+    /// Per-item content hash of the raw source bytes, or the caller-provided
+    /// `mm_hashes` override, precomputed so draining never re-hashes.
     hashes: Vec<u64>,
-    /// Per-item inclusive `(start, end)` placeholder-token span in the expanded `input_ids`.
+    /// Per-item inclusive `(start, end)` placeholder-token span in the expanded
+    /// `input_ids`.
     offsets: Vec<(u32, u32)>,
 
     // Qwen-VL-specific fields.
+    /// Per-item `image_grid_thw` `(t, h, w)` in patch units; `t*h*w` is also the
+    /// item's row count in `features`.
     grids: Vec<(u32, u32, u32)>,
-    /// M-RoPE position ids as flat `i64` with row-major shape `[3, seq_len]` (temporal, height, and width rows).
+    /// M-RoPE position ids as flat `i64` with row-major shape `[3, seq_len]`
+    /// (temporal, height, and width rows).
     mrope: Py<numpy::PyArray1<i64>>,
-    /// M-RoPE delta, `max(mrope) + 1 - seq_len`, added to the plain sequence position during decoding.
+    /// M-RoPE delta, `max(mrope) + 1 - seq_len`, added to the plain sequence
+    /// position during decoding.
     mrope_delta: i64,
 
     // Fields for external processor integrations.
@@ -55,7 +80,8 @@ pub struct MmEncodedResult {
     external_token_ids: Option<MmTokenIds>,
 }
 
-/// One media item returned to an external Python integration. The NumPy view owns the feature allocation.
+/// One media item returned to an external Python integration. The NumPy view
+/// owns the feature allocation.
 #[pyclass(frozen, get_all)]
 pub struct ExternalMmItemResult {
     modality: MmModality,
@@ -160,16 +186,20 @@ impl MmEncodedResult {
 }
 
 /// Columnar request batch handed to Python by [`Server::recv_requests`].
+/// `frozen`: immutable snapshot, so field access never contends on a borrow.
 #[pyclass(frozen, get_all)]
 pub struct RequestBatch {
     /// One msgpack scalar header per request (`input_ids` omitted).
     headers: Vec<Py<PyBytes>>,
-    /// The raw-data plane today just all requests' raw little-endian int64 ids, concatenated.
+    /// The raw-data plane today just all requests' raw little-endian int64
+    /// ids, concatenated; sliced per request via `lengths`.
     data: Py<PyBytes>,
+    /// Per-request token count (0 for control requests).
     lengths: Vec<u32>,
 }
 
-/// Handle owned by the Python scheduler process.
+/// Handle owned by the Python scheduler process. Construct once via
+/// [`Server::start`], then poll it from the scheduler event loop.
 #[pyclass]
 pub struct Server {
     rt: runtime::Runtime,
@@ -178,6 +208,8 @@ pub struct Server {
 #[pymethods]
 impl Server {
     /// Boot the frontend (spawns all threads) and return immediately.
+    /// `server_args` is the scheduler's [`ServerArgs`]; the rest are
+    /// rust-server-only overrides.
     #[new]
     #[pyo3(signature = (
         server_args,
@@ -187,7 +219,8 @@ impl Server {
         stage_channel_cap = 8192,
         cores = None,
     ))]
-    // pyo3 `#[new]` constructor: the wide arg list is the Python-facing boot surface (all optional overrides).
+    // pyo3 `#[new]` constructor: the wide arg list is the Python-facing boot
+    // surface (all optional overrides), not a call-site ergonomics problem.
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         server_args: ServerArgs,
@@ -197,8 +230,8 @@ impl Server {
         stage_channel_cap: usize,
         cores: Option<Vec<usize>>,
     ) -> PyResult<Self> {
-        // `server_args` already arrived typed (pyo3 rejected any
-        // missing/extra/ mistyped field when Python constructed it).
+        // `server_args` already arrived typed (pyo3 rejected any missing/extra/
+        // mistyped field when Python constructed it); only value checks remain.
         server_args
             .validate()
             .map_err(|e| value_error("server_args", e))?;
@@ -222,7 +255,9 @@ impl Server {
         Ok(Self { rt })
     }
 
-    /// Non-blocking drain of the to_scheduler channel, returned **columnar** as an [`RequestBatch`].
+    /// Non-blocking drain of the to_scheduler channel, returned **columnar** as an
+    /// [`RequestBatch`] so the large `input_ids` tensor never goes through
+    /// msgpack (see the field docs for the layout).
     #[pyo3(signature = (max = 256))]
     pub fn recv_requests(&self, py: Python<'_>, max: usize) -> PyResult<RequestBatch> {
         let cols = self.rt.to_scheduler_rx.drain(max);
@@ -242,7 +277,8 @@ impl Server {
         })
     }
 
-    /// Park up to `timeout_ms` for an incoming request so the idle scheduler loop sleeps instead of spinning.
+    /// Park up to `timeout_ms` for an incoming request so the idle scheduler loop
+    /// sleeps instead of spinning at 100% CPU.
     #[pyo3(signature = (timeout_ms = 1000))]
     pub fn wait_request(&self, py: Python<'_>, timeout_ms: u64) -> bool {
         py.detach(|| {
@@ -253,7 +289,7 @@ impl Server {
     }
 
     /// Push a whole decode batch as ONE frame: a columnar msgpack `header` plus
-    /// the raw `data_cols` (per-column `bytes`), concatenated here.
+    /// the raw `data_cols` (per-column `bytes`), concatenated here. Blocks for
     /// backpressure; `False` only on shutdown.
     pub fn push_decode_result_batch(
         &self,
@@ -284,15 +320,24 @@ impl Server {
     }
 
     /// Spawn the MM worker pool for the pipeline in `spec` (built from the
-    /// resolved processor config.
+    /// resolved processor config; see `RustMmProcessor.resolve_spec` and
+    /// `RustServer._build_mm_spec`). Image-only requests are processed entirely
+    /// in Rust and parked for [`Server::take_mm_result`]; anything the pipeline
+    /// cannot serve is rejected back to the client — there is no Python fallback.
     pub fn start_mm_workers(&self, spec: MmSpec, workers: usize) -> PyResult<()> {
         self.rt
             .start_mm_workers(spec, workers)
             .map_err(|e| value_error("mm spec", e))
     }
 
-    /// Pop the MM result for `rid` — parked strictly before the request
-    /// reached the to_scheduler channel — or `None` if there is none.
+    /// Pop the MM result for `rid` — parked strictly before the request reached
+    /// the to_scheduler channel — or `None` if there is none. The numeric
+    /// buffers become 1-D numpy arrays that take **ownership** of the Rust
+    /// vectors, no copy.
+    ///
+    /// Runs on the scheduler loop between decode steps, so any per-byte work
+    /// here — memcpy or hashing, tens of MB per image-heavy request — would
+    /// stall every running request's ITL. Hence the worker-precomputed `hashes`.
     pub fn take_mm_result(&self, py: Python<'_>, rid: &str) -> PyResult<Option<MmEncodedResult>> {
         self.rt
             .mm_results
@@ -314,7 +359,8 @@ impl Server {
         self.rt.start_mm_workers_with_processor(processor, workers);
     }
 
-    /// Hand one already-framed message to the ring.
+    /// Hand one already-framed message to the ring. Shared by every push path —
+    /// they differ solely in how the frame is built. `false` only on shutdown.
     #[inline]
     fn push_frame(&self, py: Python<'_>, frame: bytes::Bytes) -> bool {
         match self.rt.from_scheduler_tx.try_push(frame) {

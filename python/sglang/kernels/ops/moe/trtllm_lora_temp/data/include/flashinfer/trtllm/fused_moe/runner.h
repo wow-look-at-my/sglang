@@ -1,9 +1,18 @@
-/*All rights reserved. You may obtain a copy of the License at
- * http://www.apache.org/licenses/LICENSE-2.0 Unless required by applicable
- * law or agreed to in writing, software distributed under the License is
- * distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the specific
- * language governing permissions and limitations under the License. */
+/*
+ * Copyright (c) 2022-2025, NVIDIA CORPORATION.  All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #pragma once
 
@@ -46,6 +55,8 @@ enum class RoutingMethodType : int64_t {
   // SigmoidRenorm: Sigmoid -> TopK -> Renormalize (divide by sum of top-K
   // weights)
   SigmoidRenorm = 6,
+  // MiniMax2: Sigmoid + Bias -> TopK -> ScaledSumNormalize (routeScale=1.0,
+  // epsilon=1e-20)
   MiniMax2 = 7,
   // Sigmoid: Sigmoid -> TopK (no renormalization)
   Sigmoid = 8,
@@ -105,7 +116,10 @@ inline int32_t getMaxNumCtasInBatchDim(int32_t numTokens, int32_t topK,
   maxNumCtasInBatchDim += numExpertsFilled;
   numRemainingTokens -= numExpertsFilled;
   // Next, greedily pour all remaining tokens to one expert to maximize CTA tile
-  // count. Otherwise, we can only get tiles in total.
+  // count. E.g., at this point tokens over 4 experts are [1, 1, 1, 1], and we
+  // have 4 tokens left. If each CTA handles 4 tokens/expert, the greedy
+  // strategy is to pour all remaining tokens to any one expert to get to the
+  // 5th CTA tile. Otherwise, we can only get 4 tiles in total.
   //
   // Another way to reason about this is to pour the remaining tokens into
   // buckets of some fixed capacity. These buckets, if full, can then be
@@ -361,6 +375,11 @@ struct MoERunnerArgs {
   float *output1_scales_gate_scalar = nullptr;
   float *output2_scales_scalar = nullptr;
 
+  // Optional LoRA bridge buffers used by the copied SGLang TRTLLM FP8 path.
+  // gate_up_lora_delta: [num_tokens * top_k, 2 * intermediate_size], bf16,
+  // in FlashInfer gate/up order (up first, gate second).
+  // activation_lora_input: [num_tokens * top_k, intermediate_size], bf16,
+  // populated with the post-activation intermediate for down-proj LoRA.
   void *gate_up_lora_delta = nullptr;
   void *activation_lora_input = nullptr;
 

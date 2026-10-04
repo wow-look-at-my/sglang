@@ -19,9 +19,12 @@
 #     python3 -m sglang.launch_server --model-path <model> \
 #       --attention-backend triton --host 0.0.0.0
 
+# ROCm 7.2.4 / PyTorch 2.9.1 is AMD's stable gfx1151-supported combination.
 # Pin the image digest so rebuilding cannot silently change the toolchain.
 ARG BASE_IMAGE="rocm/pytorch@sha256:7fe531fa185af260352fe7fbb3fa64ad749abe72adf0600a648c4692801b125a"
 
+# =============================================================================
+# Stage 1: stable ROCm + PyTorch for gfx1151.
 # Pullable and testable on its own:
 #   docker build --target rocm-torch -f docker/rocm-gfx1151.Dockerfile -t rocm-torch:gfx1151 .
 # =============================================================================
@@ -45,12 +48,15 @@ ENV HSA_ENABLE_DXG_DETECTION=1
 RUN python3 -c "import torch; print('torch', torch.__version__); assert torch.version.hip" \
     && test -x /opt/rocm/bin/hipcc
 
+# =============================================================================
+# Stage 2: SGLang on top of the gfx1151 ROCm stack.
+# =============================================================================
 FROM rocm-torch AS sglang
 
 ARG GPU_ARCH=gfx1151
 # sgl-kernel's ROCm build (python/sglang/kernels/aot/setup_rocm.py) only accepts
 # gfx942/gfx950/gfx1250 and hard-exits on anything else; the patch below lifts
-# that gate.
+# that gate. Set to 0 to skip the AOT kernels entirely and run Triton-only.
 ARG BUILD_SGL_KERNEL=1
 ARG MAX_JOBS=12
 
@@ -71,12 +77,15 @@ RUN cd /sgl-workspace/sglang \
     && rm -f python/pyproject.toml \
     && mv python/pyproject_other.toml python/pyproject.toml
 
-# Current main already limits non-gfx942 TopK dynamic LDS to 40KB, which fits
-# gfx1151's 64KB limit. The remaining problems are fixed here rather than
-# upstream: gfx1151 is not a supported SGLang target, and the sources
-# themselves compile clean for it. Each edit greps for the expected text
-# first, so a rewrite upstream breaks the build loudly instead of silently
-# misconfiguring kernels.
+# One problem in setup_rocm.py for this target, plus one in include/utils.h:
+# the arch gate sys.exit(1)s outside {gfx942, gfx950, gfx1250}, and WARP_SIZE
+# resolves to 64 on the host pass but 32 on the device pass for a wave32 part,
+# which mismatches the MoE TopK launch bounds. Current main already limits
+# non-gfx942 TopK dynamic LDS to 40KB, which fits gfx1151's 64KB limit. The
+# remaining two problems are fixed here rather than upstream:
+# gfx1151 is not a supported SGLang target, and the sources themselves compile
+# clean for it. Each edit greps for the expected text first, so a rewrite
+# upstream breaks the build loudly instead of silently misconfiguring kernels.
 COPY docker/patches/sgl-kernel-gfx1151.sh /tmp/sgl-kernel-gfx1151.sh
 
 RUN cd /sgl-workspace/sglang/python/sglang/kernels/aot \
@@ -89,11 +98,11 @@ RUN cd /sgl-workspace/sglang/python/sglang/kernels/aot \
          echo "Skipping sgl-kernel build (BUILD_SGL_KERNEL=0)"; \
        fi
 
-# Current main composes extras through self-references (srt_hip ->
-# sglang[runtime_common] -> sglang[runtime_base]). pip's resolver recursively
-# walks that cycle from an editable source checkout. Flatten those groups
-# before installing the package itself without dependency solving. Keep
-# compressed-tensors at its last torch-2.9-compatible release.
+# Current main composes extras through self-references
+# (srt_hip -> sglang[runtime_common] -> sglang[runtime_base]). pip's resolver
+# recursively walks that cycle from an editable source checkout. Flatten those
+# three groups before installing the package itself without dependency solving.
+# Keep compressed-tensors at its last torch-2.9-compatible release.
 RUN cd /sgl-workspace/sglang \
     && python3 - <<'PY'
 import subprocess

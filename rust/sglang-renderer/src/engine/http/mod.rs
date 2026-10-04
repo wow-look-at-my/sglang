@@ -11,7 +11,8 @@ use protocol::{engine_error_message, normalize_engine_output, parse_engine_frame
 
 mod protocol;
 
-// SGLang's deep health probe defaults to several seconds.
+// SGLang's deep health probe defaults to 20 seconds. Leave it time to return
+// its own status while still bounding a peer that never sends response headers.
 const ENGINE_HEALTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn unavailable(message: impl Into<String>) -> ResponseError {

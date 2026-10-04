@@ -27,6 +27,7 @@ inline void copy_stub(scalar_t* __restrict__ out, const float* __restrict__ inpu
   constexpr int COLS = BLOCK_N / 16;
   auto store = [&](auto i) {
     constexpr int col = i % COLS;
+    // for COLS = 2, 4 use 512bit store
     if constexpr (col % 2 == 0) {
       auto [a_fvec0, a_fvec1] = load_float_vec2(input + col * 16);
       bVec out_bvec = convert_from_float_ext<scalar_t>(a_fvec0, a_fvec1);
@@ -220,6 +221,7 @@ struct flash_attn_softmax<at::BFloat16, BLOCK_M, BLOCK_N> {
 
     m_prime[m] = m_i;
 
+    // pad s_delta with 0, pad_size range from [0, 32)
     int pad_size = padded_n_size - n_size;
     if (pad_size > 0) {
       const __m512i vzero = _mm512_setzero_si512();

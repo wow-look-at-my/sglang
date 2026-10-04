@@ -1,5 +1,10 @@
 name: Release Docker Images Nightly (CUDA 13.4 Rubin)
-# Builds and publishes nightly CUDA 13.4 / Rubin (sm_107) images from docker/Dockerfile.cu134, aarch64 only: - lmsysorg/sglang:nightly-cu134-{date}-{sha} - lmsysorg/sglang:nightly-cu134
+#
+# Builds and publishes nightly CUDA 13.4 / Rubin (sm_107) images from
+# docker/Dockerfile.cu134, aarch64 only:
+#   - lmsysorg/sglang:nightly-cu134-{date}-{sha}
+#   - lmsysorg/sglang:nightly-cu134
+#
 
 on:
   workflow_dispatch:

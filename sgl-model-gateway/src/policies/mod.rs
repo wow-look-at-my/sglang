@@ -1,4 +1,7 @@
-//! Load balancing policies.
+//! Load balancing policies for SGLang router
+//!
+//! This module provides a unified abstraction for routing policies that work
+//! across both regular and prefill-decode (PD) routing modes.
 
 use std::{fmt::Debug, sync::Arc};
 
@@ -31,20 +34,32 @@ pub use registry::PolicyRegistry;
 pub use round_robin::RoundRobinPolicy;
 pub use tree::PrefixMatchResult;
 
-/// Core trait for load balancing policies This trait provides a unified interface for implementing routing algorithms that can work.
+/// Core trait for load balancing policies
+///
+/// This trait provides a unified interface for implementing routing algorithms
+/// that can work with both regular single-worker selection and PD dual-worker selection.
 #[async_trait]
 pub trait LoadBalancingPolicy: Send + Sync + Debug {
-    /// Select a single worker from the available workers This is used for
-    /// regular routing mode where requests go to a single worker.
+    /// Select a single worker from the available workers
+    ///
+    /// This is used for regular routing mode where requests go to a single worker.
+    /// Now uses Arc<dyn Worker> for better performance and to avoid unnecessary cloning.
+    ///
+    /// # Arguments
+    /// * `workers` - Available workers to select from
+    /// * `info` - Additional information for routing decisions
     async fn select_worker(
         &self,
         workers: &[Arc<dyn Worker>],
         info: &SelectWorkerInfo<'_>,
     ) -> Option<usize>;
 
-    /// Update policy state after request completion This is called when a
-    /// request completes (successfully or not) to allow policies.
+    /// Update policy state after request completion
+    ///
+    /// This is called when a request completes (successfully or not) to allow
+    /// policies to update their internal state.
     fn on_request_complete(&self, _worker_url: &str, _success: bool) {
+        // Default: no-op for stateless policies
     }
 
     /// Get policy name for metrics and debugging
@@ -55,18 +70,23 @@ pub trait LoadBalancingPolicy: Send + Sync + Debug {
         false // Default: most policies don't need request text
     }
 
-    /// Update worker load information This is called periodically with
-    /// current load information for load-aware policies.
+    /// Update worker load information
+    ///
+    /// This is called periodically with current load information for load-aware policies.
     fn update_loads(&self, _loads: &std::collections::HashMap<String, isize>) {
+        // Default: no-op for policies that don't use load information
     }
 
     /// Set mesh sync manager
     fn set_mesh_sync(&mut self, _mesh_sync: OptionalMeshSyncManager) {
+        // Default: no-op for policies that don't use mesh sync
     }
 
-    /// Reset any internal state This is useful for policies that maintain
-    /// state (e.g., round-robin counters).
+    /// Reset any internal state
+    ///
+    /// This is useful for policies that maintain state (e.g., round-robin counters).
     fn reset(&self) {
+        // Default: no-op for stateless policies
     }
 
     /// Get as Any for downcasting
@@ -123,6 +143,9 @@ pub(crate) fn get_healthy_worker_indices(workers: &[Arc<dyn Worker>]) -> Vec<usi
 }
 
 /// Helper function to normalize model_id to a key for policy lookups.
+///
+/// Returns UNKNOWN_MODEL_ID for empty model_ids to ensure consistent behavior
+/// across single-model and multi-model deployments.
 #[inline]
 pub(crate) fn normalize_model_key(model_id: &str) -> &str {
     if model_id.is_empty() {
@@ -137,11 +160,16 @@ pub(crate) fn normalize_model_key(model_id: &str) -> &str {
 pub struct SelectWorkerInfo<'a> {
     /// Request text for cache-aware routing
     pub request_text: Option<&'a str>,
-    /// Tokenized request for prefix-hash routing Used by PrefixHashPolicy for token-based prefix hashing
+    /// Tokenized request for prefix-hash routing
+    /// Used by PrefixHashPolicy for token-based prefix hashing
     pub tokens: Option<&'a [u32]>,
-    /// HTTP headers for header-based routing policies Policies can extract routing information from headers like: - X-SMG-Target-Worker.
+    /// HTTP headers for header-based routing policies
+    /// Policies can extract routing information from headers like:
+    /// - X-SMG-Target-Worker: Direct routing to a specific worker by index
+    /// - X-SMG-Routing-Key: Consistent hash routing for session affinity
     pub headers: Option<&'a http::HeaderMap>,
-    /// Pre-computed hash ring for O(log n) consistent hashing Built and cached by WorkerRegistry, passed through.
+    /// Pre-computed hash ring for O(log n) consistent hashing
+    /// Built and cached by WorkerRegistry, passed through to avoid per-request rebuilds
     pub hash_ring: Option<Arc<HashRing>>,
 }
 

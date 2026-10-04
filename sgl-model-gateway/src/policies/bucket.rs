@@ -222,7 +222,8 @@ impl LoadBalancingPolicy for BucketPolicy {
             Some(text) => text.chars().count(),
         };
 
-        // Determine the model for this set of workers (router pre-filters by model) All workers should be.
+        // Determine the model for this set of workers (router pre-filters by model)
+        // All workers should be from the same model
         let model_key = normalize_model_key(workers[healthy_indices[0]].model_id());
 
         let bucket = self
@@ -592,6 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_balancing_conditions() {
+        // Test 1: Basic load balancing trigger
         let config = BucketConfig {
             balance_abs_threshold: 32,
             balance_rel_threshold: 1.0001,
@@ -622,6 +624,8 @@ mod tests {
         // Initialize the policy with prefill_workers
         policy.init_prefill_worker_urls(&prefill_workers);
 
+        // === Phase S1: Construct bucket boundaries ===
+        // Requests len =33 -> Bucket 1(expected range: 0-33)
         policy
             .select_worker(
                 &prefill_workers,
@@ -632,7 +636,7 @@ mod tests {
             )
             .await
             .unwrap();
-        // Requests len =34 ->load balancing
+        // Two requests len =34 ->load balancing
         policy
             .select_worker(
                 &prefill_workers,
@@ -665,6 +669,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 33);
                     assert_eq!(bucket_guard.boundary[1].range[1], 67);
                 } else {
@@ -675,8 +680,8 @@ mod tests {
                 }
             }
         }
-        // === Phase S2: Validate load balancing === Consecutive len=33 requests
-        // (Should route to different buckets)
+        // === Phase S2: Validate load balancing ===
+        // Three consecutive len=33 requests (Should route to different buckets)
         let idx_1 = policy
             .select_worker(
                 &prefill_workers,
@@ -712,6 +717,7 @@ mod tests {
         assert_ne!(idx_2, 0, "Should trigger load balancing");
         assert_ne!(idx_3, 0, "Should trigger load balancing");
 
+        // Test 2: Not triggering when absolute threshold not met
         let config = BucketConfig {
             balance_abs_threshold: 30,
             balance_rel_threshold: 2.0,
@@ -720,6 +726,7 @@ mod tests {
         let policy = BucketPolicy::with_config(config);
         policy.init_prefill_worker_urls(&prefill_workers);
 
+        // Create load difference below absolute threshold(20 + 8 = 28 < 30)
         policy
             .select_worker(
                 &prefill_workers,
@@ -729,7 +736,7 @@ mod tests {
                 },
             )
             .await
-            .unwrap();
+            .unwrap(); // worker1: 20
         policy
             .select_worker(
                 &prefill_workers,
@@ -739,7 +746,7 @@ mod tests {
                 },
             )
             .await
-            .unwrap();
+            .unwrap(); // worker1: 8
 
         // Next request should not use bucket scheduling (no load balancing)
         let idx = policy
@@ -757,6 +764,7 @@ mod tests {
             "Should not trigger load balancing when relative threshold not met"
         );
 
+        // Test 3: Not triggering when relative threshold not met
         let config = BucketConfig {
             balance_abs_threshold: 5,
             balance_rel_threshold: 3.0,
@@ -765,6 +773,8 @@ mod tests {
         let policy = BucketPolicy::with_config(config);
         policy.init_prefill_worker_urls(&prefill_workers);
 
+        // Create load difference (but relative threshold not met)
+        // Max/Min ratio = 15/5 = 3.0
         policy
             .select_worker(
                 &prefill_workers,
@@ -774,7 +784,7 @@ mod tests {
                 },
             )
             .await
-            .unwrap();
+            .unwrap(); // worker1: 15
         policy
             .select_worker(
                 &prefill_workers,
@@ -784,7 +794,7 @@ mod tests {
                 },
             )
             .await
-            .unwrap();
+            .unwrap(); // worker2: 5
         policy
             .select_worker(
                 &prefill_workers,
@@ -794,7 +804,7 @@ mod tests {
                 },
             )
             .await
-            .unwrap();
+            .unwrap(); // worker3: 10
 
         // Next request should use bucket scheduling (load balancing)
         let idx = policy
@@ -857,6 +867,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 1364);
                     assert_eq!(bucket_guard.boundary[1].range[1], 2729);
                 } else {
@@ -868,6 +879,8 @@ mod tests {
             }
         }
 
+        // ===Phase S1: Initial requests to trigger boundary adjustment ===
+        // Send requests with lengths: [5, 10, 15, 20, 24, 26] (total = 100)
         policy
             .select_worker(
                 &prefill_workers,
@@ -930,6 +943,7 @@ mod tests {
             .unwrap();
 
         tokio::time::sleep(Duration::from_secs(4)).await;
+        // Verify boundaries adjusted to: [0, 20], [21, 26], [27, MAX]
         {
             let model_key = "default";
 
@@ -940,6 +954,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 20);
                     assert_eq!(bucket_guard.boundary[1].range[1], 26);
                 } else {
@@ -951,6 +966,8 @@ mod tests {
             }
         }
 
+        // ===Phase S2: Second set of  requests to trigger boundary adjustment ===
+        // Send requests with lengths: [10, 20, 30, 40, 45, 57] (total = 202)
         policy
             .select_worker(
                 &prefill_workers,
@@ -1013,6 +1030,7 @@ mod tests {
             .unwrap();
 
         tokio::time::sleep(Duration::from_secs(4)).await;
+        // Verify boundaries adjusted to: [0, 40], [41, 57], [58, MAX]
         {
             let model_key = "default";
 
@@ -1023,6 +1041,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 40);
                     assert_eq!(bucket_guard.boundary[1].range[1], 57);
                 } else {
@@ -1078,6 +1097,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 1364);
                     assert_eq!(bucket_guard.boundary[1].range[1], 2729);
                 } else {
@@ -1089,6 +1109,7 @@ mod tests {
             }
         }
 
+        // Send requests with char_count 20
         policy
             .select_worker(
                 &prefill_workers,
@@ -1111,6 +1132,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 20);
                     assert_eq!(bucket_guard.boundary[1].range[1], 27);
                 } else {
@@ -1144,6 +1166,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 7);
                     assert_eq!(bucket_guard.boundary[1].range[1], 10);
                 } else {
@@ -1199,6 +1222,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 1364);
                     assert_eq!(bucket_guard.boundary[1].range[1], 2729);
                 } else {
@@ -1282,6 +1306,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 20);
                     assert_eq!(bucket_guard.boundary[1].range[1], 26);
                 } else {
@@ -1365,6 +1390,7 @@ mod tests {
             if let Some(bucket) = bucket {
                 let lock_result = bucket.write();
                 if let Ok(bucket_guard) = lock_result {
+                    // Expected Boundary: [0, 33] [34, 67] [68, MAX]
                     assert_eq!(bucket_guard.boundary[0].range[1], 20);
                     assert_eq!(bucket_guard.boundary[1].range[1], 26);
                 } else {

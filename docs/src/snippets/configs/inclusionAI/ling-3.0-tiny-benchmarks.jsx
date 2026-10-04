@@ -1,4 +1,6 @@
-// TTFT/TPOT are P50.
+// TTFT/TPOT are P50. INT4 uses 80 exact ISL 8192 / OSL 1024 requests with
+// --flush-cache; BF16/FP8 retain their original published measurements.
+// Accuracy is full GSM8K (1319).
 export const benchmarks = [
   {
     match: { hw: "h200", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" },

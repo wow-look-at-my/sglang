@@ -1,3 +1,20 @@
+//! Consistent hashing routing policy with header-based routing support
+//!
+//! Supports two routing mechanisms via HTTP headers:
+//! - `X-SMG-Target-Worker`: Direct routing by worker index (0-based), returns None if unavailable
+//! - `X-SMG-Routing-Key`: Consistent hash routing for session affinity
+//!
+//! ## Consistent Hashing
+//!
+//! Uses a pre-computed hash ring from WorkerRegistry where:
+//! 1. Each worker is placed at a fixed position based on hash(worker_url)
+//! 2. Keys are hashed to the ring, then walk clockwise to find first healthy worker
+//! 3. When workers scale up/down, only keys in the affected range redistribute (~1/N keys move)
+//!
+//! The ring is built once when workers are added/removed, not per-request.
+//! This ensures O(log n) lookup performance.
+//!
+//! Complexity: O(log n) binary search + O(k) walk where k = consecutive unhealthy workers.
 
 use std::sync::Arc;
 
@@ -73,7 +90,8 @@ impl ConsistentHashingPolicy {
             return healthy_url_to_idx.get(url).copied();
         }
 
-        // Fallback: no ring provided, use simple modulo (less optimal but functional) This shouldn't happen in normal operation.
+        // Fallback: no ring provided, use simple modulo (less optimal but functional)
+        // This shouldn't happen in normal operation as WorkerSelectionStage provides the ring
         let mut healthy_indices: Vec<usize> = healthy_url_to_idx.values().copied().collect();
         healthy_indices.sort_unstable(); // Ensure deterministic order
 
@@ -96,6 +114,8 @@ impl ConsistentHashingPolicy {
         let target_worker = extract_target_worker(info.headers);
         let routing_key = extract_routing_key(info.headers);
 
+        // Priority 1: X-SMG-Target-Worker - direct routing by worker index
+        // O(1) parse + O(1) bounds check + O(1) health check
         if let Some(idx_str) = target_worker {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 if idx < workers.len() && workers[idx].is_healthy() {
@@ -105,6 +125,7 @@ impl ConsistentHashingPolicy {
             return (None, Branch::TargetWorkerMiss);
         }
 
+        // Priority 2: X-SMG-Routing-Key - consistent hash routing (O(log n))
         if let Some(key) = routing_key {
             return match Self::find_by_consistent_hash(workers, info, key) {
                 Some(idx) => (Some(idx), Branch::RoutingKeyHit),
@@ -112,6 +133,7 @@ impl ConsistentHashingPolicy {
             };
         }
 
+        // Priority 3: Implicit routing key from stable headers (session affinity)
         let implicit_key = info.headers.and_then(|h| {
             h.get("authorization")
                 .or_else(|| h.get("x-forwarded-for"))
@@ -383,6 +405,7 @@ mod tests {
             key_to_worker_before.insert(key, result.unwrap());
         }
 
+        // Mark worker 1 as unhealthy
         workers[1].set_healthy(false);
 
         // Record new routing and count how many keys moved
@@ -404,7 +427,9 @@ mod tests {
             }
         }
 
-        // With consistent hashing, approximately 1/N keys should move (N = worker count) Random redistribution would move approximately.
+        // With consistent hashing, approximately 1/N keys should move (N = worker count)
+        // Random redistribution would move approximately (N-1)/N = 75% of keys
+        // Verify we're significantly better than random (< 50% moved)
         let keys_on_failed_worker = key_to_worker_before.values().filter(|&&w| w == 1).count();
         assert!(
             moved_count <= keys_on_failed_worker + 5,
@@ -422,7 +447,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_routing_key_failover_and_recovery() {
-        // Test that when a worker fails, keys move to another worker, and when it recovers, keys return to the worker
+        // Test that when a worker fails, keys move to another worker,
+        // and when it recovers, keys return to the original worker
         let policy = ConsistentHashingPolicy::new();
         let workers = create_workers(&["http://w0:8000", "http://w1:8000", "http://w2:8000"]);
         let ring = Arc::new(HashRing::new(&workers));
@@ -459,7 +485,7 @@ mod tests {
             assert_eq!(result, Some(failover_idx), "Failover should be consistent");
         }
 
-        // Recover the worker
+        // Recover the original worker
         workers[original_idx].set_healthy(true);
 
         // Key should route back to original worker

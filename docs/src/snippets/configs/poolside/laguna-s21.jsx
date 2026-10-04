@@ -2,9 +2,20 @@
 // --trust-remote-code required (custom config code on Hub).
 //
 // Attention backend: leave unset for High-Throughput (auto-selects fa3/trtllm_mha).
+// With DFlash active, auto falls back to flashinfer which breaks hybrid-SWA at tp≥4
+// on Blackwell — Low-Latency cells pin the target backend explicitly.
 // Never use --attention-backend triton on Laguna (broken SWA handling).
 //
-// B300/GB300 (many GB/GPU) unaffected.
+// BF16 on H200 HT: --mem-fraction-static 0.80 required — BF16 leaves less headroom
+// for CUDA-graph capture and NCCL allocs than FP8/INT4 on 141 GB/GPU.
+// B300/GB300 (288 GB/GPU) unaffected.
+//
+// SGLANG_SHARED_EXPERT_TP1=1 (FP8 cells, all hardware): FP8 block-quantizes the shared
+// expert; required at both TP=4 (GB300) and TP=8 (H200/B300). INT4 shared expert stays
+// bf16 — no flag needed. Differs from Laguna-XS-2.1 where TP=4 works without this flag.
+//
+// NVFP4 is Blackwell-only → no h200×nvfp4 cells.
+// DFlash cells carry --mem-fraction-static 0.7.
 
 export const config = {
   modelName: "Laguna-S-2.1",
@@ -66,6 +77,8 @@ sgl-eval run gsm8k \\
   --base-url http://{{CURL_HOST}}:{{CURL_PORT}}/v1 \\
   --num-threads 128`,
       // Laguna's template gates on enable_thinking, not the generic 'thinking' key.
+      // Serve with a copy of the model's chat template whose enable_thinking default
+      // is flipped to true. For BF16: use --max-tokens 131072 (see Configuration Tips).
       aime25_pct:
 `# pip install sgl-eval
 # Serve with an enable_thinking=true chat template (see Configuration Tips: Thinking).
@@ -114,6 +127,7 @@ sgl-eval run aime25 \\
 
   cells: [
 
+    // ══════════════ B300 FP8 low-latency — default (cells[0]) ══════════════
 
     {
       match: { hw: "b300", variant: "default", quant: "fp8", strategy: "low-latency", nodes: "single" },
@@ -135,6 +149,7 @@ sgl-eval run aime25 \\
       ],
     },
 
+    // ══════════════ H200 (8-GPU HGX, tp 8) ══════════════
 
     {
       match: { hw: "h200", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" },
@@ -237,6 +252,7 @@ sgl-eval run aime25 \\
       ],
     },
 
+    // ══════════════ B300 (8-GPU HGX, tp 8) ══════════════
 
     {
       match: { hw: "b300", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" },
@@ -352,6 +368,7 @@ sgl-eval run aime25 \\
       ],
     },
 
+    // ══════════════ GB300 (4-GPU single node, tp 4) ══════════════
 
     {
       match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" },

@@ -1,4 +1,10 @@
-//! WASM Module Integration Tests This test suite validates the complete WASM module management functionality.
+//! WASM Module Integration Tests
+//!
+//! This test suite validates the complete WASM module management functionality:
+//! - API endpoints (add, remove, list)
+//! - Workflow integration
+//! - Module execution
+//! - Error handling
 
 mod common;
 
@@ -133,10 +139,11 @@ async fn create_test_context_with_wasm() -> Arc<AppContext> {
 async fn create_test_wasm_component(temp_dir: &TempDir) -> String {
     use wasm_encoder::{Component, Module};
 
-    // Create a minimal valid WASM module first A minimal module needs at least a type section
+    // Create a minimal valid WASM module first
+    // A minimal module needs at least a type section
     let mut module = Module::new();
 
-    // Add an empty type section (types) - this is valid
+    // Add an empty type section (0 types) - this is valid
     let type_section = wasm_encoder::TypeSection::new();
     module.section(&type_section);
     let mut component = Component::new();
@@ -190,7 +197,9 @@ async fn create_test_app_with_wasm() -> (axum::Router, Arc<AppContext>, TempDir)
     (app, app_context, temp_dir)
 }
 
-// ============================================================================ API Endpoint Tests.
+// ============================================================================
+// API Endpoint Tests
+// ============================================================================
 
 #[tokio::test]
 async fn test_wasm_api_add_module() {
@@ -302,6 +311,7 @@ async fn test_wasm_api_add_module_invalid_file() {
 
     // Verify it's an error result
     if let Some(smg::wasm::module::WasmModuleAddResult::Error(_)) = module_result {
+        // Expected error
     } else {
         panic!("Expected error result for invalid file path");
     }
@@ -311,7 +321,7 @@ async fn test_wasm_api_add_module_invalid_file() {
 async fn test_wasm_api_add_module_invalid_wasm() {
     let (app, _app_context, temp_dir) = create_test_app_with_wasm().await;
 
-    // Create an invalid WASM file ( random bytes)
+    // Create an invalid WASM file (just random bytes)
     let invalid_wasm_path = temp_dir.path().join("invalid.component.wasm");
     fs::write(&invalid_wasm_path, b"not a valid wasm file")
         .await
@@ -356,6 +366,7 @@ async fn test_wasm_api_add_module_invalid_wasm() {
 
     // Verify it's an error result
     if let Some(smg::wasm::module::WasmModuleAddResult::Error(_)) = module_result {
+        // Expected error
     } else {
         panic!("Expected error result for invalid WASM file");
     }
@@ -550,7 +561,9 @@ async fn test_wasm_api_remove_module_not_found() {
     );
 }
 
-// ============================================================================ WASM Functionality Tests.
+// ============================================================================
+// WASM Functionality Tests
+// ============================================================================
 
 #[tokio::test]
 async fn test_wasm_module_duplicate_sha256() {
@@ -758,17 +771,19 @@ async fn test_wasm_module_execution() {
             // Verify action is valid (should be Continue, Reject, or Modify)
             match action {
                 middleware_types::Action::Continue => {
+                    // Expected for a simple middleware
                 }
                 middleware_types::Action::Reject(_) => {
+                    // Also valid
                 }
                 middleware_types::Action::Modify(_) => {
+                    // Also valid
                 }
             }
         }
         Err(e) => {
-            // Execution can fail if the WASM component is not properly built
-            // This is acceptable for testing - we are testing the execution
-            // path.
+            // Execution might fail if the WASM component is not properly built
+            // This is acceptable for testing - we're testing the execution path, not the component itself
             eprintln!(
                 "Module execution failed (expected if component is not properly built): {:?}",
                 e

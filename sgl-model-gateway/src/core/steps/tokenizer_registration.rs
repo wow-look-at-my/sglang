@@ -1,4 +1,11 @@
-//! Tokenizer registration.
+//! Tokenizer registration workflow
+//!
+//! This module provides a workflow for registering tokenizers asynchronously.
+//! Tokenizers can be loaded from local paths or downloaded from HuggingFace.
+//!
+//! This is the **single source of truth** for tokenizer registration. All paths
+//! (startup, worker connection, API) should use this workflow to ensure consistent
+//! behavior (validation, caching, deduplication).
 
 use std::{sync::Arc, time::Duration};
 
@@ -37,6 +44,8 @@ pub struct TokenizerConfigRequest {
     #[serde(default)]
     pub cache_config: Option<TokenizerCacheConfig>,
     /// If true, the workflow fails when a tokenizer with the same name already exists.
+    /// If false (default), the workflow succeeds and returns the existing tokenizer's ID.
+    /// API callers should set this to true.
     #[serde(default)]
     pub fail_on_duplicate: bool,
 }
@@ -48,9 +57,17 @@ pub struct TokenizerRemovalRequest {
     pub id: String,
 }
 
-// ============================================================================ Workflow Steps.
+// ============================================================================
+// Workflow Steps
+// ============================================================================
 
-/// Load the tokenizer from source (local path or HuggingFace) This step handles.
+/// Load the tokenizer from source (local path or HuggingFace)
+///
+/// This step handles:
+/// - Input validation (via registry.load())
+/// - Deduplication (returns success if already exists)
+/// - Loading from local path or HuggingFace
+/// - Optional caching layer wrapping
 pub struct LoadTokenizerStep;
 
 #[async_trait]
@@ -190,8 +207,9 @@ impl StepExecutor<TokenizerWorkflowData> for LoadTokenizerStep {
 /// - Loading from local path or HuggingFace
 /// - Optional caching layer wrapping
 ///
-/// Configuration: - retries with 2s backoff (for
-/// network issues)
+/// Configuration:
+/// - 3 retries with 2s backoff (for network issues)
+/// - 5 minute timeout (HuggingFace downloads can be slow)
 pub fn create_tokenizer_registration_workflow() -> WorkflowDefinition<TokenizerWorkflowData> {
     WorkflowDefinition::new("tokenizer_registration", "Tokenizer Registration").add_step(
         StepDefinition::new(
@@ -203,7 +221,7 @@ pub fn create_tokenizer_registration_workflow() -> WorkflowDefinition<TokenizerW
             max_attempts: 3,
             backoff: BackoffStrategy::Fixed(Duration::from_secs(2)),
         })
-        .with_timeout(Duration::from_secs(300))
+        .with_timeout(Duration::from_secs(300)) // 5 min for HuggingFace downloads
         .with_failure_action(FailureAction::FailWorkflow),
     )
 }

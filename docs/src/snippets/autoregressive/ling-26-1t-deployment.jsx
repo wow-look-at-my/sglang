@@ -99,6 +99,7 @@ export const Ling261TDeployment = () => {
       return tail(cmd);
     }
 
+    // Two-node deployment
     const generateNodeCmd = (rank) => {
       let cmd = `sglang serve \\\n`;
       cmd += `  --model-path inclusionAI/Ling-2.6-1T \\\n`;

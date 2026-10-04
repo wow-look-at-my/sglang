@@ -1,7 +1,27 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Pins the contract that `axum::serve(...).with_graceful_shutdown(...)`.
+//! Pins the contract that `axum::serve(...).with_graceful_shutdown(...)` —
+//! the same combinator `src/main.rs` uses — drains every in-flight streaming
+//! request through the **real** `build_router(ctx)` stack before the
+//! server future resolves. A k8s SIGTERM must not truncate streaming
+//! completions. (`main.rs` additionally runs the readiness drain first; the
+//! later tests cover that.)
+//!
+//! Why route the test through the real router (chat handler + proxy +
+//! SSE pump) rather than a synthetic `Router::new().route(...)`: a
+//! truncation regression could live in `forward_streaming_to`'s
+//! `bytes_stream_to_body` completion hook, in `chat::chat_completions`'
+//! guards, or in the SSE pump's `tx.send().await` race — all of which
+//! would be silently skipped by a synthetic-handler test.
+//!
+//! The later tests pin the readiness drain that runs *before* that axum
+//! drain: `server::shutdown::drain_for_termination` flips `/readyz` to 503
+//! and holds the listener open for `--shutdown-drain-secs` so the endpoint
+//! removal reaches kube-proxy first. They substitute a channel for the real
+//! `Signal`, so `main.rs`'s `shutdown_signal` is not exercised here; the k8s
+//! integration suite (`tests/e2e/k8s_integration/test_shutdown_drain.py`)
+//! signals the shipped binary and covers that wiring.
 
 use futures::future::join_all;
 use sgl_router::config::{
@@ -70,6 +90,9 @@ fn build_ctx_with_worker(worker_url: &str) -> Arc<AppContext> {
 }
 
 /// Streaming chat-completions body the worker hands back chunk-by-chunk.
+/// One ~60 ms delay per chunk × 8 chunks ≈ ~480 ms per request, long
+/// enough that we can race in ~100 concurrent clients and trigger
+/// shutdown while every stream is still mid-flight.
 const SLOW_CHUNKS: &[&str] = &[
     "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
     "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n",
@@ -91,6 +114,8 @@ async fn shutdown_drains_100_inflight_streaming_chat_completions() {
     .await;
     let ctx = build_ctx_with_worker(&worker.url);
 
+    // 2. Serve the REAL `build_router(ctx)` on a random port with the
+    //    `with_graceful_shutdown` wiring main.rs uses.
     let app = build_router(ctx);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -106,6 +131,7 @@ async fn shutdown_drains_100_inflight_streaming_chat_completions() {
             .expect("axum::serve cleanly resolves on shutdown");
     });
 
+    // 3. Fire 100 concurrent streaming clients.
     const N: usize = 100;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -142,10 +168,14 @@ async fn shutdown_drains_100_inflight_streaming_chat_completions() {
         .collect::<Result<_, _>>()
         .expect("every client received response headers before shutdown");
 
-    // 4. Each response header confirms that its request is in flight.
+    // 4. Each response header confirms that its request is in flight. Trigger
+    //    shutdown only after the full cohort connects, then verify that Axum
+    //    drains all 100 existing streams.
     let started = Instant::now();
     shutdown_tx.send(()).unwrap();
 
+    // 5. Every in-flight request must complete with a `[DONE]` terminator
+    //    — proving the stream was NOT truncated by shutdown.
     let mut bytes_total: usize = 0;
     let mut done_count: usize = 0;
     for result in join_all(responses.into_iter().map(|(i, response)| async move {
@@ -163,6 +193,7 @@ async fn shutdown_drains_100_inflight_streaming_chat_completions() {
             done_count += 1;
         }
     }
+    // Server task must exit cleanly once all 100 in-flight requests drained.
     server.await.expect("server task joins after shutdown");
 
     let elapsed = started.elapsed();
@@ -174,6 +205,7 @@ async fn shutdown_drains_100_inflight_streaming_chat_completions() {
         bytes_total > 0,
         "expected non-zero body bytes across {N} clients"
     );
+    // Drain MUST have taken at least ~400 ms (7 remaining chunks * 60ms).
     // A shorter wait implies the streams were truncated.
     assert!(
         elapsed >= Duration::from_millis(300),
@@ -183,7 +215,9 @@ async fn shutdown_drains_100_inflight_streaming_chat_completions() {
 
 #[tokio::test]
 async fn shutdown_with_no_inflight_returns_promptly() {
-    // Complement of the load test: when nothing is in flight, the shutdown future resolves quickly.
+    // Complement of the load test: when nothing is in flight, the
+    // shutdown future resolves quickly. Catches a regression where the
+    // server might hang waiting on an idle connection pool.
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
     let ctx = build_ctx_with_worker(&worker.url);
     let app = build_router(ctx);
@@ -211,7 +245,16 @@ async fn shutdown_with_no_inflight_returns_promptly() {
     );
 }
 
-/// The readiness-drain contract: on SIGTERM the drain flips `/readyz` to *while the server keeps accepting*.
+/// The readiness-drain contract: on SIGTERM the drain flips `/readyz` to 503
+/// *while the server keeps accepting* (`/healthz` stays 200, a brand-new
+/// connection is still served), so the endpoint removal reaches kube-proxy
+/// before the listener closes. Mirrors `src/main.rs`'s SIGTERM arm by driving
+/// the shutdown future as "await the signal, then `drain_for_termination`"
+/// against the real `build_router(ctx)` stack.
+///
+/// The drain window is ended by the `expedite` channel rather than by wall
+/// clock, so the mid-drain assertions cannot lose a race with a sleeping
+/// timer on a loaded runner — and the expedite path itself gets covered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn readyz_flips_to_503_during_drain_while_still_serving() {
     let worker = crate::common::mock_worker::MockWorker::start_slow_stream(
@@ -226,7 +269,9 @@ async fn readyz_flips_to_503_during_drain_while_still_serving() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
-    // `sigterm_tx` stands in for SIGTERM delivery.
+    // `sigterm_tx` stands in for SIGTERM delivery; `expedite_tx` stands in for
+    // the further termination signal that cuts the pause short. The drain is
+    // an hour so only `expedite_tx` can end it.
     let ctx_for_shutdown = ctx.clone();
     let (sigterm_tx, sigterm_rx) = oneshot::channel::<()>();
     let (expedite_tx, expedite_rx) = oneshot::channel::<()>();
@@ -247,7 +292,9 @@ async fn readyz_flips_to_503_during_drain_while_still_serving() {
             .unwrap();
     });
 
-    // Every probe opens its own connection.
+    // Every probe opens its own connection: a pooled client would ride the
+    // pre-SIGTERM connection and keep passing even if the listener had already
+    // closed, which is exactly the regression this test exists to catch.
     let client = reqwest::Client::builder()
         .pool_max_idle_per_host(0)
         .build()
@@ -255,6 +302,7 @@ async fn readyz_flips_to_503_during_drain_while_still_serving() {
     let readyz = format!("http://{addr}/readyz");
     let healthz = format!("http://{addr}/healthz");
 
+    // Before SIGTERM: ready + worker registered ⇒ /readyz 200.
     let pre = client.get(&readyz).send().await.unwrap();
     assert_eq!(
         pre.status(),
@@ -280,6 +328,8 @@ async fn readyz_flips_to_503_during_drain_while_still_serving() {
         "/readyz must flip to 503 during the drain so probes and load balancers see this pod as not-ready before the listener closes",
     );
 
+    // State the accept explicitly rather than inferring it from a 200: this is
+    // the half of the contract that a pooled client would silently satisfy.
     tokio::net::TcpStream::connect(addr)
         .await
         .expect("the listener must still accept new connections during the drain");
@@ -290,7 +340,9 @@ async fn readyz_flips_to_503_during_drain_while_still_serving() {
         "the server must still be serving during the drain window",
     );
 
-    // A *real proxied* request (not the local health handlers) must still be accepted and served during the drain window.
+    // A *real proxied* request (not just the local health handlers) must still
+    // be accepted and served during the drain window — this is the request k8s
+    // may still route before the endpoint removal reaches kube-proxy.
     let chat = format!("http://{addr}/v1/chat/completions");
     let body = serde_json::json!({
         "model": "tiny",
@@ -303,8 +355,14 @@ async fn readyz_flips_to_503_during_drain_while_still_serving() {
         "a proxied chat request must still succeed during the drain window",
     );
 
-    // The request the drain exists for: it ARRIVES during the pause
-    // (kube-proxy has not observed the removal yet) and is still streaming.
+    // The request the drain actually exists for: it ARRIVES during the pause
+    // (kube-proxy has not observed the removal yet) and is still streaming when
+    // the pause ends. It must survive the handover into axum's in-flight drain,
+    // not just the window it started in.
+    //
+    // Await the response headers here rather than inside the spawned task: that
+    // is the point at which the request is provably in flight, so cutting the
+    // pause short below cannot race the client's connect on a loaded runner.
     let stream_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -327,7 +385,8 @@ async fn readyz_flips_to_503_during_drain_while_still_serving() {
     );
     let late = tokio::spawn(async move { late_resp.bytes().await.unwrap() });
 
-    // Cut the pause short while that stream is still mid-flight; the server resolves without waiting out the hour.
+    // Cut the pause short while that stream is still mid-flight; the server
+    // resolves without waiting out the hour.
     expedite_tx.send(()).unwrap();
 
     let late_body = late.await.expect("late client task joined");
@@ -341,7 +400,15 @@ async fn readyz_flips_to_503_during_drain_while_still_serving() {
         .expect("server task joined cleanly");
 }
 
-/// After the drain elapses and the server future resolves, axum must have stopped accepting.
+/// After the drain elapses and the server future resolves, axum must have
+/// stopped accepting: a *new* connection is refused. This is the other half of
+/// the contract — the drain has to actually END in a closed listener, or the
+/// pause merely postpones shutdown without ever handing traffic off. (What
+/// closes the rolling-update race is the pause itself, covered by
+/// `readyz_flips_to_503_during_drain_while_still_serving`.) Asserted on a raw
+/// TCP connect so the failure has to be `ConnectionRefused`; a `reqwest` error
+/// would also cover a timeout, which is a different (and on a loaded runner,
+/// plausible) outcome.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_connections_refused_after_drain_completes() {
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -392,7 +459,13 @@ async fn new_connections_refused_after_drain_completes() {
     );
 }
 
-/// End-to-end composition: SIGTERM → `drain_for_termination` (flip, pause) → axum drains the already-attached streaming request.
+/// End-to-end composition: SIGTERM → `drain_for_termination` (flip 503, pause)
+/// → axum drains the already-attached streaming request to `[DONE]`.
+/// `shutdown_drains_100_inflight_streaming_chat_completions` drives a bare
+/// oneshot shutdown future; this one composes the readiness drain with the axum
+/// drain, so a regression that truncates in-flight streams once the drain
+/// begins is caught. It does NOT assert the flip/pause ordering —
+/// `readyz_flips_to_503_during_drain_while_still_serving` covers that.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn inflight_stream_completes_through_drain_for_termination() {
     let worker = crate::common::mock_worker::MockWorker::start_slow_stream(
@@ -425,7 +498,8 @@ async fn inflight_stream_completes_through_drain_for_termination() {
     });
 
     // Start one slow stream and hand back the response only once its headers
-    // have arrived — that is the point at which the request is provably.
+    // have arrived — that is the point at which the request is provably
+    // in-flight, so SIGTERM below cannot race the client's connect.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -475,7 +549,13 @@ async fn wait_for_inflight_http(ctx: &Arc<AppContext>, want: usize) {
     );
 }
 
-/// `inflight_http` is what the drain heartbeat reports.
+/// `inflight_http` is what the drain heartbeat reports, and it is only worth
+/// reporting if it tracks what axum's graceful shutdown actually waits on: the
+/// response BODY finishing, not the handler returning. A streaming completion
+/// hands back its headers immediately, so a count released at handler exit
+/// would read 0 for the entire window the heartbeat exists to explain — the
+/// same blind spot `router_inflight_load.inflight_count()` has, reproduced in the
+/// replacement.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn inflight_http_counts_a_streaming_response_until_its_body_finishes() {
     let worker = crate::common::mock_worker::MockWorker::start_slow_stream(
@@ -519,8 +599,8 @@ async fn inflight_http_counts_a_streaming_response_until_its_body_finishes() {
         resp.status()
     );
 
-    // This is precisely the state a SIGTERM lands in, and the count has to see
-    // it.
+    // Headers are in, ~480 ms of chunks are not. This is precisely the state a
+    // SIGTERM lands in, and the count has to see it.
     assert_eq!(
         ctx.inflight_http.count(),
         1,
@@ -541,7 +621,11 @@ async fn inflight_http_counts_a_streaming_response_until_its_body_finishes() {
         .expect("server task joined cleanly");
 }
 
-/// Every route is instrumented, not only the proxied ones.
+/// Every route is instrumented, not only the proxied ones. `/metrics`,
+/// `/readyz` and a 404 are exchanges axum's drain waits on too, and they are
+/// exactly the traffic `router_inflight_load` cannot see — so a guard that leaked on a
+/// non-proxied route would leave the heartbeat permanently busy and turn the
+/// drain report back into noise.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inflight_http_returns_to_zero_after_non_proxied_routes() {
     let worker = crate::common::mock_worker::MockWorker::start_slow_stream(
@@ -573,7 +657,8 @@ async fn inflight_http_returns_to_zero_after_non_proxied_routes() {
             .send()
             .await
             .unwrap_or_else(|e| panic!("GET {path} failed: {e}"));
-        // Body consumed, not headers: an unread body is an unfinished exchange and would make this assert nothing.
+        // Body consumed, not just headers: an unread body is an unfinished
+        // exchange and would make this assert nothing.
         let _ = resp.bytes().await.unwrap();
     }
     wait_for_inflight_http(&ctx, 0).await;

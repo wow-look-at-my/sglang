@@ -103,8 +103,9 @@ pub struct PyJwtConfig {
 #[pymethods]
 impl PyJwtConfig {
     #[new]
-    // `role_claim` is appended at the end with a default so existing
-    // positional callers.
+    // `role_claim` is appended at the end with a default so existing positional
+    // callers — `PyJwtConfig(issuer, audience, jwks_uri, role_mapping)` — keep
+    // working unchanged.
     #[pyo3(signature = (
         issuer,
         audience,
@@ -435,7 +436,10 @@ struct Router {
     enable_trace: bool,
     otlp_traces_endpoint: String,
     control_plane_auth: Option<PyControlPlaneAuthConfig>,
-    // The following fields expose `#[pyo3(get)]` so tests can verify the Python kwargs landed in the right slot.
+    // The following five fields expose `#[pyo3(get)]` so tests can verify the
+    // Python kwargs landed in the right slot. Without getters, a typo'd builder
+    // call (e.g. `.pool_idle_timeout_secs(self.connect_timeout_secs)`) is
+    // undetectable from Python.
     #[pyo3(get)]
     pool_idle_timeout_secs: u64,
     #[pyo3(get)]

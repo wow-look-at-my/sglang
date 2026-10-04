@@ -1,5 +1,8 @@
 #!/bin/bash
-# Install zstd when missing, for any job that reads or writes an actions/cache entry. actions/cache identifies an entry.
+# Install zstd when missing, for any job that reads or writes an actions/cache entry.
+# actions/cache identifies an entry by key *and* a version derived from the
+# compression tool, so a runner without zstd cannot see what one with it saved -
+# a silent miss every run. Warn, not fail: both sides work without the cache.
 set -uo pipefail
 if ! command -v zstd >/dev/null 2>&1; then
     if [ "$(id -u)" = "0" ]; then SUDO=""

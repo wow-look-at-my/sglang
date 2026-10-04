@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
@@ -14,7 +14,8 @@ use crate::workers::Worker;
 use super::admission::{AdmissionLimits, Decision, EngineAdmission, EngineMetrics};
 use super::{Pick, PickError, PickRequest, Policy, Rejection, Stage};
 
-/// Samples distinct engines and selects the one with lower stage pressure.
+/// Samples two distinct engines and selects the one with lower stage pressure.
+/// Checks admission only on the selected engine; rejection never resamples.
 #[derive(Debug)]
 pub struct PowerOfTwoPolicy {
     /// Shared application state; snapshots are local to each pick.

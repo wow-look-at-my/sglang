@@ -1,4 +1,13 @@
 //! Shared HTTP test harness and `openai.rs`-level handler tests.
+//!
+//! Submodule tests live next to the code they cover: `chat`, `completions`,
+//! `tools`, and `reasoning` each carry their own
+//! `#[cfg(test)] mod tests`. This module keeps the fixtures they all share —
+//! channel fixtures (`senders`, `chunk`, `submitted`, `chat_submitted`) and the
+//! full-router harness (`server_args`, `app_state`,
+//! `oneshot`, `post_json`, `body_json`) — plus the handler-level tests that
+//! exercise [`routes`] end to end. The helpers are `pub(super)` so sibling
+//! test modules can import them via `super::super::test_utils::*`.
 
 use std::sync::Arc;
 
@@ -100,7 +109,9 @@ pub(super) fn app_state(senders: Senders) -> Arc<super::AppState> {
 }
 
 pub(super) fn senders_closed() -> Senders {
-    // Dropping the receivers disconnects the channels.
+    // Dropping the receivers disconnects the channels; the senders stay
+    // valid (moveable) but every send reports `Err`, the shutdown state
+    // `submit` surfaces as a 503.
     let (tm_tx, tm_rx) = flume::unbounded();
     drop(tm_rx);
     let (abort_tx, abort_rx) = flume::unbounded();
@@ -116,6 +127,8 @@ pub(super) fn senders_closed() -> Senders {
 }
 
 /// Serve one request through the full router (extractors, auth, routing).
+/// `with_state` consumes the state into a `Router<()>`, which is what
+/// implements `tower::Service`.
 pub(super) async fn oneshot(app: Router<()>, req: Request<Body>) -> Response {
     app.oneshot(req).await.unwrap()
 }
@@ -137,7 +150,10 @@ pub(super) async fn body_json(response: Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// The common StatusCode→error helper follows `error_response`'s shape: unary requests get the JSON error with its status.
+/// The common StatusCode→error helper follows `error_response`'s shape:
+/// unary requests get the JSON error with its status; a committed stream gets
+/// 200 + one SSE error frame + `[DONE]`, and the frame carries the OpenAI
+/// error fields (`type`, `param`, `code`) that the SDKs dispatch on.
 #[tokio::test]
 async fn openai_error_response_covers_unary_and_sse() {
     let unary = openai_error(StatusCode::BAD_REQUEST, "bad input", false);
@@ -194,6 +210,7 @@ async fn completions_handler_validates_before_submit() {
         let response = post_json(app.clone(), "/v1/completions", body).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{label}");
     }
+    // Malformed JSON → 400 (JsonRejection path).
     let req = Request::builder()
         .method("POST")
         .uri("/v1/completions")
@@ -202,6 +219,7 @@ async fn completions_handler_validates_before_submit() {
         .unwrap();
     let response = oneshot(app.clone(), req).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    // A closed tm inbox (shutdown) surfaces as 503.
     let app = routes().with_state(app_state(senders_closed()));
     let response = post_json(
         app.clone(),
@@ -246,6 +264,7 @@ async fn chat_handler_validates_before_submit() {
         let response = post_json(app.clone(), "/v1/chat/completions", body).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{label}");
     }
+    // A valid request with no loaded chat template → 400 (template gate).
     let response = post_json(
         app.clone(),
         "/v1/chat/completions",
@@ -262,7 +281,9 @@ async fn basic_openai_router_excludes_responses_api() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-/// A closed tm inbox with a *streaming* request must answer inside the committed stream.
+/// A closed tm inbox with a *streaming* request must answer inside the
+/// committed stream: 200 + one OpenAI-shaped SSE error frame + `[DONE]` (the
+/// same `error_response` rule the native API applies), not a unary 503.
 #[tokio::test]
 async fn streaming_submit_failure_answers_inside_the_stream() {
     let app = routes().with_state(app_state(senders_closed()));

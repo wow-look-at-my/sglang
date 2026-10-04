@@ -24,7 +24,7 @@ if python -c "import evalscope" >/dev/null 2>&1; then
     if ! ${PYTHON_FOR_EVALSCOPE} -c "import evalscope" >/dev/null 2>&1; then
         python -m venv --system-site-packages ${PYTHON_ENV_FOR_EVALSCOPE}
     fi
-    # Only skip the install when the env imports evalscope.
+    # Only skip the install when the env really imports evalscope.
     if ${PYTHON_FOR_EVALSCOPE} -c "import evalscope" >/dev/null 2>&1; then
         exit 0
     fi

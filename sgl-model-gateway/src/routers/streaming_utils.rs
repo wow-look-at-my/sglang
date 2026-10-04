@@ -1,5 +1,27 @@
 //! Shared streaming helpers used by the HTTP / OpenAI / PD routers.
 //!
+//! The main type here is [`BreakerTrackedStream`], a `Stream` adapter that
+//! records circuit-breaker outcomes based on how the upstream stream
+//! terminates:
+//!
+//! - **Clean end** (`Poll::Ready(None)`) → `record_success`.
+//! - **Upstream transport error** (`Poll::Ready(Some(Err(_)))`) → `record_failure`.
+//! - **Caller drops the stream while still active** (client disconnect) → no
+//!   breaker call. The HTTP response already shipped a 200 status; whether
+//!   the worker is healthy is unknown from this signal alone.
+//!
+//! Callers can override the terminal state in two cases:
+//!
+//! - [`BreakerTrackedStream::mark_completed`] — for routers that detect
+//!   end-of-stream via an in-band sentinel (e.g. PD's `data: [DONE]`)
+//!   before the underlying byte stream returns `None`. Note that
+//!   `Completed` is *not* absorbing — a subsequent `poll_next` returning
+//!   `Err` will still escalate the terminal to `Errored`. Callers should
+//!   stop polling after `mark_completed`.
+//! - [`BreakerTrackedStream::mark_errored`] — for routers wrapping content
+//!   that already represents a worker failure (e.g. a non-2xx response
+//!   body or a synthetic SSE error envelope built from a 5xx). `Errored`
+//!   is absorbing: once set, it persists regardless of later polls.
 
 use std::{
     fmt::Display,
@@ -25,7 +47,16 @@ enum Terminal {
 }
 
 /// Wraps a `Stream<Item = Result<Bytes, E>>` so that the circuit breaker on
-/// `worker` is updated exactly once on drop.
+/// `worker` is updated exactly once on drop:
+/// - completed → `record_success`
+/// - errored → `record_failure`
+/// - dropped while still active → neither (client disconnected; the worker
+///   is innocent from our point of view).
+///
+/// `E` defaults to `reqwest::Error` to match the common producer
+/// (`response.bytes_stream()`), but can be any `Display + Send + 'static`
+/// error type — useful for tests that construct streams with simpler
+/// error types.
 #[must_use = "BreakerTrackedStream must be polled to completion (or pre-marked) \
               and then dropped for the circuit breaker to record an outcome; \
               discarding it immediately records nothing"]
@@ -49,14 +80,26 @@ impl<E> BreakerTrackedStream<E> {
         }
     }
 
-    /// Mark the stream as cleanly completed.
+    /// Mark the stream as cleanly completed. Use this from callers that
+    /// detect end-of-stream via an in-band sentinel (e.g. `data: [DONE]`)
+    /// before the underlying byte stream returns `None`.
+    ///
+    /// Has no effect once the wrapper is in any non-Active state. `Completed`
+    /// is *not* absorbing — a later `poll_next` returning `Err` will still
+    /// escalate the terminal to `Errored`. Callers should stop polling
+    /// after calling this.
     pub fn mark_completed(&mut self) {
         if self.terminal == Terminal::Active {
             self.terminal = Terminal::Completed;
         }
     }
 
-    /// Pre-tag the stream as terminally errored.
+    /// Pre-tag the stream as terminally errored. Use this from callers
+    /// constructing a wrapper around content that already represents a
+    /// failed worker outcome (e.g. a non-2xx response body or a
+    /// synthetic error envelope) so Drop records `record_failure` even
+    /// if the underlying stream terminates cleanly. `Errored` is
+    /// absorbing — once set it stays set regardless of later events.
     pub fn mark_errored(&mut self) {
         self.terminal = Terminal::Errored;
     }
@@ -90,6 +133,9 @@ impl<E> Drop for BreakerTrackedStream<E> {
             Terminal::Completed => self.worker.circuit_breaker().record_success(),
             Terminal::Errored => self.worker.circuit_breaker().record_failure(),
             // Client disconnected before we knew the worker's verdict.
+            // Leaving the breaker untouched is the correct default — we
+            // got a 200 header and some bytes; nothing said the worker
+            // is unhealthy.
             Terminal::Active => {}
         }
     }
@@ -105,7 +151,8 @@ mod tests {
     use super::BreakerTrackedStream;
     use crate::core::{BasicWorkerBuilder, Worker};
 
-    /// Lightweight error type for tests — keeps the wrapper generic so we don't need.
+    /// Lightweight error type for tests — keeps the wrapper generic so we
+    /// don't need to fabricate `reqwest::Error` instances.
     #[derive(Debug)]
     struct TestErr(&'static str);
 
@@ -202,7 +249,9 @@ mod tests {
         assert_eq!(breaker_counters(&w), (0, 1));
     }
 
-    // PD's [DONE] handler calls mark_completed before the underlying byte stream finishes.
+    // PD's [DONE] handler calls mark_completed before the underlying byte
+    // stream finishes; a trailing transport error must still flip the
+    // terminal to Errored so the breaker records failure.
     #[tokio::test]
     async fn mark_completed_then_later_err_escalates_to_failure() {
         let w = worker();

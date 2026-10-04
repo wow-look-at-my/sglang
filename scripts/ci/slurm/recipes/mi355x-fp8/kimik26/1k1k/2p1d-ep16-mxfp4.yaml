@@ -1,16 +1,18 @@
 # MI355X Kimi-K2.6 (MXFP4 experts, FP8 KV) 4-node 2P1D disaggregation recipe — narrow-prefill EP8
 # + wide-decode EP16 (mirrors the DSV4-Pro Oren config: wide EP only helps decode).
 #
-# Prefill engines (EP8, one node each; the router fans requests across both) + one
-# decode engine (EP16) spanning nodes. Prefill EP8 keeps MoE all-to-all INTRA-node
-# (XGMI); decode gets wide EP16 across nodes. KV (prefill TP8 -> decode TP16) is
-# carried over mori.
+# Two prefill engines (EP8, one node each; the router fans requests across both) +
+# one decode engine (EP16) spanning 2 nodes. Still one logical P/D pair per role
+# group, 4 nodes total. nodes-per-engine = ceil(TP/8): prefill 8->1, decode 16->2,
+# so the launcher emits cross-node --nnodes/--node-rank/--dist-init-addr for the
+# decode engine only. Prefill EP8 keeps MoE all-to-all INTRA-node (XGMI); decode
+# gets wide EP16 across nodes. KV (prefill TP8 -> decode TP16) is carried over mori.
 #
 # Kimi-specific bits vs the DSV4-Pro EP16 recipe: split attention backends
 # (aiter prefill / triton decode), the Kimi model env + parsers, and the Kimi
 # model path. Everything else (2P1D topology, mori a2a + KV, dist init) is shared.
 #
-# Consumed by.
+# Consumed by:
 #   * scripts/ci/slurm/process_result.py reads `resources` and
 #     `backend.sglang_config` (TP/EP/DP + worker counts) for the summary table.
 #   * scripts/ci/slurm/launch_mi355x.sh reads `runtime`, `bench`, `model`, `mtp`.
@@ -58,6 +60,7 @@ runtime:
   kv_transfer_backend: mori
   # Cross-node torch-distributed NIC for the wide decode engine's dist init.
   dist_socket_ifname: eno0
+  # rocm720 0715 image needs the ROCm-7.0.0-alpha path OFF (validated).
   rocm700a: 0
   prefill_port: 30025
   decode_port: 30026
@@ -97,7 +100,8 @@ bench:
   num_prompts_factor: 4      # num-prompts = concurrency * factor
   random_range_ratio: 1.0
 
-  # Mirrors the single-node Kimi-K2.6 eval threshold.
+  # Correctness gate run through the PD path before the perf sweep (full GSM8K,
+  # 8-shot, accuracy > 0.92). Mirrors the single-node Kimi-K2.6 eval threshold.
   accuracy:
     enabled: true
     num_shots: 8

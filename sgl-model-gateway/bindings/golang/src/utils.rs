@@ -23,6 +23,20 @@ pub fn generate_tool_call_id(
 }
 
 /// Return an explicit error for tool-constraint generation through this FFI.
+///
+/// # Arguments
+/// * `tools_json` - JSON array of tools
+/// * `tool_choice_json` - JSON object representing tool_choice
+/// * `constraint_type_out` - Pointer to receive constraint type (e.g., "json_schema")
+/// * `constraint_schema_out` - Pointer to receive constraint schema JSON
+/// * `error_out` - Optional pointer to receive error message
+///
+/// # Returns
+/// * SglErrorCode::Success on success, error code on failure
+///
+/// # Safety
+/// The out pointers must be null or writable `char**`; only `error_out` is
+/// ever written.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_generate_tool_constraints(
     _tools_json: *const std::os::raw::c_char,

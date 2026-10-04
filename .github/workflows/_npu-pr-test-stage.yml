@@ -1,5 +1,7 @@
 name: PR Test Stage for NPU
-# Reusable workflow for one NPU test stage. Caller pr-test-npu.yml forwards job parameters (runner, image, partitions) and optionally delegates test execution to the coverage runner (use_coverage_runner=true).
+# Reusable workflow for one NPU test stage. Caller pr-test-npu.yml forwards
+# job parameters (runner, image, partitions) and optionally delegates test
+# execution to the coverage runner (use_coverage_runner=true).
 
 on:
   workflow_call:
@@ -80,7 +82,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Pin to the event SHA (not the branch name) so every job in this run checks out the same commit even if the branch advances mid-run.
+          # Pin to the event SHA (not the branch name) so every job in this run
+          # checks out the same commit even if the branch advances mid-run.
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Mark repository safe
@@ -258,6 +261,7 @@ jobs:
                 ok=1; break
               fi
             done
+            [ "${ok}" = "1" ] || { echo "ERROR: failed to install ${pkg}"; exit 1; }
           }
           REQUIRED_PIP_PKGS=(tabulate)
           for pkg in "${REQUIRED_PIP_PKGS[@]}"; do

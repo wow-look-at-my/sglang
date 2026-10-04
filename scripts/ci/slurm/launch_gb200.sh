@@ -1,10 +1,34 @@
 #!/usr/bin/env bash
 # Launch a dynamo-sglang benchmark job on the GB200 cluster via srt-slurm.
+#
+# Required environment variables (set by the GitHub Actions workflow):
+#   FRAMEWORK         - must be "dynamo-sglang"
+#   MODEL             - HuggingFace model ID (used as fallback if no local path)
+#   MODEL_PREFIX      - short prefix: "dsr1"
+#   PRECISION         - "fp8" or "fp4"
+#   ISL               - input sequence length (e.g. "1024")
+#   OSL               - output sequence length (e.g. "1024")
+#   CONFIG_FILE       - path relative to srt-slurm repo root (e.g. recipes/gb200-fp8/1k1k/low-latency.yaml)
+#   RESULT_FILENAME   - prefix for output JSON filenames
+#   RUNNER_NAME       - GitHub Actions runner name (used to tag the Slurm job)
+#   SQUASH_FILE       - path to pre-imported sglang enroot squash file on Lustre
+#   NGINX_SQUASH_FILE - path to pre-imported nginx enroot squash file on Lustre
+#   SLURM_PARTITION   - Slurm partition (default: batch)
+#   SLURM_ACCOUNT     - Slurm account  (default: sglang)
+#   SRT_SLURM_BRANCH  - branch of srt-slurm repo to check out
+#   GITHUB_WORKSPACE  - set automatically by GitHub Actions
+#   MATRIX_CONFIG_NAME- matrix entry name (e.g. dsr1-fp4-1k1k-mid-curve); used in S3 prefix
+#   S3_BUCKET         - MinIO bucket for benchmark log uploads
+#   S3_ENDPOINT_URL   - MinIO endpoint URL (e.g. https://minio.<host>.nip.io)
+#   AWS_ACCESS_KEY_ID - writer access key for S3_BUCKET (via GH secrets)
+#   AWS_SECRET_ACCESS_KEY - writer secret key for S3_BUCKET (via GH secrets)
 
 set -euo pipefail
 set -x
 
-# --------------------------------------------------------------------------- Validate required vars.
+# ---------------------------------------------------------------------------
+# Validate required vars
+# ---------------------------------------------------------------------------
 : "${FRAMEWORK:?}"
 : "${MODEL_PREFIX:?}"
 : "${PRECISION:?}"
@@ -35,12 +59,17 @@ else
     SRT_SLURM_MODEL_PREFIX="$MODEL_PREFIX"
 fi
 
-# --------------------------------------------------------------------------- Set up per-runner Lustre workspace.
+# ---------------------------------------------------------------------------
+# Set up per-runner Lustre workspace (cleaned before each run, accessible
+# to both the runner and compute nodes)
+# ---------------------------------------------------------------------------
 LUSTRE_WORKSPACE="/mnt/lustre01/users-public/sglang-ci/workspace/${RUNNER_NAME}"
 rm -rf "$LUSTRE_WORKSPACE"
 mkdir -p "$LUSTRE_WORKSPACE"
 
-# --------------------------------------------------------------------------- Clone.
+# ---------------------------------------------------------------------------
+# Clone and set up srt-slurm
+# ---------------------------------------------------------------------------
 SRT_REPO_DIR="$LUSTRE_WORKSPACE/srt-slurm"
 
 git clone https://github.com/NVIDIA/srt-slurm.git "$SRT_REPO_DIR"
@@ -61,7 +90,9 @@ if ! command -v srtctl &>/dev/null; then
     exit 1
 fi
 
-# --------------------------------------------------------------------------- Generate srtslurm.yaml.
+# ---------------------------------------------------------------------------
+# Generate srtslurm.yaml
+# ---------------------------------------------------------------------------
 SRTCTL_ROOT="$SRT_REPO_DIR"
 
 : "${S3_BUCKET:?S3_BUCKET must be set}"
@@ -124,7 +155,9 @@ echo "--- S3 log upload: s3://${S3_BUCKET}/${S3_PREFIX}/ ---"
 
 make setup ARCH=aarch64
 
-# --------------------------------------------------------------------------- Patch job name and submit.
+# ---------------------------------------------------------------------------
+# Patch job name and submit via srtctl
+# ---------------------------------------------------------------------------
 sed -i "s/^name:.*/name: \"${RUNNER_NAME}\"/" "$CONFIG_FILE"
 
 SRTCTL_OUTPUT=$(srtctl apply -f "$CONFIG_FILE" \
@@ -143,7 +176,9 @@ echo "Submitted Slurm job: $JOB_ID"
 
 set +x
 
-# --------------------------------------------------------------------------- Wait for job.
+# ---------------------------------------------------------------------------
+# Wait for job and stream logs
+# ---------------------------------------------------------------------------
 LOGS_DIR="outputs/$JOB_ID/logs"
 LOG_FILE="$LOGS_DIR/sweep_${JOB_ID}.log"
 
@@ -175,7 +210,8 @@ set -x
 echo "Job $JOB_ID completed. Collecting results..."
 
 # ---------------------------------------------------------------------------
-# Collect results.
+# Collect results
+# ---------------------------------------------------------------------------
 if [ ! -d "$LOGS_DIR" ]; then
     echo "WARNING: Logs directory not found at $LOGS_DIR"
     exit 1

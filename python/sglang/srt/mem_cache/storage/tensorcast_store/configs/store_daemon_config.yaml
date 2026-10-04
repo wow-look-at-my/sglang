@@ -11,6 +11,7 @@ meta:
 server:
   # Control-plane listen socket for the gRPC API.
   listen:
+    # Bind host for gRPC; use 0.0.0.0 to expose all NICs or a specific interface to fence access.
     host: 0.0.0.0
     # gRPC listen port; this is the port advertised to Global Store regardless of advertise.port.
     port: 50052
@@ -33,7 +34,7 @@ server:
   num_threads: 16
   # gRPC server channel args and TLS.
   grpc:
-    # Max concurrent HTTP/2 streams; uses gRPC default.
+    # Max concurrent HTTP/2 streams; 0 uses gRPC default.
     max_concurrent_streams: 0
     # Keepalive ping interval; set 0s to disable periodic pings.
     keepalive_time: 30s
@@ -76,6 +77,7 @@ engine:
     # Sized for the single-GPU local validation host. This leaves room for the
     # SGLang worker and its HiCache HostPool while retaining ample L3 capacity.
     stable_bytes: 32GB
+    # Cap for preemptible pool; ignored when enable_preemptible=false (0 means no preemptible budget).
     preemptible_limit_bytes: 0
     # Reclaim target ratio for preemptible pressure; lower values reclaim more aggressively.
     preemptible_low_watermark_ratio: 0.4
@@ -111,20 +113,27 @@ promotion:
 
 # Unified pinned memory configuration for all daemon-side pinned usage.
 pinned_memory:
-  # Startup fail-fast: before allocating pinned pools, the daemon checks current available memory and exits
-  # early if insufficient. Deadline for pinned slice acquisition under pressure.
+  # Phase 1 fixed-allocation: total pinned bytes is derived as sum(classes[].pool_bytes).
+  # Startup fail-fast: before allocating pinned pools, the daemon checks current available memory and
+  # exits early if insufficient. Required bytes = pinned_total + engine.memory_tiers.stable_bytes + headroom,
+  # where headroom = min(10% * (pinned_total + stable_bytes), 10GiB).
+  # Deadline for pinned slice acquisition under pressure.
   allocation_timeout: 30s
   classes:
     - name: engine
       slice_bytes: 256MB
+      # 1 GPU * streaming_buffer_chunks(8) = 8 slices required at startup.
+      # 8 * 256MB = 2GB minimum engine pinned pool.
       pool_bytes: 2GB
     - name: comm_gpu
       slice_bytes: 16MB
+      # 3GB covers the configured 16 buffers/flow, 8 TCP connections, and
+      # expected_gpu_channels=8 startup sizing on the local validation host.
       pool_bytes: 3GB
       rdma_preregister: true
     - name: comm_cpu
       slice_bytes: 16MB
-      # Buffers/flow require several slices (256MB).
+      # 16 buffers/flow require at least 16 slices (256MB).
       pool_bytes: 512MB
       rdma_preregister: true
 
@@ -207,13 +216,13 @@ lifecycle:
   handle_leases:
     # Optional override. Leave empty to let the daemon auto-select
     # <daemon_state_dir>/local_handle.sock for same-pod/local SDKs.
-    # daemon_state_dir defaults to.
+    # daemon_state_dir defaults to:
     #   $TENSORCAST_HOME/hosts/<host_id>/sessions/<session_id>/session
     #   (or ~/.tensorcast/hosts/<host_id>/sessions/<session_id>/session)
     # Auto-discovery relies on TENSORCAST_INSTANCE (CLI/SDK-launched daemon).
-    # If TENSORCAST_INSTANCE is not set, the daemon falls back to.
+    # If TENSORCAST_INSTANCE is not set, the daemon falls back to:
     #   $TENSORCAST_HOME/hosts/<host_id>/runtime/daemons/<daemon_id>/local_handle.sock
-    # If the selected socket path exceeds AF_UNIX limits, the daemon falls back to.
+    # If the selected socket path exceeds AF_UNIX limits, the daemon falls back to:
     #   $TENSORCAST_HOME/uds/lh-<hash>.sock
     # Set explicitly when daemon and client SDK run in different pods and need a shared path.
     # Socket path must have a daemon-owned parent directory (not world-writable); create the directory beforehand.
@@ -221,6 +230,7 @@ lifecycle:
     # Handle lease TTL as a crash-safety fallback; live clients release leases when tensors are freed.
     # Set to 0s to disable TTL (leases rely on explicit release and PID-exit cleanup).
     ttl: 0s
+    # Best-effort guardrail: limit lease-bearing handle mints per second (0 => unlimited).
     max_mints_per_second: 0
 
 # Communicator transport configuration (TCP/RDMA).
@@ -233,8 +243,9 @@ communicator:
     stage_cpu_for_rdma: true
     # Buffers per flow; more buffers increase overlap but require a larger pool.
     buffers_per_flow: 16
-    # Cap concurrent in-flight segments; inherits buffers_per_flow.
+    # Cap concurrent in-flight segments; 0 inherits buffers_per_flow.
     max_window_segments: 0
+    # Cap concurrent GPU channels so pool sizing is predictable (8 for 8-GPU defaults; 0 = auto).
     expected_gpu_channels: 8
   rdma:
     # Outstanding WRs per QP; increase for bandwidth, decrease to reduce CPU/latency.
@@ -246,14 +257,14 @@ communicator:
     qp_timeout: 20
     qp_retry: 7
     # Multi-QP configuration for high-throughput scenarios
-    qp_count: 1
+    qp_count: 1  # Number of QPs per transport (1-16, default: 1)
     bonding_balance: false  # Enable LAG port balancing (default: false)
     # Reuse preregistered stable local MRs for read_plan target windows when available.
     # Disable only for A/B or debugging request-scoped MR registration behavior.
     enable_stable_local_mr_reuse: true
     # Slot-aligned MR reuse chunk size for stable local backing.
     stable_local_mr_reuse_chunk_slots: 32
-    # Async all-rail chunk prewarm. Unset or disables; values >0 enable one
+    # Async all-rail chunk prewarm. Unset or 0 disables; values >0 enable one
     # prewarm job per visible rail on a bounded communicator-local worker pool.
     stable_local_mr_reuse_prewarm_workers: 1
   transport:
@@ -261,6 +272,7 @@ communicator:
     tcp_conn_count: 8
     # Connect timeout; increase when handshakes are slow or firewalled.
     connect_timeout_sec: 10
+    # TOS/DSCP value; keep 0 unless fabric QoS is configured.
     tcp_tos: 0
     # Allow SO_REUSEPORT on listeners; disable if OS load balancing is undesirable.
     so_reuseport: true
@@ -290,7 +302,7 @@ observability:
     otel_context_enabled: false
     # Optional enriched sink file with trace/span IDs; leave empty to disable.
     sink_file: ""
-    # VLOG verbosity level; disables VLOG.
+    # VLOG verbosity level; 0 disables VLOG.
     vlog_level: 0
   # OpenTelemetry export settings.
   otel:
@@ -304,6 +316,7 @@ observability:
     service_name: tensorcast-store-daemon
     # Sampler name for Python OTel SDK; C++ currently ignores this field.
     sampler: parentbased_traceidratio
+    # Sampler argument (ratio for traceidratio); keep 1.0 for full sampling.
     sampler_arg: "1.0"
   otel_cxx:
     # Disable the C++ SDK when embedding in C++ processes.
@@ -361,7 +374,9 @@ byte_artifact_routing:
     communicator_source_enabled: true
     # Allow host-memory export for direct-write-capable CPU paths.
     host_memory_export_enabled: true
+    # 0 means no payload-size cap
     max_batch_payload_bytes: 0
+    # 0 means no per-batch item-count cap
     max_batch_items: 0
     source_publish_prereg:
       # Pre-register publish-time exports so later batch_get can reuse them directly.

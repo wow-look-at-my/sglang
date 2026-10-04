@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! End-to-end coverage for `policy = "sticky"`: a routing key read from the
-//! operator-configured header pins a session to one worker.
-//! `sgl_router_sticky_total` outcomes are recorded.
+//! operator-configured header pins a session to one worker, and the
+//! `sgl_router_sticky_total` outcomes are recorded. Runs against two
+//! `MockWorker` backends (CPU-only, no GPU).
 
 use sgl_router::config::{
     Config, DiscoveryBackend, InflightLoadConfig, ModelConfig, ObservabilityConfig, PolicyKind,
@@ -196,7 +197,8 @@ async fn remaps_to_survivor_when_pinned_worker_is_removed() {
     let pinned_idx = worker_urls.iter().position(|u| *u == pinned_url).unwrap();
     let survivor_url = worker_urls[1 - pinned_idx].clone();
 
-    // Remove the pinned worker from the registry; the next same-key request must remap to the survivor (not fail).
+    // Remove the pinned worker from the registry; the next same-key request
+    // must remap to the survivor (not fail).
     ctx.registry.remove(&WorkerId(format!("w{pinned_idx}")));
     let res = app
         .clone()
@@ -246,7 +248,7 @@ async fn only_the_configured_header_name_is_honored() {
         assert_eq!(res.status(), StatusCode::OK);
     }
     // A request carrying the *default* header (not the configured one) must
-    // be treated as keyless — proving the header name is dynamic.
+    // be treated as keyless — proving the header name is dynamic, not baked in.
     let res = app
         .clone()
         .oneshot(chat_request(Some(("x-sgl-routing-key", "s-1"))))
@@ -260,7 +262,13 @@ async fn only_the_configured_header_name_is_honored() {
     assert_eq!(sticky_count(&metrics, "no_routing_key"), 1);
 }
 
-/// True-sticky scale-up: a worker that joins the registry at runtime must NOT redistribute an already-pinned key — the defining difference.
+/// True-sticky scale-up: a worker that joins the registry at runtime must
+/// NOT redistribute an already-pinned key — the defining difference from
+/// consistent hashing, where adding a node remaps a fraction of keys. The
+/// policy unit tests assert this over a bare worker slice; this drives it
+/// end-to-end through the HTTP stack and a live `WorkerRegistry::add`, so
+/// the freshly-added worker is a genuine healthy candidate the policy could
+/// pick — and provably doesn't.
 #[tokio::test]
 async fn adding_a_worker_does_not_redistribute_existing_key() {
     let w0 = MockWorker::start(vec![]).await;
@@ -281,7 +289,10 @@ async fn adding_a_worker_does_not_redistribute_existing_key() {
         .map(|(url, _)| url)
         .expect("first request should have been served by some worker");
 
-    // Scale up: a third worker joins the registry at runtime.
+    // Scale up: a third worker joins the registry at runtime. With no
+    // circuit breaker configured it is immediately a healthy candidate
+    // (`healthy_workers_for` filters only on the breaker), so the policy
+    // *could* route to it — the assertions below prove it does not.
     let w2 = MockWorker::start(vec![]).await;
     ctx.registry
         .add(WorkerSpec {
@@ -292,7 +303,9 @@ async fn adding_a_worker_does_not_redistribute_existing_key() {
             bootstrap_port: None,
         })
         .unwrap();
-    // Guard the premise: w2 is an eligible candidate now.
+    // Guard the premise: w2 really is an eligible candidate now, so the
+    // "policy doesn't pick it" assertions below are meaningful and can't
+    // pass vacuously if a future change stops enumerating added workers.
     assert_eq!(
         ctx.registry
             .healthy_workers_for(&ModelId("tiny".into()))
@@ -313,7 +326,7 @@ async fn adding_a_worker_does_not_redistribute_existing_key() {
 
     let metrics = ctx.metrics.render();
     let counts = success_counts(&metrics);
-    // All N+1 successes stayed on the pin — nothing leaked to the
+    // All N+1 successes stayed on the original pin — nothing leaked to the
     // newly-added worker or the other pre-existing one.
     assert_eq!(
         counts.get(&pinned_url).copied().unwrap_or(0),

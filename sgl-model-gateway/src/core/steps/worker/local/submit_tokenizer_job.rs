@@ -1,4 +1,8 @@
 //! Tokenizer registration step for local workers.
+//!
+//! This step submits a Job::AddTokenizer to the job queue, which triggers the
+//! tokenizer_registration workflow. The workflow handles validation, deduplication,
+//! and caching - this step just submits the job.
 
 use async_trait::async_trait;
 use tracing::{debug, info, warn};
@@ -12,7 +16,11 @@ use crate::{
     tokenizer::TokenizerRegistry,
 };
 
-/// Step: Submit tokenizer registration job for the worker's model This step submits a Job::AddTokenizer to the job queue.
+/// Step: Submit tokenizer registration job for the worker's model
+///
+/// This step submits a Job::AddTokenizer to the job queue rather than loading
+/// the tokenizer directly. This ensures tokenizer registration goes through
+/// the unified tokenizer_registration workflow.
 pub struct SubmitTokenizerJobStep;
 
 #[async_trait]
@@ -56,7 +64,11 @@ impl StepExecutor<LocalWorkerWorkflowData> for SubmitTokenizerJobStep {
         for worker in workers.iter() {
             let model_id = worker.model_id().to_string();
 
-            // Router config (CLI args): --model-path
+            // Get tokenizer path with fallback chain:
+            // 1. Worker labels: tokenizer_path
+            // 2. Worker labels: model_path
+            // 3. Router config (CLI args): --tokenizer-path
+            // 4. Router config (CLI args): --model-path
             let tokenizer_path: String = if let Some(path) = labels
                 .get("tokenizer_path")
                 .or_else(|| labels.get("model_path"))
@@ -82,6 +94,8 @@ impl StepExecutor<LocalWorkerWorkflowData> for SubmitTokenizerJobStep {
             };
 
             // Note: We don't check if tokenizer already exists here.
+            // The registry.load() handles deduplication gracefully (returns AlreadyExists).
+            // This simplifies the code and ensures consistent behavior.
 
             info!(
                 "Submitting tokenizer registration job for model {} from {}",

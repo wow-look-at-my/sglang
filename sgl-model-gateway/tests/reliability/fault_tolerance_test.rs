@@ -268,7 +268,7 @@ mod fault_tolerance_tests {
         let ctx = AppTestContext::new_with_config(
             config,
             vec![
-                TestWorkerConfig::flaky(20108, 0.5),
+                TestWorkerConfig::flaky(20108, 0.5), // 50% failure rate
                 TestWorkerConfig::healthy(20109),    // Always succeeds
             ],
         )

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Build script for WASM guest rate limit example This script simplifies the build process.
+# Build script for WASM guest rate limit example
+# This script simplifies the build process for the WASM middleware component
 
 set -e
 

@@ -1,7 +1,110 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Lightweight in-process Prometheus exposition.
+//!
+//! We deliberately do NOT pull in the `metrics` + `metrics-exporter-prometheus`
+//! crates: the observability surface is small enough that a hand-written
+//! counter + histogram + gauge family is cheaper than a new dependency, and
+//! it lets us label/serialise exactly the way the convergence and PD-affinity
+//! tests want.
+//!
+//! All operations are concurrent — counters and gauges use
+//! [`std::sync::atomic`], histograms use a [`Mutex<Vec<u64>>`] over a
+//! fixed bucket set. Tests sub-second; production scrapes are 15s
+//! cadence. Lock contention is not a concern at these rates.
+//!
+//! # Metrics surface
+//!
+//! | Metric | Type | Labels |
+//! |---|---|---|
+//! | `sgl_router_requests_total` | Counter | `route`, `method` |
+//! | `sgl_router_responses_total` | Counter | `route`, `method`, `status_code` |
+//! | `sgl_router_worker_requests_total` | Counter | `worker_url`, `model_id`, `mode`, `outcome` |
+//! | `sgl_router_request_duration_seconds` | Histogram | `model_id` |
+//! | `sgl_router_ttft_seconds` | Histogram | `model_id` |
+//! | `sgl_router_stream_outcome_total` | Counter | `worker_url`, `model_id`, `outcome` |
+//! | `sgl_router_active_load` | Gauge | `worker_url`, `kind` |
+//! | `sgl_router_workers` | Gauge | `mode` |
+//! | `sgl_router_worker_health` | Gauge | `worker_url` |
+//! | `sgl_router_worker_cb_state` | Gauge | `worker_url` |
+//! | `sgl_router_worker_inflight_requests` | Gauge | `worker_url` |
+//! | `sgl_router_stale_requests_total` | Counter | `outcome` |
+//! | `sgl_router_decode_affinity_total` | Counter | `outcome` |
+//! | `sgl_router_sticky_total` | Counter | `outcome` |
+//! | `sgl_router_policy_decisions_total` | Counter | `policy`, `reason` |
+//! | `sgl_router_policy_selection_failures_total` | Counter | `policy`, `reason` |
+//! | `sgl_router_cache_admission_evaluated_total` | Counter | — |
+//! | `sgl_router_cache_admission_rejected_total` | Counter | — |
+//! | `sgl_router_cache_pressure_guard_compared_total` | Counter | — |
+//! | `sgl_router_cache_pressure_guard_override_total` | Counter | — |
+//! | `sgl_router_cache_monitor_decisions_total` | Counter | `source` |
+//! | `sgl_router_cache_aware_decisions_total` | Counter | `model_id`, `decision` |
+//! | `sgl_router_diverted_overlap_blocks` | Histogram | `model_id` |
+//! | `sgl_router_ingress_tokenize_errors_total` | Counter | `model_id` |
+//! | `sgl_router_input_ids_forwarding_total` | Counter | `model_id`, `outcome` |
+//! | `sgl_router_sampling_contract_rejections_total` | Counter | `param` |
+//!
+//! `sgl_router_cache_aware_decisions_total` records exactly one decision per
+//! cache-aware prefill selection that resolves a worker, so the labels sum to
+//! the cache-aware request rate less the selections that ended in a 503 (see
+//! `sgl_router_policy_selection_failures_total` for those) and ratios between
+//! them are meaningful:
+//!
+//! - `cache_hit` — a prefix owner won the selection. Note this includes a
+//!   PARTIAL gate diversion: when the gate removed the deepest owner but a
+//!   shallower one survived, an owner still won, so the request books here
+//!   and contributes nothing to `sgl_router_diverted_overlap_blocks`.
+//! - `cache_miss` — no usable prefix owner (tree miss, or every owner
+//!   rejected by hard capacity admission). A tree miss books here even on a
+//!   saturated fleet: with no prefix owner the gate never fired, so there was
+//!   no affinity to keep or trade. `all_queued` is the saturation signal for
+//!   traffic the gate ACTED on, not a fleet-wide saturation gauge — read
+//!   engine queue depth for that.
+//! - `cache_worker_queued` — the queue gate (`--worker-queue-limit`) removed
+//!   every owner while an unqueued destination still existed, so the request
+//!   was diverted off its prefix. The matched-prefix depth it gave up is in
+//!   `sgl_router_diverted_overlap_blocks` — read it against the overlap of
+//!   all selections: a diverted curve skewing high means the gate is trading
+//!   large cached prefixes for short waits.
+//! - `all_queued` — the queue gate removed every owner and no diversion could
+//!   dodge a wait. Two conditions draw it. Without `--saturation-queue-floor`
+//!   it means every worker in the prefill fleet is queueing at or above
+//!   `--worker-queue-limit`. With a floor set, the saturation pin also draws
+//!   it on the weaker condition the floor names: no fleet worker reads
+//!   strictly below the floor. Since the floor may be lower than the limit, a
+//!   floor well under the limit widens this label to fleets that still hold
+//!   gate-admissible workers — read it against the configured floor, not as
+//!   "every worker is over the limit". It is keyed on saturation rather than
+//!   on where the request landed: usually the request kept its prefix, but
+//!   when the owners it would keep are also out of KV capacity it lands
+//!   off-owner and still books here. Reporting that case as `cache_miss`
+//!   would hide the saturation in the one state where it matters most. It
+//!   deliberately does NOT spell `cache_hit*`: a `decision=~"cache_hit.*"`
+//!   hit-rate query must not absorb it, or a fully saturated fleet reads as a
+//!   healthy one.
+//!
+//! `sgl_router_input_ids_forwarding_total` records one outcome per dispatched
+//! `/v1/chat/completions` request, so `outcome!="forwarded"` over the sum is
+//! the share the engine tokenized itself:
+//!
+//! - `forwarded` — router-rendered `input_ids` replaced engine tokenization.
+//! - `disabled` — forwarding is off for the model (`--disable-input-ids-forwarding`,
+//!   or no chat formatter).
+//! - `ineligible_multimodal` — the chat carries image, video, or audio content
+//!   parts, which only the engine's multimodal processor can tokenize.
+//! - `ineligible` — the forwarding guard excluded some other request shape
+//!   (tools, non-string content, caller `input_ids`, template controls, ...).
+//! - `tokenize_failed` — eligible, but ingress rendering failed (the same
+//!   requests `sgl_router_ingress_tokenize_errors_total` counts).
+//!
+//! The four `sgl_router_worker*` gauges and `sgl_router_workers` are sampled
+//! at scrape time from the live [`crate::workers::WorkerRegistry`] (passed to
+//! [`MetricsRegistry::render_with_workers`]) rather than pushed — there is no
+//! health-check loop to push from, and pull-on-scrape means a removed worker
+//! stops emitting series immediately instead of leaving a stale gauge.
+//!
+//! The exposition is text/plain; version=0.0.4 per the Prometheus spec.
 
 use crate::config::PolicyKind;
 use crate::proxy::sse::{StreamEnd, StreamEndReason};
@@ -11,12 +114,30 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Histogram bucket upper bounds (seconds) for
-/// `sgl_router_request_duration_seconds`.
+/// `sgl_router_request_duration_seconds`. Standard latency ladder spanning
+/// 5 ms → 30 s; the `+Inf` bucket catches anything slower (a request that
+/// outlives the upstream's own timeouts).
 const REQUEST_DURATION_BUCKETS: &[f64] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
 ];
 
 /// Histogram bucket upper bounds (seconds) for `sgl_router_ttft_seconds`.
+///
+/// From 0.1 s up these edges are IDENTICAL to the SGLang engine's
+/// `sglang:time_to_first_token_seconds` histogram (defined in
+/// `python/sglang/srt/observability/metrics_collector.py`). Matching edges is
+/// what makes a `histogram_quantile` comparison between the router and the
+/// engine meaningful: the quantile interpolates within the same bucket on both
+/// sides, so `quantile(router) - quantile(engine)` reflects real router
+/// overhead rather than grid skew. With mismatched grids the two interpolations
+/// run on different bucket widths and the difference can even go negative — the
+/// router P50 reading *below* the engine P50 despite the router sitting in
+/// front of it.
+///
+/// The four sub-100 ms edges have no engine counterpart (the engine's first
+/// bucket is `[0, 0.1]`, so it cannot resolve a sub-100 ms TTFT at all). They
+/// are router-only headroom: harmless for the comparison (they sit below the
+/// engine's range) while letting the router resolve a genuinely fast TTFT.
 const TTFT_BUCKETS: &[f64] = &[
     0.005, 0.01, 0.025, 0.05, // router-only sub-100 ms head
     0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 20.0, 40.0, 60.0, 80.0, 100.0, 200.0,
@@ -24,20 +145,37 @@ const TTFT_BUCKETS: &[f64] = &[
 ];
 
 /// Histogram bucket upper bounds (blocks) for
-/// `sgl_router_diverted_overlap_blocks`.
+/// `sgl_router_diverted_overlap_blocks`. Powers of two up to 8192 blocks;
+/// block size is engine-configured (commonly 16–64 tokens), so the ladder
+/// spans ~16 tokens to ~512K tokens of forfeited prefix.
 const OVERLAP_BLOCK_BUCKETS: &[f64] = &[
     1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0,
 ];
 
-/// Recordable outcome for a request — narrowed to a handful of variants so the label cardinality stays bounded.
+/// Recordable outcome for a request — narrowed to a handful of variants so
+/// the label cardinality stays bounded.
+///
+/// The split exists so `outcome="error"` means *this worker failed*, matching
+/// what [`crate::proxy`]'s `breaker_outcome` counts as a fault. A request can
+/// fail for reasons that say nothing about the worker's health — the caller sent
+/// something invalid, or the worker was merely at capacity — and folding those
+/// into `error` makes the per-worker error ratio fire on client mistakes and on
+/// exactly the backpressure the circuit breaker deliberately tolerates.
 #[derive(Debug, Clone, Copy)]
 pub enum RequestOutcome {
     Success,
+    /// The worker answered and rejected the request as invalid (a 4xx other than
+    /// 429). The caller's fault, not the worker's.
     ClientError,
+    /// The worker was responsive but at capacity (429 / 503). Not a fault — the
+    /// same judgement `breaker_outcome` makes when it declines to open the
+    /// breaker on these statuses.
     Backpressure,
-    /// The worker failed to serve the request: a 5xx fault, a transport failure, a timeout.
+    /// The worker failed to serve the request: a 5xx fault, a transport failure,
+    /// a timeout, or a body that never completed.
     Error,
-    /// The router cancelled the request itself — today only the stale-request deadline.
+    /// The router cancelled the request itself — today only the stale-request
+    /// deadline. Never derived from a status; see [`outcome_from_status`].
     Cancelled,
 }
 
@@ -55,25 +193,50 @@ impl RequestOutcome {
 
 /// Derive the bounded [`RequestOutcome`] label from the client-visible HTTP
 /// status.
+///
+/// Deriving from the status rather than from `Result::Ok`/`Err` is what keeps a
+/// forwarded worker error honest: a worker 4xx/5xx the router proxies is an
+/// `Ok(Response)` at the handler, so keying off `Ok` credits it as a success.
+///
+/// This never returns [`RequestOutcome::Cancelled`]. A status cannot identify a
+/// router-side cancellation: a 504 is produced by the stale-request deadline, by
+/// the router's own upstream timeout, and by a worker 504 forwarded unchanged,
+/// and only the caller holding the `ApiError` can tell them apart. Callers that
+/// know they cancelled the request say so explicitly instead.
 pub fn outcome_from_status(status: u16) -> RequestOutcome {
     match status {
         200..=299 => RequestOutcome::Success,
-        // Responsive but at capacity. Listed before the 4xx arm so lands here rather than in `ClientError`.
+        // Responsive but at capacity. Listed before the 4xx arm so 429 lands
+        // here rather than in `ClientError`.
         429 | 503 => RequestOutcome::Backpressure,
         400..=499 => RequestOutcome::ClientError,
         _ => RequestOutcome::Error,
     }
 }
 
-/// Routing context a handler attaches to its `Response` (via response extensions).
+/// Routing context a handler attaches to its `Response` (via response
+/// extensions) so the outermost access-log middleware can describe a dispatch it
+/// cannot see itself.
+///
+/// Attached today only by `chat_completions`. There is no compile-time
+/// obligation to attach one — any handler that dispatches to a worker must do so
+/// or its access-log line names no worker and falls back to a status-derived
+/// outcome. A line with empty `worker`/`model` is therefore normal, not a bug:
+/// it means the request was rejected before dispatch, or reached a route that
+/// does not dispatch at all.
 #[derive(Debug, Clone)]
 pub struct RequestLogContext {
-    /// The worker the client-visible response came from.
+    /// The worker the client-visible response actually came from. In PD mode
+    /// that is the decode worker, not the policy-selected prefill worker.
     pub worker_url: String,
     pub model_id: String,
-    /// Whether the client asked for an SSE stream.
+    /// Whether the client asked for an SSE stream. Only the handler knows this
+    /// (it is a body field, not a header or a route), and it separates
+    /// time-to-last-byte from time-to-headers when reading `latency_ms`.
     pub streaming: bool,
-    /// The outcome the handler recorded for this request.
+    /// The outcome the handler recorded for this request. Carried so the log
+    /// line and `worker_requests_total` cannot disagree — the middleware can
+    /// only see the status, which cannot express a router-side cancellation.
     pub outcome: RequestOutcome,
     /// Router-minted engine ID, logged beside the caller's correlation ID.
     pub engine_rid: Option<String>,
@@ -118,7 +281,8 @@ impl StreamOutcome {
     }
 }
 
-/// Worker dispatch mode label — narrowed to the modes the policy resolver distinguishes.
+/// Worker dispatch mode label — narrowed to the three modes the policy
+/// resolver distinguishes. The `Plain` variant covers the non-PD case.
 #[derive(Debug, Clone, Copy)]
 pub enum WorkerModeLabel {
     Prefill,
@@ -136,7 +300,8 @@ impl WorkerModeLabel {
     }
 }
 
-/// Decode-affinity outcome — see `select_decode_with_affinity` for the reasons the affinity may not be honored.
+/// Decode-affinity outcome — see `select_decode_with_affinity` for the
+/// three reasons the affinity may not be honored.
 #[derive(Debug, Clone, Copy)]
 pub enum DecodeAffinityOutcome {
     SameHostPicked,
@@ -154,7 +319,8 @@ impl DecodeAffinityOutcome {
     }
 }
 
-/// Sticky-policy selection outcome — see `StickyPolicy::select` for the branches.
+/// Sticky-policy selection outcome — see `StickyPolicy::select` for the
+/// four branches.
 #[derive(Debug, Clone, Copy)]
 pub enum StickyOutcome {
     /// Routing key found and its assigned worker is still healthy.
@@ -199,7 +365,8 @@ pub(crate) enum PolicySelectionFailureReason {
     ProposalEmpty,
 }
 
-/// Final cache-aware routing decision, one per prefill selection.
+/// Final cache-aware routing decision, one per prefill selection. See the
+/// module doc for how the labels read against each other.
 #[derive(Debug, Clone, Copy)]
 pub enum CacheAwareDecision {
     CacheHit,
@@ -219,7 +386,8 @@ impl CacheAwareDecision {
     }
 }
 
-/// Whether a dispatched chat request carried router-rendered `input_ids` to the engine, and why not otherwise.
+/// Whether a dispatched chat request carried router-rendered `input_ids` to
+/// the engine, and why not otherwise. See the module doc for each label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputIdsForwarding {
     Forwarded,
@@ -251,7 +419,7 @@ impl PolicySelectionFailureReason {
     }
 }
 
-/// Active-load kind label — separates the axes of per-worker load.
+/// Active-load kind label — separates the two axes of per-worker load.
 #[derive(Debug, Clone, Copy)]
 pub enum RouterInflightLoadKind {
     PrefillTokens,
@@ -267,15 +435,22 @@ impl RouterInflightLoadKind {
     }
 }
 
-/// The shared metrics registry, held on `AppContext`.
+/// The shared metrics registry, held on `AppContext`. Cheap to clone — all
+/// internal state is `Arc`/`Atomic`/`Mutex`-protected.
 #[derive(Debug, Default)]
 pub struct MetricsRegistry {
-    // Edge counters (recorded at the app.rs middleware): intake at entry, responses at exit.
+    // Edge counters (recorded at the app.rs middleware): intake at entry,
+    // responses at exit. `requests_total - responses_total` = received but
+    // never answered, which `worker_requests_total` (post-dispatch) can't see.
     requests_total: Mutex<HashMap<EdgeKey, Arc<AtomicU64>>>,
     responses_total: Mutex<HashMap<EdgeResponseKey, Arc<AtomicU64>>>,
-    // Per-worker dispatch outcomes.
+    // Per-worker dispatch outcomes. Recorded after dispatch, so blind to
+    // pre-dispatch drops; kept per-worker for the routing-convergence tests.
     worker_requests_total: Mutex<HashMap<RequestKey, Arc<AtomicU64>>>,
-    // Keyed by `model_id` only: a model's pool is either all-plain or all-PD (the registry rejects mixed pools).
+    // Keyed by `model_id` only: a model's pool is either all-plain or all-PD
+    // (the registry rejects mixed pools), so the worker `mode` would be a pure
+    // function of `model_id` here — a redundant label. Per-worker `mode` lives
+    // on `worker_requests_total` / the worker gauges instead.
     request_duration: Mutex<HashMap<String, Histogram>>,
     ttft_seconds: Mutex<HashMap<String, Histogram>>,
     stream_outcome_total: Mutex<HashMap<StreamOutcomeKey, Arc<AtomicU64>>>,
@@ -305,7 +480,8 @@ struct RequestKey {
     outcome: &'static str,
 }
 
-/// Labels for the edge `requests_total` (intake) counter.
+/// Labels for the edge `requests_total` (intake) counter. `route` is the matched
+/// template (small fixed set), so cardinality is bounded.
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 struct EdgeKey {
     route: String,
@@ -328,7 +504,10 @@ struct StreamOutcomeKey {
     outcome: &'static str,
 }
 
-/// Per-worker state sampled from the [`crate::workers::WorkerRegistry`] at scrape time and rendered.
+/// Per-worker state sampled from the [`crate::workers::WorkerRegistry`] at
+/// scrape time and rendered as the `sgl_router_workers` /
+/// `sgl_router_worker_*` gauge families. Built by the `/metrics` route from
+/// the live registry on every scrape — see [`MetricsRegistry::render_with_workers`].
 #[derive(Debug, Clone)]
 pub struct WorkerSnapshot {
     pub worker_url: String,
@@ -336,6 +515,7 @@ pub struct WorkerSnapshot {
     pub mode: &'static str,
     /// Circuit breaker would currently admit a request (`would_allow`).
     pub healthy: bool,
+    /// Circuit breaker state code: 0=closed, 1=open, 2=half_open.
     pub cb_state: u8,
     /// In-flight request count for this worker (`Worker::router_inflight_load`).
     pub inflight: i64,
@@ -367,9 +547,11 @@ struct InputIdsForwardingKey {
 
 #[derive(Debug)]
 struct Histogram {
-    /// Bucket upper bounds this histogram observes against.
+    /// Bucket upper bounds this histogram observes against. Held per-instance
+    /// so a single `Histogram` type backs metrics with different bucket ladders.
     bounds: &'static [f64],
-    /// One counter per boundary in `bounds`, plus one for `+Inf`.
+    /// One counter per boundary in `bounds`, plus one for `+Inf`. Buckets
+    /// are cumulative on render but stored as non-cumulative counts here.
     buckets: Vec<u64>,
     sum: f64,
     count: u64,
@@ -455,11 +637,14 @@ impl MetricsRegistry {
 
     /// Observe end-to-end request latency (seconds) for
     /// `sgl_router_request_duration_seconds`. Recorded once the upstream
-    /// outcome is known.
+    /// outcome is known, regardless of success or error — a slow error is
     /// still latency the operator cares about.
     pub fn observe_request_duration(&self, model_id: &str, seconds: f64) {
         // Drop non-finite observations before touching the map: a NaN would
-        // poison the series `sum` permanently.
+        // poison the series `sum` permanently (NaN propagates through every
+        // later add). Guarding here (not in `Histogram::observe`) also avoids
+        // materializing an empty series for a dropped observation. Current
+        // callers feed `Instant::elapsed`, so this is defense-in-depth.
         if !seconds.is_finite() {
             return;
         }
@@ -470,9 +655,13 @@ impl MetricsRegistry {
         hist.observe(seconds);
     }
 
-    /// Observe time-to-first-token (seconds) for `sgl_router_ttft_seconds`
-    /// — the interval from request receipt to the first response chunk
-    /// arriving from the upstream worker.
+    /// Observe time-to-first-token (seconds) for `sgl_router_ttft_seconds` —
+    /// the interval from request receipt to the first response chunk arriving
+    /// from the upstream worker. Recorded only for successful *streaming*
+    /// responses; non-streaming "first token" equals total latency, which
+    /// `sgl_router_request_duration_seconds` already captures. Uses
+    /// [`TTFT_BUCKETS`], whose edges align with the engine's TTFT histogram so
+    /// the two are directly comparable in `histogram_quantile`.
     pub fn observe_ttft(&self, model_id: &str, seconds: f64) {
         // See `observe_request_duration` — drop non-finite before the map.
         if !seconds.is_finite() {
@@ -656,9 +845,12 @@ impl MetricsRegistry {
     }
 
     /// Observe the matched-prefix depth (blocks) a queue-gate diversion gave
-    /// up.
-    /// candidate set (`cache_worker_queued`).
-    /// histogram measures sacrifice rather than traffic.
+    /// up, for `sgl_router_diverted_overlap_blocks`. Recorded ONLY when the
+    /// gate emptied the candidate set (`cache_worker_queued`), so the
+    /// histogram measures sacrifice rather than traffic. A PARTIAL diversion
+    /// — the gate removed the deepest owner but a shallower one still won —
+    /// is therefore not represented here even though some locality was given
+    /// up; it books as `cache_hit`.
     pub fn observe_diverted_overlap_blocks(&self, model_id: &str, blocks: u64) {
         let mut guard = self.diverted_overlap_blocks.lock();
         let hist = guard
@@ -699,7 +891,13 @@ impl MetricsRegistry {
     }
 
     /// Bump `sgl_router_sampling_contract_rejections_total{param}`.
-    /// `--sampling-param-conflict reject`.
+    ///
+    /// Recorded when the fleet-wide sampling contract refuses a request under
+    /// `--sampling-param-conflict reject`. This is the rollout gauge for the
+    /// flag: it answers "how much client traffic is the contract turning away,
+    /// and on which parameter" — which is otherwise unanswerable, because the
+    /// rejection reaches the client as a 400 like any other. `param` is a
+    /// wire name from a fixed enum, so the label set is bounded.
     pub fn record_sampling_contract_rejection(&self, param: &'static str) {
         let mut guard = self.sampling_contract_rejections_total.lock();
         let counter = guard
@@ -710,6 +908,11 @@ impl MetricsRegistry {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Render the registry as a Prometheus 0.0.4 exposition-format string
+    /// with no live worker snapshot. The per-worker gauges emit only their
+    /// HELP/TYPE headers and a zeroed pool-size series. Production scrapes
+    /// go through [`Self::render_with_workers`]; this exists for callers
+    /// (and tests) that have no [`crate::workers::WorkerRegistry`] handy.
     pub fn render(&self) -> String {
         self.render_with_workers(&[])
     }
@@ -827,6 +1030,7 @@ impl MetricsRegistry {
         }
         drop(guard);
 
+        // responses_total — edge, by route/method/status (incl. early-exit 400/413/503)
         out.push_str(
             "# HELP sgl_router_responses_total Responses returned at the router HTTP edge, by route, method and HTTP status code.\n",
         );
@@ -875,9 +1079,13 @@ impl MetricsRegistry {
         }
         drop(guard);
 
-        // Worker gauges — sampled from the live registry snapshot passed in, not stored.
+        // Worker gauges — sampled from the live registry snapshot passed in,
+        // not stored. Rendering from the snapshot (rather than a pushed map)
+        // means a removed worker stops emitting series on the very next
+        // scrape instead of leaving a stale gauge pinned at its last value.
 
-        // workers (pool size by mode).
+        // workers (pool size by mode). Emit all three modes so the series
+        // exist (at 0) even before any worker of that mode is discovered.
         out.push_str("# HELP sgl_router_workers Registered workers by mode.\n");
         out.push_str("# TYPE sgl_router_workers gauge\n");
         for mode in ["plain", "prefill", "decode"] {
@@ -892,6 +1100,7 @@ impl MetricsRegistry {
         let mut sorted: Vec<&WorkerSnapshot> = workers.iter().collect();
         sorted.sort_by(|a, b| a.worker_url.cmp(&b.worker_url));
 
+        // worker_health (1=breaker would admit a request, 0=breaker open)
         out.push_str(
             "# HELP sgl_router_worker_health Worker health: 1 = circuit breaker admits requests, 0 = rejecting (open within cooldown, or half-open with a probe in flight). May read 1 while sgl_router_worker_cb_state=1 (open but cooldown elapsed).\n",
         );
@@ -904,6 +1113,7 @@ impl MetricsRegistry {
             ));
         }
 
+        // worker_cb_state (0=closed, 1=open, 2=half_open)
         out.push_str(
             "# HELP sgl_router_worker_cb_state Circuit breaker state per worker (0=closed, 1=open, 2=half_open).\n",
         );
@@ -1187,9 +1397,10 @@ impl MetricsRegistry {
 }
 
 /// Render one labelled histogram family (`<name>_bucket` / `_sum` /
-/// `_count`) into `out`. emitted verbatim — callers escape their own
-/// label values.
-/// rendered cumulatively per the Prometheus histogram contract.
+/// `_count`) into `out`. `label_body` is the inside-of-braces label set
+/// WITHOUT the trailing `le` (e.g. `model_id="tiny"`) and is
+/// emitted verbatim — callers escape their own label values. Buckets are
+/// rendered cumulatively per the Prometheus histogram contract, with a
 /// final `+Inf` bucket.
 fn render_histogram(out: &mut String, name: &str, label_body: &str, hist: &Histogram) {
     let mut cumulative: u64 = 0;
@@ -1208,8 +1419,8 @@ fn render_histogram(out: &mut String, name: &str, label_body: &str, hist: &Histo
 }
 
 /// Prometheus label-value escape rule per
-/// https://prometheus.io/docs/instrumenting/exposition_formats/. We
-/// only escape `\`, `"`.
+/// https://prometheus.io/docs/instrumenting/exposition_formats/.
+/// We only escape `\`, `"`, and newline — the three characters the
 /// reference parser rejects unescaped.
 pub(crate) fn escape_label(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -1254,6 +1465,8 @@ mod tests {
         assert!(out.contains("# TYPE sgl_router_sticky_total counter"));
         assert!(out.contains("# TYPE sgl_router_policy_decisions_total counter"));
         assert!(out.contains("# TYPE sgl_router_ingress_tokenize_errors_total counter"));
+        // Pool-size series exist (at 0) for all three modes even with no
+        // workers, so dashboards have a stable series to graph.
         assert!(out.contains(r#"sgl_router_workers{mode="plain"} 0"#));
         assert!(out.contains(r#"sgl_router_workers{mode="prefill"} 0"#));
         assert!(out.contains(r#"sgl_router_workers{mode="decode"} 0"#));
@@ -1262,6 +1475,7 @@ mod tests {
     #[test]
     fn observe_request_duration_writes_buckets_sum_and_count() {
         let reg = MetricsRegistry::new();
+        // 25 ms, 120 ms, 600 ms for model "tiny".
         reg.observe_request_duration("tiny", 0.025);
         reg.observe_request_duration("tiny", 0.12);
         reg.observe_request_duration("tiny", 0.6);
@@ -1270,13 +1484,14 @@ mod tests {
             out.contains(r#"sgl_router_request_duration_seconds_count{model_id="tiny"} 3"#),
             "expected count=3; got:\n{out}",
         );
+        // 0.025 <= 0.025, so the le=0.025 bucket is 1 (cumulative).
         assert!(
             out.contains(
                 r#"sgl_router_request_duration_seconds_bucket{model_id="tiny",le="0.025"} 1"#
             ),
             "expected le=0.025 bucket = 1; got:\n{out}",
         );
-        // le=1 is cumulative over all observations.
+        // le=1 is cumulative over all three observations.
         assert!(
             out.contains(r#"sgl_router_request_duration_seconds_bucket{model_id="tiny",le="1"} 3"#),
             "expected le=1 bucket = 3; got:\n{out}",
@@ -1299,7 +1514,10 @@ mod tests {
     #[test]
     fn request_duration_overflow_lands_in_plus_inf_bucket_only() {
         let reg = MetricsRegistry::new();
-        // 45s is beyond the top finite bound (30s).
+        // 45s is beyond the top finite bound (30s) — the operationally
+        // critical "outlived the upstream timeout" case the +Inf bucket exists
+        // for. It must NOT appear in le="30" but must be in le="+Inf"/_count,
+        // and _sum must reflect the full value.
         reg.observe_request_duration("m", 45.0);
         let out = reg.render();
         assert!(
@@ -1336,15 +1554,22 @@ mod tests {
             out.contains(r#"sgl_router_ttft_seconds_count{model_id="tiny"} 2"#),
             "expected ttft count=2; got:\n{out}",
         );
+        // 0.04 <= 0.05, so the le=0.05 bucket is 1 (cumulative).
         assert!(
             out.contains(r#"sgl_router_ttft_seconds_bucket{model_id="tiny",le="0.05"} 1"#),
             "expected le=0.05 bucket = 1; got:\n{out}",
         );
+        // le=0.2 (an engine-aligned edge) is cumulative over both observations.
         assert!(out.contains(r#"sgl_router_ttft_seconds_bucket{model_id="tiny",le="0.2"} 2"#));
     }
 
     #[test]
     fn ttft_buckets_align_with_engine_grid() {
+        // The engine's `sglang:time_to_first_token_seconds` edges from 0.1 s up.
+        // These MUST all appear verbatim in the router's TTFT histogram, else a
+        // `histogram_quantile` comparison silently interpolates on mismatched
+        // grids. The sub-100 ms head (0.005..0.05) is router-only and not
+        // asserted here.
         let reg = MetricsRegistry::new();
         reg.observe_ttft("m", 0.5);
         let out = reg.render();
@@ -1476,6 +1701,7 @@ mod tests {
         assert!(out.contains(r#"sgl_router_workers{mode="prefill"} 1"#));
         assert!(out.contains(r#"sgl_router_workers{mode="decode"} 1"#));
         assert!(out.contains(r#"sgl_router_workers{mode="plain"} 0"#));
+        // Health: healthy prefill = 1, unhealthy decode = 0.
         assert!(out.contains(r#"sgl_router_worker_health{worker_url="http://p0:30000"} 1"#));
         assert!(out.contains(r#"sgl_router_worker_health{worker_url="http://d0:30000"} 0"#));
         // Circuit breaker state codes.
@@ -1658,12 +1884,14 @@ mod tests {
         assert!(out.contains(
             r#"sgl_router_cache_aware_decisions_total{model_id="tiny",decision="all_queued"} 1"#
         ));
-        // The saturation label must not be absorbed by a `cache_hit.*` hit-rate query.
+        // The saturation label must not be absorbed by a `cache_hit.*`
+        // hit-rate query.
         assert!(!out.contains(r#"decision="cache_hit_all_queued""#));
         assert!(
             out.contains(r#"sgl_router_diverted_overlap_blocks_count{model_id="tiny"} 1"#),
             "expected one diverted observation; got:\n{out}"
         );
+        // 40 blocks lands in the le=64 bucket, not le=32.
         assert!(
             out.contains(r#"sgl_router_diverted_overlap_blocks_bucket{model_id="tiny",le="64"} 1"#)
         );
@@ -1707,7 +1935,8 @@ mod tests {
 
     #[test]
     fn ingress_tokenize_error_absent_until_recorded() {
-        // Healthy operation never calls the recorder.
+        // Healthy operation never calls the recorder, so no per-model series
+        // should exist — only the HELP/TYPE headers.
         let reg = MetricsRegistry::new();
         let out = reg.render();
         assert!(out.contains("# TYPE sgl_router_ingress_tokenize_errors_total counter"));
@@ -1736,7 +1965,8 @@ mod tests {
             "render did not escape backslash; got:\n{out}",
         );
     }
-    /// The contract's rollout gauge: absent until a request is refused, then keyed by the parameter that refused it.
+    /// The contract's rollout gauge: absent until a request is actually
+    /// refused, then keyed by the parameter that refused it.
     #[test]
     fn sampling_contract_rejections_are_keyed_by_param() {
         let reg = MetricsRegistry::new();
@@ -1761,13 +1991,17 @@ mod tests {
         );
     }
 
-    /// The status → outcome mapping is the single definition shared by the access log and `worker_requests_total`.
+    /// The status → outcome mapping is the single definition shared by the
+    /// access log and `worker_requests_total`, so a silent change here corrupts
+    /// both surfaces at once. Pin every class, including the boundaries.
     #[test]
     fn outcome_from_status_maps_every_class() {
         let cases = [
             (200, "success"),
             (204, "success"),
             (299, "success"),
+            // Backpressure is listed before the 4xx arm, so 429 must not fall
+            // through to client_error.
             (429, "backpressure"),
             (503, "backpressure"),
             (400, "client_error"),
@@ -1775,6 +2009,9 @@ mod tests {
             (499, "client_error"),
             (500, "error"),
             (502, "error"),
+            // A 504 is NOT a cancellation: the router's own upstream timeout and
+            // a worker's forwarded 504 both land here, and only the caller
+            // holding the `ApiError` can tell a real stale-cancel apart.
             (504, "error"),
             (199, "error"),
             (300, "error"),

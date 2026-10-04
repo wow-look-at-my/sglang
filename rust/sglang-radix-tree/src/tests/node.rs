@@ -188,6 +188,7 @@ fn attach_child_rejects_duplicate_key() {
         parent.attach_child(&mut b, /* page_size = */ 1),
         Err(TreeCoreRuntimeError::DuplicateChildKey { parent: p, .. }) if p == 0
     ));
+    // b was rejected without mutation; a still holds key 7.
     assert_eq!(
         parent.children.get(&(KeyNamespace::default(), vec![7])),
         Some(&NodeIdx_(1))
@@ -821,7 +822,8 @@ fn bigram_key_from_is_empty_below_one_pair() {
 
 // Per-page hash chains.
 
-// Expected values are literals produced by the python native hash.
+// Expected values are literals produced by the python native hash
+// (mem_cache/utils.py::get_hash_str over cpp_utils/hash_binding.cpp).
 
 #[test]
 fn unigram_pages_chain_within_the_node() {
@@ -861,6 +863,7 @@ fn parent_hash_chains_across_nodes() {
 
 #[test]
 fn bigram_atoms_hash_as_word_pairs() {
+    // Raw ids [1, 2, 3, 4, 5] as overlapping pairs, two pairs per page.
     let atoms: Vec<(i64, i64)> = vec![(1, 2), (2, 3), (3, 4), (4, 5)];
     assert_eq!(
         get_hash_str::<Vec<(i64, i64)>>(&atoms, None, 2),
@@ -1039,6 +1042,7 @@ fn reset_clears_then_reinstalls_root() -> Result<(), TreeCoreRuntimeError> {
 #[test]
 fn get_and_bump_access_counter_is_monotonic() {
     let mut arena = arena();
+    // The root's construction consumed tick 1.
     assert_eq!(arena.get_and_bump_access_counter(), 2);
     assert_eq!(arena.get_and_bump_access_counter(), 3);
 }
@@ -1261,7 +1265,8 @@ fn alloc_stamps_self_id_and_a_fresh_access_tick() -> Result<(), TreeCoreRuntimeE
     assert_eq!(arena.node(a).id, 1);
     assert_eq!(arena.node(b).id, 2);
     assert_eq!(arena.resolve(arena.node(a).id).expect("live test node"), a);
-    // Construction stamps strictly increasing ticks: root, then a, then b.
+    // Construction stamps strictly increasing ticks: root, then a, then b;
+    // both stamps share the node's single construction tick.
     let root_tick = arena.node(root).last_access_counter;
     let a_tick = arena.node(a).last_access_counter;
     let b_tick = arena.node(b).last_access_counter;
@@ -1280,6 +1285,7 @@ fn reset_zeroes_access_counter() {
     arena.get_and_bump_access_counter();
     arena.get_and_bump_access_counter();
     arena.reset();
+    // The counter restarts and the fresh root's stamp consumes tick 1.
     assert_eq!(arena.get_and_bump_access_counter(), 2);
 }
 
@@ -1812,7 +1818,7 @@ fn id_map_stays_consistent_across_free_and_realloc() -> Result<(), TreeCoreRunti
     let b_id = arena.node(b).id;
     arena.free_leaf(b)?;
     assert!(arena.resolve(b_id).is_err());
-    // The freed slot is recycled with a fresh handle; the one stays dead.
+    // The freed slot is recycled with a fresh handle; the old one stays dead.
     let c = arena.alloc_child(
         root,
         /* key = */ vec![3],
@@ -1894,6 +1900,7 @@ fn discard_fixes_up_the_swapped_member_slot() {
     set.add(NodeIdx_(10));
     set.add(NodeIdx_(20));
     set.add(NodeIdx_(30));
+    // Removing the first member swap-moves the tail (30) into its slot.
     set.discard(NodeIdx_(10));
     assert!(!set.contains(NodeIdx_(10)));
     assert!(set.contains(NodeIdx_(20)));

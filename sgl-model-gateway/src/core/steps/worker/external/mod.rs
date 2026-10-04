@@ -1,4 +1,7 @@
 //! External worker registration steps for OpenAI-compatible API endpoints.
+//!
+//! These steps handle the discovery and creation of workers that connect to
+//! external API providers (OpenAI, Anthropic, etc.) via HTTP.
 
 mod create_workers;
 mod discover_models;
@@ -18,8 +21,10 @@ use crate::{
     protocols::worker_spec::WorkerConfigRequest,
 };
 
-/// Create external worker registration workflow definition. DAG structure
-/// with parallel execution opportunities: ```text
+/// Create external worker registration workflow definition.
+///
+/// DAG structure with parallel execution opportunities:
+/// ```text
 ///              discover_models
 ///                    │
 ///              create_workers
@@ -31,11 +36,13 @@ use crate::{
 ///  update_policies         activate_workers
 ///       │                         │
 ///       └────────────┴────────────┘
+/// ```
 pub fn create_external_worker_workflow() -> WorkflowDefinition<ExternalWorkerWorkflowData> {
     WorkflowDefinition::new(
         "external_worker_registration",
         "External Worker Registration",
     )
+    // Step 1: Discover models from /v1/models endpoint
     .add_step(
         StepDefinition::new(
             "discover_models",
@@ -52,6 +59,7 @@ pub fn create_external_worker_workflow() -> WorkflowDefinition<ExternalWorkerWor
         .with_timeout(Duration::from_secs(30))
         .with_failure_action(FailureAction::FailWorkflow),
     )
+    // Step 2: Create workers for each model
     .add_step(
         StepDefinition::new(
             "create_workers",
@@ -62,6 +70,7 @@ pub fn create_external_worker_workflow() -> WorkflowDefinition<ExternalWorkerWor
         .with_failure_action(FailureAction::FailWorkflow)
         .depends_on(&["discover_models"]),
     )
+    // Step 3: Register workers (shared step)
     .add_step(
         StepDefinition::new(
             "register_workers",

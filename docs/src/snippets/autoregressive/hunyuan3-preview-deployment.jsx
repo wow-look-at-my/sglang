@@ -1,4 +1,6 @@
 export const Hunyuan3PreviewDeployment = () => {
+  // Hunyuan 3 Preview (~276B total / ~20B active MoE) — BF16 only.
+  // ~552GB weights; 80GB-class GPUs (A100/H100) cannot fit single-node.
   //   H200 (141GB): tp=8
   //   B200 (180GB): tp=8
   //   B300 (275GB): tp=4

@@ -1,4 +1,6 @@
-/***************************************************************************** */
+/******************************************************************************
+ * Copyright (c) 2023, Tri Dao.
+ ******************************************************************************/
 
 #pragma once
 
@@ -109,6 +111,7 @@ struct Flash_fwd_params : public Qkv_params {
   // uint16_t p_dropout_in_uint16_t;
   uint8_t p_dropout_in_uint8_t;
 
+  // Scale factor of 1 / (1 - p_dropout).
   float rp_dropout;
   float scale_softmax_rp_dropout;
 
@@ -119,14 +122,17 @@ struct Flash_fwd_params : public Qkv_params {
   // Random state.
   at::PhiloxCudaState philox_args;
 
+  // Pointer to the RNG seed (idx 0) and offset (idx 1).
   uint64_t* rng_state;
 
   bool is_bf16;
   bool is_causal;
 
+  // If is_seqlens_k_cumulative, then seqlen_k is cu_seqlens_k[bidb + 1] - cu_seqlens_k[bidb].
   // Otherwise it's cu_seqlens_k[bidb], i.e., we use cu_seqlens_k to store the sequence lengths of K.
   bool is_seqlens_k_cumulative;
 
+  // If is_seqlens_v_cumulative, then seqlen_v is cu_seqlens_v[bidb + 1] - cu_seqlens_v[bidb].
   // Otherwise it's cu_seqlens_v[bidb], i.e., we use cu_seqlens_v to store the sequence lengths of V.
   bool is_seqlens_v_cumulative;
 
@@ -138,7 +144,7 @@ struct Flash_fwd_params : public Qkv_params {
   index_t alibi_slopes_batch_stride;
 
   bool unpadded_lse;  // For varlen paths: LSE is in [nheads, total_seqlen_q] format instead of [b, nheads, seqlen_q].
-  bool seqlenq_ngroups_swapped;
+  bool seqlenq_ngroups_swapped;  // q has been transposed from (b, 1, (nheads_kv ngroups), d) to (b, ngroups, nheads_kv,
                                  // d).
 };
 

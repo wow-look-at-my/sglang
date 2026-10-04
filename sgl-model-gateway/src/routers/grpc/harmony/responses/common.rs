@@ -20,7 +20,9 @@ use crate::{
     routers::{error, grpc::common::responses::ResponsesContext},
 };
 
-/// Record of a single MCP tool call execution Stores metadata needed to build mcp_call output items.
+/// Record of a single MCP tool call execution
+///
+/// Stores metadata needed to build mcp_call output items for Responses API format
 #[derive(Debug, Clone)]
 pub(super) struct McpCallRecord {
     /// Tool call ID (stored for potential future use, currently generate new IDs)
@@ -38,7 +40,10 @@ pub(super) struct McpCallRecord {
     pub error: Option<String>,
 }
 
-/// Tracking structure for MCP tool calls across iterations Accumulates all MCP tool call metadata during multi-turn conversation.
+/// Tracking structure for MCP tool calls across iterations
+///
+/// Accumulates all MCP tool call metadata during multi-turn conversation
+/// so we can build proper mcp_list_tools and mcp_call output items.
 #[derive(Debug, Clone)]
 pub(super) struct McpCallTracking {
     /// MCP server label (e.g., "sglang-mcp")
@@ -95,8 +100,10 @@ pub(super) fn build_mcp_tool_names_set(
 
 /// Build next request with tool results appended to history
 ///
-/// Constructs a new ResponsesRequest with.
-/// Tool result messages for each tool execution
+/// Constructs a new ResponsesRequest with:
+/// 1. Original input items (preserved)
+/// 2. Assistant message with analysis (reasoning) + partial_text + tool_calls
+/// 3. Tool result messages for each tool execution
 pub(super) fn build_next_request_with_tools(
     mut request: ResponsesRequest,
     tool_calls: Vec<ToolCall>,
@@ -117,7 +124,8 @@ pub(super) fn build_next_request_with_tools(
         }
     };
 
-    // Build assistant response item with reasoning + content + tool calls This represents what the model generated.
+    // Build assistant response item with reasoning + content + tool calls
+    // This represents what the model generated in this iteration
     let assistant_id = format!("msg_{}", Uuid::new_v4());
 
     // Add reasoning if present (from analysis channel)
@@ -190,7 +198,9 @@ pub(super) fn build_next_request_with_tools(
     // Update request with new items
     request.input = ResponseInput::Items(items);
 
-    // Switch tool_choice to "auto" for subsequent iterations This prevents infinite loops when original tool_choice was "required".
+    // Switch tool_choice to "auto" for subsequent iterations
+    // This prevents infinite loops when original tool_choice was "required" or specific function
+    // After receiving tool results, the model should be free to decide whether to call more tools or finish
     request.tool_choice = Some(ToolChoice::Value(ToolChoiceValue::Auto));
 
     Ok(request)
@@ -199,7 +209,9 @@ pub(super) fn build_next_request_with_tools(
 /// Inject MCP metadata into final response
 ///
 /// Adds mcp_list_tools and mcp_call output items to the response output array.
-/// Append all mcp_call items at the end
+/// Following non-Harmony pipeline pattern:
+/// 1. Prepend mcp_list_tools at the beginning
+/// 2. Append all mcp_call items at the end
 pub(super) fn inject_mcp_metadata(
     response: &mut ResponsesResponse,
     tracking: &McpCallTracking,
@@ -246,7 +258,8 @@ pub(super) fn inject_mcp_metadata(
         })
         .collect();
 
-    // Prepend mcp_list_tools at the beginning
+    // Inject into response output:
+    // 1. Prepend mcp_list_tools at the beginning
     response.output.insert(0, mcp_list_tools);
 
     // 2. Append all mcp_call items at the end

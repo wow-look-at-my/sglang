@@ -25,7 +25,10 @@ on:
     - cron: '0 12 * * *'
 
 concurrency:
-  # A PR number if a pull request and otherwise the commit hash. This cancels queued and in-progress runs for the same PR (presubmit) or commit (postsubmit). The workflow name is prepended to avoid conflicts between different workflows.
+  # A PR number if a pull request and otherwise the commit hash. This cancels
+  # queued and in-progress runs for the same PR (presubmit) or commit
+  # (postsubmit). The workflow name is prepended to avoid conflicts between
+  # different workflows.
   group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
   cancel-in-progress: True
 
@@ -111,7 +114,10 @@ jobs:
           docker build . -f docker/rocm.Dockerfile --build-arg SGL_BRANCH=${{ github.ref_name }} --build-arg BUILD_TYPE=${{ matrix.build_type }} --build-arg GPU_ARCH=${{ matrix.gpu_arch }} --build-arg ENABLE_MORI=1 --build-arg ENABLE_NIXL=1 --build-arg SETUPTOOLS_SCM_PRETEND_VERSION=${pretend_version} --build-arg UBUNTU_MIRROR=https://archive.ubuntu.com -t rocm/sgl-dev:${tag}-${{ env.DATE }} --no-cache
           docker push rocm/sgl-dev:${tag}-${{ env.DATE }}
 
-      # Persist the tag right after rocm/sgl-dev push succeeds so the local registry mirror can run even if a later step in this job (lmsys push) fails. By default this step only runs when the previous step succeeded, so the artifact only exists when an image actually landed on Docker Hub.
+      # Persist the tag right after rocm/sgl-dev push succeeds so the local
+      # registry mirror can run even if a later step in this job (lmsys push)
+      # fails. By default this step only runs when the previous step succeeded,
+      # so the artifact only exists when an image actually landed on Docker Hub.
       - name: Save published image tag
         run: |
           mkdir -p image-tag
@@ -135,7 +141,13 @@ jobs:
           docker tag rocm/sgl-dev:${{ env.IMAGE_TAG }} lmsysorg/sglang-rocm:${{ env.IMAGE_TAG }}
           docker push lmsysorg/sglang-rocm:${{ env.IMAGE_TAG }}
 
-  # Mirror the freshly published rocm/sgl-dev image to the in-network Docker registry so AMD CI runners can pull without hitting Docker Hub rate limits. The tag is read verbatim from the publish job's artifact so this job uses exactly the same tag that publish pushed (only the registry prefix differs). `!cancelled()` lets us still mirror successful matrix legs when other legs of publish failed; legs without an artifact will fail at download and be the only ones marked red.
+  # Mirror the freshly published rocm/sgl-dev image to the in-network Docker
+  # registry so AMD CI runners can pull without hitting Docker Hub rate limits.
+  # The tag is read verbatim from the publish job's artifact so this job uses
+  # exactly the same tag that publish pushed (only the registry prefix differs).
+  # `!cancelled()` lets us still mirror successful matrix legs when other legs
+  # of publish failed; legs without an artifact will fail at download and be
+  # the only ones marked red.
   push_local_registry:
     if: github.repository == 'sgl-project/sglang' && (false)
     runs-on: linux-mi300-1gpu-sglang

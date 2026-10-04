@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # Bootstrap a kind cluster for sgl-router K8s integration E2E tests.
+#
+# Prerequisites: Docker, kind, kubectl
+#
+# Usage:
+#   ./tests/e2e/k8s_integration/setup.sh           # full setup
+#   ./tests/e2e/k8s_integration/setup.sh teardown  # delete the cluster
 
 set -euo pipefail
 
@@ -28,6 +34,9 @@ if [[ "${1:-}" == "teardown" ]]; then
     exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# Step 1: Create kind cluster (idempotent)
+# ---------------------------------------------------------------------------
 if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
     log "Kind cluster '${CLUSTER_NAME}' already exists — reusing."
 else
@@ -37,6 +46,9 @@ fi
 
 kubectl config use-context "${CONTEXT}"
 
+# ---------------------------------------------------------------------------
+# Step 2: Build Docker images (unless SKIP_DOCKER_BUILD=1)
+# ---------------------------------------------------------------------------
 if [[ "${SKIP_DOCKER_BUILD:-}" == "1" ]]; then
     log "SKIP_DOCKER_BUILD=1 — skipping docker build; expecting images to exist locally."
     for img in sgl-router:e2e sgl-router-fake-worker:e2e; do
@@ -59,14 +71,25 @@ else
         "${SCRIPT_DIR}"
 fi
 
+# ---------------------------------------------------------------------------
+# Step 3: Load images into kind
+# ---------------------------------------------------------------------------
 log "Loading images into kind cluster '${CLUSTER_NAME}'..."
 kind load docker-image sgl-router:e2e --name "${CLUSTER_NAME}"
 kind load docker-image sgl-router-fake-worker:e2e --name "${CLUSTER_NAME}"
 
+# ---------------------------------------------------------------------------
+# Step 4: Apply namespace and RBAC
+# ---------------------------------------------------------------------------
 log "Applying namespace and RBAC..."
 kubectl --context "${CONTEXT}" apply -f "${MANIFESTS_DIR}/namespace.yaml"
 kubectl --context "${CONTEXT}" apply -f "${MANIFESTS_DIR}/rbac.yaml"
 
+# ---------------------------------------------------------------------------
+# Step 5: Deploy 3 fake-worker replicas behind a Service
+#         The Service causes K8s to auto-create an EndpointSlice, which
+#         the sgl-router K8s discovery backend watches.
+# ---------------------------------------------------------------------------
 log "Deploying fake-worker Deployment + Service (3 replicas, app=sglang)..."
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" apply -f - <<EOF
 apiVersion: apps/v1
@@ -117,13 +140,20 @@ EOF
 log "Waiting for fake-worker rollout..."
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/fake-worker --timeout=120s
 
+# ---------------------------------------------------------------------------
+# Step 6: Deploy sgl-router. It is configured entirely via CLI flags in
+#         router.yaml — k8s EndpointSlice discovery watches `app=sglang`
+#         pods in the sgl-router-test namespace (where fake-worker lives).
+# ---------------------------------------------------------------------------
 log "Deploying sgl-router..."
 kubectl --context "${CONTEXT}" apply -f "${MANIFESTS_DIR}/router.yaml"
 
 log "Waiting for sgl-router rollout..."
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/sgl-router --timeout=300s
 
-# --------------------------------------------------------------------------- Done.
+# ---------------------------------------------------------------------------
+# Done
+# ---------------------------------------------------------------------------
 log ""
 log "Setup complete! Run the integration tests with:"
 log "  pytest tests/e2e/k8s_integration/ -v -s"

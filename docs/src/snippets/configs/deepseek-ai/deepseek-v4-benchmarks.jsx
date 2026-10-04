@@ -183,6 +183,8 @@ export const benchmarks = [
     ],
   },
   {
+    // At conc 4096 the engine is saturated (running at its max batch), so extra requests
+    // queue — the high TTFT is queue wait, not compute; throughput is at its ceiling here.
     match: { hw: "b300", variant: "pro", quant: "fp4", strategy: "high-throughput", nodes: "single" },
     sglang_version: "0.5.15.post1",
     speed: [
@@ -216,7 +218,8 @@ export const benchmarks = [
     ],
   },
   // ====================================================================
-  // GB200 + FP4.
+  // GB200 + FP4
+  // ====================================================================
   {
     match: { hw: "gb200", variant: "flash", quant: "fp4", strategy: "low-latency", nodes: "single" },
   },
@@ -364,10 +367,22 @@ export const benchmarks = [
         ttft_ms: 761128, tpot_ms: 188.23, tokens_per_sec_per_gpu: 2787 },
     ],
   },
+  // ====================================================================
+  // GB300 + FP4 — Pro Official (0813)
   //
-  // Each strategy carries its lowest and highest measured concurrency.
-  // TTFT/TPOT are bench_serving means, hence the per-entry latencyPercentile
-  // override.
+  // 4xGB300, random 8192/1024 with --random-range-ratio 1.0 (a true fixed
+  // length; the 0.0 default samples uniformly and averages ~5100 in), 64 warmup
+  // requests, cache flushed per point. Each strategy carries its lowest and
+  // highest measured concurrency. TTFT/TPOT are bench_serving means, hence the
+  // per-entry latencyPercentile override. Accuracy is GSM8K via sgl-eval, 1319
+  // examples at temperature 0.
+  //
+  // NOTE: the low-latency speed rows were measured with SGLANG_SIMULATE_ACC_LEN=4,
+  // which pins the DSpark accept length at exactly 4.00. The shipped recipe earns
+  // 4.678 on the same engine, so these rows are a slightly conservative stand-in
+  // for that cell rather than a direct run of the command above. Accuracy for that
+  // cell IS from the shipped command. Re-measure when convenient.
+  // ====================================================================
   {
     match: { hw: "gb300", variant: "pro-official", quant: "fp4", strategy: "low-latency", nodes: "single" },
     sglang_version: "main @ 273d978bed",
@@ -543,6 +558,10 @@ export const benchmarks = [
     ],
   },
   {
+    // Capacity-bound on 8xH200 for the 1.6T model: KV fits only ~15 concurrent requests, so
+    // tok/s/GPU is pinned (~535-572) from conc 64 through the ht conc-4096 cell and the excess
+    // concurrency just queues — P50 TTFT climbs to ~46s here and minutes at higher conc. The
+    // throughput numbers are real but reflect that ceiling, not linear scaling.
     match: { hw: "h200", variant: "pro", quant: "fp4", strategy: "balanced", nodes: "single" },
     sglang_version: "0.5.15.post1",
     speed: [
@@ -604,7 +623,8 @@ export const benchmarks = [
   {
     match: { hw: "h100", variant: "pro", quant: "fp4", strategy: "high-throughput", nodes: "multi-2" },
   },
-  // ==================================================================== MI300X + FP8 (Flash)
+  // ====================================================================
+  // MI300X + FP8 (Flash)
   { match: { hw: "mi300x", variant: "flash", quant: "fp8", strategy: "low-latency", nodes: "single" } },
   { match: { hw: "mi300x", variant: "flash", quant: "fp8", strategy: "balanced", nodes: "single" } },
   { match: { hw: "mi300x", variant: "flash", quant: "fp8", strategy: "high-throughput", nodes: "single" } },

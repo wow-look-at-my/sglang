@@ -1,24 +1,61 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Process-shared KV-cache block size, sourced from the workers.
+//!
+//! # Why an oracle instead of a config field?
+//!
+//! `compute_block_hashes` must hash with the **same** block size the
+//! worker uses to publish KV-cache events; otherwise every cache-aware
+//! lookup misses silently. The worker advertises its `page_size` via
+//! `/server_info` (parsed into [`crate::state::kv_events::EventConfig::block_size`]).
+//! Dynamo's design treats `kv_cache_block_size` as a property of the
+//! `ModelDeploymentCard` populated by the worker registrar (see
+//! `~/dynamo/components/src/dynamo/sglang/register.py`); a mismatch
+//! across workers for the same model is rejected loudly
+//! (`lib/kv-router/src/standalone_indexer/registry.rs::bail!`). The
+//! oracle here is the sgl-router analog — first worker establishes the
+//! value, mismatches are refused.
+//!
+//! # Single oracle vs per-model
+//!
+//! For now the oracle is process-wide. Realistic deployments use one
+//! `page_size` across the cluster, so a single value suffices and
+//! mismatches across models indicate misconfiguration the operator
+//! should see. A per-model oracle would require threading `ModelId`
+//! through `KvEventIndex::add_worker`; that refactor can land later
+//! without changing the oracle's public surface.
 
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
-/// Tri-state for the bigram flag: distinguishes "not yet reported" from an established `false`.
+/// Tri-state for the bigram flag: distinguishes "not yet reported" from an
+/// established `false`, so [`BlockSizeOracle::set_bigram`] can be first-wins
+/// (matching `try_set`) rather than last-writer-wins.
 const BIGRAM_UNKNOWN: u8 = 0;
 const BIGRAM_UNIGRAM: u8 = 1;
 const BIGRAM_BIGRAM: u8 = 2;
 
-/// First-wins, idempotent block-size publisher. Internally an `AtomicU32` where means "not yet known".
+/// First-wins, idempotent block-size publisher.
+///
+/// Internally an `AtomicU32` where 0 means "not yet known". Use
+/// [`Self::try_set`] to publish a worker-reported value and
+/// [`Self::get`] to read at routing time.
+///
+/// Also carries a `bigram` flag — EAGLE-family workers hash KV blocks over
+/// token bigrams, so the policy must pick the bigram hasher. Like `value` it
+/// is a per-cluster property (all workers run the same model) and is
+/// established first-wins with a loud warning on disagreement, mirroring
+/// `try_set` — a heterogeneous EAGLE/non-EAGLE cluster would otherwise let the
+/// last registrant silently flip the global hashing mode.
 #[derive(Debug, Default)]
 pub struct BlockSizeOracle {
     value: AtomicU32,
     bigram: AtomicU8,
 }
 
-/// Returned by [`BlockSizeOracle::try_set`] when the candidate disagrees with the already-established value.
+/// Returned by [`BlockSizeOracle::try_set`] when the candidate disagrees
+/// with the already-established value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockSizeMismatch {
     pub established: u32,
@@ -43,7 +80,7 @@ impl BlockSizeOracle {
 
     /// Publish whether the cluster's workers use bigram (EAGLE-family) KV-block
     /// hashing. Called from `KvEventIndex::add_worker` alongside `try_set`.
-    /// First-wins: the first worker establishes the mode.
+    /// First-wins: the first worker establishes the mode; a later worker that
     /// disagrees is logged (not silently honored), since the query-hashing mode
     /// is process-wide and one mismatched worker would zero out cache-aware
     /// routing for the cluster.
@@ -75,7 +112,8 @@ impl BlockSizeOracle {
     }
 
     /// Whether query hashing should use the bigram variant
-    /// ([`super::hash::compute_block_hashes_bigram`]).
+    /// ([`super::hash::compute_block_hashes_bigram`]). Defaults to `false`
+    /// until a worker reports an EAGLE-family `speculative_algorithm`.
     pub fn is_bigram(&self) -> bool {
         self.bigram.load(Ordering::Relaxed) == BIGRAM_BIGRAM
     }
@@ -84,6 +122,7 @@ impl BlockSizeOracle {
     /// success (idempotent: same candidate as already set is `Ok`);
     /// returns `Err(BlockSizeMismatch)` when the candidate disagrees.
     ///
+    /// `candidate == 0` is rejected because 0 is reserved as the "not
     /// yet known" sentinel.
     pub fn try_set(&self, candidate: u32) -> Result<u32, BlockSizeMismatch> {
         if candidate == 0 {

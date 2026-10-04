@@ -5,7 +5,7 @@
 
 namespace {
 
-// packed layout:
+// packed   layout:
 //   quants {N, K}  int8_t
 //   comp   {N}     int32_t
 template <int BLOCK_N>
@@ -35,6 +35,8 @@ inline void s8s8_compensation(int8_t* __restrict__ packed, int K) {
 #endif
 }
 
+// convert to vnni format
+// from [N, K] to [K/2, N, 2] for bfloat16 and float16
 template <typename packed_t>
 inline void pack_vnni(packed_t* __restrict__ packed, const packed_t* __restrict__ weight, int N, int K) {
   const int VNNI_BLK = 2;
@@ -65,6 +67,10 @@ inline void pack_vnni<int8_t>(int8_t* __restrict__ packed, const int8_t* __restr
 
 // uint8_t: mxfp4 or int4
 // pack to vnni2 format as they are computed with bfloat16
+//
+// from [N, K'/2, 2] to [K'/2, N, 2], view 2x int4 as unit8:
+// from [N,    K   ] to [K,    N   ] where K = K'/2
+//
 template <>
 inline void pack_vnni<uint8_t>(uint8_t* __restrict__ packed, const uint8_t* __restrict__ weight, int N, int K) {
   constexpr int BLOCK_N = block_size_n();
@@ -73,6 +79,7 @@ inline void pack_vnni<uint8_t>(uint8_t* __restrict__ packed, const uint8_t* __re
 
   // 32-way pack (align with BLOCK_N), faster for avx512 unpacking
   //
+  // for a range of (64):
   //   {0, 1, 2, ..., 63}
   //
   // original format:
@@ -80,12 +87,13 @@ inline void pack_vnni<uint8_t>(uint8_t* __restrict__ packed, const uint8_t* __re
   //
   // packed format:
   //   {32|0, 31|1, ..., 63|31}
+  //
   for (int k = 0; k < K; ++k) {
     // unpack first
     for (int n = 0; n < N; ++n) {
       uint8_t value = weight[n * K + k];
-      unpacked[n * 2 + 0] = value & 0xF;  // lower a few
-      unpacked[n * 2 + 1] = value >> 4;   // higher a few
+      unpacked[n * 2 + 0] = value & 0xF;  // lower 4 bits
+      unpacked[n * 2 + 1] = value >> 4;   // higher 4 bits
     }
     // re-pack to 32-way
     for (int n = 0; n < N; ++n) {
@@ -227,7 +235,7 @@ struct tinygemm_kernel_nn<at::BFloat16, has_bias, BLOCK_M, BLOCK_N> {
 
     const int64_t K2 = K >> 1;
     const int64_t lda2 = lda >> 1;
-    const int64_t ldb2 = ldb;
+    const int64_t ldb2 = ldb;  // ldb * 2 >> 1;
     const float* a_ptr = reinterpret_cast<const float*>(A);
     const float* b_ptr = reinterpret_cast<const float*>(B);
 
@@ -253,6 +261,8 @@ struct tinygemm_kernel_nn<at::BFloat16, has_bias, BLOCK_M, BLOCK_N> {
     auto storec = [&](auto i) {
       constexpr int row = i / COLS;
       constexpr int col = i % COLS;
+      // for COLS = 2, 4 use 512bit store
+      // for COLS = 1, 3 use 256bit store
       if constexpr (COLS % 2 == 0) {
         if constexpr (col % 2 == 0) {
           _mm512_storeu_si512(
@@ -341,6 +351,7 @@ void tinygemm_kernel(
     return;
   }
 
+  // pattern: 1-4-16, N = 16, 32, 48, 64
   constexpr int64_t BLOCK_M = 4;
   constexpr int64_t BLOCK_N = 64;
   const int64_t MB = div_up(M, BLOCK_M);
@@ -620,13 +631,14 @@ at::Tensor convert_weight_packed(at::Tensor& weight) {
   // mxfp4 or int4 are packed with uint8
   const int64_t actual_IC = st == at::kByte ? IC * 2 : IC;
 
-  // we handle TILE_N at a time.
+  // we handle 2 TILE_N at a time.
   TORCH_CHECK(OC % TILE_N == 0, "invalid weight out features ", OC);
   TORCH_CHECK(actual_IC % TILE_K == 0, "invalid weight input features ", actual_IC);
 
   constexpr int64_t BLOCK_N = block_size_n();
   const int64_t NB = div_up(OC, BLOCK_N);
 
+  // use phony sizes here [E, OC, IC], for each [E], [OC, IC] -> [IC / 2, OC, 2]
   auto packed_weight = at::empty({}, weight.options());
   const int64_t stride = OC * IC;
 
@@ -701,8 +713,11 @@ at::Tensor convert_scale_packed(at::Tensor& scale) {
   return packed_scale;
 }
 
-// mat1 : [*, K] mat2 : [N, K] ([K, N] if
-// use_fma_gemm) bias : [N] out : [*, N]
+// mat1 : [*, K]
+// mat2 : [N, K] ([K, N] if use_fma_gemm)
+// bias : [N]
+// out  : [*, N]
+//
 at::Tensor
 weight_packed_linear(at::Tensor& mat1, at::Tensor& mat2, const std::optional<at::Tensor>& bias, bool is_vnni) {
   auto packed_w = is_vnni ? mat2 : convert_weight_packed(mat2);
@@ -769,6 +784,12 @@ weight_packed_linear(at::Tensor& mat1, at::Tensor& mat2, const std::optional<at:
   return out.view(input_sizes);
 }
 
+// mat1         : [M, K]
+// mat2         : [K, 1]
+// post_mul_mat : [M, K]
+// bias         : [N]
+// out          : [M, N]
+//
 at::Tensor fused_linear_sigmoid_mul(
     at::Tensor& mat1,
     at::Tensor& mat2,

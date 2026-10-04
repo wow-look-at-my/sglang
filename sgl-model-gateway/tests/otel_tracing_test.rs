@@ -166,6 +166,7 @@ async fn test_router_with_tracing() {
     );
     println!("Logging initialized with OTEL layer");
 
+    // 5. Create a span and sleep for a while
     let _span = info_span!(target: "smg::otel-trace", "test_router_with_tracing");
     tokio::time::sleep(Duration::from_secs(1)).await;
     drop(_span);
@@ -265,12 +266,24 @@ async fn test_router_with_tracing() {
     println!("Cleanup completed");
 }
 
-// ============================================================================ gRPC Trace Context Injection Tests.
+// ============================================================================
+// gRPC Trace Context Injection Tests
+// ============================================================================
 
-/// Comprehensive test for gRPC trace context injection. This test validates:.
+/// Comprehensive test for gRPC trace context injection.
+///
+/// This test validates:
+/// 1. W3C trace context headers are properly injected into gRPC metadata
+/// 2. traceparent format is correct (version-traceid-spanid-flags)
+/// 3. All metadata keys are lowercase (gRPC requirement)
+///
+/// Note: This test handles the case where OTEL may already be initialized
+/// by a previous test (since tests run sequentially with #[serial]).
 #[tokio::test]
 #[serial]
 async fn test_grpc_trace_context_injection() {
+    // 1. Start the OTLP collector (needed even if OTEL is already initialized,
+    //    as a target for any spans that might be exported)
     let port = pick_unused_port().expect("Failed to pick unused port");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let _collector = start_collector(port, shutdown_rx)
@@ -278,6 +291,9 @@ async fn test_grpc_trace_context_injection() {
         .expect("Failed to start collector");
     let collector_endpoint = format!("0.0.0.0:{}", port);
 
+    // 2. Initialize OTEL if not already enabled
+    // Note: otel_tracing_init will fail if already initialized (OnceLock),
+    // but that's fine - we just need OTEL to be enabled
     let already_enabled = otel_trace::is_otel_enabled();
     if !already_enabled {
         let init_result = otel_trace::otel_tracing_init(true, Some(&collector_endpoint));
@@ -307,12 +323,14 @@ async fn test_grpc_trace_context_injection() {
         // Inject trace context
         otel_trace::inject_trace_context_grpc(&mut metadata);
 
+        // === Test 1: Verify traceparent header was injected ===
         let traceparent = metadata.get("traceparent");
         assert!(
             traceparent.is_some(),
             "traceparent header should be present in gRPC metadata"
         );
 
+        // === Test 2: Verify traceparent format (version-traceid-spanid-flags) ===
         let traceparent_value = traceparent.unwrap().to_str().unwrap();
         let parts: Vec<&str> = traceparent_value.split('-').collect();
         assert_eq!(
@@ -326,6 +344,7 @@ async fn test_grpc_trace_context_injection() {
 
         println!("Successfully injected traceparent: {}", traceparent_value);
 
+        // === Test 3: Verify all keys are lowercase (gRPC metadata requirement) ===
         for key_and_value in metadata.iter() {
             match key_and_value {
                 tonic::metadata::KeyAndValueRef::Ascii(key, _) => {
@@ -352,7 +371,8 @@ async fn test_grpc_trace_context_injection() {
         println!("All gRPC metadata keys are lowercase as required");
     });
 
-    // Cleanup - don't shutdown OTEL since tests share global state (OnceLock) and other tests may need.
+    // Cleanup - don't shutdown OTEL since tests share global state (OnceLock)
+    // and other tests may need to use the already-initialized OTEL
     let _ = shutdown_tx.send(());
 
     println!("test_grpc_trace_context_injection: All assertions passed!");
