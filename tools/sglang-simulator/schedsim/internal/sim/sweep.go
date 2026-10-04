@@ -132,7 +132,7 @@ type SweepRow struct {
 
 // RunSweep measures every variant. The seeds are the sweep's own, typically fewer
 // than a scenario's, since the point is the direction of each perturbation.
-func RunSweep(base Cost, linear trace.PrefillCost, seeds []int64, aSeed int64, workers int) []SweepRow {
+func RunSweep(base Cost, linear trace.PrefillCost, ep *Episode, seeds []int64, aSeed int64, workers int) []SweepRow {
 	variants := SweepVariants(linear)
 	rows := make([]SweepRow, len(variants))
 	var jobs []func()
@@ -161,11 +161,11 @@ func RunSweep(base Cost, linear trace.PrefillCost, seeds []int64, aSeed int64, w
 				}
 				rows[i].B[mi] = Pool(runs, sc.Window)
 			}
-			if v.SkipA {
+			if v.SkipA || ep == nil {
 				return
 			}
 			rows[i].SweptA = true
-			asc := ScenarioA()
+			asc := ScenarioA(*ep)
 			asc.Seeds = []int64{aSeed}
 			for mi, mode := range Modes {
 				cfg := DefaultConfig(mode, cost)

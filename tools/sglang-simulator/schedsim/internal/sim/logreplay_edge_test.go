@@ -18,7 +18,7 @@ func bootOf(t *testing.T, l *tracetest.Log) *trace.Boot {
 }
 
 func TestBuildLogReplayErrors(t *testing.T) {
-	bare, _ := trace.ParseBoots(trace.EmbeddedLog)
+	bare, _ := trace.ParseBoots(tracetest.Incident(tracetest.DefaultIncident).String())
 	if _, err := BuildLogReplay(&bare[0], 4096, 0, 0); err == nil || !strings.Contains(err.Error(), "no timestamps") {
 		t.Errorf("bare boot: %v", err)
 	}

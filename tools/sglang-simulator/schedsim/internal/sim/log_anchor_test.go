@@ -20,7 +20,7 @@ import (
 // budget, the cede's half-chunk rule and which prefix the pool reports for the
 // follow-up, so it fails if any of those drift.
 func TestReplayReproducesTheLoggedBatch(t *testing.T) {
-	sc := ScenarioA()
+	sc := ScenarioA(testEpisode())
 	cost := NewCost(calib(t))
 	res := Run(sc, DefaultConfig(ModeOld, cost), sc.Seeds[0])
 
@@ -93,7 +93,7 @@ func TestOldRunsNoDecodeDuringTheColdPrefills(t *testing.T) {
 		chunks++
 	}
 
-	sc := ScenarioA()
+	sc := ScenarioA(testEpisode())
 	cost := NewCost(calib(t))
 	res := Run(sc, DefaultConfig(ModeOld, cost), sc.Seeds[0])
 	c1 := FindTag(res, "C1")
@@ -163,7 +163,7 @@ func TestDecodeRateMatchesTheLog(t *testing.T) {
 // also covers the suite's own aggregation.
 func TestRunIsDeterministic(t *testing.T) {
 	cost := NewCost(calib(t))
-	scs := []Scenario{ScenarioA(), ScenarioB(5), ScenarioThrash(1.5, 600)}
+	scs := []Scenario{ScenarioA(testEpisode()), ScenarioB(5), ScenarioThrash(1.5, 600)}
 	var first []byte
 	for _, workers := range []int{1, 4} {
 		var buf bytes.Buffer
@@ -185,9 +185,5 @@ func calib(t *testing.T) trace.Calibration {
 
 func mustSteps(t *testing.T) []trace.Step {
 	t.Helper()
-	steps, err := trace.Parse(trace.EmbeddedLog)
-	if err != nil {
-		t.Fatalf("parsing the embedded log: %v", err)
-	}
-	return steps
+	return incidentSteps()
 }

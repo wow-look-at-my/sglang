@@ -18,12 +18,8 @@ import (
 // the token budget divide -- are unchanged; only the wall clock each prefill
 // batch occupies moves, by the factor itself.
 func TestCostScaleMovesTheReportedMetrics(t *testing.T) {
-	steps, err := trace.Parse(trace.EmbeddedLog)
-	if err != nil {
-		t.Fatalf("parse embedded log: %v", err)
-	}
-	cal := trace.Calibrate(steps, BaselineChunkSize, 64)
-	sc := ScenarioA()
+	cal := trace.Calibrate(mustSteps(t), BaselineChunkSize, 64)
+	sc := ScenarioA(testEpisode())
 
 	var ttft, stall, stallOld []float64
 	for _, k := range []float64{0.5, 1, 2} {

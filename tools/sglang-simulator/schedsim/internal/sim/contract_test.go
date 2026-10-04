@@ -14,12 +14,8 @@ import (
 // The suite is expensive enough to run once per test binary: every scenario, every
 // policy, every seed. The tests below then read it rather than re-simulating.
 var suiteOnce = sync.OnceValue(func() map[string]Row {
-	steps, err := trace.Parse(trace.EmbeddedLog)
-	if err != nil {
-		panic("embedded log: " + err.Error())
-	}
-	cal := trace.Calibrate(steps, BaselineChunkSize, 64)
-	rows := RunSuite(BaseScenarios(), NewCost(cal), DefaultConfig, 0)
+	cal := trace.Calibrate(incidentSteps(), BaselineChunkSize, 64)
+	rows := RunSuite(BaseScenarios(testEpisodePtr()), NewCost(cal), DefaultConfig, 0)
 	out := map[string]Row{}
 	for _, r := range rows {
 		out[r.Scenario.Key] = r
@@ -39,7 +35,7 @@ func suite(t *testing.T) map[string]Row {
 // test then checks instead of the win.
 func TestContractEveryScenarioEveryMetric(t *testing.T) {
 	rows := suite(t)
-	for _, sc := range BaseScenarios() {
+	for _, sc := range BaseScenarios(testEpisodePtr()) {
 		sc := sc
 		t.Run(sc.Name, func(t *testing.T) {
 			r, ok := rows[sc.Key]

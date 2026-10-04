@@ -39,7 +39,7 @@ func TestEveryBoundNamesACommittedDerivation(t *testing.T) {
 // and a document no name returns is an argument nothing reads.
 func TestBoundTableAndDocumentsCoverEachOther(t *testing.T) {
 	claimed := map[string]bool{}
-	for _, sc := range BaseScenarios() {
+	for _, sc := range BaseScenarios(testEpisodePtr()) {
 		for _, opp := range []string{"OLD", "PREV"} {
 			for _, k := range ContractMetrics {
 				if name := boundName(sc, k, opp); name != "" {

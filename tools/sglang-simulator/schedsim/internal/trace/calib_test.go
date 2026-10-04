@@ -7,11 +7,7 @@ import (
 
 func cal(t *testing.T) Calibration {
 	t.Helper()
-	steps, err := Parse(EmbeddedLog)
-	if err != nil {
-		t.Fatalf("parse embedded log: %v", err)
-	}
-	c := Calibrate(steps, 4096, 64)
+	c := Calibrate(mustParse(t), 4096, 64)
 	if c.Prefill.Samples < 10 {
 		t.Fatalf("prefill fit has %d samples, want a logged cold run", c.Prefill.Samples)
 	}
@@ -23,15 +19,30 @@ func cal(t *testing.T) Calibration {
 // linear form must be visibly worse on it. If a future log makes the quadratic
 // unnecessary this test is the place that gets argued.
 func TestPrefillFitPredictsTheHeldOutRun(t *testing.T) {
-	steps, err := Parse(EmbeddedLog)
-	if err != nil {
-		t.Fatalf("parse embedded log: %v", err)
-	}
+	steps := mustParse(t)
 	runs := ColdRuns(steps, 4096)
 	if len(runs) < 2 {
 		t.Fatalf("the log must carry two isolated cold runs to fit and hold out, found %d", len(runs))
 	}
 	c := cal(t)
+	if c.Prefill.Samples != incident.C1Chunks-1 || c.Prefill.HoldoutSamples != incident.R3Chunks-1 {
+		t.Errorf("fit on %d chunks with %d held out, want C1's %d and R3's %d past their first",
+			c.Prefill.Samples, c.Prefill.HoldoutSamples, incident.C1Chunks-1, incident.R3Chunks-1)
+	}
+	// The log's chunks were priced by a known quadratic, so the fit recovers it.
+	want := incident.Model
+	for _, f := range []struct {
+		name      string
+		got, want float64
+	}{
+		{"per token", c.Prefill.PerToken, want.PerToken},
+		{"per token-ctx", c.Prefill.PerTokenCtx, want.PerTokenCtx},
+		{"per token-ctx^2", c.Prefill.PerTokenCtxSq, want.PerTokenCtxSq},
+	} {
+		if math.Abs(f.got-f.want) > 0.01*f.want {
+			t.Errorf("fitted %s %.4g, the log was priced at %.4g", f.name, f.got, f.want)
+		}
+	}
 	if c.Prefill.RMSEHoldout > 0.03 {
 		t.Errorf("holdout relative RMSE %.4f, want under 3%%", c.Prefill.RMSEHoldout)
 	}
@@ -118,13 +129,10 @@ func TestScaledCostIsExactProportional(t *testing.T) {
 // is, so their ratios must agree. A spread means the capacity was read off a
 // line that does not describe the whole pool.
 func TestDevicePoolRatioIsConsistentAcrossLines(t *testing.T) {
-	steps, err := Parse(EmbeddedLog)
-	if err != nil {
-		t.Fatalf("parse embedded log: %v", err)
-	}
+	steps := mustParse(t)
 	capacity := DevicePoolTokens(steps)
-	if capacity < 1<<20 {
-		t.Fatalf("device pool %d tokens, want at least a million", capacity)
+	if pool := incident.Model.Pool; math.Abs(float64(capacity-pool)) > 0.01*float64(pool) {
+		t.Fatalf("device pool %d tokens, the log's lines were printed against %d", capacity, pool)
 	}
 	var n int
 	for _, s := range steps {
@@ -145,10 +153,7 @@ func TestDevicePoolRatioIsConsistentAcrossLines(t *testing.T) {
 // The decode base term is solved from the steady single-stream lines at their
 // own context, so the model must reproduce those lines' step times.
 func TestDecodeModelReproducesSteadyLines(t *testing.T) {
-	steps, err := Parse(EmbeddedLog)
-	if err != nil {
-		t.Fatalf("parse embedded log: %v", err)
-	}
+	steps := mustParse(t)
 	c := cal(t)
 	if c.Decode.Samples < 10 {
 		t.Fatalf("only %d steady decode lines to fit", c.Decode.Samples)

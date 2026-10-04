@@ -4,71 +4,16 @@
 package trace
 
 import (
-	"bytes"
-	"compress/gzip"
-	_ "embed"
 	"fmt"
-	"io"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
-// EmbeddedLog is the operator log the simulation is driven by, kept byte for
-// byte as received so every timing in the report traces back to a measured line.
-//
-//go:embed live_log.txt
-var EmbeddedLog string
-
-// embeddedLog2Gz is a second, larger operator log corpus (28 hours, 11 process
-// boots), stored gzip-compressed because it is far too big to keep as plain
-// text in the module. It carries the production timestamped format (an
-// "<RFC3339Nano> <worker> <LEVEL> " prefix before the bare "TP<n>] ..." body
-// live_log.txt uses), plus server_args boot headers, boot-ending signals, HTTP
-// completion lines and Triton JIT-compile lines that live_log.txt does not.
-//
-//go:embed live_log2.txt.gz
-var embeddedLog2Gz []byte
-
-var (
-	log2Once sync.Once
-	log2Text string
-	log2Err  error
-)
-
-// Log2 is the decompressed second corpus. Decompression happens once, on first
-// use, and is cached: most tests and callers never touch it, so nothing pays
-// for a megabyte-plus gunzip unless it is actually needed.
-func Log2() string {
-	log2Once.Do(func() {
-		r, err := gzip.NewReader(bytes.NewReader(embeddedLog2Gz))
-		if err != nil {
-			log2Err = err
-			return
-		}
-		defer r.Close()
-		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, r); err != nil {
-			log2Err = err
-			return
-		}
-		log2Text = buf.String()
-	})
-	if log2Err != nil {
-		panic("trace: decompress live_log2.txt.gz: " + log2Err.Error())
-	}
-	return log2Text
-}
-
-// DecodeLogInterval is the number of decode iterations between decode stat
-// lines (--decode-log-interval, default 40). A decode line therefore aggregates
-// 40 decode steps, and its gen throughput is tokens over that whole window:
-// absence of decode lines bounds decode steps, it does not report zero.
 const DecodeLogInterval = 40
 
-// Kind distinguishes the two batch classes the scheduler alternates between.
+// Kind distinguishes both batch classes the scheduler alternates between.
 type Kind int
 
 const (
@@ -104,9 +49,7 @@ type Step struct {
 	At time.Time
 	// Worker is the process id the line carries in the production format.
 	Worker string
-	// Rank is the tensor-parallel rank that printed the line. Only rank 0
-	// prints batch lines in a healthy deployment; Parse keeps rank 0 only, so
-	// a log where every rank printed them is not counted twice.
+	// Rank is the tensor-parallel rank that printed the line.
 	Rank int
 }
 
@@ -116,8 +59,7 @@ type Step struct {
 var kindRe = regexp.MustCompile(`^(?:(\d{4}-\d\d-\d\dT\S+) (\S+) (\S+) )?TP(\d+)\] (Prefill|Decode) batch,`)
 
 // Parse reads every scheduler step line out of a log, ignoring the HTTP request
-// lines interleaved with them. Both line formats are accepted (see kindRe);
-// only rank 0's batch lines are kept.
+// lines interleaved with them.
 func Parse(log string) ([]Step, error) {
 	var steps []Step
 	for i, raw := range strings.Split(log, "\n") {
@@ -285,9 +227,9 @@ type Metrics struct {
 	DecodeStepToks float64 // median speculative tokens accepted per decode step
 	RunningDecode  int     // running requests on the last decode step before the stretch
 
-	// LowGenLines counts pre-collapse decode lines reporting under 100 tok/s and
-	// LowGenNearPrefill how many of those sit within a line or two of a prefill
-	// line, which is the signature of a log window that swallowed a chunk.
+	// LowGenLines counts pre-collapse decode lines reporting a bounded number of
+	// tok/s and LowGenNearPrefill how many of those sit within a line or some of
+	// a prefill line, which is the signature of a log window that swallowed a chunk.
 	LowGenLines       int
 	LowGenNearPrefill int
 }
@@ -437,9 +379,6 @@ func Summarize(steps []Step, chunkSize int) Metrics {
 	}
 	m.BaselineGenTP = median(baseline)
 	m.MinGenTP = minOf(minGen)
-	// The log's own interval is 40, so at most 39 decode steps fit in the cold
-	// window without a line, an order of magnitude under the thousands a healthy
-	// schedule would run there.
 	for i, s := range steps {
 		if s.Kind != Decode || s.Throughput >= 100 {
 			continue
@@ -491,8 +430,6 @@ func StepSeconds(s Step) float64 {
 // Seconds is StepSeconds as a method.
 func (s Step) Seconds() float64 { return StepSeconds(s) }
 
-// StepGap is the wall-clock seconds between two timestamped steps, which the
-// production format supports and the bare format does not (ok=false then).
 func StepGap(prev, cur Step) (float64, bool) {
 	if prev.At.IsZero() || cur.At.IsZero() {
 		return 0, false

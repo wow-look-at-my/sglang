@@ -2,7 +2,6 @@ package trace
 
 import (
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -178,36 +177,6 @@ func TestCalibrateBootsWithoutARun(t *testing.T) {
 	if s := rep.String(); !strings.Contains(s, "1 holdout run(s)") || !strings.Contains(s, "wall clock over") {
 		t.Errorf("report string = %s", s)
 	}
-}
-
-func TestLog2DecompressionFailurePanics(t *testing.T) {
-	saved := embeddedLog2Gz
-	defer func() {
-		embeddedLog2Gz, log2Err, log2Text = saved, nil, ""
-		log2Once = sync.Once{}
-	}()
-	embeddedLog2Gz = []byte("not gzip")
-	log2Once = sync.Once{}
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("no panic on a corrupt corpus")
-			}
-		}()
-		Log2()
-	}()
-	// A valid header with a truncated body fails in the copy, not the open.
-	full := saved
-	embeddedLog2Gz, log2Err = full[:len(full)/2], nil
-	log2Once = sync.Once{}
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("no panic on a truncated corpus")
-			}
-		}()
-		Log2()
-	}()
 }
 
 func TestMetricsGuardsAndStepHelpers(t *testing.T) {

@@ -222,7 +222,7 @@ func TestITLP99BandFollowsTheMixedShare(t *testing.T) {
 func TestDeliveryClassShareTable(t *testing.T) {
 	cost := ScenarioCost()
 	for _, sc := range []Scenario{
-		ScenarioA(), ScenarioC(2, 16), ScenarioC(0.5, 16),
+		ScenarioA(testEpisode()), ScenarioC(2, 16), ScenarioC(0.5, 16),
 		ScenarioD(400000), ScenarioD(100000), ScenarioThrash(4, 600), ScenarioThrash(4, 1800),
 	} {
 		for _, mode := range Modes {

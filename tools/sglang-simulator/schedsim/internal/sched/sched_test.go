@@ -4,17 +4,18 @@ import (
 	"testing"
 
 	"schedsim/internal/trace"
+	"schedsim/internal/trace/tracetest"
 )
 
 func workload(t *testing.T) (Workload, trace.Metrics) {
 	t.Helper()
-	steps, err := trace.Parse(trace.EmbeddedLog)
+	steps, err := trace.Parse(tracetest.Incident(tracetest.DefaultIncident).String())
 	if err != nil {
-		t.Fatalf("parse embedded log: %v", err)
+		t.Fatalf("parse incident log: %v", err)
 	}
 	m := trace.Summarize(steps, 4096)
 	if m.ColdStart < 0 {
-		t.Fatal("no cold prefill stretch in the embedded log")
+		t.Fatal("no cold prefill stretch in the incident log")
 	}
 	return WorkloadFromLog(steps, m, 4096), m
 }

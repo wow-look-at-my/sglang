@@ -3,9 +3,8 @@
 //
 // Usage:
 //
-//	go run ./cmd/schedsim                 # embedded log at internal/trace/live_log.txt
-//	go run ./cmd/schedsim -log FILE       # a different log, bare or production format
-//	go run ./cmd/schedsim -chunk-size 2048 -prefill-share 0.5
+//	go run ./cmd/schedsim -log FILE       # a serving log, bare or production format
+//	go run ./cmd/schedsim -log FILE -chunk-size 2048 -prefill-share 0.5
 //	go run ./cmd/schedsim -log FILE -replay-boots 4 -replay-seconds 0
 //
 // A production log (timestamped lines, several boots) adds three sections:
@@ -39,7 +38,7 @@ func main() {
 func run(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("schedsim", flag.ContinueOnError)
 	fs.SetOutput(w)
-	logPath := fs.String("log", "", "log to read (default: the embedded live serving log)")
+	logPath := fs.String("log", "", "serving log to read, bare or production format (required)")
 	chunkSize := fs.Int("chunk-size", 4096, "tokens per cold-prefill chunk to look for")
 	prefillShare := fs.Float64("prefill-share", 0.5, "prefill's share of contended GPU time under the time-balance policy")
 	sweep := fs.Bool("sweep", true, "print the fixed-interval sensitivity table")
@@ -51,14 +50,14 @@ func run(args []string, w io.Writer) error {
 		return err
 	}
 
-	logName, text := "internal/trace/live_log.txt (embedded)", trace.EmbeddedLog
-	if *logPath != "" {
-		b, err := os.ReadFile(*logPath)
-		if err != nil {
-			return fmt.Errorf("read log: %w", err)
-		}
-		logName, text = *logPath, string(b)
+	if *logPath == "" {
+		return fmt.Errorf("-log FILE is required: the serving log to calibrate and replay")
 	}
+	b, err := os.ReadFile(*logPath)
+	if err != nil {
+		return fmt.Errorf("read log: %w", err)
+	}
+	logName, text := *logPath, string(b)
 
 	boots, err := trace.ParseBoots(text)
 	if err != nil {
@@ -74,9 +73,6 @@ func run(args []string, w io.Writer) error {
 	metrics := boots[anchor].Summarize(*chunkSize)
 	work := sched.WorkloadFromLog(steps, metrics, *chunkSize)
 	var incident *report.Incident
-	if *logPath == "" {
-		incident = report.EmbeddedIncident
-	}
 	pageSize := PageSize
 	if boots[anchor].ArgsKnown && boots[anchor].Args.PageSize > 0 {
 		pageSize = boots[anchor].Args.PageSize
