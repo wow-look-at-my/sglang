@@ -36,6 +36,14 @@ on:
         description: 'Artifact of prebuilt Rust extension modules, from rust-ext-build. Empty, or a download that fails, falls back to the cache; a miss there compiles during install.'
         type: string
         default: ''
+      sched_policy_handoff:
+        description: 'cache-upload name of the sched-policy build/ (Fork CI sched-policy-build). The install step fails when it is empty or missing.'
+        type: string
+        default: ''
+      goipc_handoff:
+        description: 'cache-upload name of libgoipc.so (Fork CI sched-policy-build). The install step fails when it is empty or missing.'
+        type: string
+        default: ''
 
 # Reusable workflows do NOT inherit the caller's workflow-level env across the
 # workflow_call boundary, so pr-test.yml's env is redeclared here -- minus the
@@ -91,9 +99,6 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      # This stage compiled the workspace too - 7+ minutes per partition on
-      # billable hosted minutes. rust-ext-build's modules need an older glibc than
-      # this runner has, which is the safe direction, and both pin Python 3.10.
       - uses: ./.github/actions/download-rust-ext
         id: rust_ext
         with:
@@ -151,6 +156,20 @@ jobs:
           URL="https://raw.githubusercontent.com/sgl-project/sglang-ci-stats/${{ fromJson(inputs.check_changes).partition_model_sha }}/model.json"
           curl --fail --silent --show-error --max-time 15 --retry 3 --retry-delay 2 \
             "$URL" -o /tmp/partition-model.json
+
+      # Every scheduler spawns the Go policy process and reaches it over goipc.
+      - uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ${{ inputs.sched_policy_handoff }}
+          path: ${{ runner.temp }}/sched-policy
+
+      - uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ${{ inputs.goipc_handoff }}
+          path: ${{ runner.temp }}/libgoipc
+
+      - name: Install the policy process and libgoipc
+        run: bash scripts/ci/utils/install_sched_policy_runtime.sh install "${{ runner.temp }}/sched-policy" "${{ runner.temp }}/libgoipc"
 
       - name: Run test
         timeout-minutes: ${{ fromJson(inputs.run_timeout_minutes) }}

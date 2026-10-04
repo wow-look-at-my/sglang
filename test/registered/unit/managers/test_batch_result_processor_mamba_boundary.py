@@ -109,6 +109,7 @@ class TestMambaBoundaryMaskReuse(unittest.TestCase):
                 scheduler._apply_war_barrier = MagicMock()
                 scheduler.is_generation = False
                 scheduler.last_batch = None
+                scheduler.event_loop_ct = 0
 
                 plan_count = 0
 

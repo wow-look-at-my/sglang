@@ -84,27 +84,21 @@ class TestEvictionThrottlePrefixMatch(unittest.TestCase):
         import torch
 
         from sglang.srt.managers import scheduler as scheduler_module
-        from sglang.srt.managers.scheduler_components.eviction_throttle import (
-            EvictionThrottle,
-        )
 
-        throttle = EvictionThrottle(
-            device_tokens=1000,
-            host_tokens=0,
-            prefill_seconds_per_token=lambda: 1.0,
-            clock=lambda: 0.0,
-        )
-        # Another live conversation already holds most of the pool.
-        throttle.on_request_queued(rid="other", token_ids=list(range(10000, 10900)))
+        seen = {}
+
+        def should_hold(**kwargs):
+            seen.update(kwargs)
+            return False
+
         req = SimpleNamespace(
             rid="returning",
             origin_input_ids=list(range(700)),
             prefix_indices=torch.empty((0,), dtype=torch.int64),
             time_stats=SimpleNamespace(wait_queue_entry_time=0.0),
         )
-        throttle.on_request_queued(rid=req.rid, token_ids=req.origin_input_ids)
         scheduler = Scheduler.__new__(Scheduler)
-        scheduler.eviction_throttle = throttle
+        scheduler.eviction_throttle = SimpleNamespace(should_hold=should_hold)
         scheduler.waiting_queue = [req]
         scheduler.tree_cache = object()
         scheduler.policy = SimpleNamespace(waiting_queue_prefix_matched=lambda q: False)
@@ -123,6 +117,8 @@ class TestEvictionThrottlePrefixMatch(unittest.TestCase):
             verdict = scheduler._eviction_throttle_holds(adder, req)
 
         self.assertIsNotNone(verdict, "a resident conversation was held back")
+        self.assertEqual(seen["device_hit"], 600)
+        self.assertEqual(seen["input_len"], 700)
 
 
 if __name__ == "__main__":

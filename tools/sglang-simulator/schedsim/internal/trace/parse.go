@@ -223,7 +223,6 @@ type Metrics struct {
 	DecodeStepToks float64 // median speculative tokens accepted per decode step
 	RunningDecode  int     // running requests on the last decode step before the stretch
 
-	// LowGenLines counts pre-collapse decode lines reporting a bounded number of tok/s and LowGenNearPrefill how many.
 	LowGenLines       int
 	LowGenNearPrefill int
 }

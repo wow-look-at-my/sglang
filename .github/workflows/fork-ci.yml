@@ -1,6 +1,6 @@
 name: Fork CI
 
-# CI for forks of sgl-project/sglang, on GitHub-hosted runners only. Upstream workflows build on self-hosted pools (x64-kernel-build-node, x64-docker-build-node, GPU runners) and publish with Docker Hub / PyPI secrets that a fork does not have. Every job of those workflows, *-finish aggregators included, starts its `if:` with github.repository == 'sgl-project/sglang', so on a fork they all report skipped. This workflow is the fork's replacement and skips upstream. A new upstream-only job needs the same guard; hosted, secret-free workflows (lint, pr-test-rust-exts, ci-model-inventory, ...) run everywhere unguarded. every push      : CPU unit suite (base-a-test-cpu) + sglang wheel + model gateway (fmt, clippy, cargo test, sglang-router wheel, Go bindings build + go test) AOT kernel diff : sglang-kernel CUDA 13 wheel for x86_64, compiled only for FORK_KERNEL_CUDA_ARCHS (default 80;120a: sm80-sm89 and RTX PRO 6000 Blackwell), checked against the ops this tree calls default branch  : kernel wheels as release sglang-kernel-v<version>, and the serving image (docker/Dockerfile, framework_final) on ghcr.io. Optional repository variables (Settings > Variables) for bigger machines: FORK_KERNEL_RUNNER_X64                              runner label. FORK_KERNEL_CUDA_ARCHS                              GPU archs, e.g. "90a;120a" FORK_KERNEL_BUILD_JOBS / FORK_KERNEL_NVCC_THREADS   build parallelism
+# CI for forks of sgl-project/sglang, on GitHub-hosted runners only. Upstream workflows build on self-hosted pools (x64-kernel-build-node, x64-docker-build-node, GPU runners) and publish with Docker Hub / PyPI secrets that a fork does not have. Every job of those workflows, *-finish aggregators included, starts its `if:` with github.repository == 'sgl-project/sglang', so on a fork they all report skipped. This workflow is the fork's replacement and skips upstream.
 
 on:
   push:
@@ -62,7 +62,7 @@ jobs:
           fi
           CHANGED="unknown"
           if [ -n "$BASE" ]; then
-            # The compare API lists at most 300 files; treat a full page as unknown.
+            # The compare API lists a bounded number of files; treat a full page as unknown.
             if FILES=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE}...${GITHUB_SHA}" --jq '.files[].filename'); then
               [ "$(printf '%s\n' "$FILES" | grep -c .)" -lt 300 ] && CHANGED="$FILES"
             fi
@@ -139,9 +139,35 @@ jobs:
       runs_on: ubuntu-22.04
       artifact_name: fork-rust-ext-x86_64
 
+  sched-policy-build:
+    needs: fork-plan
+    permissions:
+      id-token: write
+      contents: write
+      actions: read
+      checks: read
+      deployments: write
+      artifact-metadata: write
+    runs-on: ubuntu-latest
+    outputs:
+      policy_handoff: go-build-sched-policy-build.btools-sched-policy
+      goipc_handoff: sched-policy-libgoipc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/go-toolchain@master
+        with:
+          working-directory: tools/sched-policy
+      - name: Build libgoipc
+        run: bash scripts/ci/utils/install_sched_policy_runtime.sh build-goipc "${{ runner.temp }}/libgoipc"
+      - uses: wow-look-at-my/actions@cache-upload#latest
+        with:
+          name: sched-policy-libgoipc
+          path: ${{ runner.temp }}/libgoipc
+
   base-a-test-cpu:
-    needs: [fork-check-changes, fork-rust-ext-build]
-    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' }}
+    needs: [fork-check-changes, fork-rust-ext-build, sched-policy-build]
+    permissions: {actions: read, contents: write, issues: read, pull-requests: read, id-token: write}
+    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' && needs.sched-policy-build.result == 'success' }}
     uses: ./.github/workflows/_pr-test-stage-cpu.yml
     with:
       self_name: base-a-test-cpu
@@ -150,6 +176,20 @@ jobs:
       partitions: ${{ needs.fork-check-changes.outputs.partitions }}
       run_timeout_minutes: '30'
       rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
+      sched_policy_handoff: ${{ needs.sched-policy-build.outputs.policy_handoff }}
+      goipc_handoff: ${{ needs.sched-policy-build.outputs.goipc_handoff }}
+
+  simulator-test-cpu:
+    needs: [fork-check-changes, fork-rust-ext-build, sched-policy-build]
+    permissions: {actions: read, contents: write, issues: read, pull-requests: read, id-token: write}
+    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' && needs.sched-policy-build.result == 'success' }}
+    uses: ./.github/workflows/_pr-test-simulator-cpu.yml
+    with:
+      check_changes: ${{ toJson(needs.fork-check-changes.outputs) }}
+      caller_inputs: '{"skip_pr_test_health_check": true}'
+      rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
+      sched_policy_handoff: ${{ needs.sched-policy-build.outputs.policy_handoff }}
+      goipc_handoff: ${{ needs.sched-policy-build.outputs.goipc_handoff }}
 
   # ------------------------------------------------------ constructor order Fails when an __init__ step reads a self field before an earlier step sets it, or when a method creates a field the constructor never initializes.
   fork-init-order-check:
@@ -212,7 +252,7 @@ jobs:
           path: python/dist/*.whl
           if-no-files-found: error
 
-  # ----------------------------------------------------------- model gateway. Upstream builds and tests sgl-model-gateway in pr-test-rust.yml, guarded to sgl-project/sglang. The toolchain comes from sgl-model-gateway/rust-toolchain.toml.
+  # ----------------------------------------------------------- model gateway Upstream builds and tests sgl-model-gateway in pr-test-rust.yml, guarded to sgl-project/sglang. The toolchain comes from sgl-model-gateway/rust-toolchain.toml.
   fork-gateway-test:
     needs: fork-plan
     runs-on: ubuntu-latest
@@ -256,7 +296,7 @@ jobs:
         with:
           go-version-file: tools/sglang-simulator/schedsim/go.mod
 
-      # The simulator is the proof artifact for scheduler changes, so its tests gate a push the same way the gateway's do. The log replay code (trace layer, log workload, report, command) must stay at 95% statement coverage; scripts/coverage.sh prints the per-file table.
+      # The simulator is the proof artifact for scheduler changes, so its tests gate a push the same way the gateway's do.
       - name: scheduler simulator tests
         working-directory: tools/sglang-simulator/schedsim
         run: scripts/coverage.sh
@@ -269,7 +309,6 @@ jobs:
         with:
           tool: just
 
-      # The visual simulator ships its compiled sim.js beside sim.ts so the page opens from a file:// URL; this rebuilds it, runs the headless comparison and the unit tests (engine, balancer, pool and the page against a fake DOM) under c8's 95% line threshold, and fails if the committed sim.js is stale.
       - name: visual simulator
         working-directory: tools/sglang-simulator/schedsim/web
         run: |
@@ -278,7 +317,7 @@ jobs:
           just test
           git diff --exit-code -- sim.js
 
-      # The NPU precise-test selector's git fallback (used when the GitHub. API is down) is covered by its own pytest suite.
+      # The NPU precise-test selector's git fallback (used when the GitHub API is down) is covered by its own pytest suite.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -352,7 +391,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: sgl-model-gateway/bindings/golang/go.mod
-          # Two modules sit under this path (the bindings and examples/oai_server) and the action keys its cache on one go.sum.
+          # Modules sit under this path (the bindings and examples/oai_server) and the action keys its cache on one go.sum.
           cache: false
 
       - name: Install Rust, protoc and system deps
@@ -368,7 +407,7 @@ jobs:
           shared-key: fork-gateway-golang
           cache-on-failure: true
 
-      # No pre-commit hook covers Go, so this is the only thing holding the two trees this fork adds to the formatting the rest of them already uses.
+      # No pre-commit hook covers Go, so this is the only thing holding both trees this fork adds to the formatting the rest of them already uses.
       - name: gofmt
         working-directory: .
         run: test -z "$(gofmt -l sgl-model-gateway/bindings/golang tools/sglang-simulator/schedsim)"
@@ -437,7 +476,6 @@ jobs:
           key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}-${{ github.run_id }}
           restore-keys: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}-
 
-      # Two CUTLASS GEMM compiles at once exceed a 16 GB runner's RAM.
       - name: Add swap
         if: steps.wheel_cache.outputs.cache-hit != 'true'
         run: |
@@ -455,7 +493,6 @@ jobs:
           USE_CCACHE: 1
           # Empty lets build.sh size jobs to cores and RAM + swap.
           BUILD_JOBS: ${{ vars.FORK_KERNEL_BUILD_JOBS || '' }}
-          # Each nvcc thread compiles one arch of a translation unit at up to 10 GB.
           NVCC_THREADS: ${{ vars.FORK_KERNEL_NVCC_THREADS || '1' }}
           CMAKE_ARGS: -DSGL_KERNEL_CUDA_ARCHS=${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}
         run: |
@@ -550,7 +587,7 @@ jobs:
             echo "$NAME already published; keeping it"
           done
 
-  # ------------------------------------------------------------ serving image. Built for the fork's deployment only: x86_64, CUDA 13, FORK_KERNEL_CUDA_ARCHS (default 80;120a), served with sglang.launch_server, so the image leaves out the sm90-only hpc-ops kernels and the sgl-model-gateway router. Publishes only a tree that passed the constructor-order check and the CPU suite.
+  # Publishes only a tree that passed the constructor-order check and the CPU suite.
   fork-docker-image:
     needs: [fork-plan, fork-sgl-kernel-wheel, fork-init-order-check, base-a-test-cpu]
     if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' && needs.fork-init-order-check.result == 'success' && needs.base-a-test-cpu.result == 'success' }}
@@ -609,6 +646,13 @@ jobs:
           df -h / /mnt || true
 
       - uses: actions/checkout@v4
+
+      # The Dockerfile runs go-toolchain, an APE, which the build container can only exec through the host's handler.
+      - name: Register the APE binfmt handler
+        run: |
+          curl -fsSL --retry 3 -o "${{ runner.temp }}/register-ape-binfmt.sh" \
+            https://raw.githubusercontent.com/wow-look-at-my/go-toolchain/master/.github/scripts/register-ape-binfmt.sh
+          bash "${{ runner.temp }}/register-ape-binfmt.sh"
 
       - uses: actions/download-artifact@v4
         continue-on-error: true
