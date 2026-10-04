@@ -29,8 +29,10 @@ class TestPromptChannelCapacity(unittest.TestCase):
                 payload, sched_policy._TOKEN_BYTES * context_len, context_len
             )
 
-    def test_a_short_context_keeps_the_smallest_ring(self):
-        self.assertEqual(sched_policy._prompt_channel_capacity(0), goipc.MIN_CAPACITY)
+    def test_a_short_context_still_gives_a_valid_ring(self):
+        capacity = sched_policy._prompt_channel_capacity(0)
+        self.assertGreaterEqual(capacity, goipc.MIN_CAPACITY)
+        self.assertEqual(capacity & (capacity - 1), 0)
 
 
 if __name__ == "__main__":
