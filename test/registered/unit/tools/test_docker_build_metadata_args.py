@@ -207,7 +207,11 @@ class TestPruneCubins(unittest.TestCase):
                 path.write_bytes(b"x")
             args = ["sh", str(PRUNE_CUBINS_PATH), root, archs]
             subprocess.run(args + (["--modules"] if modules else []), check=True)
-            return {p.parent.name if modules else p.name for p in Path(root).rglob("*") if p.is_file()}
+            return {
+                p.parent.name if modules else p.name
+                for p in Path(root).rglob("*")
+                if p.is_file()
+            }
 
     def test_jit_cache_modules_follow_their_directory_tag(self):
         kept = self.prune(
