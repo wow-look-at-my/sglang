@@ -181,7 +181,7 @@ jobs:
       coverage_artifact: engine-coverage
 
   fork-engine-coverage:
-    needs: [fork-check-changes, base-a-test-cpu, simulator-test-cpu]
+    needs: [fork-check-changes, base-a-test-cpu, simulator-test-cpu, base-a-test-npu]
     if: ${{ !cancelled() && needs.base-a-test-cpu.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -215,9 +215,9 @@ jobs:
           RC="$GITHUB_WORKSPACE/.ci-tooling/scripts/ci/utils/engine-coverage.toml"
           shopt -s nullglob dotglob
           PARTS=("${{ runner.temp }}"/engine-coverage/*/.coverage)
-          EXPECTED=$(( ${{ fromJson(needs.fork-check-changes.outputs.partitions)['base-a-test-cpu'].size }} + ${{ needs.simulator-test-cpu.result != 'skipped' && 1 || 0 }} ))
+          EXPECTED=$(( ${{ fromJson(needs.fork-check-changes.outputs.partitions)['base-a-test-cpu'].size }} + ${{ needs.simulator-test-cpu.result != 'skipped' && 1 || 0 }} + ${{ needs.base-a-test-npu.result != 'skipped' && 1 || 0 }} ))
           if [ "${#PARTS[@]}" -ne "$EXPECTED" ]; then
-            echo "::error::expected ${EXPECTED} coverage files (base-a-test-cpu partitions plus simulator-test-cpu when it ran), found ${#PARTS[@]}"
+            echo "::error::expected ${EXPECTED} coverage files (base-a-test-cpu partitions, plus simulator-test-cpu and base-a-test-npu when they ran), found ${#PARTS[@]}"
             exit 1
           fi
           mkdir -p "$GITHUB_WORKSPACE/.coverage-engine"
@@ -244,6 +244,82 @@ jobs:
       sched_policy_handoff: ${{ needs.sched-policy-build.outputs.policy_handoff }}
       goipc_handoff: ${{ needs.sched-policy-build.outputs.goipc_handoff }}
       coverage_artifact: engine-coverage-simulator
+
+  # pr-test-npu.yml's hosted stage-A suite: the NPU attention-backend unit tests stub out torch_npu and sgl_kernel_npu, so a CPU runner runs them.
+  base-a-test-npu:
+    needs: [fork-check-changes, sched-policy-build]
+    permissions: {actions: read, contents: read, id-token: write}
+    if: ${{ !cancelled() && needs.fork-check-changes.result == 'success' && needs.fork-check-changes.outputs.main_package == 'true' && needs.sched-policy-build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SGLANG_IS_IN_CI: true
+    steps:
+      - name: Checkout the code under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.sha }}
+
+      - name: Checkout CI scripts
+        uses: actions/checkout@v4
+        with:
+          path: .ci-tooling
+          sparse-checkout: scripts/ci/utils
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: 'python/pyproject_npu.toml'
+
+      - name: Install dependencies
+        timeout-minutes: 30
+        env:
+          UV_SYSTEM_PYTHON: "1"
+        run: |
+          rm -f python/pyproject.toml
+          mv python/pyproject_npu.toml python/pyproject.toml
+          uv pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 triton \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --extra-index-url https://pypi.org/simple/ \
+            --index-strategy unsafe-best-match
+          uv pip install -e "python[dev_npu]" "coverage>=7.10" --index-strategy unsafe-best-match
+
+      - uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ${{ needs.sched-policy-build.outputs.policy_handoff }}
+          path: ${{ runner.temp }}/sched-policy
+
+      - uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ${{ needs.sched-policy-build.outputs.goipc_handoff }}
+          path: ${{ runner.temp }}/libgoipc
+
+      - name: Install the policy process and libgoipc
+        run: bash .ci-tooling/scripts/ci/utils/install_sched_policy_runtime.sh install "${{ runner.temp }}/sched-policy" "${{ runner.temp }}/libgoipc"
+
+      - name: Run NPU unit tests
+        timeout-minutes: 10
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.coverage-engine"
+          cd test
+          python3 -m coverage run --rcfile="$GITHUB_WORKSPACE/.ci-tooling/scripts/ci/utils/engine-coverage.toml" run_suite.py --hw npu --suite base-a-test-npu
+
+      - name: Combine coverage
+        if: ${{ !cancelled() }}
+        run: python3 -m coverage combine --rcfile="$GITHUB_WORKSPACE/.ci-tooling/scripts/ci/utils/engine-coverage.toml"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: engine-coverage-npu
+          path: .coverage-engine/.coverage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
 
   # ------------------------------------------------------ constructor order Fails when an __init__ step reads a self field before an earlier step sets it, or when a method creates a field the constructor never initializes.
   fork-init-order-check:
