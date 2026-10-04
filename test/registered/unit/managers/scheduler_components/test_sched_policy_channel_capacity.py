@@ -10,9 +10,23 @@ import unittest
 import goipc
 
 from sglang.srt.managers.scheduler_components import sched_policy
+from sglang.srt.managers.scheduler_components import sched_policy_messages as msg
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=5, suite="base-a-test-cpu")
+
+# More tokens than a service channel of go-ipc's default size carries.
+_PROMPT_TOKENS = 1 << 17
+
+
+# The policy process answers Hello with HelloOk and every other request with Ack.
+def _answer(session, type_, payload):
+    if type_ == msg.Hello.TYPE_ID:
+        return (
+            msg.HelloOk.TYPE_ID,
+            msg.HelloOk(protocol=sched_policy.PROTOCOL_VERSION).encode(),
+        )
+    return msg.Ack.TYPE_ID, msg.Ack().encode()
 
 
 class TestPromptChannelCapacity(unittest.TestCase):
@@ -33,6 +47,36 @@ class TestPromptChannelCapacity(unittest.TestCase):
         capacity = sched_policy._prompt_channel_capacity(0)
         self.assertGreaterEqual(capacity, goipc.MIN_CAPACITY)
         self.assertEqual(capacity & (capacity - 1), 0)
+
+
+class TestPromptChannelCarriesThePrompt(unittest.TestCase):
+    """The shipped send path. A channel of go-ipc's default size rejects this prompt."""
+
+    def _serve(self):
+        name = sched_policy.new_name()
+        service = goipc.service.serve(name, _answer)
+        self.addCleanup(service.close)
+        return name
+
+    def test_the_policy_wrapper_sends_a_whole_prompt(self):
+        name = self._serve()
+        client = sched_policy.SchedPolicy(
+            name=name, rank=0, world=1, timeout=5.0, context_len=_PROMPT_TOKENS
+        )
+        self.addCleanup(client.close)
+        client.on_request_queued(rid="prompt", token_ids=range(_PROMPT_TOKENS))
+
+    def test_go_ipcs_default_channel_rejects_the_same_prompt(self):
+        name = self._serve()
+        client = goipc.service.connect(name, timeout=5.0, messages=msg.MESSAGES)
+        self.addCleanup(client.close)
+        request = msg.RequestQueued(
+            now=0.0,
+            rid="prompt",
+            tokens=sched_policy._tokens(range(_PROMPT_TOKENS)),
+        )
+        with self.assertRaises(goipc.MessageTooLarge):
+            client.call_typed(request)
 
 
 if __name__ == "__main__":
