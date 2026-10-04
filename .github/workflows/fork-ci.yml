@@ -165,7 +165,7 @@ jobs:
       check_changes: ${{ toJson(needs.fork-check-changes.outputs) }}
       caller_inputs: '{"skip_pr_test_health_check": true, "git_ref": "${{ inputs.git_ref }}"}'
       partitions: ${{ needs.fork-check-changes.outputs.partitions }}
-      run_timeout_minutes: '13'
+      run_timeout_minutes: '11'
       rust_ext_artifact: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
       sched_policy_handoff: ${{ needs.sched-policy-build.outputs.policy_handoff }}
       goipc_handoff: ${{ needs.sched-policy-build.outputs.goipc_handoff }}
