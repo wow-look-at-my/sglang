@@ -1,6 +1,6 @@
 # Replaying a serving log
 
-`go run ./cmd/schedsim -log FILE` accepts a production log as the server writes it. Every line carries an RFC3339 timestamp, the worker id and the level before the rank tag (`2026-09-27T00:15:24.123Z 5ylyr21v-rhkt6 INFO TP0] Prefill batch, ...`). One file holds every process lifetime of the deployment. The bare `TP0] ...` format of `internal/trace/live_log.txt` still parses. A second corpus, `internal/trace/live_log2.txt.gz`, is many hours of the Qwen3.8-Flash-Next deployment in the production format (boots, 49,477 batch lines). This drives the tests that cover this path.
+`go run ./cmd/schedsim -log FILE` accepts a production log as the server writes it. Every line carries an RFC3339 timestamp, the worker id and the level before the rank tag (`2026-09-27T00:15:24.123Z 5ylyr21v-rhkt6 INFO TP0] Prefill batch, ...`). One file holds every process lifetime of the deployment. The bare `TP0] ...` format, with no prefix, also parses. `-log` is required: the command reads no log of its own, and no serving log is kept in the repository. The tests generate their logs with `internal/trace/tracetest`.
 
 ## What the log gives that one incident could not
 

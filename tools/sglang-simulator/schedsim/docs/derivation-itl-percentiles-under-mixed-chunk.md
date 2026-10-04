@@ -2,7 +2,7 @@
 
 What each policy's inter-token latency can and cannot be compared on. The three-policy tables report `ITL p99` and `ITL p99.9` as contract metrics. NEW loses at least one of them to OLD and to PREV in most scenarios. This document names the measured quantities behind those cells and does the arithmetic. As a result, the assertions in `scenario_contract_test.go` are the ones the model supports and the unwinnable cells are not quietly dropped.
 
-Everything below is scenario B (closed-loop agent streams at 100K-250K context plus one cold 400K prompt on a fixed cadence), seeds `[1 2 3 4 5]`, window 900 s, cost model calibrated from the embedded production log (`internal/trace/live_log.txt`), chunk 4096, page 64. Drafts accepted to 2.76 tokens per step on average.
+Everything below is scenario B (closed-loop agent streams at 100K-250K context plus one cold 400K prompt on a fixed cadence), seeds `[1 2 3 4 5]`, window 900 s, cost model calibrated from the serving log passed with `-log` (in the tests, the incident `tracetest.Incident` generates), chunk 4096, page 64. Drafts accepted to 2.76 tokens per step on average.
 
 ## The quantities the arithmetic uses
 
