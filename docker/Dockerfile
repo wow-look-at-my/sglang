@@ -8,11 +8,22 @@ ARG GPU_ARCHS=
 ARG BUILD_JOBS=
 ARG INSTALL_GATEWAY=1
 
-# The toolkit packages of NVIDIA's -devel tag, on its -runtime tag. The -devel tag
-# also carries static archives that no build here links, the Nsight Compute GUI,
-# and a cuDNN that torch never loads (it uses the pip cuDNN). This stage leaves
-# them out, in the same layer that installs them.
-FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04 AS cuda_devel
+# The toolkit packages of NVIDIA's -devel tag, on its -base tag. The -runtime and -devel
+# layers also carry NPP, which nothing in this image links, static archives that no build
+# here links, the Nsight Compute GUI, and a cuDNN that torch never loads (it uses the pip
+# cuDNN). This stage leaves them out, in the same layer that installs them.
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04 AS cuda_runtime
+
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS cuda_devel
+# Package pins of the matching -runtime tag, which -base does not set.
+ENV NV_CUDA_LIB_VERSION=13.0.3-1 \
+    NV_LIBCUBLAS_VERSION=13.1.1.3-1 \
+    NV_LIBCUSPARSE_VERSION=12.6.3.3-1 \
+    NV_LIBNCCL_PACKAGE_VERSION=2.28.3-1 \
+    NCCL_VERSION=2.28.3-1 \
+    NVIDIA_PRODUCT_NAME=CUDA
+COPY --from=cuda_runtime /opt/nvidia /opt/nvidia
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cuda-command-line-tools-13-0=${NV_CUDA_LIB_VERSION} \
         cuda-cudart-dev-13-0=${NV_CUDA_CUDART_VERSION} \
@@ -23,8 +34,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcublas-dev-13-0=${NV_LIBCUBLAS_VERSION} \
         libcusparse-dev-13-0=${NV_LIBCUSPARSE_VERSION} \
         libnccl-dev=${NV_LIBNCCL_PACKAGE_VERSION}+cuda13.0 \
-        libnpp-dev-13-0=${NV_LIBNPP_VERSION} \
-    && apt-mark hold libcublas-dev-13-0 libnccl-dev \
+        libnccl2=${NV_LIBNCCL_PACKAGE_VERSION}+cuda13.0 \
+        libcublas-13-0=${NV_LIBCUBLAS_VERSION} \
+    && apt-mark hold libcublas-13-0 libcublas-dev-13-0 libnccl2 libnccl-dev \
+    # Purging NPP also drops the cuda-libraries-dev metapackage; the libraries it pulled stay, marked manual.
+    && apt-mark manual $(dpkg-query -W -f '${Package}\n' | grep -E '^(cuda-|libcu|libnv|libnccl)' | grep -v '^libnpp') \
+    && apt-get purge -y 'libnpp-*' \
+    && ! ls /usr/local/cuda-13.0/targets/*/lib/libnpp* 2>/dev/null \
     # nvcc links libcudart_static.a by default, so it stays.
     && find /usr/local/cuda-13.0 -name '*_static*.a' ! -name libcudart_static.a -delete \
     && rm -f /usr/lib/$(uname -m)-linux-gnu/libnccl_static.a \
