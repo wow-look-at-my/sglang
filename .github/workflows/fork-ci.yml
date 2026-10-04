@@ -71,7 +71,7 @@ jobs:
           touched() { [ "$CHANGED" = "unknown" ] || printf '%s\n' "$CHANGED" | grep -qE "$1"; }
 
           KERNEL_CHANGED=false
-          if [ -n "$BASE" ] && touched '^(python/sglang/kernels/aot/|\.github/workflows/fork-ci\.yml$)'; then
+          if [ -n "$BASE" ] && touched '^python/sglang/kernels/aot/'; then
             KERNEL_CHANGED=true
           fi
 
@@ -548,7 +548,6 @@ jobs:
       - name: Publish to release sglang-kernel-v${{ needs.fork-plan.outputs.kernel_version }}
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.fork-plan.outputs.kernel_version }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -557,13 +556,13 @@ jobs:
             echo "no sglang-kernel wheel was built" >&2
             exit 1
           fi
-          TAG="sglang-kernel-v${VERSION}"
+          TAG="sglang-kernel-v${{ needs.fork-plan.outputs.kernel_version }}"
           # Releases here are immutable once published, so a release is created
           # with its wheels in one call and never gets assets added later.
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" "${WHEELS[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "sglang-kernel ${VERSION}" \
-              --notes "sglang-kernel ${VERSION} built from ${GITHUB_SHA}. Install: pip install sglang-kernel==${VERSION} --find-links https://github.com/${GITHUB_REPOSITORY}/releases/expanded_assets/${TAG}"
+              --title "sglang-kernel ${{ needs.fork-plan.outputs.kernel_version }}" \
+              --notes "sglang-kernel ${{ needs.fork-plan.outputs.kernel_version }} built from ${GITHUB_SHA}. Install: pip install sglang-kernel==${{ needs.fork-plan.outputs.kernel_version }} --find-links https://github.com/${GITHUB_REPOSITORY}/releases/expanded_assets/${TAG}"
             exit 0
           fi
           EXISTING=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
@@ -755,12 +754,10 @@ jobs:
           password: ${{ github.token }}
 
       - name: Join the per-arch images under each tag
-        env:
-          IMAGE_TAGS: ${{ needs.fork-plan.outputs.image_tags }}
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang"
-          for TAG in $IMAGE_TAGS; do
+          for TAG in ${{ needs.fork-plan.outputs.image_tags }}; do
             SOURCES=()
             for SUFFIX in amd64; do
               if docker buildx imagetools inspect "${IMAGE}:${TAG}-${SUFFIX}" >/dev/null 2>&1; then
