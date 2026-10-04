@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// testTokenizerPath is llm-tokenizer's built-in testing tokenizer, selected by
-// path instead of by a fixture on disk, so these tests need no model files.
+// testTokenizerPath is llm-tokenizer's built-in testing tokenizer, selected by path instead of by a fixture on disk.
 const testTokenizerPath = "mock"
 
 // TestClientConfig tests ClientConfig validation

@@ -21,8 +21,7 @@ use smg::protocols::chat::ChatCompletionRequest;
 use smg::tokenizer::create_tokenizer_from_file;
 
 /// Tool constraint in the shape the Go caller unmarshals: an object keyed by
-/// constraint type, the key naming a `SamplingParams.constraint` oneof field of
-/// the SGLang gRPC proto (`regex`, `json_schema`, `ebnf_grammar`, `structural_tag`).
+/// constraint type.
 fn constraint_json(constraint_type: &str, constraint_value: &str) -> Value {
     serde_json::json!({ constraint_type: constraint_value })
 }
@@ -384,10 +383,7 @@ mod tests {
     use super::constraint_json;
     use std::collections::HashMap;
 
-    /// `internal/grpc/client_grpc.go` decodes this as `map[string]string` and
-    /// reads the constraint type back out as the map key, so any other shape --
-    /// a two-element array, a `{"type":..,"value":..}` object -- decodes to
-    /// nothing and the constraint is dropped before it reaches the wire.
+    /// `internal/grpc/client_grpc.go` decodes this as `map[string]string` and reads the constraint type back out as the map key.
     #[test]
     fn constraint_decodes_as_a_map_keyed_by_constraint_type() {
         let schema = r#"{"type":"object","properties":{"city":{"type":"string"}}}"#;

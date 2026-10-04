@@ -517,8 +517,7 @@ jobs:
 
       - name: Recommend tests for current PR
         env:
-          # test_selector.py falls back to `git diff base head` from this
-          # checkout when the GitHub API keeps answering 503.
+          # test_selector.py falls back to `git diff base head` from this checkout when the GitHub API keeps answering 503.
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
