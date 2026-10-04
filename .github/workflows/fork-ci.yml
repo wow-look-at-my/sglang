@@ -21,9 +21,8 @@ on:
         default: ""
 
 concurrency:
-  group: fork-ci-${{ github.event_name }}-${{ github.ref }}
-  # The kernel wheel build outlasts the gap between pushes, so a cancelled run never finished it; a newer run waits instead.
-  cancel-in-progress: false
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 permissions:
   actions: read
