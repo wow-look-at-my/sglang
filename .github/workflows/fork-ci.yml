@@ -30,7 +30,6 @@ jobs:
       kernel_released: ${{ steps.plan.outputs.kernel_released }}
       cuda_archs: ${{ steps.plan.outputs.cuda_archs }}
       build_kernel: ${{ steps.plan.outputs.build_kernel }}
-      kernel_changed: ${{ steps.plan.outputs.kernel_changed }}
       publish_kernel: ${{ steps.plan.outputs.publish_kernel }}
       build_docker: ${{ steps.plan.outputs.build_docker }}
       image_tags: ${{ steps.plan.outputs.image_tags }}
@@ -48,7 +47,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          PUSH_BEFORE: ${{ github.event.before }}
           CUDA_ARCHS: ${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}
         run: |
           set -euo pipefail
@@ -66,24 +64,6 @@ jobs:
           else
             echo "::error::cannot look up ${KERNEL_IMAGE}: ${INSPECT}"
             exit 1
-          fi
-
-          BASE=""
-          if [ "${{ github.event_name }}" = push ]; then
-            BASE="$PUSH_BEFORE"
-            if [[ "$BASE" =~ ^0+$ ]]; then BASE="$DEFAULT_BRANCH"; fi
-          fi
-          CHANGED="unknown"
-          if [ -n "$BASE" ]; then
-            # The compare API lists a bounded number of files; treat a full page as unknown.
-            if FILES=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE}...${GITHUB_SHA}" --jq '.files[].filename'); then
-              [ "$(printf '%s\n' "$FILES" | grep -c .)" -lt 300 ] && CHANGED="$FILES"
-            fi
-          fi
-
-          KERNEL_CHANGED=false
-          if [ -n "$BASE" ] && touched '^python/sglang/kernels/aot/'; then
-            KERNEL_CHANGED=true
           fi
 
           ON_DEFAULT=false
@@ -104,10 +84,9 @@ jobs:
             BUILD_DOCKER=true
           fi
 
-          # A wheel already pushed under KERNEL_KEY came from identical inputs, so only a missing one is built.
+          # KERNEL_KEY changes exactly when the AOT tree or the build parameters do, so a missing wheel is the only reason to build.
           BUILD_KERNEL=false
-          if [ "$KERNEL_CACHED" = false ] \
-               && { [ "$KERNEL_CHANGED" = true ] || [ "$ON_DEFAULT" = true ] || [ "$BUILD_DOCKER" = true ]; }; then
+          if [ "$KERNEL_CACHED" = false ]; then
             BUILD_KERNEL=true
           fi
           SHORT_SHA="${GITHUB_SHA::7}"
@@ -121,7 +100,6 @@ jobs:
             echo "kernel_key=${KERNEL_KEY}"
             echo "kernel_released=${KERNEL_AVAILABLE}"
             echo "cuda_archs=${CUDA_ARCHS}"
-            echo "kernel_changed=${KERNEL_CHANGED}"
             echo "build_kernel=${BUILD_KERNEL}"
             echo "publish_kernel=${ON_DEFAULT}"
             echo "build_docker=${BUILD_DOCKER}"
@@ -133,7 +111,6 @@ jobs:
             echo "|---|---|"
             echo "| sglang-kernel version | ${KERNEL_VERSION} (available: ${KERNEL_AVAILABLE}) |"
             echo "| kernel inputs key | ${KERNEL_KEY} (wheel in registry: ${KERNEL_CACHED}) |"
-            echo "| AOT kernel changed | ${KERNEL_CHANGED} |"
             echo "| build kernel wheels | ${BUILD_KERNEL} |"
             echo "| publish kernel release | ${ON_DEFAULT} |"
             echo "| build image | ${BUILD_DOCKER} (${IMAGE_TAGS}) |"
