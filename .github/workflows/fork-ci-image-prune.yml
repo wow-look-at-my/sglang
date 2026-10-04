@@ -1,7 +1,6 @@
 name: Fork CI image prune
 
 on:
-  push:
   schedule:
     - cron: '23 5 * * *'
   workflow_dispatch:
