@@ -650,7 +650,6 @@ class Scheduler(
         self.init_diffusion_llm()
         self.maybe_init_prefill_decode_balancer()
 
-
         self.init_metrics_reporter()
         self.scheduler_stage_metrics = self.metrics_reporter.scheduler_stage_metrics
 
