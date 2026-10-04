@@ -164,7 +164,17 @@ def _master_key(version: dict) -> str | None:
 
 
 def parse_versions(pages: list[list[dict]]) -> list[dict]:
-    return [version for page in pages for version in page]
+    return [normalize_version(version) for page in pages for version in page]
+
+
+def normalize_version(version: dict) -> dict:
+    """The registry's record of one image, with its tags lifted out of metadata."""
+    return {
+        "id": version["id"],
+        "name": version.get("name", ""),
+        "tags": (version.get("metadata") or {}).get("container", {}).get("tags") or [],
+        "created_at": version["created_at"],
+    }
 
 
 def gh_api(*args: str, expect_json: bool = True):

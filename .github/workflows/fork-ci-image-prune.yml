@@ -1,6 +1,7 @@
 name: Fork CI image prune
 
 on:
+  push:
   schedule:
     - cron: '23 5 * * *'
   workflow_dispatch:
@@ -34,9 +35,9 @@ jobs:
         run: |
           set -euo pipefail
           export GH_TOKEN="${{ github.token }}"
-          DRY_RUN=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            DRY_RUN=--dry-run
+          DRY_RUN=--dry-run
+          if [ "${{ inputs.dry_run }}" = "false" ]; then
+            DRY_RUN=""
           fi
           python3 scripts/ci/utils/prune_ghcr_images.py \
             --owner "${GITHUB_REPOSITORY_OWNER}" \
