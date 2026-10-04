@@ -688,7 +688,7 @@ ADD --chmod=755 https://dl.pazer.build/go-toolchain?os=linux&arch=amd64 /usr/loc
 COPY --from=local_src /src/tools/sched-policy /sched-policy/tools/sched-policy
 COPY --from=local_src /src/python/sglang/srt/managers/scheduler_components /sched-policy/python/sglang/srt/managers/scheduler_components
 WORKDIR /sched-policy/tools/sched-policy
-RUN go-toolchain && ./build/sglang-sched-policy --help
+RUN --mount=type=tmpfs,target=/dev/shm,size=1g go-toolchain && ./build/sglang-sched-policy --help
 # A serving host registers no APE handler, so the binary is started through /bin/sh as that handler would.
 RUN printf '#!/bin/sh\nexec /bin/sh /opt/sglang/sched-policy/sglang-sched-policy.ape "$@"\n' > build/launcher \
     && chmod 755 build/launcher
