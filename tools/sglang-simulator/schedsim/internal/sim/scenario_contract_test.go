@@ -3,6 +3,8 @@ package sim
 import (
 	"math"
 	"testing"
+
+	"schedsim/internal/trace/tracetest"
 )
 
 // mixedShare is the weight of mixed-batch deliveries in the metric's population,
@@ -98,8 +100,14 @@ func TestScenarioBBalanceWinsAgainstPrev(t *testing.T) {
 // a gap by the tokens it carried, raises that policy's own ITL p99. Turning the ride
 // off wins p99 outright and gives back the tokens streams generate during a cold
 // prompt. Numbers quoted in docs/derivation-itl-percentiles-under-mixed-chunk.md.
+//
+// The claim needs the regime where mixed deliveries reach PREV's p99 rank: a
+// decode step costly enough that fewer decode samples dilute the rides. The
+// test's log is the incident priced with that step.
 func TestMixedRideIsWhatDecidesTheP99Cell(t *testing.T) {
-	cost := ScenarioCost()
+	model := tracetest.DefaultModel
+	model.DecodeBase = 16e-3
+	cost := costOf(model)
 	sc := ScenarioB(2)
 	seeds := []int64{1, 2, 3} // the sensitivity sweep's own seeds
 	off := func(mode Mode) Metrics {

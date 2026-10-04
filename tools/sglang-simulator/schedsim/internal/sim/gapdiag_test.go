@@ -33,6 +33,17 @@ func testEpisodePtr() *Episode {
 	return &ep
 }
 
+// costOf calibrates on the default incident priced by model instead.
+func costOf(model tracetest.Model) Cost {
+	spec := tracetest.DefaultIncident
+	spec.Model = model
+	steps, err := trace.Parse(tracetest.Incident(spec).String())
+	if err != nil {
+		panic("incident log: " + err.Error())
+	}
+	return NewCost(trace.Calibrate(steps, BaselineChunkSize, 64))
+}
+
 // ScenarioCost is the calibrated cost model the committed scenarios run on.
 func ScenarioCost() Cost {
 	return NewCost(trace.Calibrate(incidentSteps(), BaselineChunkSize, 64))
