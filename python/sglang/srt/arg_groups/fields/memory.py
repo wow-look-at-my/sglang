@@ -118,10 +118,8 @@ class Memory(msgspec.Struct):
                 "cache (grown up to 8x within --hicache-host-memory-fraction); "
                 "the startup log states the decision and its reason. "
                 "--enable-hierarchical-cache requires it and fails on an "
-                "incompatible configuration; --no-enable-hierarchical-cache "
-                "turns it off."
+                "incompatible configuration."
             ),
-            action=argparse.BooleanOptionalAction,
             fallback=False,
         ),
     ] = None

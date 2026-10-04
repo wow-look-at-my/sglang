@@ -2398,17 +2398,20 @@ class TestHiCacheAutoResolution(CustomTestCase):
                     resolution_result(args, "_enable_hierarchical_cache_auto")
                 )
 
-    def test_cli_flag_is_tri_state(self):
+    def test_cli_flag_has_no_opt_out(self):
         parser = argparse.ArgumentParser()
         ServerArgs.add_cli_args(parser)
         for argv, expected in (
             ([], None),
             (["--enable-hierarchical-cache"], True),
-            (["--no-enable-hierarchical-cache"], False),
         ):
             with self.subTest(argv=argv):
                 parsed = parser.parse_args(["--model-path", "dummy", *argv])
                 self.assertIs(parsed.enable_hierarchical_cache, expected)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(
+                ["--model-path", "dummy", "--no-enable-hierarchical-cache"]
+            )
 
     def test_each_incompatible_configuration_keeps_hicache_off(self):
         """Every combination an explicit flag would reject, or would adjust in
