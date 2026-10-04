@@ -1,18 +1,25 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: `opened_at` uses `tokio::time::Instant` rather than `std::time::Instant`.
+// NOTE: `opened_at` uses `tokio::time::Instant` rather than `std::time::Instant`
+// so that `#[tokio::test(start_paused = true)]` + `tokio::time::advance` can
+// move the clock forward in tests. `std::time::Instant` is not paused by
+// tokio's mock clock, so `elapsed()` would always return near-zero inside a
+// paused-time test, preventing the Open → HalfOpen transition from being
+// exercised deterministically.
 
 use std::num::NonZeroU32;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::time::Instant;
 
-/// Consistent `(admit, state_code)` pair read under a single breaker lock. See [`CircuitBreaker::snapshot`].
+/// Consistent `(admit, state_code)` pair read under a single breaker lock.
+/// See [`CircuitBreaker::snapshot`].
 #[derive(Debug, Clone, Copy)]
 pub struct CircuitSnapshot {
     /// Would the breaker admit a request right now (`would_allow` semantics).
     pub admit: bool,
+    /// State code: 0=closed, 1=open, 2=half_open.
     pub state_code: u8,
 }
 
@@ -67,8 +74,23 @@ impl CircuitBreaker {
         }
     }
 
-    /// Non-mutating predicate: would [`allow`] return `true` if called right
-    /// now?
+    /// Non-mutating predicate: would [`allow`] return `true` if called
+    /// right now?
+    ///
+    /// Used by enumeration / filter paths (e.g.
+    /// [`crate::workers::registry::WorkerRegistry::healthy_workers_for`])
+    /// that need to inspect breaker readiness without claiming a half-open
+    /// probe slot. Calling `allow()` for filtering would leak probe slots
+    /// to unselected candidates and starve dispatch: the policy would
+    /// enumerate a worker as "healthy", then the proxy's `allow()` at
+    /// dispatch time would see `probe_in_flight=true` and reject.
+    ///
+    /// Semantics:
+    /// - `Closed` → `true`
+    /// - `Open` past `cool_down` → `true` (a probe slot is available)
+    /// - `Open` within `cool_down` → `false`
+    /// - `HalfOpen { probe_in_flight: true }` → `false`
+    /// - `HalfOpen { probe_in_flight: false }` → `true`
     pub fn would_allow(&self) -> bool {
         let g = self.inner.lock().unwrap();
         match g.state {
@@ -79,7 +101,16 @@ impl CircuitBreaker {
     }
 
     /// Single-lock snapshot of `(admit, state_code)` for the `/metrics`
-    /// scrape path.
+    /// scrape path, feeding `sgl_router_worker_health` and
+    /// `sgl_router_worker_cb_state` (0=closed, 1=open, 2=half_open). Reading
+    /// admit and state separately would take the lock twice and could observe
+    /// a transition between the two reads, emitting a self-contradictory pair
+    /// for one scrape. This reads both under one lock so they always agree.
+    ///
+    /// Note `admit` and `state_code` can still legitimately disagree within
+    /// a *consistent* read: an `Open` breaker past its cooldown returns
+    /// `admit=true` (a probe slot is available) while `state_code=1`. That
+    /// is the breaker's real state, not a race.
     pub fn snapshot(&self) -> CircuitSnapshot {
         let g = self.inner.lock().unwrap();
         let (admit, state_code) = match g.state {
@@ -138,10 +169,34 @@ impl CircuitBreaker {
                 }
             }
             State::Open { .. } => {
+                // Already open: ticking consecutive_failures or refreshing opened_at
+                // would pin us Open during a failure storm. The cool_down is
+                // measured from first-open; failures during Open are ignored.
             }
         }
     }
 
+    /// Record a backpressure response (HTTP 503 / 429): the worker answered, so
+    /// it is responsive — busy, not faulty.
+    ///
+    /// - **Closed:** no-op. A busy worker must not open the breaker, and —
+    ///   unlike [`record_success`](Self::record_success) — backpressure must
+    ///   NOT reset an in-progress failure streak, so a worker interleaving real
+    ///   5xx faults with 503s still trips.
+    /// - **HalfOpen:** close. Any response observed here proves the worker is
+    ///   answering, which is what the probe exists to find out. Leaving HalfOpen
+    ///   unresolved would wedge the breaker permanently — the probe slot is
+    ///   released only by a success or failure, and backpressure is neither —
+    ///   shutting a recovered-but-busy worker out forever (a worse false-shed
+    ///   than the one ignoring 503 removes). The responder is not necessarily
+    ///   the probe: [`allow`](Self::allow) gates admission, not completion, so a
+    ///   request admitted while Closed can land here. [`record_success`] has the
+    ///   same property.
+    /// - **Open:** no-op, and reachable — `allow` gates admission, not
+    ///   completion, so a request admitted while Closed can return after
+    ///   concurrent failures have opened the breaker. A late backpressure answer
+    ///   must not reset a breaker that has already tripped, exactly as
+    ///   [`record_failure`](Self::record_failure) ignores failures while Open.
     pub fn record_backpressure(&self) {
         let mut g = self.inner.lock().unwrap();
         if matches!(g.state, State::HalfOpen { .. }) {
@@ -250,7 +305,10 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn snapshot_reports_open_but_admittable_after_cooldown() {
-        // The contract the scrape path depends on: a single read can show an Open breaker (state_code=1) that nonetheless admits (admit=true).
+        // The contract the scrape path depends on: a single read can show an
+        // Open breaker (state_code=1) that nonetheless admits (admit=true)
+        // once cooldown has elapsed — and the two halves never disagree due
+        // to a torn read because they come from one lock acquisition.
         let b = cb(1, 10);
         b.record_failure();
         let s = b.snapshot();
@@ -265,6 +323,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn backpressure_resolves_half_open_probe() {
+        // Regression guard: a backpressure (503/429) answer to a half-open
+        // probe must RESOLVE the probe, not wedge the breaker. The probe slot
+        // is otherwise released only by success/failure; without
+        // record_backpressure handling HalfOpen, a recovered-but-busy worker
+        // would be shut out forever.
         let b = cb(1, 10);
         b.record_failure(); // Open
         assert_eq!(b.snapshot().state_code, 1);
@@ -289,7 +352,8 @@ mod tests {
 
     #[test]
     fn backpressure_in_closed_state_preserves_failure_streak() {
-        // Unlike record_success, record_backpressure must NOT reset an in-progress streak.
+        // Unlike record_success, record_backpressure must NOT reset an
+        // in-progress streak: 2 faults + a 503 + 1 fault still hits threshold 3.
         let b = cb(3, 30);
         b.record_failure();
         b.record_failure();

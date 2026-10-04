@@ -112,7 +112,7 @@ fn reset_node_mru_panics_on_a_non_member() {
     list.reset_node_mru(NodeIdx_(7));
 }
 
-// Arena chain root -> a -> b -> c plus a sibling, atoms per key.
+// Arena chain root -> a -> b -> c plus a sibling, two atoms per key.
 fn arena_chain() -> (
     NodeArena<Vec<i64>>,
     NodeIdx_,
@@ -212,7 +212,7 @@ fn reset_window_ancestors_mru_stops_at_the_window() {
     list.insert_mru(c);
     list.insert_mru(a);
     list.insert_mru(other);
-    // A window of multiple atoms covers c and b; a stays put beyond it.
+    // A window of 4 atoms covers c and b; a stays put beyond it.
     list.reset_node_and_window_ancestors_mru(c, 4, &arena, |_| true);
     assert_eq!(order(&list), vec![c, b, other, a]);
     list.validate();
@@ -226,7 +226,7 @@ fn reset_window_ancestors_mru_includes_the_straddling_ancestor() {
     list.insert_mru(b);
     list.insert_mru(c);
     list.insert_mru(other);
-    // A window of multiple atoms ends mid-a: the straddling ancestor is still included.
+    // A window of 5 atoms ends mid-a: the straddling ancestor is still included.
     list.reset_node_and_window_ancestors_mru(c, 5, &arena, |_| true);
     assert_eq!(order(&list), vec![c, b, a, other]);
     list.validate();
@@ -358,6 +358,7 @@ fn get_prev_where_walks_toward_the_head_from_a_member() {
     list.insert_mru(NodeIdx_(10));
     list.insert_mru(NodeIdx_(20));
     list.insert_mru(NodeIdx_(30));
+    // Order is [30, 20, 10]; 10's predecessors are 20 then 30.
     assert_eq!(
         list.get_prev_where(NodeIdx_(10), |_| true),
         Some(NodeIdx_(20))
@@ -526,6 +527,7 @@ fn check_linked_list_reports_a_cycle() {
     let mut lru = UnifiedLRUList::new(ValueSlotIdx::device(FULL));
     lru.insert_mru(NodeIdx_(0));
     lru.insert_mru(NodeIdx_(1));
+    // 0's next loops back to 1 instead of reaching the tail.
     lru.cells[UnifiedLRUList::cell_of_(NodeIdx_(0)).0].next = UnifiedLRUList::cell_of_(NodeIdx_(1));
     let mut errors = Vec::new();
     lru.check_linked_list_("[t]", &mut errors);
@@ -583,6 +585,7 @@ fn check_linked_list_reports_a_flagged_unreachable_cell() {
 
 // Eviction priority keys.
 
+// A node with distinct field values: last_access 5, creation 7, hits 3, priority 9.
 fn arena_with_node() -> (NodeArena<Vec<i64>>, NodeIdx_) {
     let mut arena: NodeArena<Vec<i64>> = NodeArena::new(vec![FULL], /* page_size = */ 1);
     let root = arena.root();
@@ -619,6 +622,7 @@ fn slru_segments_on_the_protected_threshold() {
     let slru = SlruStrategy {
         protected_threshold: 2,
     };
+    // 3 hits >= threshold 2: protected segment.
     assert_eq!(
         slru.get_priority(arena.node(NodeIdx_(a.0))),
         PriorityKey(1, 5)
@@ -678,6 +682,7 @@ fn eviction_policy_names_are_case_insensitive() {
 fn get_eviction_strategy_slru_default_threshold_is_two() {
     let (mut arena, a) = arena_with_node();
     let slru = get_eviction_strategy::<Vec<i64>>("slru");
+    // Exactly 2 hits is protected under the factory default; 1 is not.
     arena.node_mut(NodeIdx_(a.0)).hit_count = 2;
     assert_eq!(
         slru.get_priority(arena.node(NodeIdx_(a.0))),

@@ -1,4 +1,7 @@
-//! [`SamplingParams`] — the typed Rust port of Python `SamplingParams` (python/sglang/srt/sampling/sampling_params.py).
+//! [`SamplingParams`] — the typed Rust port of Python `SamplingParams`
+//! (python/sglang/srt/sampling/sampling_params.py): every field, plus its
+//! `__post_init__` → `normalize` → `verify` pipeline (run in that order, as
+//! `TokenizerManager._create_tokenized_object` does).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -14,16 +17,21 @@ use crate::utils::{error::Error, regex::RegexPattern};
 const SAMPLING_EPS: f64 = 1e-6;
 /// `TOP_K_ALL = 1 << 30` — `top_k` sentinel for "consider the whole vocabulary".
 const TOP_K_ALL: i64 = 1 << 30;
-/// Most stop STRINGS accepted per request.
+/// Most stop STRINGS accepted per request. The scheduler scans the decoded text
+/// once per stop per decode step, so this is a per-step multiplier: 50k stops
+/// measured 20.4 ms/step from a 586 KB body.
 const MAX_STOP_COUNT: usize = 32;
-/// Longest `stop_regex` accepted.
+/// Longest `stop_regex` accepted. A 1 MB literal pattern takes ~677 ms just to
+/// compile, and that cost lands on the scheduler.
 const MAX_STOP_REGEX_LEN: usize = 256;
-/// Most `stop_regex` patterns accepted per request.
+/// Most `stop_regex` patterns accepted per request. Python's `re` cache holds 512
+/// (`re._MAXCACHE`), so past that every pattern recompiles on every decode step.
 const MAX_STOP_REGEX_COUNT: usize = 32;
 const REQUEST_REASONING_END_TOKEN_IDS_KEY: &str = "__sglang_reasoning_end_token_ids";
 const MAX_REQUEST_REASONING_END_TOKEN_IDS: usize = 32;
 
-/// JSON values accepted by Python's `CustomParamValue`: a scalar, a list of scalars.
+/// JSON values accepted by Python's `CustomParamValue`: a scalar, a list of
+/// scalars, or a string-keyed object whose values are scalars.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CustomParamValue {
@@ -48,10 +56,12 @@ pub enum JsonScalar {
     String(String),
 }
 
-/// One module per field default, each exposing both hooks serde needs under
-/// one name: `default` (key absent) and `deserialize` (key present —
-/// including an explicit `null`.
-/// the default: "callers can pass null without crashing verify").
+/// One module per field default, each exposing the two hooks serde needs under
+/// one name: `default` (key absent) and `deserialize` (key present — including
+/// an explicit `null`, which Python's `__post_init__` maps back to the default:
+/// "callers can pass null without crashing verify"). They cannot be one function
+/// — serde calls `default()` with no arguments and `deserialize(deserializer)` —
+/// but `deserialize` defers to `default()`, so the value is written once.
 macro_rules! defaulted {
     ($($name:ident: $ty:ty = $value:expr;)*) => {$(
         mod $name {
@@ -76,11 +86,17 @@ defaulted! {
     bool_true: bool = true;
 }
 
+/// `max_new_tokens` is `Optional[int] = 128`: an *absent* key means 128, but an
+/// explicit `null` means None (no limit) — so it keeps its `Option` rather than
+/// going through [`defaulted`].
 fn max_new_tokens_default() -> Option<i64> {
     Some(128)
 }
 
-/// The sampling parameters of one `/generate` request.
+/// The sampling parameters of one `/generate` request. Deserialized from the
+/// client's `sampling_params` object (unknown keys are a 400, mirroring Python's
+/// `SamplingParams(**kwargs)` TypeError) and serialized by field name into the
+/// scheduler header once [`normalize`](Self::normalize) has run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SamplingParams {
@@ -90,7 +106,8 @@ pub struct SamplingParams {
     /// API input alias, copied to `stop_strs` then cleared by `normalize`.
     #[serde(default)]
     pub stop: Option<OneOrMany<String>>,
-    /// Python `Optional[Set[int]]`.
+    /// Python `Optional[Set[int]]`. A `null` *element* is a 400 here where Python
+    /// filters it out — a typed list can't hold one, and it is malformed input.
     #[serde(default)]
     pub stop_token_ids: Option<Vec<i64>>,
     /// API input alias, copied to `stop_regex_strs` then cleared by `normalize`.
@@ -145,7 +162,8 @@ pub struct SamplingParams {
         deserialize_with = "i64_one::deserialize"
     )]
     pub n: i64,
-    /// `beam_width > 1` makes it a beam search request.
+    /// `beam_width > 1` makes it a beam search request. Mirrored for the
+    /// positional wire layout even though the rust path rejects it below.
     #[serde(default)]
     pub beam_width: Option<i64>,
 
@@ -183,16 +201,28 @@ pub struct SamplingParams {
     #[serde(default)]
     pub stream_interval: Option<i64>,
 
-    // Logit processing and reproducibility. Token id (as a string key, matching Python) → bias.
+    // Logit processing and reproducibility.
+    /// Token id (as a string key, matching Python) → bias. Keys are vocab-bounded
+    /// by [`verify`](Self::verify).
     #[serde(default)]
     pub logit_bias: Option<BTreeMap<String, f64>>,
     #[serde(default)]
     pub sampling_seed: Option<i64>,
-    /// JSON object forwarded to a custom logit processor. Its values match Python's `CustomParamValue` exactly.
+    /// JSON object forwarded to a custom logit processor. Its values match
+    /// Python's `CustomParamValue` exactly.
     #[serde(default)]
     pub custom_params: Option<BTreeMap<String, CustomParamValue>>,
 
     // Normalized internal fields.
+    //
+    // All `skip_deserializing`: they are outputs of `normalize`, and a client that
+    // could set them would be setting the pipeline's own state. `is_normalized` is
+    // the dangerous one — `{"is_normalized": true, "temperature": 0.0}` makes
+    // `post_init` early-return, so the greedy mapping never runs and temperature 0
+    // reaches the scheduler's `logits.div_()`; `stop` would likewise be dropped
+    // without ever reaching `stop_strs`. They still SERIALIZE: the scheduler needs
+    // them on the wire.
+    /// From `stop`; a list after `normalize` (Python widens str → [str] there).
     #[serde(skip_deserializing)]
     pub stop_strs: Vec<String>,
     /// From `stop_regex`.
@@ -205,18 +235,31 @@ pub struct SamplingParams {
     /// Set by `normalize`; tells the scheduler its own pass can early-return.
     #[serde(skip_deserializing)]
     pub is_normalized: bool,
-    /// Set by the OpenAI serving layer for generated full-assistant EBNF constraints, which already cover reasoning.
+    /// Set by the OpenAI serving layer for generated full-assistant EBNF
+    /// constraints, which already cover reasoning; the scheduler skips the
+    /// reasoner grammar wrapper for them. Client-settable would let a request
+    /// strip that wrapper from its own grammar, so it is a pipeline output only.
     #[serde(skip_deserializing)]
     pub ebnf_full_assistant: bool,
-    /// API fields present in the request object.
+    /// API fields present in the request object. Serde defaults erase this
+    /// distinction, but preferred sampling parameters must not overwrite an
+    /// explicit request value, including an explicit default or null.
     #[serde(skip)]
     pub(crate) explicit_fields: BTreeSet<String>,
 }
 
-/// The `/generate` body's `sampling_params`: one object (broadcast to every prompt) or a list of them (one per prompt), fanned out.
+/// The `/generate` body's `sampling_params`: one object (broadcast to every
+/// prompt) or a list of them (one per prompt), fanned out by `GenerateBody::into_requests`.
+///
+/// Hand-written `Deserialize` rather than `#[serde(untagged)]`: untagged buffers
+/// the input and, on failure, reports only "data did not match any variant" —
+/// losing the field-level message ("unknown field `temperature`, expected one of
+/// …") that makes a typo actionable. Object-vs-list is unambiguous here, so a
+/// single `deserialize_any` dispatch keeps the inner error verbatim.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SamplingParamsInput {
-    /// Boxed: `SamplingParams` is many bytes, so an inline variant would make every `GenerateBody` that big regardless.
+    /// Boxed: `SamplingParams` is ~440 bytes, so an inline variant would make
+    /// every `GenerateBody` that big regardless of which form arrived.
     One(Box<SamplingParams>),
     Many(Vec<SamplingParams>),
 }
@@ -351,7 +394,9 @@ impl Default for SamplingParams {
 
 impl SamplingParams {
     /// `__post_init__` → `normalize` → `verify`, the order
-    /// `TokenizerManager._create_tokenized_object` runs them in.
+    /// `TokenizerManager._create_tokenized_object` runs them in. `Err` is a
+    /// request-local 400. `skip_tokenizer_init` stands in for Python's
+    /// `tokenizer is None`; `vocab_size` bounds `logit_bias` keys.
     pub fn normalize(&mut self, skip_tokenizer_init: bool, vocab_size: u64) -> Result<(), Error> {
         self.post_init();
         self.normalize_stops(skip_tokenizer_init)?;
@@ -359,10 +404,13 @@ impl SamplingParams {
     }
 
     /// Python `__post_init__` (minus the null-to-default coercions, which the
-    /// null-tolerant deserializers above already did).
+    /// null-tolerant deserializers above already did): copy the API aliases into
     /// the internal fields and apply the greedy / `top_k` special cases.
     fn post_init(&mut self) {
-        // Python's `__post_init__` guard.
+        // Python's `__post_init__` guard. Without it a second `normalize` reads
+        // the aliases `normalize_stops` already cleared and silently wipes
+        // `stop_strs`/`stop_regex_strs` to empty — the request would stop
+        // matching its stop strings.
         if self.is_normalized {
             return;
         }
@@ -374,11 +422,12 @@ impl SamplingParams {
             self.stop_token_ids = None;
         }
         if (0.0..SAMPLING_EPS).contains(&self.temperature) {
+            // Greedy: temperature ~0 → temperature=1.0, top_k=1.
             self.temperature = 1.0;
             self.top_k = 1;
         }
         if self.top_k == -1 {
-            self.top_k = TOP_K_ALL; // -disables top_k → whole vocabulary
+            self.top_k = TOP_K_ALL; // -1 disables top_k → whole vocabulary
         }
         for constraint in [
             &mut self.json_schema,
@@ -399,7 +448,9 @@ impl SamplingParams {
         // Match window: UTF-8 byte length is a safe upper bound on the token count.
         self.stop_str_max_len = self.stop_strs.iter().map(|s| s.len()).max().unwrap_or(0);
         // Validate + bound every stop_regex here, before it can reach the
-        // scheduler's `re.search` (see `RegexPattern`).
+        // scheduler's `re.search` (see `RegexPattern`). A rejected pattern is a
+        // 400 for this request; an accepted one carries a bound the scheduler uses
+        // to size its match window.
         if self.stop_strs.len() > MAX_STOP_COUNT {
             return Err(bad(format!(
                 "at most {MAX_STOP_COUNT} stop strings are allowed, got {}",
@@ -526,7 +577,9 @@ impl SamplingParams {
         }
         // A non-numeric bias key raises in the scheduler's `int(key)`, and an
         // out-of-vocabulary one would index past the logits row, so both are
-        // rejected here (Python `verify` does the same, in that order).
+        // rejected here (Python `verify` does the same, in that order). Only the
+        // *range* check needs the vocab size (`None` = unknown, skip it); the key
+        // format is checked either way, since `int(key)` runs regardless.
         if let Some(logit_bias) = &self.logit_bias {
             for key in logit_bias.keys() {
                 let token_id: u64 = key
@@ -587,8 +640,10 @@ impl SamplingParams {
                 "Only one of json_schema, regex, ebnf, or structural_tag can be set".into(),
             ));
         }
-        // Not a Python restriction: the rust from_scheduler maps one rid to one response, so parallel sampling would
-        // drop all but the first sample.
+        // Not a Python restriction: the rust from_scheduler maps one rid to one response,
+        // so parallel sampling would drop all but the first sample. This is the
+        // only place it is rejected — `n` lives in `sampling_params`, where
+        // Python reads it, and the `/generate` body has no `n` of its own.
         if self.n != 1 {
             return Err(bad(format!(
                 "n must be 1 (parallel sampling is not supported), got {}",
@@ -626,10 +681,14 @@ mod tests {
 
     use super::*;
 
-    /// Vocab size for tests that aren't about the vocab bound at all.
+    /// Vocab size for tests that aren't about the vocab bound at all. It is
+    /// mandatory now (`ServerArgs::validate_mandatory` rejects a boot without
+    /// one), so there is no longer an "unknown vocab" case to pass instead —
+    /// this is just a value large enough to stay out of the way.
     const TEST_VOCAB: u64 = 1000;
 
-    /// End to end through the path `/generate` takes: a bounded `stop_regex` reaches the wire with its real length.
+    /// End to end through the path `/generate` takes: a bounded `stop_regex`
+    /// reaches the wire with its real length, and a malformed one is a 400.
     #[test]
     fn stop_regex_bound_reaches_the_wire() {
         assert_eq!(norm(r#"{"stop_regex": "\\d{6}"}"#).stop_regex_max_len, 6);
@@ -686,7 +745,9 @@ mod tests {
         assert!(sp.stop.is_none());
     }
 
-    /// A multi-byte stop char must use its byte length as the window bound.
+    /// A multi-byte stop char must use its byte length as the window bound: `𓀀`
+    /// is 1 char but 4 UTF-8 bytes (and 3 tokens on Qwen3). Char count (1) would
+    /// under-size the tail and miss the stop; byte count (4) ≥ the token span.
     #[test]
     fn stop_str_max_len_uses_bytes_not_chars() {
         let sp = norm(r#"{"stop": "𓀀"}"#);
@@ -703,7 +764,9 @@ mod tests {
         assert_eq!(sp.stop_str_max_len, 0);
     }
 
-    /// The wire map is what the scheduler's msgspec decoder reads by field name: the normalized values must be present under the Python names.
+    /// The wire map is what the scheduler's msgspec decoder reads by field name:
+    /// the normalized values must be present under the Python names, and the
+    /// `is_normalized` flag must be set so its own pass early-returns.
     #[test]
     fn wire_map_carries_python_field_names() {
         let sp = norm(r#"{"temperature": 0.7, "max_new_tokens": 64, "ignore_eos": true}"#);
@@ -714,12 +777,15 @@ mod tests {
         assert_eq!(get(&w, "top_k").unwrap().as_i64(), Some(TOP_K_ALL));
         assert_eq!(get(&w, "is_normalized").unwrap().as_bool(), Some(true));
         assert_eq!(get(&w, "stop_str_max_len").unwrap().as_i64(), Some(0));
-        // Unset optionals ride as null, NOT omitted: the msgpack wire is positional (`array_like=True`).
+        // Unset optionals ride as null, NOT omitted: the msgpack wire is
+        // positional (`array_like=True`), so a skipped field would shift every
+        // later one. JSON keeps the names, which is what this test is about.
         assert!(get(&w, "regex").unwrap().is_null());
         assert!(get(&w, "stop").unwrap().is_null());
     }
 
-    /// `max_new_tokens` is the one field where absent and null differ: absent = 128 (the Python field default).
+    /// `max_new_tokens` is the one field where absent and null differ: absent =
+    /// 128 (the Python field default), explicit null = None (no limit).
     #[test]
     fn max_new_tokens_null_is_unlimited_absent_is_default() {
         assert_eq!(norm("{}").max_new_tokens, Some(128));
@@ -729,8 +795,17 @@ mod tests {
         assert_eq!(sp.min_new_tokens, 4096);
     }
 
-    /// `SamplingParams` is `msgspec.Struct(array_like=True)` on the Python side, so the header carries an ARRAY and every field is identified by POSITION. Things follow, and both are asserted below: the order must match `SamplingParams.__struct_fields__` exactly, and no field may be omitted — a `skip_serializing_if` anywhere would shorten the array and shift every later field onto the wrong scheduler slot. KEEP IN SYNC with `sampling_params.py`. This list is an external-source literal: it is the Python
-    /// declaration order, not this file's.
+    /// The 31 wire slots, in Python's declaration order.
+    ///
+    /// `SamplingParams` is `msgspec.Struct(array_like=True)` on the Python side, so
+    /// the header carries an ARRAY and every field is identified by POSITION. Two
+    /// things follow, and both are asserted below: the order must match
+    /// `SamplingParams.__struct_fields__` exactly, and no field may be omitted —
+    /// a `skip_serializing_if` anywhere would shorten the array and shift every
+    /// later field onto the wrong scheduler slot.
+    ///
+    /// KEEP IN SYNC with `sampling_params.py`. This list is an external-source
+    /// literal: it is the Python declaration order, not this file's.
     const WIRE_ORDER: &[&str] = &[
         "max_new_tokens",
         "stop",
@@ -767,6 +842,12 @@ mod tests {
     ];
 
     /// Every field reaches the wire, at the position Python expects.
+    ///
+    /// Each slot is given a DISTINCT value so a swap of two same-typed neighbours
+    /// is caught by value, not just by arity — the failure mode a length check
+    /// alone would wave through. Regression for the map-vs-array break: this used
+    /// to serialize as a map, which `array_like=True` rejects outright
+    /// (`Expected array, got object`), so every generate request failed to decode.
     #[test]
     fn wire_is_positional_and_complete() {
         let sp = SamplingParams {
@@ -806,7 +887,8 @@ mod tests {
             "every field must be emitted: a shorter array shifts later fields onto \
              the wrong scheduler slot"
         );
-        // Spot-check the positions whose neighbours share a type, where a swap would otherwise be invisible.
+        // Spot-check the positions whose neighbours share a type, where a swap
+        // would otherwise be invisible.
         let at = |name: &str| WIRE_ORDER.iter().position(|f| *f == name).unwrap();
         assert_eq!(arr[at("max_new_tokens")].as_i64(), Some(11));
         assert_eq!(arr[at("temperature")].as_f64(), Some(0.13));
@@ -864,7 +946,10 @@ mod tests {
         }
     }
 
-    /// The inclusive bounds must ACCEPT their endpoints.
+    /// The inclusive bounds must ACCEPT their endpoints. Only the rejecting side
+    /// was covered, and far from the edge (`frequency_penalty: 3.0`), so flipping
+    /// any `..=` to `..` — or `>= 1` to `> 1` — would 400 legitimate requests
+    /// without failing a single test.
     #[test]
     fn verify_accepts_inclusive_boundaries() {
         for json in [
@@ -881,6 +966,7 @@ mod tests {
             r#"{"min_new_tokens": 0}"#,
             // min == max is in range: `[0, max_new_tokens]` is inclusive.
             r#"{"max_new_tokens": 8, "min_new_tokens": 8}"#,
+            // Greedy: temperature 0 is the documented sentinel, not an under-run.
             r#"{"temperature": 0.0}"#,
             r#"{"n": 1}"#,
         ] {
@@ -890,7 +976,8 @@ mod tests {
         }
     }
 
-    /// And the first value past each endpoint is still rejected — the pair of tests brackets the boundary instead of testing one side.
+    /// And the first value past each endpoint is still rejected — the pair of
+    /// tests brackets the boundary instead of testing one side of it.
     #[test]
     fn verify_rejects_just_past_the_boundaries() {
         for json in [
@@ -913,7 +1000,9 @@ mod tests {
         }
     }
 
-    /// A wrong JSON type for a numeric field is rejected at parse time — it must NOT silently fall back to the default.
+    /// A wrong JSON type for a numeric field is rejected at parse time — it must
+    /// NOT silently fall back to the default (`temperature: "bad"` has different
+    /// semantics than an unset temperature).
     #[test]
     fn wrong_typed_field_is_rejected() {
         for json in [
@@ -929,7 +1018,11 @@ mod tests {
         }
     }
 
-    /// An unknown key is a.
+    /// An unknown key is a 400, mirroring Python's `SamplingParams(**kwargs)`
+    /// TypeError — a typo must not be silently ignored. (The bogus key is
+    /// deliberately not a near-miss of a real field: an editor spell-checker
+    /// kept "correcting" a misspelling here into a valid name, which silently
+    /// turned this assertion into a tautology.)
     #[test]
     fn unknown_field_is_rejected() {
         assert!(serde_json::from_str::<SamplingParams>(r#"{"zzz_not_a_field": 1}"#).is_err());
@@ -937,7 +1030,8 @@ mod tests {
         assert!(serde_json::from_str::<SamplingParams>(r#"{"temperature": 0.7}"#).is_ok());
     }
 
-    /// A present-but-null non-optional field keeps the default (Python's `x if x is not None`) — null is absent.
+    /// A present-but-null non-optional field keeps the default (Python's
+    /// `x if x is not None`) — null is absent, not a wrong type.
     #[test]
     fn null_field_keeps_default() {
         let sp = norm(r#"{"temperature": null, "top_k": null, "skip_special_tokens": null}"#);
@@ -946,7 +1040,10 @@ mod tests {
         assert!(sp.skip_special_tokens);
     }
 
-    /// `normalize` must be idempotent: `post_init` reads the API aliases, which `normalize_stops` clears.
+    /// `normalize` must be idempotent: `post_init` reads the API aliases, which
+    /// `normalize_stops` clears, so without Python's `if self.is_normalized:
+    /// return` guard a second call wipes `stop_strs` and drops the stop bound to
+    /// zero — silently, leaving a request that never stops.
     #[test]
     fn normalize_is_idempotent() {
         let mut once = norm(r#"{"stop": ["END", "STOP"], "stop_regex": "\\d{3}"}"#);
@@ -960,6 +1057,8 @@ mod tests {
         assert_eq!(twice.stop_str_max_len, 4);
         assert_eq!(twice.stop_regex_max_len, 3);
 
+        // Greedy handling must not re-fire either: temperature is 1.0 after the
+        // first pass, which is not in the greedy window.
         once.normalize(false, TEST_VOCAB).unwrap();
         assert_eq!(once.top_k, twice.top_k);
     }
@@ -1022,7 +1121,9 @@ mod tests {
         }
     }
 
-    /// `skip_tokenizer_init` has no tokenizer, so the text-matching stop features and `min_new_tokens` (needs eos_token_id) are 400s.
+    /// `skip_tokenizer_init` has no tokenizer, so the text-matching stop features
+    /// and `min_new_tokens` (needs eos_token_id) are 400s, not silent no-ops.
+    /// Mirrors Python `raise_if_tokenizer_required`.
     #[test]
     fn tokenizer_dependent_features_rejected_without_tokenizer() {
         for json in [
@@ -1041,7 +1142,10 @@ mod tests {
         assert!(sp.normalize(false, TEST_VOCAB).is_ok());
     }
 
-    /// `logit_bias` keys index the logits row, so an out-of-vocab id is a (Python `verify`'s vocab bound).
+    /// `logit_bias` keys index the logits row, so an out-of-vocab id is a 400
+    /// (Python `verify`'s vocab bound). The bound is exclusive, and it always
+    /// applies — `vocab_size` is mandatory, so there is no "unknown vocab" path
+    /// that skips this.
     #[test]
     fn logit_bias_keys_are_vocab_bounded() {
         let mut sp: SamplingParams =
@@ -1054,7 +1158,10 @@ mod tests {
         assert!(sp.normalize(false, 1000).is_ok());
     }
 
-    /// The key *format* check is separate from the vocab bound.
+    /// The key *format* check is separate from the vocab bound: the scheduler
+    /// does `logit_bias[i, int(key)]`, so a key that is not a parseable
+    /// non-negative integer has to be a 400 in its own right — a range check
+    /// alone would let `"abc"` or `"1.5"` through to that indexing.
     #[test]
     fn logit_bias_keys_must_be_parseable_token_ids() {
         for json in [
@@ -1063,13 +1170,17 @@ mod tests {
             r#"{"logit_bias": {"1.5": 1.0}}"#,
             r#"{"logit_bias": {"": 1.0}}"#,
         ] {
-            // Every key here is well inside TEST_VOCAB's range (or unparsable).
+            // Every key here is well inside TEST_VOCAB's range (or unparsable),
+            // so only the format check can be what rejects it.
             let _ = norm_err(json);
         }
         assert!(norm(r#"{"logit_bias": {"7": 1.0}}"#).logit_bias.is_some());
     }
 
-    /// Both `stop_regex` caps, neither of which had a test: deleting either `if` left the suite green.
+    /// Both `stop_regex` caps, neither of which had a test: deleting either `if`
+    /// left the suite green. The count cap bounds per-step recompilation (Python's
+    /// `re` cache is 512 entries); the length cap bounds compile time (a 1 MB
+    /// literal pattern measured ~677 ms).
     #[test]
     fn stop_regex_count_and_length_are_capped() {
         let over: Vec<String> = (0..MAX_STOP_REGEX_COUNT + 1)
@@ -1094,7 +1205,8 @@ mod tests {
         assert!(err.contains("over the"), "{err}");
     }
 
-    /// The commoner field had no limit at all: the scheduler scans the decoded text once per stop per decode step.
+    /// The commoner field had no limit at all: the scheduler scans the decoded text
+    /// once per stop per decode step.
     #[test]
     fn stop_string_count_is_capped() {
         let stops: Vec<String> = (0..MAX_STOP_COUNT + 1).map(|i| i.to_string()).collect();

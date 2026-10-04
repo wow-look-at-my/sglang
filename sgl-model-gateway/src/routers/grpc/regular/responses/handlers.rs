@@ -1,4 +1,29 @@
-//! Handler functions.
+//! Handler functions for /v1/responses endpoints
+//!
+//! # Public API
+//!
+//! - `route_responses()` - POST /v1/responses (main entry point)
+//!
+//! # Architecture
+//!
+//! This module provides the entry point for the /v1/responses endpoint.
+//! It supports two execution modes:
+//!
+//! 1. **Synchronous** - Returns complete response immediately (non_streaming.rs)
+//! 2. **Streaming** - Returns SSE stream with real-time events (streaming.rs)
+//!
+//! Note: Background mode is no longer supported. Requests with background=true
+//! will be rejected with a 400 error.
+//!
+//! # Request Flow
+//!
+//! ```text
+//! route_responses()
+//!   ├─► route_responses_sync()  → non_streaming::route_responses_internal()
+//!   └─► route_responses_streaming()
+//!       ├─► streaming::execute_tool_loop_streaming() (MCP tools)
+//!       └─► streaming::convert_chat_stream_to_responses_stream() (no MCP)
+//! ```
 
 use std::sync::Arc;
 

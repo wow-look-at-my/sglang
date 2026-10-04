@@ -1,7 +1,12 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Router-facing client for the prefix-match query.
+//!
+//! A successful query distinguishes a real match from an empty result. Transport
+//! failures, deadlines, and server rejections stay distinct errors so the caller
+//! chooses between degrading and failing the request, instead of silently using
+//! a different signal.
 
 use std::time::Duration;
 
@@ -12,7 +17,8 @@ use crate::pb::kv_indexer_client::KvIndexerClient;
 use crate::pb::MatchExternalKvPrefixRequest;
 use crate::service::MAX_GRPC_DECODING_MESSAGE_SIZE;
 
-/// Default per-query deadline.
+/// Default per-query deadline. Indexer failures are request failures, so this
+/// absorbs normal cross-host jitter without stalling a request indefinitely.
 pub const DEFAULT_QUERY_DEADLINE: Duration = Duration::from_millis(100);
 /// Default process-local bound on prefix-query RPCs issued by one client.
 pub const DEFAULT_QUERY_MAX_INFLIGHT: usize = 32;
@@ -24,7 +30,8 @@ const MAX_PREFIX_HASHES_PER_QUERY: usize =
 /// One worker's contiguous prefix hit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrefixMatch {
-    /// Router-facing routing identity; intersect byte-for-byte with registered worker URLs.
+    /// Router-facing routing identity; intersect byte-for-byte with registered
+    /// worker URLs. Never empty (the indexer drops unroutable workers).
     pub address: String,
     /// Length of the contiguous request prefix this worker holds.
     pub matched_prefix_blocks: u32,
@@ -41,7 +48,9 @@ pub enum PrefixIndexError {
     Timeout,
     /// The client or Indexer shed the query because its in-flight limit was hit.
     Overloaded,
-    /// The query exceeded the Indexer's gRPC message-size limit, so no worker's prefix was scanned.
+    /// The query exceeded the Indexer's gRPC message-size limit, so no worker's
+    /// prefix was scanned. Bounded by prompt length, not by load: retrying the
+    /// same prompt cannot succeed.
     QueryTooLarge,
     /// The server rejected the request.
     Rejected(tonic::Code),
@@ -120,7 +129,8 @@ impl PrefixIndexConfig {
 /// The prefix-match query the router links against.
 #[tonic::async_trait]
 pub trait PrefixIndex: Send + Sync {
-    /// Queries the longest contiguous prefix each worker holds for `hashes` (prompt order, `hashes[0]` first).
+    /// Queries the longest contiguous prefix each worker holds for `hashes`
+    /// (prompt order, `hashes[0]` first).
     async fn match_prefix(&self, hashes: Vec<i64>) -> Result<PrefixOutcome, PrefixIndexError>;
 }
 
@@ -180,10 +190,14 @@ impl PrefixIndex for GrpcPrefixIndex {
         let mut client = KvIndexerClient::new(self.channel.clone());
         let mut request = tonic::Request::new(MatchExternalKvPrefixRequest {
             hashes,
-            // The policy retains the full query length as its denominator.
+            // The policy retains the full query length as its denominator, so a
+            // transport-limited prefix cannot turn a partial scan into a perfect
+            // hit.
             max_blocks: 0,
         });
-        // On the wire so the indexer can drop a query this caller already stopped waiting for.
+        // On the wire so the indexer can drop a query this caller already stopped
+        // waiting for. The local timeout below stays the hard stop, since it also
+        // covers a stall before the channel applies its own deadline.
         request.set_timeout(self.deadline);
 
         match tokio::time::timeout(self.deadline, client.match_external_kv_prefix(request)).await {
@@ -242,10 +256,15 @@ fn parse_endpoint(endpoint: &str) -> Result<Endpoint, InvalidEndpoint> {
 fn classify(code: tonic::Code) -> PrefixIndexError {
     match code {
         tonic::Code::Unavailable => PrefixIndexError::Unreachable,
-        // The indexer sheds an expired query as DEADLINE_EXCEEDED.
+        // The indexer sheds an expired query as DEADLINE_EXCEEDED, while tonic
+        // reports its own enforcement of the same `grpc-timeout` as CANCELLED.
+        // This client cancels a query for no other reason.
         tonic::Code::DeadlineExceeded | tonic::Code::Cancelled => PrefixIndexError::Timeout,
         tonic::Code::ResourceExhausted => PrefixIndexError::Overloaded,
-        // The indexer's decoder refuses a message past its size limit with OUT_OF_RANGE.
+        // The indexer's decoder refuses a message past its size limit with
+        // OUT_OF_RANGE. A prompt too long to carry is not a disagreement about
+        // the request contract, so it stays separable from `Rejected` and the
+        // caller can degrade instead of failing the request.
         tonic::Code::OutOfRange => PrefixIndexError::QueryTooLarge,
         _ => PrefixIndexError::Rejected(code),
     }
@@ -265,7 +284,8 @@ mod tests {
         );
     }
 
-    /// An over-limit query must stay distinguishable from a contract rejection.
+    /// An over-limit query must stay distinguishable from a contract rejection:
+    /// the caller degrades on the former and fails the request on the latter.
     #[test]
     fn classifies_over_limit_message_as_too_large() {
         assert_eq!(
@@ -316,7 +336,8 @@ mod tests {
         }
     }
 
-    /// A host:port with no scheme parses as a URI but can never connect.
+    /// A host:port with no scheme parses as a URI but can never connect, which
+    /// is the misconfiguration that otherwise only shows up under traffic.
     #[test]
     fn rejects_endpoints_that_could_only_fail_at_query_time() {
         for endpoint in [

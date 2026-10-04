@@ -2,7 +2,8 @@ name: Open A PR to Copy Code From OSS
 
 on:
   workflow_dispatch:
-  # schedule: - cron: '0 10 * * *'
+  # schedule:
+  #   - cron: '0 10 * * *'
 
 permissions:
   contents: write

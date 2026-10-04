@@ -25,6 +25,8 @@ struct Cli {
     model: String,
 
     /// Optional SGLang engine origin exposing /generate.
+    ///
+    /// When omitted, only rendering and tokenization routes are served.
     #[arg(long, value_name = "URL")]
     engine_url: Option<String>,
 
@@ -58,7 +60,8 @@ struct Cli {
     default_chat_template_kwargs: Option<HashMap<String, Value>>,
     #[arg(long, value_enum, default_value_t)]
     sampling_defaults: SamplingDefaultsSource,
-    /// Already-resolved sampling defaults.
+    /// Already-resolved sampling defaults. When set with context length and
+    /// vocabulary size, model metadata is not reopened by this process.
     #[arg(long, value_parser = parse_sampling_defaults)]
     resolved_sampling_params: Option<SamplingDefaults>,
     #[arg(long)]

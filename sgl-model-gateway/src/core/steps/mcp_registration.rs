@@ -27,6 +27,11 @@ impl McpServerConfigRequest {
     }
 }
 
+/// Step 1: Connect to MCP server
+///
+/// This step establishes a connection to the MCP server using the flat manager architecture.
+/// The connection is retried aggressively (100 attempts) with a long timeout (2 hours)
+/// to handle slow-starting servers or network issues.
 pub struct ConnectMcpServerStep;
 
 #[async_trait]
@@ -78,6 +83,12 @@ impl StepExecutor<McpWorkflowData> for ConnectMcpServerStep {
     }
 }
 
+/// Step 2: Discover MCP inventory (tools, prompts, resources)
+///
+/// This step queries the MCP server for its capabilities using McpManager::load_server_inventory().
+/// - Tools: Available function calls
+/// - Prompts: Reusable prompt templates
+/// - Resources: Accessible files/data
 pub struct DiscoverMcpInventoryStep;
 
 #[async_trait]
@@ -128,6 +139,10 @@ impl StepExecutor<McpWorkflowData> for DiscoverMcpInventoryStep {
     }
 }
 
+/// Step 3: Register MCP server in manager
+///
+/// This step adds the MCP client to the McpManager's client map so it can be
+/// used for tool calls and inventory management.
 pub struct RegisterMcpServerStep;
 
 #[async_trait]
@@ -177,6 +192,12 @@ impl StepExecutor<McpWorkflowData> for RegisterMcpServerStep {
     }
 }
 
+/// Step 4: Validate registration based on required flag
+///
+/// This step checks if the server is marked as required. If the server is required
+/// but wasn't successfully registered (client not in context), this step fails the workflow.
+/// For optional servers, this step always succeeds, allowing the workflow to complete
+/// even if earlier steps failed.
 pub struct ValidateRegistrationStep;
 
 #[async_trait]
@@ -232,10 +253,10 @@ impl StepExecutor<McpWorkflowData> for ValidateRegistrationStep {
 /// - If `required == true`: Uses FailWorkflow - router startup fails if server cannot be reached
 /// - If `required == false` (default): Uses ContinueNextStep - logs warning but continues
 ///
-/// Workflow configuration: - ConnectMcpServer: retries, 2hr timeout (aggressive
-/// retry for slow servers)
-/// - DiscoverMcpInventory: retries, 10s timeout (discovery + caching) -
-/// RegisterMcpServer: No retry, 5s timeout (fast registration)
+/// Workflow configuration:
+/// - ConnectMcpServer: 100 retries, 2hr timeout (aggressive retry for slow servers)
+/// - DiscoverMcpInventory: 3 retries, 10s timeout (discovery + caching)
+/// - RegisterMcpServer: No retry, 5s timeout (fast registration)
 /// - ValidateRegistration: Final validation step
 pub fn create_mcp_registration_workflow() -> WorkflowDefinition<McpWorkflowData> {
     WorkflowDefinition::new("mcp_registration", "MCP Server Registration")
@@ -252,7 +273,7 @@ pub fn create_mcp_registration_workflow() -> WorkflowDefinition<McpWorkflowData>
                     max: Duration::from_secs(5),
                 },
             })
-            .with_timeout(Duration::from_secs(7200))
+            .with_timeout(Duration::from_secs(7200)) // 2 hours
             .with_failure_action(FailureAction::ContinueNextStep),
         )
         .add_step(

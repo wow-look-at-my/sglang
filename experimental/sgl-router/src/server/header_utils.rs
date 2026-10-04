@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Header forwarding whitelist — mirrors SMG semantics.
@@ -64,10 +64,15 @@ mod tests {
         )));
     }
 
-    /// Prefix-match negatives: names that LOOK similar to `x-request-id-*` or `x-sgl-*` but must NOT be forwarded.
+    /// Prefix-match negatives: names that LOOK similar to `x-request-id-*`
+    /// or `x-sgl-*` but must NOT be forwarded. Guards against a future
+    /// regression that loosens the rule (e.g., a `contains` instead of
+    /// `starts_with`, or a missing hyphen anchor).
     #[test]
     fn whitelist_prefix_negatives() {
-        // `x-request-id` itself is an exact match and MUST forward.
+        // `x-request-id` itself is an exact match and MUST forward —
+        // pin this so a future "tighten prefix to require trailing hyphen"
+        // refactor doesn't silently drop the canonical name.
         assert!(
             should_forward_request_header(&HeaderName::from_static("x-request-id")),
             "x-request-id (exact match) must forward",

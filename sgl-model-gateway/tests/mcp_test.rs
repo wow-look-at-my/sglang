@@ -1,4 +1,11 @@
-// This test suite validates the complete MCP implementation against the functionality required.
+// This test suite validates the complete MCP implementation against the
+// functionality required for SGLang responses API integration.
+//
+// - Core MCP server functionality
+// - Tool session management (individual and multi-tool)
+// - Tool execution and error handling
+// - Schema adaptation and validation
+// - Mock server integration for reliable testing
 
 mod common;
 
@@ -199,7 +206,8 @@ async fn test_multi_server_connection() {
         inventory: Default::default(),
     };
 
-    // Note: This will fail to connect to both servers in the current implementation since they return the same tools.
+    // Note: This will fail to connect to both servers in the current implementation
+    // since they return the same tools. The manager will connect to the first one.
     let result = McpManager::with_defaults(config).await;
 
     if let Ok(manager) = result {
@@ -418,7 +426,8 @@ async fn test_tool_info_structure() {
         .as_ref()
         .map(|d| d.contains("Mock web search"))
         .unwrap_or(false));
-    // Note: server information is now maintained separately in the inventory, not in the Tool type itself
+    // Note: server information is now maintained separately in the inventory,
+    // not in the Tool type itself
     assert!(!brave_search.input_schema.is_empty());
 }
 

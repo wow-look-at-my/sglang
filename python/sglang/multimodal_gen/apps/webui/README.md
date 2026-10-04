@@ -1,6 +1,7 @@
 # SGLang Diffusion WebUI User Guide
 
-SGLang Diffusion WebUI provides an intuitive Gradio-based interface for image and video generation, supporting parameter tuning and real-time previews.
+SGLang Diffusion WebUI provides an intuitive Gradio-based interface for image and video generation, supporting parameter
+tuning and real-time previews.
 
 ## Prerequisites
 
@@ -38,7 +39,8 @@ sglang serve --model-path Wan-AI/Wan2.2-TI2V-5B-Diffusers --num-gpus 1 --webui -
 
 ### Launch MiniMax H3
 
-MiniMax H3 uses a native joint video/audio request contract. Select the weight partition at server startup:
+MiniMax H3 uses a native joint video/audio request contract. Select the weight
+partition at server startup:
 
 ```bash
 # Serves text-to-video-with-audio (t2va) and first/last-frame-to-video-with-audio (fl2va).
@@ -50,13 +52,19 @@ sglang serve --model-path MiniMaxAI/MiniMax-H3 --model-variant ref2va \
   --num-gpus 4 --ulysses-degree 4 --webui --webui-port 2333
 ```
 
-The WebUI exposes H3's `task`, conditioning media, target short edge/aspect ratio/duration, joint denoising steps, video/audio flow shifts, and seed. H3 is CFG-distilled, so the generic negative prompt, guidance scales, manual FPS/frame count, width/height, and TeaCache controls do not apply. H3 output is fixed at 24 FPS, with its frame count and canvas derived from the target.
+The WebUI exposes H3's `task`, conditioning media, target short edge/aspect
+ratio/duration, joint denoising steps, video/audio flow shifts, and seed. H3 is CFG-distilled, so the generic negative prompt,
+guidance scales, manual FPS/frame count, width/height, and TeaCache controls do
+not apply. H3 output is fixed at 24 FPS, with its frame count and canvas derived
+from the target.
 
 ## Port Forwarding
 
-Once the WebUI service is running, you need to use **SSH port forwarding** to securely access the remote service from your local machine.
+Once the WebUI service is running, you need to use **SSH port forwarding** to securely access the remote service from
+your local machine.
 
-In most cases: Your IDE (like VS Code, Cursor, etc.) can handle this automatically. Check your IDE's remote development or port forwarding features. Otherwise, execute this command manually.
+In most cases: Your IDE (like VS Code, Cursor, etc.) can handle this automatically. Check your IDE's remote development
+or port forwarding features. Otherwise, execute this command manually.
 
 ```bash
 ssh -L ${WEBUI_PORT}:localhost:${WEBUI_PORT} user_name@machine_name

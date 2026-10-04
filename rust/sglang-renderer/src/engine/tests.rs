@@ -106,7 +106,8 @@ async fn shared_decoder_stops_across_chunks_and_releases_transport() {
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0].token.text.as_deref(), Some("e"));
         assert_eq!(positions[0].top[0].text.as_deref(), Some("e"));
-        // Release upstream as soon as a local stop is emitted.
+        // Release upstream as soon as a local stop is emitted, even if the caller
+        // keeps the completed response stream alive without polling it again.
         assert_eq!(transport.dropped.load(Ordering::SeqCst), 1);
         assert!(events.next().await.is_none());
 

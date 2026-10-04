@@ -55,17 +55,33 @@ pub enum RetryError {
 pub struct RetryExecutor;
 
 impl RetryExecutor {
-    /// Execute an operation that returns an HTTP Response with retries and
-    /// backoff. Usage pattern: - `operation(attempt)`: perform one attempt
-    /// (0-based). Construct and send the request,
+    /// Execute an operation that returns an HTTP Response with retries and backoff.
+    ///
+    /// Usage pattern:
+    /// - `operation(attempt)`: perform one attempt (0-based). Construct and send the request,
     ///   then return the `Response`. Do any per-attempt bookkeeping (e.g., load tracking,
     ///   circuit-breaker outcome recording) inside this closure.
-    /// - `should_retry(&response, attempt)`: decide if the given response
-    /// should be retried
+    /// - `should_retry(&response, attempt)`: decide if the given response should be retried
     ///   (e.g., based on HTTP status). Returning false short-circuits and returns the response.
-    /// - `on_backoff(delay, next_attempt)`: called before sleeping between
-    /// attempts.
+    /// - `on_backoff(delay, next_attempt)`: called before sleeping between attempts.
     ///   Use this to record metrics.
+    /// - `on_exhausted()`: called when the executor has exhausted all retry attempts.
+    ///
+    /// Example:
+    /// ```ignore
+    /// let resp = RetryExecutor::execute_response_with_retry(
+    ///     &retry_cfg,
+    ///     |attempt| async move {
+    ///         let worker = select_cb_aware_worker()?;
+    ///         let resp = send_request(worker).await;
+    ///         worker.record_outcome(resp.status().is_success());
+    ///         resp
+    ///     },
+    ///     |res, _| matches!(res.status(), StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS | StatusCode::INTERNAL_SERVER_ERROR | StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT),
+    ///     |delay, _attempt| { /* record backoff metrics */ },
+    ///     || { /* record retries exhausted */ },
+    /// ).await;
+    /// ```
     pub async fn execute_response_with_retry<Op, Fut, ShouldRetry, OnBackoff, OnExhausted>(
         config: &RetryConfig,
         mut operation: Op,

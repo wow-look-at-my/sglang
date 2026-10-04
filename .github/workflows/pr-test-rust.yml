@@ -8,7 +8,9 @@ on:
       - ".github/workflows/pr-test-rust.yml"
       - "scripts/ci/cuda/ci_install_dependency.sh"
       - "scripts/ci/cuda/ci_install_gateway_dependencies.sh"
-      # gateway-e2e resolves the SMG runtime deps (the smg-grpc-servicer floor) from here, via ci_install_dependency.sh's `pip install -e python[...]` — a bump there must re-run this workflow.
+      # gateway-e2e resolves the SMG runtime deps (the smg-grpc-servicer
+      # floor) from here, via ci_install_dependency.sh's
+      # `pip install -e python[...]` — a bump there must re-run this workflow.
       - "python/pyproject.toml"
       # The SMG gRPC entrypoint; only this workflow exercises it.
       - "python/sglang/srt/entrypoints/grpc_server.py"
@@ -20,7 +22,9 @@ on:
       - ".github/workflows/pr-test-rust.yml"
       - "scripts/ci/cuda/ci_install_dependency.sh"
       - "scripts/ci/cuda/ci_install_gateway_dependencies.sh"
-      # gateway-e2e resolves the SMG runtime deps (the smg-grpc-servicer floor) from here, via ci_install_dependency.sh's `pip install -e python[...]` — a bump there must re-run this workflow.
+      # gateway-e2e resolves the SMG runtime deps (the smg-grpc-servicer
+      # floor) from here, via ci_install_dependency.sh's
+      # `pip install -e python[...]` — a bump there must re-run this workflow.
       - "python/pyproject.toml"
       # The SMG gRPC entrypoint; only this workflow exercises it.
       - "python/sglang/srt/entrypoints/grpc_server.py"
@@ -39,9 +43,15 @@ jobs:
       github.event_name != 'pull_request' ||
       (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'run-ci')) ||
       (github.event.action == 'labeled' && github.event.label.name == 'run-ci')
-    # Pin to 22.04 so the wheel auditwheel-tags as manylinux_2_35; the self-hosted GPU runners are Ubuntu 22.04 (glibc 2.35) and reject manylinux_2_39 wheels produced on ubuntu-latest (Ubuntu 24.04).
+    # Pin to 22.04 so the wheel auditwheel-tags as manylinux_2_35; the
+    # self-hosted GPU runners are Ubuntu 22.04 (glibc 2.35) and reject
+    # manylinux_2_39 wheels produced on ubuntu-latest (Ubuntu 24.04).
     runs-on: ubuntu-22.04
-    # sccache is only installed on the GitHub-hosted runners that run this job and `unit-tests`; setting RUSTC_WRAPPER workflow-wide leaks it to gateway-e2e on the self-hosted GPU runners (which don't have sccache), so any pip-install that compiles a Rust extension would fail with `could not execute process \`sccache rustc\``.
+    # sccache is only installed on the GitHub-hosted runners that run this
+    # job and `unit-tests`; setting RUSTC_WRAPPER workflow-wide leaks it to
+    # gateway-e2e on the self-hosted GPU runners (which don't have sccache),
+    # so any pip-install that compiles a Rust extension would fail with
+    # `could not execute process \`sccache rustc\``.
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
@@ -200,13 +210,31 @@ jobs:
         (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'run-ci')) ||
         (github.event.action == 'labeled' && github.event.label.name == 'run-ci')
       )
-    # The `responses` matrix entry is intentionally omitted. It needs `docker run gvenzl/oracle-xe` + `docker run shoofio/brave-search-mcp-sse` on the runner host, but the 2-/4-gpu-h100 runners are themselves containers without a Docker daemon. Re-enable by adding back: - name: responses runner: 2-gpu-h100 timeout: 45 test_dirs: "e2e_test/responses" extra_deps: "" env_vars: "SHOW_WORKER_LOGS=0 SHOW_ROUTER_LOGS=1" reruns: "--reruns 2 --reruns-delay 5" setup_oracle: true setup_brave: true parallel_opts: "" plus the Oracle Instant Client / `gvenzl/oracle-xe` / `shoofio/brave-search-mcp-sse` setup + cleanup steps (see commit cf346bb15 for the exact step bodies) once a runner with `docker.sock` (or binary-installed deps) is available.
+    # The `responses` matrix entry is intentionally omitted. It needs
+    # `docker run gvenzl/oracle-xe` + `docker run shoofio/brave-search-mcp-sse`
+    # on the runner host, but the 2-/4-gpu-h100 runners are themselves
+    # containers without a Docker daemon. Re-enable by adding back:
+    #   - name: responses
+    #     runner: 2-gpu-h100
+    #     timeout: 45
+    #     test_dirs: "e2e_test/responses"
+    #     extra_deps: ""
+    #     env_vars: "SHOW_WORKER_LOGS=0 SHOW_ROUTER_LOGS=1"
+    #     reruns: "--reruns 2 --reruns-delay 5"
+    #     setup_oracle: true
+    #     setup_brave: true
+    #     parallel_opts: ""
+    # plus the Oracle Instant Client / `gvenzl/oracle-xe` /
+    # `shoofio/brave-search-mcp-sse` setup + cleanup steps (see commit
+    # cf346bb15 for the exact step bodies) once a runner with
+    # `docker.sock` (or binary-installed deps) is available.
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: benchmarks
-            # 4 GPUs: test_pd_perf.py uses workers(prefill=2, decode=2) and test_regular_perf.py uses workers(count=4) — both need tp*workers=4.
+            # 4 GPUs: test_pd_perf.py uses workers(prefill=2, decode=2) and
+            # test_regular_perf.py uses workers(count=4) — both need tp*workers=4.
             runner: 4-gpu-h100
             timeout: 32
             test_dirs: "e2e_test/benchmarks"
@@ -222,7 +250,14 @@ jobs:
             extra_deps: ""
             env_vars: "SHOW_WORKER_LOGS=0 SHOW_ROUTER_LOGS=1"
             reruns: "--reruns 2 --reruns-delay 5"
-            # Run tests serially. pytest-parallel (unmaintained since 2019) has buggy fixture-finalize handling under thread dispatch: both class- and function-scoped fixture references leaked between tests, leaving model_pool instances pinned at _ref_count > 0 and deadlocking later tests that needed eviction (50+ min hangs). On a 2-GPU runner with 5 distinct model:mode combos in router+embeddings, the suite is eviction-bound anyway, so the parallel speedup was illusory.
+            # Run tests serially. pytest-parallel (unmaintained since 2019)
+            # has buggy fixture-finalize handling under thread dispatch:
+            # both class- and function-scoped fixture references leaked
+            # between tests, leaving model_pool instances pinned at
+            # _ref_count > 0 and deadlocking later tests that needed
+            # eviction (50+ min hangs). On a 2-GPU runner with 5 distinct
+            # model:mode combos in router+embeddings, the suite is
+            # eviction-bound anyway, so the parallel speedup was illusory.
             parallel_opts: ""
           - name: chat-completions
             runner: 2-gpu-h100
@@ -235,7 +270,8 @@ jobs:
           - name: chat-completions-4gpu
             runner: 4-gpu-h100
             timeout: 45
-            # qwen-30b (tp=4) tests can't fit on the 2-gpu-h100 matrix entries — they get skipped there by hooks.py. Run them here so coverage holds.
+            # qwen-30b (tp=4) tests can't fit on the 2-gpu-h100 matrix entries —
+            # they get skipped there by hooks.py. Run them here so coverage holds.
             test_dirs: "e2e_test/chat_completions/test_enable_thinking.py"
             extra_deps: ""
             env_vars: "SHOW_WORKER_LOGS=0 SHOW_ROUTER_LOGS=1"
@@ -243,7 +279,14 @@ jobs:
             parallel_opts: ""
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
-    # Self-hosted GPU runners are scarce; serialize per hardware type so 2-gpu-h100 and 4-gpu-h100 each run one job at a time across all in-flight PRs. Queue rather than cancel — different refs shouldn't interrupt each other. Include matrix.name in the group so siblings within the same run don't collide: GitHub keeps only one pending job per concurrency group, so matrix entries sharing a group (e.g. benchmarks + chat-completions-4gpu on 4-gpu-h100) would evict each other regardless of cancel-in-progress: false.
+    # Self-hosted GPU runners are scarce; serialize per hardware type so
+    # 2-gpu-h100 and 4-gpu-h100 each run one job at a time across all
+    # in-flight PRs. Queue rather than cancel — different refs shouldn't
+    # interrupt each other. Include matrix.name in the group so siblings
+    # within the same run don't collide: GitHub keeps only one pending job
+    # per concurrency group, so matrix entries sharing a group (e.g.
+    # benchmarks + chat-completions-4gpu on 4-gpu-h100) would evict each
+    # other regardless of cancel-in-progress: false.
     concurrency:
       group: pr-test-rust-${{ matrix.runner }}-${{ matrix.name }}
       cancel-in-progress: false
@@ -323,7 +366,10 @@ jobs:
           cache-to: type=gha,mode=max
 
   k8s-integration:
-    # Runs SMG against a kind cluster with fake worker pods to exercise the K8s service discovery / reconciliation path. No GPU required (workers are python:3.12-slim mocks); the h100 matrix runners are unsuitable because they're containers without a Docker daemon.
+    # Runs SMG against a kind cluster with fake worker pods to exercise the
+    # K8s service discovery / reconciliation path. No GPU required (workers
+    # are python:3.12-slim mocks); the h100 matrix runners are unsuitable
+    # because they're containers without a Docker daemon.
     if: |
       github.event_name != 'pull_request' ||
       (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'run-ci')) ||

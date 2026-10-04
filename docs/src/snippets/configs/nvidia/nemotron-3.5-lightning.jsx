@@ -5,13 +5,14 @@
 export const config = {
   modelName: "Nemotron 3.5 Lightning",
 
+  // Three validated single-GPU platforms, all at TP1/EP1.
   supportedHardware: ["b200", "h100", "dgx-spark"],
 
   variants: [{ id: "default", label: "Default" }],
 
   quantizations: [{ id: "nvfp4", label: "NVFP4" }, { id: "bf16", label: "BF16" }],
 
-  // The base serving recipe plus those validated speculative decoders.
+  // The base serving recipe plus the three validated speculative decoders.
   strategies: [
     { id: "balanced", label: "Balanced" },
     { id: "mtp",      label: "MTP"      },
@@ -62,6 +63,7 @@ sgl-eval run gsm8k \\
 
   dockerImages: {
     // Multi-arch index (amd64 + arm64), so one tag covers H100, B200, and GB10.
+    // Equivalent to dev-cu13-nemotron3-5-lightning.
     b200:        "lmsysorg/sglang:dev-nemotron3-5-lightning",
     h100:        "lmsysorg/sglang:dev-nemotron3-5-lightning",
     "dgx-spark": "lmsysorg/sglang:dev-nemotron3-5-lightning",
@@ -161,6 +163,8 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DFlash uses depth five on B200; its full-attention draft resolves to
+    // FlashInfer while target verification remains TRT-LLM MHA.
     {
       match: { hw: "b200", variant: "default", quant: "nvfp4", strategy: "dflash", nodes: "single" },
       env: [],
@@ -238,6 +242,7 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DFlash: separate draft model; depth three -> block/verify width four.
     {
       match: { hw: "h100", variant: "default", quant: "nvfp4", strategy: "dflash", nodes: "single" },
       env: [],
@@ -255,6 +260,7 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DSpark: separate draft model; gamma three.
     {
       match: { hw: "h100", variant: "default", quant: "nvfp4", strategy: "dspark", nodes: "single" },
       env: [],
@@ -310,6 +316,7 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DFlash: separate draft model; depth three -> block/verify width four.
     {
       match: { hw: "dgx-spark", variant: "default", quant: "nvfp4", strategy: "dflash", nodes: "single" },
       env: [],
@@ -327,6 +334,7 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DSpark: separate draft model; gamma three.
     {
       match: { hw: "dgx-spark", variant: "default", quant: "nvfp4", strategy: "dspark", nodes: "single" },
       env: [],
@@ -386,6 +394,8 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DFlash uses depth five on B200; its full-attention draft resolves to
+    // FlashInfer while target verification remains TRT-LLM MHA.
     {
       match: { hw: "b200", variant: "default", quant: "bf16", strategy: "dflash", nodes: "single" },
       env: [],
@@ -463,6 +473,7 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DFlash: separate draft model; depth three -> block/verify width four.
     {
       match: { hw: "h100", variant: "default", quant: "bf16", strategy: "dflash", nodes: "single" },
       env: [],
@@ -480,6 +491,7 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DSpark: separate draft model; gamma three.
     {
       match: { hw: "h100", variant: "default", quant: "bf16", strategy: "dspark", nodes: "single" },
       env: [],
@@ -535,6 +547,7 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DFlash: separate draft model; depth three -> block/verify width four.
     {
       match: { hw: "dgx-spark", variant: "default", quant: "bf16", strategy: "dflash", nodes: "single" },
       env: [],
@@ -552,6 +565,7 @@ sgl-eval run gsm8k \\
         "--port {{PORT}}",
       ],
     },
+    // DSpark: separate draft model; gamma three.
     {
       match: { hw: "dgx-spark", variant: "default", quant: "bf16", strategy: "dspark", nodes: "single" },
       env: [],

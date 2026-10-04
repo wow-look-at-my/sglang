@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! HTTP proxy — forwards requests to the upstream SGLang worker.
@@ -21,9 +21,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-/// Parse a worker URL emitted by discovery. On failure, trip the worker's
+/// Parse a worker URL emitted by discovery.  On failure, trip the worker's
 /// circuit breaker so the malformed worker drops out of subsequent
-/// `healthy_workers_for(...)` selection.
+/// `healthy_workers_for(...)` selection, then surface the error as
 /// `ApiError::WorkerMisconfigured`.
 fn parse_worker_url(worker_url: &str, breaker: &CircuitBreaker) -> Result<Url, ApiError> {
     Url::parse(worker_url).map_err(|e| {
@@ -35,19 +35,47 @@ fn parse_worker_url(worker_url: &str, breaker: &CircuitBreaker) -> Result<Url, A
     })
 }
 
-/// How an upstream HTTP response status should affect the worker's circuit breaker.
+/// How an upstream HTTP response status should affect the worker's circuit
+/// breaker, at the dispatch sites (`forward_json_to` / `forward_streaming_to`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BreakerOutcome {
-    /// The worker was responsive — a 2xx.
+    /// The worker was responsive — a 2xx, or a 4xx it answered cleanly (a
+    /// client's bad request says nothing about worker health). The non-streaming
+    /// arm records success immediately; the streaming arm defers to the pump's
+    /// completion hook, which classifies [`sse::StreamEnd::reason`],
+    /// since a 2xx head can still be followed
+    /// by a body that never completes.
     Success,
-    /// A real fault (5xx other than backpressure) → `record_failure`: count toward opening.
+    /// A real fault (5xx other than backpressure) → `record_failure`: count
+    /// toward opening.
     Failure,
-    /// Backpressure or router-side stream expiry → `record_backpressure`: never opens the breaker and, while Closed.
+    /// Backpressure or router-side stream expiry →
+    /// `record_backpressure`: never opens the breaker and, while Closed, leaves
+    /// an in-progress failure streak intact — but still resolves a half-open
+    /// probe so a recovered-but-busy worker isn't wedged shut.
     Neutral,
 }
 
 /// Classify an upstream status for circuit-breaker accounting.
-/// worker signalling "responsive but at capacity", not a fault.
+///
+/// A backpressure status — `503 Service Unavailable` or `429 Too Many
+/// Requests` — is the worker signalling "responsive but at capacity", not a
+/// fault. Counting it as a breaker failure is actively harmful: a saturated
+/// worker trips the breaker on its own queue-full 503s, and with a single
+/// worker the router then sheds *every* request for the whole cool-down —
+/// including after the engine has drained and gone idle. So backpressure is
+/// [`Neutral`](BreakerOutcome::Neutral) (see [`CircuitBreaker::record_backpressure`]
+/// for its exact effect per breaker state). Genuine 5xx faults (500 / 502 /
+/// 504 / …) still count as failures, and transport errors / timeouts /
+/// mid-body drops are recorded as failures at the call sites — as are a
+/// malformed discovery URL (`parse_worker_url`) and a stream whose body dies
+/// after a 2xx head.
+///
+/// Tradeoff: because 503 never opens the breaker, a worker stuck returning 503
+/// indefinitely (a wedged engine, not transient load) is NOT detected here —
+/// HTTP status alone can't distinguish "busy" from "broken-and-saying-503", and
+/// counting it caused the worse fleet-wide false-shed above. Detecting a
+/// chronically-backpressuring worker is left to higher-level signals.
 fn breaker_outcome(status: reqwest::StatusCode) -> BreakerOutcome {
     use reqwest::StatusCode;
     match status {
@@ -73,18 +101,23 @@ fn stream_breaker_outcome(end: sse::StreamEnd) -> BreakerOutcome {
 
 #[derive(Debug)]
 pub struct Proxy {
-    /// The negotiating client: HTTP/1.1 in cleartext, and ALPN `h2, http/1.1` over TLS.
+    /// The negotiating client: HTTP/1.1 in cleartext, and ALPN `h2, http/1.1`
+    /// over TLS. Safe against any engine, which is why it is also the client
+    /// for side-channel admin traffic (`/flush_cache`).
     default_client: Client,
-    /// Cleartext h2c (HTTP/2 prior knowledge).
+    /// Cleartext h2c (HTTP/2 prior knowledge). No negotiation happens, so this
+    /// is used only for workers whose `/server_info` reported `--enable-http2`
+    /// on a cleartext URL.
     h2c_client: Client,
-    /// Wall-clock timeout applied to non-streaming upstream requests.
+    /// Wall-clock timeout applied to non-streaming upstream requests. Streaming
+    /// requests deliberately do not use this (long generations are valid).
     pub request_timeout: Duration,
     /// Maximum silence between streamed upstream chunks; `None` waits forever.
     pub stream_idle_timeout: Option<Duration>,
 }
 
 /// Build a forwarding client for `protocol`, sharing pool/connect tuning
-/// across protocols. The h2c variant pins HTTP/2 prior knowledge.
+/// across protocols. The h2c variant pins HTTP/2 prior knowledge, which is
 /// what Granian's `HTTPModes.auto` serves on a plaintext port; plaintext has
 /// no ALPN, so prior knowledge is the only way to reach it.
 fn build_client(protocol: WireProtocol) -> Result<Client, anyhow::Error> {
@@ -100,9 +133,15 @@ fn build_client(protocol: WireProtocol) -> Result<Client, anyhow::Error> {
 }
 
 impl Proxy {
-    /// Build a proxy. `request_timeout` is the per-request wall-clock budget
-    /// for non-streaming forwards.
-    /// unreachable.
+    /// Build a proxy. `request_timeout` is the per-request wall-clock budget for
+    /// non-streaming forwards. Connect timeout is hard-coded to 5 s — even a
+    /// streaming request fails fast at TCP setup if the worker is unreachable.
+    ///
+    /// WHY both clients up front: protocol is a per-worker property resolved
+    /// from each engine's `/server_info`, so the request path must be able to
+    /// pick either one per request. Building them here reduces that to a
+    /// selection — no per-request client construction, and no single shared
+    /// client whose first writer decides the protocol for the whole fleet.
     pub fn new(request_timeout: Duration) -> Result<Self, anyhow::Error> {
         Ok(Self {
             default_client: build_client(WireProtocol::Http1)?,
@@ -127,7 +166,7 @@ impl Proxy {
     }
 
     /// The client for side-channel admin traffic (e.g. `/flush_cache`), which
-    /// fans out across workers.
+    /// fans out across workers and so cannot use any one worker's protocol.
     pub fn admin_client(&self) -> &Client {
         &self.default_client
     }
@@ -157,7 +196,16 @@ impl Proxy {
         }
     }
 
-    /// Breaker-gated JSON POST: acquires a cancellation-safe permit first.
+    /// Breaker-gated JSON POST: acquires a cancellation-safe permit first, classifies the
+    /// response status through [`breaker_outcome`] (success / failure /
+    /// backpressure), and returns `ApiError::BreakerOpen` immediately when the
+    /// breaker is Open.
+    ///
+    /// `worker_url` is the discovery-emitted worker URL string. It's parsed
+    /// to [`reqwest::Url`] internally so we can use [`Url::join`] for clean
+    /// path concatenation (no double-slash) and pass a typed URL to the
+    /// split error variants (`UpstreamUnreachable` / `UpstreamTimeout` /
+    /// `UpstreamStatus`).
     #[allow(clippy::too_many_arguments)]
     pub async fn forward_json_to(
         &self,
@@ -192,14 +240,19 @@ impl Proxy {
             Self::classify_reqwest_error_for(worker_url.clone(), e, path)
         })?;
         let status = resp.status();
-        // Defer breaker recording until after the body completes — a worker
-        // that returns 2xx headers and then drops mid-body is still failing
-        // the request, and crediting it as healthy lets a misbehaving worker
-        // stay eligible.
+        // Defer breaker recording until after the body completes — a
+        // worker that returns 2xx headers and then drops mid-body is
+        // still failing the request, and crediting it as healthy lets
+        // a misbehaving worker stay eligible. For 5xx the early bail is
+        // safe (no body to consume meaningfully), but we still wait
+        // until after the read attempt to record exactly once.
         let bytes = match resp.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                // Walk the full source chain (`{:#}`) like the connect-error handler in `classify_reqwest_error_for` — a mid-body drop's real cause.
+                // Walk the full source chain (`{:#}`) like the connect-error
+                // handler in `classify_reqwest_error_for` — a mid-body drop's
+                // real cause (incomplete message, connection reset) lives in the
+                // wrapped source, not the outer reqwest error.
                 let cause = anyhow::Error::new(e);
                 tracing::warn!(
                     upstream = %url,
@@ -215,6 +268,10 @@ impl Proxy {
         match breaker_outcome(status) {
             BreakerOutcome::Failure => breaker.record_failure(),
             BreakerOutcome::Success => breaker.record_success(),
+            // Backpressure (503/429): the engine is healthy but busy. This never
+            // opens the breaker and (in Closed) leaves the failure streak
+            // intact, but it DOES resolve a half-open probe so a recovered
+            // worker that answers a probe with 503 isn't wedged shut.
             BreakerOutcome::Neutral => breaker.record_backpressure(),
         }
         permit.disarm();
@@ -227,7 +284,22 @@ impl Proxy {
         Ok(out)
     }
 
-    /// Breaker-gated streaming POST: acquires a cancellation-safe permit first.
+    /// Breaker-gated streaming POST: acquires a cancellation-safe permit first, classifies
+    /// the response status through [`breaker_outcome`], and returns
+    /// `ApiError::BreakerOpen` when Open.
+    ///
+    /// `stream_guards` — when `Some`, the value is threaded into the SSE
+    /// pump task and held for the entire body lifetime (headers → last byte
+    /// / client disconnect).  The proxy does not inspect the boxed value; it
+    /// relies entirely on `Drop` semantics, so callers typically pack
+    /// `(LoadGuard, RouterInflightLoadGuard)` here. This keeps both the per-worker
+    /// `active_requests` counter and the per-request active-load entry alive
+    /// for the full streaming lifetime — without which a long-running SSE
+    /// response would under-report load.
+    // Each parameter is a distinct, required input to a single upstream
+    // forward (target, protocol, breaker, path, headers, body, plus the
+    // streaming-lifetime callbacks). Bundling them into a struct purely to
+    // satisfy the arg-count heuristic would add indirection without clarity.
     #[allow(clippy::too_many_arguments)]
     pub async fn forward_streaming_to(
         &self,
@@ -280,7 +352,16 @@ impl Proxy {
         } else {
             upstream_ct
         };
-        // Breaker recording is deferred to the pump's completion hook so an upstream that returns 2xx headers and then drops mid-stream is recorded.
+        // Breaker recording is deferred to the pump's completion hook so
+        // an upstream that returns 2xx headers and then drops mid-stream
+        // is recorded as a failure. For a genuine 5xx fault we record_failure
+        // up front and skip the pump hook (the body we surface is the
+        // error response — its stream completing is not a worker win). For a
+        // backpressure status (503/429) we record_backpressure up front and
+        // skip the hook: a busy-but-healthy engine's queue-full responses can't
+        // open the breaker, but a half-open probe answered with 503 is still
+        // resolved rather than wedged (see `breaker_outcome` /
+        // `record_backpressure`).
         let caller_end_hook = if status.is_success() {
             on_stream_end
         } else {
@@ -360,7 +441,12 @@ mod tests {
         assert_eq!(p.request_timeout, Duration::from_secs(5));
     }
 
-    /// `client_for` routes each protocol to its own field, and admin traffic shares the default client.
+    /// `client_for` routes each protocol to its own field, and admin traffic
+    /// shares the default client. Asserting the two clients differ by address
+    /// would be vacuous — they are distinct struct fields, so that holds even
+    /// if `build_client` ignored its argument. What the selector must get right
+    /// is the mapping, so pin that instead; the on-the-wire difference between
+    /// the two clients is covered by tests/proxy/h2c_forward.rs.
     #[tokio::test]
     async fn client_for_maps_each_protocol_to_its_own_client() {
         let p = Proxy::new(Duration::from_secs(5)).unwrap();
@@ -609,7 +695,9 @@ mod tests {
         assert!(!breaker.would_allow());
     }
 
-    /// A saturated engine's own queue-full 503s must not trip the router's circuit breaker.
+    /// A saturated engine's own queue-full 503s must not trip the router's
+    /// circuit breaker. Dispatch far past any plausible failure threshold and
+    /// assert the breaker stays Closed and admitting.
     #[tokio::test]
     async fn engine_503_does_not_trip_breaker() {
         let (url, _shutdown) = spawn_status_worker(503).await;
@@ -647,7 +735,10 @@ mod tests {
         );
     }
 
-    /// Contrast guard, so the backpressure carve-out cannot disable fault detection: a genuine 5xx fault ().
+    /// Contrast guard, so the backpressure carve-out cannot disable fault
+    /// detection: a genuine 5xx fault (500) MUST still open the breaker. Loops
+    /// on `would_allow()` rather than a fixed count so the test stays correct if
+    /// the default `CircuitBreakerConfig` threshold changes.
     #[tokio::test]
     async fn engine_500_still_trips_breaker() {
         let (url, _shutdown) = spawn_status_worker(500).await;
@@ -678,19 +769,25 @@ mod tests {
         );
     }
 
-    /// End-to-end wedge guard: a breaker that opened on real faults, then has its half-open probe answered with a.
+    /// End-to-end wedge guard: a breaker that opened on real faults, then has
+    /// its half-open probe answered with a 503, must RECOVER — not stay shut
+    /// out forever. Exercises the `Neutral => record_backpressure` wiring in
+    /// `forward_json_to` through the half-open path.
     #[tokio::test]
     async fn engine_503_recovers_a_half_open_breaker() {
         let (url, _shutdown) = spawn_status_worker(503).await;
         let proxy = Proxy::new(Duration::from_secs(5)).unwrap();
-        // threshold=1 so one prior fault opens it; a short cooldown so the
-        // probe is admitted quickly.
+        // threshold=1 so one prior fault opens it; a short cooldown so the probe
+        // is admitted quickly. The wait below is an order of magnitude longer
+        // than the cooldown rather than a thin margin, since this test needs a
+        // real socket and so cannot pause the clock.
         let breaker = CircuitBreaker::with_config(CircuitBreakerConfig {
             threshold: NonZeroU32::new(1).unwrap(),
             cool_down: Duration::from_millis(20),
         });
         let headers = HeaderMap::new();
 
+        // Simulate a prior genuine fault (e.g. a 500 / timeout) that tripped it.
         breaker.record_failure();
         assert_eq!(breaker.snapshot().state_code, 1, "breaker should be Open");
 
@@ -721,7 +818,8 @@ mod tests {
         );
     }
 
-    /// Streaming path parity: the engine's on the streaming arm must also leave the breaker untouched.
+    /// Streaming path parity: the engine's 503 on the streaming arm must also
+    /// leave the breaker untouched (no up-front failure, no completion hook).
     #[tokio::test]
     async fn engine_503_does_not_trip_breaker_streaming() {
         use http_body_util::BodyExt;
@@ -749,7 +847,8 @@ mod tests {
                 .await
                 .expect("streaming dispatch should reach the worker");
             assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "iter {i}");
-            // Drain the body so the pump task runs to completion (would fire any completion hook).
+            // Drain the body so the pump task runs to completion (would fire any
+            // completion hook). For a 503 there is none, but draining proves it.
             let _ = resp.into_body().collect().await;
             assert_eq!(
                 breaker.snapshot().state_code,

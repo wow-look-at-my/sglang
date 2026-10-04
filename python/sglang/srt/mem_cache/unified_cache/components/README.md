@@ -1,13 +1,13 @@
 # Unified Radix Cache
 
-A component-based, pluggable prefix cache framework for SGLang that unifies Full-attention, Sliding-Window-Attention (SWA), and Mamba/SSM caching. This is into a single radix tree.
+A component-based, pluggable prefix cache framework for SGLang that unifies Full-attention, Sliding-Window-Attention (SWA), and Mamba/SSM caching into a single radix tree.
 
 ## Design Goals
 
 1. **Unified tree structure** — One radix tree manages all KV cache types, replacing the separate specialized implementations that preceded it.
 2. **Pluggable components** — Each attention/state type (Full, SWA, Mamba) is a `TreeComponent` that implements hook interfaces. Adding a new cache type only requires adding a new component.
-3. **Per-component resource isolation** — Each component has its own lock reference counting, evictable/protected size tracking, and eviction driver. Auxiliary components use per-component LRUs. Full uses device/host leaf sets.
-4. **Cascade eviction with priority** — When a component evicts a node, lower-or-equal-priority components on the same node are evicted together. This is maintaining cross-component consistency.
+3. **Per-component resource isolation** — Each component has its own lock reference counting, evictable/protected size tracking, and eviction driver. Auxiliary components use per-component LRUs; Full uses device/host leaf sets.
+4. **Cascade eviction with priority** — When a component evicts a node, lower-or-equal-priority components on the same node are evicted together, maintaining cross-component consistency.
 5. **Zero special-casing in the main tree** — The tree operates purely on keys (logical). All physical resource management (allocation, freeing, copy-on-write) is handled by components through hooks.
 
 ## Architecture
@@ -89,7 +89,7 @@ All public APIs are on `UnifiedRadixCache`, which implements `BasePrefixCache`.
 
 **Notation**: K = key length (tokens), D = matched path depth in tree (D ≤ K/P), P = page_size, C = number of components (≤ 3, treated as constant).
 
-All tree traversal operations have cost components: **O(K)** for data operations (key comparison, tensor clone/concat) + **O(D·C)** for component overhead (C hooks per node). Since D ≤ K/P and C is constant, overall **O(K)**.
+All tree traversal operations have two cost components: **O(K)** for data operations (key comparison, tensor clone/concat) + **O(D·C)** for component overhead (C hooks per node). Since D ≤ K/P and C is constant, overall **O(K)**.
 
 ### `match_prefix(params: MatchPrefixParams) → MatchResult`
 
@@ -105,13 +105,13 @@ Find the longest cached prefix for a token sequence.
 
 **Algorithm detail:**
 1. Calls `create_match_validator(match_device_only=...)` once per component — returns a stateful closure (e.g., SWA tracks accumulated window length). In HiCache mode, matching tracks both the best device-only node and the best device-or-host node.
-2. Walks tree edges via `RadixKey.match()`. At each node, calls all validator closures — the match boundary is only advanced when **all** validators return `True`
+2. Walks tree edges via `RadixKey.match()`; at each node, calls all validator closures — the match boundary is only advanced when **all** validators return `True`
 3. If match ends mid-node, calls `_split_node` → triggers `redistribute_on_node_split()` per component
 4. Post-match (`_match_post_processor`):
    - Promotes matched path to MRU in each component's LRU via `node_has_component_data()` as filter
    - Updates `last_access_time` with decreasing timestamps up the path (parent < child)
    - Concatenates matched device indices via `torch.cat` (concat length ≤ K, subsumed by O(K))
-   - Calls `finalize_match_result_in_tree_core()` per component (tree-side: Full/SWA host-hit sums, Mamba `branching_seqlen`). The cache then routes `finalize_match_result_in_cache()` per component post-walk (Mamba performs copy-on-write: allocates new pool slot, copies SSM state)
+   - Calls `finalize_match_result_in_tree_core()` per component (tree-side: Full/SWA host-hit sums, Mamba `branching_seqlen`); the cache then routes `finalize_match_result_in_cache()` per component post-walk (Mamba performs copy-on-write: allocates new pool slot, copies SSM state)
 
 ---
 
@@ -130,15 +130,15 @@ Insert a key-value pair into the tree.
 **Algorithm detail** (the resumable insert steps: `_insert_walk_step` / `_insert_commit_step` / `_insert_tail_step`):
 1. At each existing node, calls `_touch_node` → promotes to MRU via `node_has_component_data()`
 2. If key diverges mid-node, calls `_split_node` → `redistribute_on_node_split()` per component
-3. For each overlapping node, calls `update_component_on_insert_overlap()` per component — returns `consumed_from` index. The tree frees `value[dup_start:consumed_from]` as duplicate pool indices
+3. For each overlapping node, calls `update_component_on_insert_overlap()` per component — returns `consumed_from` index; the tree frees `value[dup_start:consumed_from]` as duplicate pool indices
    - Full: returns `prefix_len` (no consumption, default behavior)
    - SWA: checks if the overlapping node is a tombstone (SWA value = None) within the SWA window boundary (`params.get_evicted_seqlen(ComponentType.SWA)`):
      - If entirely within window: **recovers tombstone** — frees old `full_value`, clones `value_slice`, translates to SWA indices, inserts into SWA LRU (returns `0` = all consumed)
      - If partially within window: **splits node** at boundary, recovers SWA on the window portion (returns `start_idx`)
      - If entirely outside window: returns `prefix_len` (no consumption)
    - Mamba: returns `prefix_len` (no consumption, default behavior)
-4. Creates leaf via `_add_new_node` (clones value tensor, updates Full leaf-set tracking). A leaf survives on its Full value alone. As a result, it is materialized even when an auxiliary component holds only a tombstone for the span (e.g. the whole leaf is outside the SWA window)
-5. Calls `commit_insert_component_data()` per component on the final target node (SWA may trigger a secondary split for window boundary. Mamba sets mamba pool indices and inserts into Mamba LRU)
+4. Creates leaf via `_add_new_node` (clones value tensor, updates Full leaf-set tracking). A leaf survives on its Full value alone, so it is materialized even when an auxiliary component holds only a tombstone for the span (e.g. the whole leaf is outside the SWA window)
+5. Calls `commit_insert_component_data()` per component on the final target node (SWA may trigger a secondary split for window boundary; Mamba sets mamba pool indices and inserts into Mamba LRU)
 
 ---
 
@@ -156,11 +156,11 @@ Free cached tokens to reclaim memory.
 
 **Algorithm detail:**
 1. Drives each component's walk via `evict_device_start()` / `evict_device_next_node()` / `evict_device_end()`:
-   - Full: drives eviction from `evictable_device_leaves` using `last_access_time`. Only device leaves are evicted atomically
-   - SWA: scans SWA LRU from tail. **internal** nodes are tombstoned (evict SWA data, keep node), **leaf** nodes are fully deleted. Both trigger cascade
-   - Mamba: scans Mamba LRU from tail. **internal** nodes are tombstoned, **leaf** nodes are fully deleted. Both trigger cascade
+   - Full: drives eviction from `evictable_device_leaves` using `last_access_time`; only device leaves are evicted atomically
+   - SWA: scans SWA LRU from tail; **internal** nodes are tombstoned (evict SWA data, keep node), **leaf** nodes are fully deleted; both trigger cascade
+   - Mamba: scans Mamba LRU from tail; **internal** nodes are tombstoned, **leaf** nodes are fully deleted; both trigger cascade
 2. After each node eviction, calls `_cascade_evict`:
-   - Queries `eviction_priority()` per component. Evicts all with priority ≤ trigger's
+   - Queries `eviction_priority()` per component; evicts all with priority ≤ trigger's
    - Calls `evict_component()` + `node_has_component_data()` for cascaded components
    - For leaf: removes from parent, then `_iteratively_delete_tombstone_leaf` walks up **O(H)** ancestors
 
@@ -185,7 +185,9 @@ Lock a node to protect it (and its ancestors) from eviction.
 | **Mutation** | Increments `lock_ref` per component along its contiguous segment; moves data-bearing tokens from evictable to protected size counters |
 | **Complexity** | **O(D)** — Full: node to root; SWA: up to window boundary O(min(D, W)); Mamba: O(1).|
 
-**Algorithm detail:** Calls `acquire_component_lock()` for each component. A lock covers a contiguous node segment and counts **every** node in it — tombstones included (they carry no tokens, so sizes only move for data-bearing nodes).
+**Algorithm detail:** Calls `acquire_component_lock()` for each component. A lock
+covers a contiguous node segment and counts **every** node in it — tombstones
+included (they carry no tokens, so sizes only move for data-bearing nodes).
 
 | Component | Strategy |
 |-----------|----------|
@@ -197,7 +199,7 @@ Lock a node to protect it (and its ancestors) from eviction.
 
 ### `dec_lock_ref(node, params, skip_swa=False) → DecLockRefResult`
 
-Unlock a locked node path by replaying the acquire's receipt.
+Unlock a previously locked node path by replaying the acquire's receipt.
 
 | Aspect | Detail |
 |--------|--------|
@@ -207,13 +209,22 @@ Unlock a locked node path by replaying the acquire's receipt.
 | **Mutation** | Decrements `lock_ref` per component along the same segment the acquire counted; moves tokens from protected back to evictable when `lock_ref` reaches 0 |
 | **Complexity** | **O(D)** — symmetric to `inc_lock_ref` |
 
-**Algorithm detail:** Releases auxiliary components before Full. Every walk refreshes the evictable-leaf membership of each node whose last lock it drops. As a result, the order is not load-bearing for the leaf sets. Full walks to root. SWA stops at the receipt boundary. Components in `skipped_lock_components` are left alone. `skip_swa=True` also skips lower-priority components already released by `dec_swa_lock_only`. The host-side `dec_host_lock_ref` takes the same required receipt.
+**Algorithm detail:** Releases auxiliary components before Full; every walk
+refreshes the evictable-leaf membership of each node whose last lock it drops,
+so the order is not load-bearing for the leaf sets. Full walks to root; SWA
+stops at the receipt boundary; components in `skipped_lock_components` are
+left alone. `skip_swa=True` also skips lower-priority components already
+released by `dec_swa_lock_only`. The host-side `dec_host_lock_ref` takes the
+same required receipt.
 
 ---
 
 ### `dec_swa_lock_only(node, params) → DecSwaLockOnlyResult`
 
-Early-release only the SWA portion of a lock (decode advanced past the window), plus strictly-lower-priority co-located locks (e.g. Mamba) the receipt proves were taken. The eventual full release must pass `skip_swa=True`. At most once per (node, boundary uuid) pair.
+Early-release only the SWA portion of a lock (decode advanced past the
+window), plus strictly-lower-priority co-located locks (e.g. Mamba) the
+receipt proves were taken. The eventual full release must pass
+`skip_swa=True`. At most once per (node, boundary uuid) pair.
 
 ---
 
@@ -230,7 +241,7 @@ Cache a completed request's KV data into the tree.
 | **Complexity** | **O(K + D·C)** — insert O(K + D·C) + lock release O(D). Simplifies to **O(K)**. |
 
 **Algorithm detail:**
-1. `prepare_for_caching_req()` per component — sets component-specific insert params, returns effective cache length (SWA: copies its cursor with `set_evicted_seqlen`. Mamba: prepares `mamba_value` from ping-pong buffer, returns `mamba_last_track_seqlen` as truncation hint)
+1. `prepare_for_caching_req()` per component — sets component-specific insert params, returns effective cache length (SWA: copies its cursor with `set_evicted_seqlen`; Mamba: prepares `mamba_value` from ping-pong buffer, returns `mamba_last_track_seqlen` as truncation hint)
 2. Truncates if `effective_cache_len < len(token_ids)`: frees excess pool indices
 3. Converts token IDs (bigram if EAGLE), page-aligns keys, then calls `insert()`
 4. Frees unaligned tail KV indices beyond page boundary

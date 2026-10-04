@@ -4,14 +4,14 @@ Status: implemented
 
 ## Packaging checks — 2026-09-17
 
-CPU tests pass: all request modes. Both stream formats, default DP routing, verified-single-worker omitted ranks, strict multiworker ranks, context/output validation, aborted/truncated streams, timeouts and cleanup. Measurement tests cover occupancy, per-label resets, missing/idle counters, token-weighted denominators, separate exporters, old/interrupted recordings. This is partial failed requests and safe self-contained HTML.
+17 CPU tests pass: all three request modes and both stream formats, default DP routing, verified-single-worker omitted ranks, strict multiworker ranks, context/output validation, aborted/truncated streams, timeouts and cleanup. Measurement tests cover occupancy, per-label resets, missing/idle counters, token-weighted denominators, separate exporters, old/interrupted recordings, partial failed requests and safe self-contained HTML.
 
 ~~~bash
 uv run --no-project --with aiohttp --with transformers --with prometheus-client \
   python -m unittest discover -s benchmark/agentic-rollout/tests -v
 ~~~
 
-Viewers were rebuilt from the saved Qwen runs below, each with multiple conversations and requests. Both tabs, all lanes, zoom, request selection, legends and static plots were checked. Embedded-asset tests pass. The browser renders with external resource loading blocked by the page policy. Direct file-URL navigation was blocked by the browser automation policy. As a result, that path was not manually verified. Packaging does not rerun GPU inference. Raw recordings, generated HTML and machine-specific orchestration stay outside.
+Viewers were rebuilt from the two saved Qwen runs below, each with 16 conversations and 96 requests. Both tabs, all 16 lanes, zoom, request selection, legends and static plots were checked. Embedded-asset tests pass, and the browser renders with external resource loading blocked by the page policy. Direct file-URL navigation was blocked by the browser automation policy, so that path was not manually verified. Packaging does not rerun GPU inference. Raw recordings, generated HTML and machine-specific orchestration stay outside this PR.
 
 ## Saved Qwen comparison — 2026-09-17
 
@@ -37,7 +37,7 @@ uv run benchmark/agentic-rollout/simulate.py \
   --disable-dp-sticky-routing --output-dir "results/page$PAGE"
 ~~~
 
-The recorded client disabled routing hints because this single-worker server omitted its response rank. The packaged client now accepts that omission with default sticky routing only for verified DP=1. This adjustment is CPU-tested, not GPU-rerun.
+The recorded client disabled routing hints because this single-worker server omitted its response rank. The packaged client now accepts that omission with default sticky routing only for verified DP=1; this adjustment is CPU-tested, not GPU-rerun.
 
 | Measurement | Page 1 | Page 64 |
 | --- | ---: | ---: |
@@ -49,4 +49,4 @@ The recorded client disabled routing hints because this single-worker server omi
 | Turns 4–5 mean time per output token | 10.56 ms | 2.33 ms |
 | Last observed eviction / restore counters | 92,200 / 76,088 | 66,112 / 49,984 |
 
-Limitations: one short run per setting, no reverse-order repeat. Client inputs, delays and lengths matched, but server-generated random seeds differed. 85/96 output hashes matched. This validates the client and exposes cache pressure. It does not establish a general page-size speedup or a kernel-level cause. Counters are last scraped values and may miss the tail.
+Limitations: one short run per setting, no reverse-order repeat. Client inputs, delays and lengths matched, but server-generated random seeds differed; 85/96 output hashes matched. This validates the client and exposes cache pressure; it does not establish a general page-size speedup or a kernel-level cause. Counters are last scraped values and may miss the tail.

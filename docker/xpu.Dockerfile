@@ -1,5 +1,6 @@
-# docker build -t sglang:xpu -f xpu.Dockerfile --build-arg http_proxy=${http_proxy} --build-arg https_proxy=${https_proxy} --build-arg no_proxy=${no_proxy} --no-cache.
+# docker build -t sglang:xpu -f xpu.Dockerfile --build-arg http_proxy=${http_proxy} --build-arg https_proxy=${https_proxy} --build-arg no_proxy=${no_proxy} --no-cache .
 
+# Use Intel deep learning essentials base image with Ubuntu 24.04
 FROM intel/deep-learning-essentials:2026.0.0-devel-ubuntu24.04
 
 # Avoid interactive prompts during package install
@@ -16,6 +17,7 @@ ARG SG_LANG_KERNEL_BRANCH=main
 
 USER root
 
+# Pin Level-Zero UMD + IGC (rolling PPA once faulted libze on B580; see sgl-kernel-xpu#296).
 # Keep in lockstep with the host xe KMD; override via --build-arg.
 ARG COMPUTE_RUNTIME_VERSION=26.18.38308.1
 ARG IGC_VERSION=2.34.4+21428

@@ -14,7 +14,7 @@ use tch::Tensor;
 
 use crate::components::{ComponentType, FULL, NUM_COMPONENT_TYPES};
 
-/// The independent dimensions that partition a radix tree.
+/// The two independent dimensions that partition a radix tree.
 #[derive(Debug)]
 struct KeyNamespaceData {
     extra_key: Option<Arc<str>>,
@@ -23,6 +23,9 @@ struct KeyNamespaceData {
 }
 
 /// Compact, shared namespace stored on nodes and child edges.
+///
+/// The default namespace is represented without an allocation. Non-default
+/// namespaces share one immutable allocation down a radix path.
 #[derive(Clone, Debug, Default)]
 pub struct KeyNamespace(Option<Arc<KeyNamespaceData>>);
 
@@ -150,21 +153,27 @@ impl<K: ChildKeyType> Equivalent<(KeyNamespace, K)> for ChildEdgeRef<'_, K> {
 pub struct Node<K: ChildKeyType> {
     /// Parent handle; `None` for the root or a not-yet-attached child.
     pub parent: Option<NodeIdx_>,
-    /// Own arena slot; stamped by the arena on allocation (hand-built nodes default it to the id value).
+    /// Own arena slot; stamped by the arena on allocation (hand-built nodes
+    /// default it to the id value).
     pub(crate) idx: NodeIdx_,
     /// The namespace this node belongs to.
     pub namespace: KeyNamespace,
-    /// Child edges keyed by (namespace, the child's page key).
+    /// Child edges keyed by (namespace, the child's page key); the namespace
+    /// component mirrors the child's namespace at every level.
     pub children: ChildMap<K>,
-    /// The page key labelling the edge from the parent (also this node's key in the parent's `children`); empty.
+    /// The page key labelling the edge from the parent (also this node's key in the
+    /// parent's `children`); empty for the root.
     pub key: K,
-    /// Per-(component × tier) value state, indexed by `ValueSlotIdx` (device slots first, host after).
+    /// Per-(component × tier) value state, indexed by `ValueSlotIdx` (device
+    /// slots first, host after); device states also sit at plain component
+    /// indices.
     pub values: [ValueState; NUM_VALUE_SLOTS],
     /// SWA lock-window uuid; stamped where a device lock walk fills the window.
     pub swa_uuid: Option<i64>,
     /// SWA lock-window uuid for host locks; stamped where a host lock walk fills the window.
     pub swa_host_uuid: Option<i64>,
     /// Per-page hash chain; None when the node was never hashed.
+    /// TODO: Store raw digests and hex-encode only at the Python or storage boundary.
     pub hash_value: Option<Vec<String>>,
     /// Whether this node is available through the direct external-cache linker.
     pub external_cache_stored: bool,
@@ -174,9 +183,13 @@ pub struct Node<K: ChildKeyType> {
     pub load_back_pending_id: Option<NodeId>,
     /// Monotonic access tick for LRU ordering (exact; not wall-clock).
     pub last_access_counter: i64,
+    /// Tick stamped at construction.
     pub creation_counter: i64,
+    /// Match hits accumulated for write-through and LFU decisions.
     pub hit_count: i64,
+    /// Eviction priority; the root uses `i64::MIN` and is never a leaf.
     pub priority: i64,
+    /// This node's external handle; minted once, never recycled.
     pub id: NodeId,
 }
 
@@ -236,6 +249,7 @@ impl<K: ChildKeyType> Node<K> {
         self.has_value_(ValueSlotIdx::device(component_type))
     }
 
+    /// The component's device value length, or 0 when value-less.
     pub fn device_value_len(&self, component_type: ComponentType) -> usize {
         self.value_len_(ValueSlotIdx::device(component_type))
     }
@@ -307,6 +321,7 @@ impl<K: ChildKeyType> Node<K> {
         self.has_value_(ValueSlotIdx::host(component_type))
     }
 
+    /// The component's host value length, or 0 when value-less.
     pub fn host_value_len(&self, component_type: ComponentType) -> usize {
         self.value_len_(ValueSlotIdx::host(component_type))
     }
@@ -499,6 +514,7 @@ impl<K: ChildKeyType> Node<K> {
         self.state_(slot).value.is_some()
     }
 
+    /// The slot's value length, or 0 when value-less (internal slot-keyed lookup).
     pub fn value_len_(&self, slot: ValueSlotIdx) -> usize {
         self.state_(slot)
             .value
@@ -607,6 +623,8 @@ impl<K: ChildKeyType> Node<K> {
 // Node handles and per-slot value state.
 
 /// External node handle — the only node identity that crosses the FFI.
+/// Minted monotonically and never recycled, so a freed node's id can never
+/// alias a later allocation (the arena's id map is the ABA guard).
 pub type NodeId = usize;
 
 /// Internal arena slot index; recycled by the freelist and never crosses the FFI.
@@ -623,6 +641,7 @@ impl std::fmt::Display for NodeIdx_ {
 pub const NUM_VALUE_SLOTS: usize = 2 * NUM_COMPONENT_TYPES;
 
 /// Flat index of one (component × tier) value slot in a node's `values` array.
+/// All slot arithmetic lives here; nothing else computes raw offsets.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct ValueSlotIdx(usize);
 
@@ -667,7 +686,8 @@ impl ValueSlotIdx {
     }
 }
 
-/// Per-(component × tier) node state: the KV-index `value` (held opaquely) and the in-flight `lock_ref`.
+/// Per-(component × tier) node state: the KV-index `value` (held opaquely)
+/// and the in-flight `lock_ref`.
 #[derive(Default)]
 pub struct ValueState {
     /// KV pool indices; `None` = value-less (root) or tombstone (evicted / out-of-window).
@@ -685,7 +705,8 @@ pub struct NodeAccessError {
     pub node_id: NodeId,
 }
 
-/// Errors surfaced from the tree-core runtime API when a caller violates a documented contract.
+/// Errors surfaced from the tree-core runtime API when a caller violates a documented
+/// contract (freeing an unallocated node, allocating under a freed parent).
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, thiserror::Error)]
 pub enum TreeCoreRuntimeError {
@@ -698,7 +719,8 @@ pub enum TreeCoreRuntimeError {
     /// `resume_insert` called without a suspended insert.
     #[error("no in-flight insert")]
     NoInFlightInsert,
-    /// A `NodeIdx_` beyond the arena's bounds — never allocated.
+    /// A `NodeIdx_` beyond the arena's bounds — never allocated. `size` is the
+    /// arena's current slot count, so valid ids are `0..size`.
     #[error("node access out of bounds: id {id} not in [0, {size})")]
     NodeAccessOutOfBound { id: NodeIdx_, size: usize },
     /// `free` called on an in-range slot that is already free — a double free.
@@ -772,16 +794,19 @@ pub trait ChildKeyType:
 {
     type Atom: Copy + Eq + Hash + Send + Sync;
 
-    /// Whether this key represents overlapping token bigrams rather than individual tokens.
+    /// Whether this key represents overlapping token bigrams rather than
+    /// individual tokens. This is type metadata, not per-node state.
     const IS_BIGRAM: bool;
 
-    /// The key over the boundary's raw token ids; ownership passes straight through, so the unigram key never copies.
+    /// The key over the boundary's raw token ids; ownership passes straight
+    /// through, so the unigram key never copies.
     fn key_from(token_ids: Cow<'_, Vec<i64>>) -> Cow<'_, Self>;
 
     /// The atom's token ids as u32 storage-hash words.
     fn hash_words(atom: &Self::Atom) -> impl Iterator<Item = u32>;
 
-    /// The raw token ids spanned by `atoms`; the unigram view borrows, bigram atoms (overlapping by one) materialize.
+    /// The raw token ids spanned by `atoms`; the unigram view borrows, bigram
+    /// atoms (overlapping by one) materialize.
     fn raw_token_ids(atoms: &[Self::Atom]) -> Cow<'_, [i64]>;
 
     /// Number of atoms in this key; an atom is one radix position — a token normally,
@@ -996,11 +1021,12 @@ pub(crate) fn get_hash_digests<K: ChildKeyType>(
     digests
 }
 
+/// The hash's first 16 hex chars as a signed 64-bit block id for events.
 pub fn hash_str_to_int64(hash_str: &str) -> i64 {
     u64::from_str_radix(&hash_str[..16], 16).expect("hash must be a hex digest") as i64
 }
 
-/// The raw digest's first several bytes as the event protocol's signed i64.
+/// The raw digest's first eight bytes as the event protocol's signed i64.
 pub(crate) fn hash_digest_to_int64(digest: &HashDigest) -> i64 {
     i64::from_be_bytes(digest[..8].try_into().expect("digest has eight bytes"))
 }
@@ -1029,7 +1055,8 @@ pub struct NodeArena<K: ChildKeyType> {
     nodes: Vec<Option<Node<K>>>,
     /// Freed slot ids available for reuse.
     free: Vec<NodeIdx_>,
-    /// External handle -> live slot.
+    /// External handle -> live slot; a freed `NodeId` leaves the map, so a
+    /// stale handle can never alias a recycled slot.
     id_map: HashMap<NodeId, NodeIdx_>,
     /// Next external handle; monotonic, never recycled (survives `reset`).
     next_id: NodeId,
@@ -1274,7 +1301,8 @@ impl<K: ChildKeyType> NodeArena<K> {
         priority: i64,
         namespace: KeyNamespaceRef<'_>,
     ) -> Result<NodeIdx_, TreeCoreRuntimeError> {
-        // Validate the parent and attach the child before committing a slot, so a rejected add reserves nothing.
+        // Validate the parent and attach the child before committing a slot, so a
+        // rejected add reserves nothing.
         let size = self.nodes.len();
         match self.nodes.get(parent.0) {
             None => return Err(TreeCoreRuntimeError::NodeAccessOutOfBound { id: parent, size }),
@@ -1415,6 +1443,7 @@ impl<K: ChildKeyType> NodeArena<K> {
         self.node(id).has_device_value(component_type)
     }
 
+    /// The node's device value length for the component, or 0 when value-less.
     pub fn device_value_len(&self, id: NodeIdx_, component_type: ComponentType) -> usize {
         self.node(id).device_value_len(component_type)
     }
@@ -1444,6 +1473,7 @@ impl<K: ChildKeyType> NodeArena<K> {
         self.node(id).has_host_value(component_type)
     }
 
+    /// The node's host value length for the component, or 0 when value-less.
     pub fn host_value_len(&self, id: NodeIdx_, component_type: ComponentType) -> usize {
         self.node(id).host_value_len(component_type)
     }
@@ -1478,7 +1508,8 @@ impl<K: ChildKeyType> NodeArena<K> {
         self.node_mut(id).inc_host_lock_ref(component_type);
     }
 
-    /// Mutable access to a live parent/child pair at once.
+    /// Mutable access to a live parent/child pair at once. Internal-only accessor:
+    /// panics on a dead id or when `child_node_id` is not a child of `parent_node_id`.
     #[track_caller]
     pub fn node_pair_mut(
         &mut self,

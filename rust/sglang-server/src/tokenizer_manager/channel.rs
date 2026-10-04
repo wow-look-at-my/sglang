@@ -1,4 +1,9 @@
-//! Both Rust↔Python boundary queues.
+//! The two Rust↔Python boundary queues.
+//!
+//! In embedded mode the Rust frontend threads and the Python scheduler loop
+//! share one process, so these are in-process `flume` channels — literal
+//! `mpsc`/`mpmc`, no shared memory, no serialization beyond the msgpack bytes
+//! the payload already is.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -8,6 +13,9 @@ use bytes::Bytes;
 use crate::message::request::SchedulerRequest;
 
 /// ToSchedulerTx: TokenizerManager → scheduler `recv_requests`.
+/// Producers are Rust TM workers; the single consumer is the Python thread.
+/// Carries [`SchedulerRequest`] (columnar: scalar header + raw int64 ids cell), not a
+/// single msgpack blob, so the large `input_ids` tensor bypasses msgpack.
 #[derive(Clone)]
 pub struct ToSchedulerTx {
     tx: flume::Sender<SchedulerRequest>,
@@ -15,17 +23,28 @@ pub struct ToSchedulerTx {
 
 pub struct ToSchedulerRx {
     rx: flume::Receiver<SchedulerRequest>,
-    /// One-slot buffer holding a message consumed by a blocking [`wait`] so the scheduler can park on idle without losing it.
+    /// One-slot buffer holding a message consumed by a blocking [`wait`] so the
+    /// scheduler can park on idle without losing it — the next [`drain`] returns
+    /// it first. Only ever touched by the single consumer (the Python thread),
+    /// so contention is nil; the `Mutex` is just for interior mutability across
+    /// the `&self` methods.
+    ///
+    /// [`wait`]: ToSchedulerRx::wait
+    /// [`drain`]: ToSchedulerRx::drain
     stash: Mutex<Option<SchedulerRequest>>,
 }
 
-/// A drained request batch in **columnar** (struct-of-arrays) form.
+/// A drained request batch in **columnar** (struct-of-arrays) form. The `ids`
+/// cells are kept *un-concatenated* so the pyo3 boundary can copy them straight
+/// into one `PyBytes` (no intermediate buffer); `ids_total` is their summed
+/// length, precomputed for that single allocation.
 #[derive(Default)]
 pub struct RequestColumns {
     /// Per-request scalar msgpack header (`input_ids` omitted).
     pub headers: Vec<Bytes>,
     /// Per-request raw little-endian int64 ids cell (empty for control reqs).
     pub ids: Vec<Bytes>,
+    /// Per-request token count (`ids` cell length / 8).
     pub lengths: Vec<u32>,
     /// Sum of all `ids` cell byte lengths.
     pub ids_total: usize,
@@ -46,7 +65,8 @@ impl RequestColumns {
 }
 
 impl ToSchedulerTx {
-    /// Non-blocking push.
+    /// Non-blocking push. Returns `false` on a full ring (backpressure) so the
+    /// caller can fail the request rather than block a worker thread.
     #[inline]
     pub fn try_push(&self, msg: SchedulerRequest) -> bool {
         self.tx.try_send(msg).is_ok()
@@ -54,7 +74,13 @@ impl ToSchedulerTx {
 }
 
 impl ToSchedulerRx {
-    /// `request_receiver._pull_raw_reqs`.
+    /// Drain up to `max` messages into a columnar [`RequestColumns`], returning
+    /// immediately when the ring runs dry — mirrors the scheduler's existing
+    /// `zmq.NOBLOCK` loop in `request_receiver._pull_raw_reqs`.
+    ///
+    /// Non-blocking by construction: `try_recv` returns `Err(TryRecvError::Empty)`
+    /// instantly when the ring is empty, and `Err(_) => break` exits the loop
+    /// right away.
     pub fn drain(&self, max: usize) -> RequestColumns {
         let mut batch = RequestColumns::default();
         // A message parked by a prior blocking `wait` is delivered first.
@@ -70,6 +96,12 @@ impl ToSchedulerRx {
         batch
     }
 
+    /// Park up to `timeout` for at least one incoming message, so the idle
+    /// scheduler loop sleeps instead of spinning at 100% CPU. The message is
+    /// **stashed, not returned** — the next [`drain`](Self::drain) yields it —
+    /// so this composes with the existing non-blocking drain flow. Returns
+    /// whether a message is now available. `flume` wakes the parked thread the
+    /// instant a producer pushes, so this adds no latency to real requests.
     pub fn wait(&self, timeout: Duration) -> bool {
         if self.stash.lock().unwrap().is_some() {
             return true;
@@ -93,7 +125,9 @@ fn push_msg(batch: &mut RequestColumns, m: SchedulerRequest) {
     batch.ids.push(m.ids);
 }
 
-/// Scheduler output (`Server.push_decode_result_batch` / `push_control_result` / `push_error`).
+/// Scheduler output (`Server.push_decode_result_batch` / `push_control_result`
+/// / `push_error`) → Rust response dispatcher. The single producer is the
+/// Python thread; the consumer is the dispatcher.
 #[derive(Clone)]
 pub struct FromSchedulerTx {
     tx: flume::Sender<Bytes>,
@@ -122,7 +156,7 @@ impl FromSchedulerTx {
 
 impl FromSchedulerRx {
     /// The underlying receiver, so the dispatcher can drain it via
-    /// [`wiring::recv`](crate::tokenizer_manager::wiring::recv).
+    /// [`wiring::recv`](crate::tokenizer_manager::wiring::recv) (data + shutdown select).
     pub fn receiver(&self) -> &flume::Receiver<Bytes> {
         &self.rx
     }
@@ -156,7 +190,8 @@ mod tests {
         }
     }
 
-    /// `wait` parks when empty (times out), stashes a pushed message non-destructively.
+    /// `wait` parks when empty (times out), stashes a pushed message
+    /// non-destructively, and the next `drain` returns it.
     #[test]
     fn wait_stashes_then_drain_returns_it() {
         let (tx, rx) = to_scheduler(8);
@@ -180,12 +215,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
             let _ = tx.try_push(msg(b"a"));
         });
-        // Generous timeout, but it should return well before it as soon as the push lands.
+        // Generous timeout, but it should return well before it as soon as the
+        // push lands.
         assert!(rx.wait(Duration::from_secs(5)));
         assert_eq!(rx.drain(16).headers.len(), 1);
     }
 
-    /// A full from_scheduler channel parks the producer until the consumer drains — the committed frame is delivered in order.
+    /// A full from_scheduler channel parks the producer until the consumer drains — the
+    /// committed frame is delivered in order, never dropped.
     #[test]
     fn response_push_blocks_until_drained() {
         let (tx, rx) = from_scheduler(1);
@@ -199,7 +236,8 @@ mod tests {
         assert_eq!(rx.receiver().recv().unwrap(), Bytes::from_static(b"b"));
     }
 
-    /// A closed ring (consumer gone → shutdown) returns `false` instead of parking forever.
+    /// A closed ring (consumer gone → shutdown) returns `false` instead of
+    /// parking forever, so a scheduler blocked in `push` unblocks on teardown.
     #[test]
     fn response_push_returns_false_when_closed() {
         let (tx, rx) = from_scheduler(1);

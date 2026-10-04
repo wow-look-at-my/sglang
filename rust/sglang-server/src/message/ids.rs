@@ -10,23 +10,34 @@ use std::{
 
 use uuid::Uuid;
 
-/// Health-probe rid prefix — MUST match the Python server's `sglang.srt.constants.HEALTH_CHECK_RID_PREFIX`.
+/// Health-probe rid prefix — MUST match the Python server's
+/// `sglang.srt.constants.HEALTH_CHECK_RID_PREFIX`, so scheduler logs / crash
+/// dumps and any prefix-gated logic recognize probes from either server.
 pub const HEALTH_CHECK_RID_PREFIX: &str = "HEALTH_CHECK";
 
-/// Separates a client-supplied rid from the uniquifier appended to it (see [`Rid::from_client`]).
+/// Separates a client-supplied rid from the uniquifier appended to it (see
+/// [`Rid::from_client`]). Deliberately a character this server never mints:
+/// [`Rid::new`] is uuid hex and [`Rid::new_health_check`] adds only
+/// `HEALTH_CHECK_`, so its presence at the fixed offset below is what lets
+/// [`Rid::client_facing`] recognize a suffix without `Rid` carrying a flag —
+/// which matters because `Rid` rides on every `ChunkEvent`.
 const UNIQ_SEP: u8 = b'#';
+/// Hex digits of uniquifier: 8 of a per-process random base, 8 of a counter.
 const UNIQ_DIGITS: usize = 16;
-/// Total bytes appended.
+/// Total bytes appended. Fixed-width by construction — both halves are `u32`
+/// formatted `{:08x}` — which is what makes stripping a slice, not a search.
 const UNIQ_SUFFIX_LEN: usize = 1 + UNIQ_DIGITS;
 
 #[derive(Clone, Debug)]
 pub struct Rid {
     id: String,
-    /// Partition key, derived from `id`. Never part of identity — see the `Eq` / `Hash` impls below.
+    /// Partition key, derived from `id`. Never part of identity — see the `Eq` /
+    /// `Hash` impls below.
     hash: u64,
 }
 
-// Identity is the ID, not the digest.
+// Identity is the ID, not the digest. Deriving these would fold `hash` into both,
+// which is redundant while the seed is stable and silently wrong if it ever isn't.
 impl PartialEq for Rid {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -55,7 +66,26 @@ impl Rid {
         Rid::from(id)
     }
 
-    /// A CLIENT-SUPPLIED rid, made unique for internal use by appending a uniquifier.
+    /// A CLIENT-SUPPLIED rid, made unique for internal use by appending a
+    /// uniquifier.
+    ///
+    /// Nothing stops two concurrent requests from arriving with the same rid, and
+    /// the rid is an identity downstream: detok `Register` is an insert-overwrite,
+    /// so the second would evict the first's sink, 500 that client mid-generation
+    /// and deliver its remaining chunks to the second's connection. Uniquifying
+    /// here makes the collision unrepresentable rather than something a duplicate
+    /// check has to catch — no in-flight registry, no admission/release ordering
+    /// to get wrong, and both clients get served instead of the second being 400'd.
+    ///
+    /// The client never sees this: [`client_facing`](Self::client_facing) strips it
+    /// back off for `meta_info.id`. Only the scheduler wire and its logs carry the
+    /// suffixed form.
+    ///
+    /// The counter alone would guarantee uniqueness within a process; the random
+    /// base covers several HTTP worker processes feeding one scheduler, where two
+    /// counters would otherwise both start at zero. `u32` (not `u64`) keeps the
+    /// `{:08x}` width exactly 8 — wrapping needs 2^32 live requests sharing one
+    /// client rid.
     pub fn from_client(id: &str) -> Self {
         use std::sync::atomic::{AtomicU32, Ordering};
         static BASE: OnceLock<u32> = OnceLock::new();
@@ -95,7 +125,9 @@ impl Rid {
 
 impl From<String> for Rid {
     fn from(id: String) -> Self {
-        // ONE seed per process, not one per conversion.
+        // ONE seed per process, not one per conversion. To-scheduler and from-scheduler each
+        // build a `Rid` from the same string and must agree on the shard without a
+        // shared map.
         static SEED: OnceLock<RandomState> = OnceLock::new();
         let hash = SEED.get_or_init(RandomState::new).hash_one(&id);
         Rid { id, hash }
@@ -123,7 +155,10 @@ impl Default for Rid {
 }
 
 impl fmt::Display for Rid {
-    /// The BARE rid, with no decoration.
+    /// The BARE rid, with no decoration. It is formatted into client-facing error
+    /// messages and into wire values (`AbortReq`), so a prefix here would surface
+    /// as a corrupted id rather than a nicety. `Debug` still shows `Rid("…")` if a
+    /// log wants the type visible.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.id)
     }
@@ -133,7 +168,10 @@ impl fmt::Display for Rid {
 mod tests {
     use super::*;
 
-    /// Cross-language format guard: Python rids are `uuid.uuid4().hex` — lowercase hex chars, no hyphens.
+    /// Cross-language format guard: Python rids are `uuid.uuid4().hex` — 32
+    /// lowercase hex chars, no hyphens. `.simple()` is the matching uuid-crate
+    /// encoding; swapping it for the default `to_string()` (36 chars,
+    /// hyphenated) would silently break the parity.
     #[test]
     fn rid_matches_python_uuid4_hex_format() {
         let rid = Rid::new();
@@ -145,7 +183,11 @@ mod tests {
         );
     }
 
-    /// The round-trip that makes the scheme invisible: whatever the client sent comes back out of `client_facing`, byte for byte.
+    /// The round-trip that makes the scheme invisible: whatever the client sent
+    /// comes back out of `client_facing`, byte for byte, however odd it is.
+    /// `meta_info.id` is the only thing the client can correlate a response by, so
+    /// leaking the uniquifier — or over-stripping a rid that happens to look like
+    /// one — is a client-visible bug.
     #[test]
     fn client_facing_round_trips_whatever_the_client_sent() {
         for given in [
@@ -170,7 +212,9 @@ mod tests {
         }
     }
 
-    /// A rid this server minted carries no suffix, so `client_facing` must return it whole.
+    /// A rid this server minted carries no suffix, so `client_facing` must return
+    /// it whole. Nothing strips these today, but `Rid::new` is uuid hex and a
+    /// 17-byte tail of it is all hex — only the missing separator saves it.
     #[test]
     fn client_facing_leaves_minted_rids_alone() {
         for rid in [Rid::new(), Rid::new_health_check(), Rid::default()] {
@@ -178,7 +222,9 @@ mod tests {
         }
     }
 
-    /// Uniqueness is the entire point, and it must hold for the same input — that IS the collision case.
+    /// Uniqueness is the entire point, and it must hold for the same input — that
+    /// IS the collision case. Checked across threads because the counter is shared
+    /// by every api thread.
     #[test]
     fn from_client_is_unique_even_for_one_repeated_rid() {
         let handles: Vec<_> = (0..4)
@@ -197,11 +243,14 @@ mod tests {
         assert_eq!(all.len(), 1000, "every uniquified rid must be distinct");
     }
 
-    /// Cross-language literal guard: the prefix is dictated by Python's `constants.HEALTH_CHECK_RID_PREFIX` ("HEALTH_CHECK").
+    /// Cross-language literal guard: the prefix is dictated by Python's
+    /// `constants.HEALTH_CHECK_RID_PREFIX` ("HEALTH_CHECK"); drifting silently
+    /// would break prefix-gated handling (e.g. the disagg encode server).
     #[test]
     fn health_rid_matches_python_convention() {
         assert_eq!(HEALTH_CHECK_RID_PREFIX, "HEALTH_CHECK");
         let rid = Rid::new_health_check();
+        // "HEALTH_CHECK_" + 32 hex chars
         assert!(rid.starts_with("HEALTH_CHECK_"));
         assert_eq!(rid.len(), "HEALTH_CHECK_".len() + 32);
     }

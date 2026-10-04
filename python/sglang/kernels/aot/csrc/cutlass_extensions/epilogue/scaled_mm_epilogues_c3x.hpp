@@ -101,6 +101,8 @@ struct ScaledEpilogueBase {
     }
   }
 
+  // This overload handles the case where there might not be a tensor, in which
+  // case a nullptr is passed and a constant (0) is used.
   template <typename Descriptor, typename T>
   static auto args_from_tensor(std::optional<torch::Tensor> const& tensor) {
     using Arguments = typename Descriptor::Arguments;
@@ -196,9 +198,11 @@ struct ScaledEpilogueBias : private ScaledEpilogueBase<ElementAcc, ElementD, Til
   }
 };
 
-/*This epilogue performs the same operation as ScaledEpilogueBias, but the bias
- * is a column vector instead of a row vector. Useful e.g. if we are computing
- * a GEMM via C^T += B^T A^T. */
+/*
+ * This epilogue performs the same operation as ScaledEpilogueBias, but the
+ * bias is a column vector instead of a row vector. Useful e.g. if we are
+ * computing a GEMM via C^T += B^T A^T. This happens in the 2:4 sparse kernels.
+ */
 template <typename ElementAcc, typename ElementD, typename TileShape>
 struct ScaledEpilogueColumnBias : private ScaledEpilogueBase<ElementAcc, ElementD, TileShape> {
  private:
@@ -231,10 +235,14 @@ struct ScaledEpilogueColumnBias : private ScaledEpilogueBase<ElementAcc, Element
   }
 };
 
-/*This epilogue directly supports per-tensor azp in int32 form. As opposed to
- * the per-token epilogue below, this epilogue only has an azp_adj term, which
- * should already be multiplied with the scalar azp. This epilogue also supports
- * bias, which remains per-channel. */
+/*
+ * This epilogue directly supports per-tensor azp in int32 form.
+ * As opposed to the per-token epilogue below, this epilogue only has an azp_adj
+ * term, which should already be multiplied with the scalar azp.
+ * The azp_adj term is a 1D tensor of shape (1,n), computed as azp * J @ B.
+ *
+ * This epilogue also supports bias, which remains per-channel.
+ */
 template <typename ElementAcc, typename ElementD, typename TileShape>
 struct ScaledEpilogueBiasAzp : private ScaledEpilogueBase<ElementAcc, ElementD, TileShape> {
  private:
@@ -244,6 +252,7 @@ struct ScaledEpilogueBiasAzp : private ScaledEpilogueBase<ElementAcc, ElementD, 
   using ScaleB = typename SUPER::template RowOrScalarLoad<float>;
   using Bias = typename SUPER::template RowLoad<ElementD, true>;
 
+  // This is the full AZP term, azp * J @ B, shape (1,n)
   using AzpWithAdj = typename SUPER::template RowLoad<int32_t>;
 
   // Compute float(accum - azp_adj), both operands are int32_t
@@ -280,10 +289,16 @@ struct ScaledEpilogueBiasAzp : private ScaledEpilogueBase<ElementAcc, ElementD, 
   }
 };
 
-/*This epilogue supports per-token azp by computing and applying the correction
- * term using a rank-1 update. If the term were materialized, it would require
- * O(m*n) space, and this way it only requires O(m+n) space. This epilogue also
- * supports bias, which remains per-channel. */
+/*
+ * This epilogue supports per-token azp by computing and applying
+ * the correction term using a rank-1 update. If the term were materialized,
+ * it would require O(m*n) space, and this way it only requires O(m+n) space.
+ * The azp term is a 1D tensor of shape (m,1), and represents the unscaled zero
+ * point for each row of A.
+ * The azp_adj term is a 1D tensor of shape (1,n), computed as J @ B.
+ *
+ * This epilogue also supports bias, which remains per-channel.
+ */
 template <typename ElementAcc, typename ElementD, typename TileShape>
 struct ScaledEpilogueBiasAzpToken : private ScaledEpilogueBase<ElementAcc, ElementD, TileShape> {
  private:
@@ -293,8 +308,10 @@ struct ScaledEpilogueBiasAzpToken : private ScaledEpilogueBase<ElementAcc, Eleme
   using ScaleB = typename SUPER::template RowOrScalarLoad<float>;
   using Bias = typename SUPER::template RowLoad<ElementD, true>;
 
+  // Per-token azp term, shape (m,1)
   using Azp = typename SUPER::template ColLoad<int32_t>;
 
+  // This is the AZP adjustment term, J @ B, shape (1,n)
   using AzpAdj = typename SUPER::template RowLoad<int32_t>;
 
   // Compute azp * azp_adj

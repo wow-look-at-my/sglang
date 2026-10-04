@@ -1,4 +1,19 @@
-//! Runtime configuration: the rust-server boot knobs ([`RustServerServerArgs`]).
+//! Runtime configuration: the rust-server boot knobs
+//! ([`RustServerServerArgs`]), the scheduler's typed `server_args` handoff
+//! ([`ServerArgs`] / [`ModelConfig`]), the [`RuntimeConfig`] pairing them for
+//! `runtime::start`, and the Rust MM pipeline handoff ([`MmSpec`]).
+//!
+//! [`ServerArgs`] / [`ModelConfig`] / [`DefaultSamplingParams`] /
+//! [`DisaggregationMode`] / [`MmSpec`] / [`MmFamily`] / [`MmResample`] are
+//! also `#[pyclass]`es: the Python scheduler (`RustServer._build_server_args`
+//! / `_build_mm_spec`) constructs them directly by keyword and hands them to
+//! `Server`. There is one schema — this file — and
+//! pyo3 enforces it at construction: every field is a required, typed
+//! constructor argument, so a drifted caller fails at boot rather than running
+//! on a silently-defaulted knob. The `#[pyo3::pymethods]` constructors below
+//! each struct — plus the one hand-written extraction,
+//! [`PreferredSamplingParams`] — are the only Python-facing code in this file;
+//! the rest is pure Rust.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -6,7 +21,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-/// Boot knobs specific to the embedded rust server — none of these exist in the Python-built [`ServerArgs`].
+/// Boot knobs specific to the embedded rust server — none of these exist in
+/// the Python-built [`ServerArgs`]; they arrive as explicit
+/// `Server::start` parameters.
 #[derive(Clone, Debug)]
 pub struct RustServerServerArgs {
     pub http_addr: SocketAddr,
@@ -14,7 +31,8 @@ pub struct RustServerServerArgs {
     pub to_scheduler_cap: usize,
     pub from_scheduler_cap: usize,
     pub stage_channel_cap: usize,
-    /// CPU core ids the pools pin to (e.g. this rank's NUMA-local cores minus the scheduler's reserved launch cores).
+    /// CPU core ids the pools pin to (e.g. this rank's NUMA-local cores minus
+    /// the scheduler's reserved launch cores). `None` → run unpinned.
     pub cores: Option<Vec<usize>>,
 }
 
@@ -35,7 +53,9 @@ impl Default for RustServerServerArgs {
 pub struct RuntimeConfig {
     /// Rust-server-only boot knobs (listen address, pool/ring sizes, pinning).
     pub rust_server_args: RustServerServerArgs,
-    /// The scheduler's [`ServerArgs`] (worker counts, tokenizer source, config-endpoint metadata).
+    /// The scheduler's [`ServerArgs`] (worker counts, tokenizer source,
+    /// config-endpoint metadata). `Arc` so cloning the config (and, downstream,
+    /// each `AppState`) is cheap; immutable after construction.
     pub server_args: Arc<ServerArgs>,
 }
 
@@ -48,7 +68,11 @@ impl Default for RuntimeConfig {
     }
 }
 
-/// The scheduler's launch-time handoff (`RustServer._build_server_args`): the `server_args` fields the rust server reads.
+/// The scheduler's launch-time handoff (`RustServer._build_server_args`):
+/// the `server_args` fields the rust server reads, the resolved
+/// [`ModelConfig`], and launch-time stamps. Values are post-`__post_init__`
+/// (all paths and names resolved). Constructed from Python via the `#[new]` in
+/// `lib.rs`, whose keyword parameters are exactly these fields.
 #[pyo3::pyclass(frozen, from_py_object, module = "sglang.srt.rust_extensions._server")]
 #[derive(Clone, Debug)]
 pub struct ServerArgs {
@@ -56,51 +80,75 @@ pub struct ServerArgs {
     pub model_path: String,
     /// Model name reported by `/v1/models` and `/server_info`.
     pub served_model_name: String,
-    /// Tokenizer source (model dir / `tokenizer.json` / HF repo id).
+    /// Tokenizer source (model dir / `tokenizer.json` / HF repo id). Empty only
+    /// in standalone (test) configs — then boot requires `skip_tokenizer_init`.
     pub tokenizer_path: String,
     /// HF revision, used only when `tokenizer_path` is a repo id. `None` → main.
     pub revision: Option<String>,
     /// Weight format selected by `--load-format`, reported by `/get_model_info`.
+    /// The blob carries the post-`__post_init__` value (`auto` is already
+    /// narrowed to `gguf` / `mistral` / `runai_streamer` / `remote` where the
+    /// checkpoint demands it). Not consumed for loading -- the scheduler owns
+    /// that; `None` only when the blob omits the key.
     pub load_format: Option<String>,
-    /// Operator-supplied weight version, reported by `/model_info`.
+    /// Operator-supplied weight version, reported by `/model_info`. Defaults to
+    /// `"default"` on the Python side, so it is present in every blob; `None`
+    /// only when the blob omits the key.
     pub weight_version: Option<String>,
     /// HTTP bind address (see [`Self::bind`]).
     pub host: String,
     pub port: u16,
-    /// Log levels driving the access log — uvicorn runs at `log_level_http or log_level`.
+    /// Log levels driving the access log — uvicorn runs at
+    /// `log_level_http or log_level` (see [`Self::http_access_log_enabled`]).
     pub log_level: String,
     pub log_level_http: Option<String>,
-    /// Optional built-in chat-template name or path to a Jinja/legacy JSON template file.
+    /// Optional built-in chat-template name or path to a Jinja/legacy JSON
+    /// template file. Without an override, uses the tokenizer config template.
     pub chat_template: Option<String>,
     /// Parser selected by `--tool-call-parser`.
     pub tool_call_parser: Option<String>,
     /// Reasoning splitter selected by `--reasoning-parser` (e.g. deepseek-r1).
+    /// When set, chat completions strip the model's reasoning markers out of
+    /// `content` into `reasoning_content` — both unary and streaming.
     pub reasoning_parser: Option<String>,
     /// Python's global default for whether an SSE stream ends with a usage chunk.
     pub stream_response_default_include_usage: bool,
+    /// Pinned tokenizer threads / detok shards (Python asserts both ≥ 1).
     pub tokenizer_worker_num: usize,
     pub detokenizer_worker_num: usize,
-    /// Token-ids-in / token-ids-out mode: no tokenizer load, raw `output_ids` frames.
+    /// Token-ids-in / token-ids-out mode: no tokenizer load, raw `output_ids`
+    /// frames.
     pub skip_tokenizer_init: bool,
-    /// Start accepting health checks immediately instead of waiting for the main process's startup warmup request.
+    /// Start accepting health checks immediately instead of waiting for the
+    /// main process's startup warmup request to finish.
     pub skip_server_warmup: bool,
-    /// Streamed `/generate` frames carry per-step deltas instead of cumulative text.
+    /// Streamed `/generate` frames carry per-step deltas instead of cumulative
+    /// text. Matches the Python `TokenizerManager`.
     pub incremental_streaming_output: bool,
-    /// PD-disaggregation role.
+    /// PD-disaggregation role. (On prefill, the KV bootstrap registry is mounted
+    /// on the api router — see [`Self::enable_pd_bootstrap`].)
     pub disaggregation_mode: DisaggregationMode,
     /// The resolved Python `ModelConfig`, attached at handoff time.
     pub model_config: ModelConfig,
-    /// Launch-time sampling defaults merged beneath per-request values and advertised by `/get_model_info`.
+    /// Launch-time sampling defaults merged beneath per-request values and
+    /// advertised by `/get_model_info`.
     pub preferred_sampling_params: Option<PreferredSamplingParams>,
     /// Per-modality media-count limits from `--limit-mm-data-per-request`.
     pub limit_mm_data_per_request: BTreeMap<String, usize>,
-    /// Over-long inputs are truncated to fit the context instead of 400ing.
+    /// Over-long inputs are truncated to fit the context instead of 400ing, and
+    /// `max_new_tokens` is clamped rather than rejected (Python
+    /// `TokenizerManager._validate_one_request`).
     pub allow_auto_truncate: bool,
-    /// `return_hidden_states` is refused unless the server was launched with it: the scheduler simply won't produce them.
+    /// `return_hidden_states` is refused unless the server was launched with it:
+    /// the scheduler simply won't produce them, so the request would 200 with the
+    /// field silently missing.
     pub enable_return_hidden_states: bool,
-    /// Output slots reserved per request on top of its input (eagle stores draft tokens there).
+    /// Output slots reserved per request on top of its input (eagle stores draft
+    /// tokens there). Not a `server_args` field — `TokenizerManager` derives it and
+    /// `RustServer._build_server_args` stamps it in, so both sides count alike.
     pub num_reserved_tokens: u64,
-    /// Launch-time stamps (not `server_args` fields): sglang package version and the scheduler-derived KV token capacity.
+    /// Launch-time stamps (not `server_args` fields): sglang package version
+    /// and the scheduler-derived KV token capacity, reported by `/server_info`.
     pub version: String,
     pub max_total_num_tokens: u64,
 }
@@ -241,7 +289,9 @@ impl Default for ServerArgs {
     }
 }
 
-/// `--preferred-sampling-params`, carried verbatim: `/get_model_info` echoes whatever Python advertises.
+/// `--preferred-sampling-params`, carried verbatim: `/get_model_info` echoes
+/// whatever Python advertises, and the keys are whatever `SamplingParams`
+/// accepts, so there is no fixed field list to model as a `#[pyclass]`.
 #[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
 pub struct PreferredSamplingParams(pub serde_json::Value);
@@ -259,7 +309,8 @@ impl<'py> pyo3::FromPyObject<'_, 'py> for PreferredSamplingParams {
     }
 }
 
-/// PD-disaggregation role, the values of `--disaggregation-mode`.
+/// PD-disaggregation role, the values of `--disaggregation-mode`. Exposed to
+/// Python as an enum (`DisaggregationMode.Null` / `.Prefill` / `.Decode`).
 #[pyo3::pyclass(
     eq,
     frozen,
@@ -282,13 +333,22 @@ pub enum DisaggregationMode {
 pub struct ModelConfig {
     /// Authoritative HF model type, used to select a native chat formatter.
     pub model_type: Option<String>,
-    /// Resolved context length (`max_model_len` in `/v1/models`); the ceiling for input + `max_new_tokens`.
+    /// Resolved context length (`max_model_len` in `/v1/models`); the ceiling
+    /// for input + `max_new_tokens`.
     pub context_len: u64,
-    /// Bounds client-supplied token ids — return 400s out-of-vocab ids.
+    /// Bounds client-supplied token ids — return 400s out-of-vocab ids before
+    /// they crash the scheduler's embedding lookup.
     pub vocab_size: u64,
-    /// Whether the model accepts multimodal inputs.
+    /// Whether the model accepts multimodal inputs. Gates the MM Encoding branch
+    /// in to-scheduler; `false` silently ignores mm fields, as the Python
+    /// `TokenizerManager` does with `mm_processor is None`.
     pub is_multimodal: bool,
-    /// Resolved default sampling parameters, from Python's `ModelConfig.get_default_sampling_params()`.
+    /// Resolved default sampling parameters, from Python's
+    /// `ModelConfig.get_default_sampling_params()`. Already gated on
+    /// `--sampling-defaults`: holds the model's generation_config.json values
+    /// in "model" mode, and is all-`None` in "openai" mode. Consumed when a chat
+    /// request omits `temperature`/`top_p` — the conversion must not skip
+    /// straight to the OpenAI terminal defaults.
     pub default_sampling_params: DefaultSamplingParams,
 }
 
@@ -326,7 +386,13 @@ impl Default for ModelConfig {
     }
 }
 
-/// One `SamplingParams` field per key `get_default_sampling_params()` may emit.
+/// One `SamplingParams` field per key `get_default_sampling_params()` may emit
+/// (`repetition_penalty`, `temperature`, `top_k`, `top_p`, `min_p`); `None`
+/// where the generation config does not set it.
+///
+/// `top_k` / `min_p` / `repetition_penalty` are carried for parity with the
+/// Python dict but not yet consumed: the Dynamo chat request type only carries
+/// `temperature` and `top_p`, so the conversion resolves just those two.
 #[pyo3::pyclass(frozen, from_py_object, module = "sglang.srt.rust_extensions._server")]
 #[derive(Clone, Debug, Default)]
 #[allow(dead_code)]
@@ -359,11 +425,16 @@ impl DefaultSamplingParams {
     }
 }
 
-/// The Rust MM pipeline handoff, built by `RustServer._build_mm_spec` from the resolved `RustMmSpec` and passed.
+/// The Rust MM pipeline handoff, built by `RustServer._build_mm_spec` from
+/// the resolved `RustMmSpec` and passed to `Server.start_mm_workers`. Same
+/// contract as [`ServerArgs`]: every field is a required, typed constructor
+/// keyword, so a drifted Python caller fails at boot.
 #[pyo3::pyclass(frozen, from_py_object, module = "sglang.srt.rust_extensions._server")]
 #[derive(Clone, Debug)]
 pub struct MmSpec {
-    /// Park feature buffers in POSIX shm rather than inline.
+    /// Park feature buffers in POSIX shm rather than inline. Set by the Python
+    /// launcher (`RustMmProcessor._use_feature_shm`) exactly when the scheduler
+    /// broadcasts across TP ranks and will unwrap `ShmPointerMMData`.
     pub feature_shm: bool,
     /// The family pipeline and its resolved processor parameters.
     pub pipeline: sglang_mm::registry::PipelineSpec,
@@ -371,7 +442,9 @@ pub struct MmSpec {
 
 #[pyo3::pymethods]
 impl MmSpec {
-    /// The parameter list is flat because every family so far shares the Qwen-VL processor geometry.
+    /// The parameter list is flat because every family so far shares the
+    /// Qwen-VL processor geometry; a family with different knobs adds its own
+    /// keywords and match arm here.
     #[new]
     #[pyo3(signature = (*,
         family,
@@ -422,7 +495,8 @@ impl MmSpec {
 }
 
 /// Which `sglang_mm` family pipeline serves the model — one variant per
-/// [`sglang_mm::registry::PipelineSpec`] arm.
+/// [`sglang_mm::registry::PipelineSpec`] arm. Exposed to Python as an enum
+/// (`MmFamily.QwenVl`); `RustMmFamily.name` maps onto it at handoff.
 #[pyo3::pyclass(
     eq,
     frozen,
@@ -435,7 +509,9 @@ pub enum MmFamily {
 }
 
 /// The HF image processor the Rust resize must reproduce bit-exactly (see
-/// [`sglang_mm::qwen_vl::Resampler`]).
+/// [`sglang_mm::qwen_vl::Resampler`]). Exposed to Python as an enum
+/// (`MmResample.AtenU8` / `.Pil`); `RustMmFamily.image_processors` maps each
+/// processor class onto it.
 #[pyo3::pyclass(
     eq,
     frozen,
@@ -486,7 +562,11 @@ impl ServerArgs {
     }
 
     /// Serve the PD KV bootstrap registry on the api listener: every prefill
-    /// rust server hosts it, unconditionally — no extra topology gating.
+    /// rust server hosts it, unconditionally — no extra topology gating. KV
+    /// managers and decode nodes reach the registry at the resolved
+    /// `disaggregation_bootstrap_port`, which rust-server mode aliases to the
+    /// api port, so whichever prefill server that port names is the one that
+    /// receives the registrations.
     pub fn enable_pd_bootstrap(&self) -> bool {
         self.disaggregation_mode == DisaggregationMode::Prefill
     }
@@ -518,7 +598,8 @@ impl ServerArgs {
         )
     }
 
-    /// Pinned API threads for the embedded HTTP api-server.
+    /// Pinned API threads for the embedded HTTP api-server. Python `server_args`
+    /// has no such field — this is derived: enough to cover the widest pool.
     pub fn http_api_worker_num(&self) -> usize {
         4.max(self.tokenizer_worker_num)
             .max(self.detokenizer_worker_num)
@@ -575,7 +656,8 @@ mod tests {
         assert!(sa.validate().is_ok());
     }
 
-    /// `--log-level-http` overrides `--log-level` for the access log; unset or empty falls through.
+    /// `--log-level-http` overrides `--log-level` for the access log; unset or
+    /// empty falls through.
     #[test]
     fn access_log_follows_http_level_then_global() {
         let mut sa = ServerArgs::default();

@@ -77,6 +77,7 @@ export const Qwen3CoderDeployment = () => {
     let cmd = 'python -m sglang.launch_server \\\n';
     cmd += `  --model ${modelName}`;
 
+    // TP is always 8 for this model
     cmd += ` \\\n  --tp ${hwConfig.tp}`;
 
     // FP8 requires EP=2 for MoE dimension alignment

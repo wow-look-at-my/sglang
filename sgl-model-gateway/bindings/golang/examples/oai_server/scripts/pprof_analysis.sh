@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# pprof performance analysis script Used to analyze performance bottlenecks of Go OpenAI server
+# pprof performance analysis script
+# Used to analyze performance bottlenecks of Go OpenAI server
 
 set -e
 
@@ -99,7 +100,7 @@ fi
 echo "Starting to collect performance data..."
 echo ""
 
-# 1. CPU Profile (many seconds)
+# 1. CPU Profile (30 seconds)
 echo "[1/6] Collecting CPU Profile (30 seconds)..."
 go tool pprof -proto -output="$OUTPUT_DIR/cpu_${TIMESTAMP}.pb.gz" \
     "http://localhost:${PPROF_PORT}/debug/pprof/profile?seconds=30" &
@@ -158,10 +159,12 @@ echo ""
 echo "Generating analysis report..."
 echo ""
 
+# CPU Top 20
 echo "=== CPU Top 20 (sorted by flat time) ===" > "$OUTPUT_DIR/analysis_${TIMESTAMP}.txt"
 go tool pprof -top -cum "$OUTPUT_DIR/cpu_${TIMESTAMP}.pb.gz" >> "$OUTPUT_DIR/analysis_${TIMESTAMP}.txt" 2>&1 || true
 echo "" >> "$OUTPUT_DIR/analysis_${TIMESTAMP}.txt"
 
+# Heap Top 20
 echo "=== Heap Top 20 (sorted by allocation size) ===" >> "$OUTPUT_DIR/analysis_${TIMESTAMP}.txt"
 go tool pprof -top "$OUTPUT_DIR/heap_${TIMESTAMP}.pb.gz" >> "$OUTPUT_DIR/analysis_${TIMESTAMP}.txt" 2>&1 || true
 echo "" >> "$OUTPUT_DIR/analysis_${TIMESTAMP}.txt"

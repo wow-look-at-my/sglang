@@ -1,6 +1,6 @@
-/* Copyright SGLang Team. All Rights Reserved.
+/* Copyright 2025 SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version.0 (the "License");
+Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -14,7 +14,9 @@ limitations under the License.
 ==============================================================================*/
 
 // Pybind entry for the InfLLM-V2 FlashAttention backend (vendored from
-// 3rdparty/infllmv2_cuda_impl).
+// 3rdparty/infllmv2_cuda_impl). This builds as a standalone extension module
+// `infllm_ops` so its `flash::` symbols stay isolated from sgl-kernel's own
+// flash attention (`flash_ops` / `common_ops`).
 
 #include <ATen/ATen.h>
 #include <c10/util/Optional.h>

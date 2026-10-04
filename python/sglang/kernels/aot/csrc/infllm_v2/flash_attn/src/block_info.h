@@ -1,4 +1,6 @@
-/***************************************************************************** */
+/******************************************************************************
+ * Copyright (c) 2023, Tri Dao.
+ ******************************************************************************/
 
 #pragma once
 
@@ -19,6 +21,7 @@ struct BlockInfo {
                                                                                          : params.cu_seqlens_v[bidb]),
         actual_seqlen_q(
             !Varlen || params.cu_seqlens_q == nullptr ? params.seqlen_q : params.cu_seqlens_q[bidb + 1] - sum_s_q)
+        // If is_seqlens_k_cumulative, then seqlen_k is cu_seqlens_k[bidb + 1] - cu_seqlens_k[bidb].
         // Otherwise it's cu_seqlens_k[bidb], i.e., we use cu_seqlens_k to store the sequence lengths of K.
         ,
         leftpad_k(params.leftpad_k == nullptr ? 0 : params.leftpad_k[bidb]),
@@ -31,6 +34,7 @@ struct BlockInfo {
         actual_seqlen_k(
             params.seqused_k ? params.seqused_k[bidb] - leftpad_k
                              : seqlen_k_cache + (params.knew_ptr == nullptr ? 0 : params.seqlen_knew))
+        // If is_seqlens_v_cumulative, then seqlen_v is cu_seqlens_v[bidb + 1] - cu_seqlens_v[bidb].
         // Otherwise it's cu_seqlens_v[bidb], i.e., we use cu_seqlens_v to store the sequence lengths of V.
         ,
         leftpad_v(params.leftpad_v == nullptr ? 0 : params.leftpad_v[bidb]),
@@ -71,9 +75,11 @@ struct BlockInfo {
   const int sum_s_k;
   const int sum_s_v;
   const int actual_seqlen_q;
+  // We have to have seqlen_k_cache declared before actual_seqlen_k, otherwise actual_seqlen_k is set to 0.
   const int leftpad_k;
   const int seqlen_k_cache;
   const int actual_seqlen_k;
+  // We have to have seqlen_v_cache declared before actual_seqlen_c, otherwise actual_seqlen_c is set to 0.
   const int leftpad_v;
   const int seqlen_v_cache;
   const int actual_seqlen_c;

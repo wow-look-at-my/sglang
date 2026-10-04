@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
@@ -16,22 +16,36 @@ use crate::pb::{
     MatchExternalKvRequest, MatchExternalKvResponse, TierType, WorkerCacheSpec,
 };
 
-/// Protocol-level resource bounds, enforced before a backend sees the request so no caller can make it allocate work proportional.
+/// Protocol-level resource bounds, enforced before a backend sees the request so
+/// no caller can make it allocate work proportional to an unbounded field. The
+/// prefix query is exempt from the hash bound; see [`validate_hashes`].
 pub(crate) const MAX_HASHES_PER_REQUEST: usize = 16_384;
 pub(crate) const MAX_ACTIONS_PER_BATCH: usize = 256;
 pub const DEFAULT_PREFIX_QUERY_MAX_INFLIGHT: usize = 32;
-/// Maximum encoded gRPC request size accepted by the Indexer server.
+/// Maximum encoded gRPC request size accepted by the Indexer server. With
+/// packed `sfixed64` hashes this holds roughly one million blocks.
 pub const MAX_GRPC_DECODING_MESSAGE_SIZE: usize = 8 * 1024 * 1024;
-/// Per-connection bound on concurrently served HTTP/2 streams.
+/// Per-connection bound on concurrently served HTTP/2 streams. Decoding happens
+/// in tonic's codec before a method body runs, so `prefix_query_max_inflight`
+/// bounds only the scan, not the bytes a peer makes the server buffer — left
+/// unset, one connection can hold an unbounded number of
+/// [`MAX_GRPC_DECODING_MESSAGE_SIZE`] messages at once. Sized well above the
+/// router's own default of 32 in-flight queries so it never throttles a healthy
+/// caller.
 pub const MAX_CONCURRENT_STREAMS: u32 = 64;
 
 static OVERLOAD_LOG: RejectionLog = RejectionLog::new();
 
-/// Storage backend for the indexer.
+/// Storage backend for the indexer. Every mutation flows through
+/// `apply_external_kv_batch`, preserving one ordered write path.
+///
+/// Async so a backend that does IO fits without reshaping the trait, and
+/// dyn-safe so the server can hold it as `Arc<dyn KvIndexerBackend>`.
 #[tonic::async_trait]
 pub trait KvIndexerBackend: Send + Sync + 'static {
     /// Applies a whole SGLang KVEventBatch. The actions are pre-validated and
-    /// must be applied in order.
+    /// must be applied in order. Applies are unconditional: the request `seq` is
+    /// informational only and a redelivered batch is applied again.
     async fn apply_external_kv_batch(
         &self,
         request: ApplyExternalKvBatchRequest,
@@ -42,10 +56,12 @@ pub trait KvIndexerBackend: Send + Sync + 'static {
         request: MatchExternalKvRequest,
     ) -> Result<MatchExternalKvResponse, Status>;
 
-    /// Collects the per-worker, per-block component placement needed to
-    /// compute a prefix, aligned with `hashes`.
-    /// component-blind: every held block becomes a legacy whole-block
-    /// placement.
+    /// Collects the per-worker, per-block component placement needed to compute a
+    /// prefix, aligned with `hashes`.
+    ///
+    /// The default implementation is component-blind: every held block becomes a
+    /// legacy whole-block placement. Component-aware backends override it to
+    /// attach each worker's `WorkerCacheSpec` and the resident component set.
     async fn collect_worker_prefix_inputs(
         &self,
         hashes: &[i64],
@@ -63,10 +79,10 @@ pub trait KvIndexerBackend: Send + Sync + 'static {
     ///
     /// This default implementation *is* the written definition of the prefix
     /// semantics, so a backend that overrides it for performance must stay
-    /// field-for-field identical except for `blocks_read`.
+    /// field-for-field identical except for `blocks_read`, which is
     /// observability rather than semantics.
     ///
-    /// The result is a safe lower bound.
+    /// The result is a safe lower bound: every required component's rule is
     /// applied, so an accurate index can only under-report, never over-report.
     async fn match_external_kv_prefix(
         &self,
@@ -88,7 +104,8 @@ pub trait KvIndexerBackend: Send + Sync + 'static {
     ) -> Result<GetExternalKvHitCountsResponse, Status>;
 }
 
-/// Blanket impl so the server can hold the selected backend as `Arc<dyn KvIndexerBackend>`.
+/// Blanket impl so the server can hold the selected backend as
+/// `Arc<dyn KvIndexerBackend>` and still satisfy `KvIndexerService<B>`.
 #[tonic::async_trait]
 impl KvIndexerBackend for std::sync::Arc<dyn KvIndexerBackend> {
     async fn apply_external_kv_batch(
@@ -153,18 +170,26 @@ where
     }
 
     /// Wraps the service in its generated server with the decoding limit a
-    /// full-length prefix query needs.
+    /// full-length prefix query needs. Constructing the server any other way
+    /// silently reinstates tonic's 4 MiB default, so production and tests that
+    /// exercise large requests go through here.
     pub fn into_server(self) -> KvIndexerServer<Self> {
         KvIndexerServer::new(self).max_decoding_message_size(MAX_GRPC_DECODING_MESSAGE_SIZE)
     }
 }
 
-/// A transport builder carrying the Indexer's stream bound.
+/// A transport builder carrying the Indexer's stream bound. Pairs with
+/// [`KvIndexerService::into_server`]: that sets the per-message ceiling, this
+/// bounds how many messages can be in flight against it at once.
 pub fn server_builder() -> Server {
     server_builder_with_max_concurrent_streams(MAX_CONCURRENT_STREAMS)
 }
 
 /// A transport builder with an explicit stream bound for high-fanout fleets.
+///
+/// The default entry point keeps the stable 64-stream behavior, while the
+/// standalone Indexer binary can raise the bound when it has one bridge per
+/// worker.
 pub fn server_builder_with_max_concurrent_streams(max_concurrent_streams: u32) -> Server {
     Server::builder().max_concurrent_streams(max_concurrent_streams)
 }
@@ -189,7 +214,8 @@ where
         request: Request<MatchExternalKvPrefixRequest>,
     ) -> Result<Response<MatchExternalKvPrefixResponse>, Status> {
         let (metadata, extensions, request) = request.into_parts();
-        // Before any work: an expired query must not spend the capacity the rest of the backlog needs to drain.
+        // Before any work: an expired query must not spend the capacity the rest
+        // of the backlog needs to drain.
         reject_if_deadline_passed(&metadata, &extensions)?;
         validate_hashes(&request.hashes)?;
         // Caps concurrent prefix queries; excess is rejected, never queued.
@@ -248,7 +274,10 @@ fn validate_hashes_bounded(hashes: &[i64]) -> Result<(), Status> {
     Ok(())
 }
 
-/// Well-formedness only: no hash ceiling.
+/// Well-formedness only: no hash ceiling. A prefix scan uses O(1) state per
+/// candidate worker, and truncating it would silently understate a worker's
+/// reusable prefix. Length is bounded by `max_blocks` and the transport limit,
+/// not by the caller's deadline, which cannot cancel a scan already under way.
 fn validate_hashes(hashes: &[i64]) -> Result<(), Status> {
     if hashes.is_empty() {
         return Err(Status::invalid_argument("hashes must not be empty"));
@@ -291,8 +320,8 @@ fn validate_actions(actions: &[ExternalKvAction]) -> Result<(), Status> {
                 return Err(Status::invalid_argument("action type is not supported"));
             }
         }
-        // The per-hash arrays are either absent (legacy) or index-aligned
-        // with `hashes`.
+        // The per-hash arrays are either absent (legacy) or index-aligned with
+        // `hashes`; a partial array is a malformed batch, not a silent legacy hash.
         validate_aligned(
             action.component_masks.len(),
             action.hashes.len(),
@@ -314,7 +343,8 @@ fn validate_aligned(array_len: usize, hashes_len: usize, field: &str) -> Result<
 }
 
 /// Number of leading blocks to consider for a prefix query: bounded by the
-/// request length and, when the caller set one.
+/// request length and, when the caller set one, by `max_blocks` (0 disables the
+/// caller ceiling).
 pub(crate) fn prefix_limit(len: usize, max_blocks: u32) -> usize {
     if max_blocks == 0 {
         len
@@ -323,7 +353,8 @@ pub(crate) fn prefix_limit(len: usize, max_blocks: u32) -> usize {
     }
 }
 
-/// KV component bits.
+/// KV component bits. Each component's rule is a property of its type, so the
+/// indexer applies fixed semantics rather than a per-worker rule binding.
 pub const COMPONENT_FULL: u32 = 1 << 0;
 pub const COMPONENT_SWA: u32 = 1 << 1;
 pub const COMPONENT_MAMBA: u32 = 1 << 2;
@@ -343,7 +374,8 @@ pub fn component_bit(name: &str) -> Option<u32> {
 const SERVABLE_TIER_MASK: u32 =
     (1 << (TierType::TierHbm as u32)) | (1 << (TierType::TierDram as u32));
 
-/// Highest `WorkerCacheSpec.version` this build interprets; a higher (future) version fails closed.
+/// Highest `WorkerCacheSpec.version` this build interprets; a higher (future)
+/// version fails closed. Version 0 (proto default) is accepted as current.
 const SUPPORTED_SPEC_VERSION: u32 = 1;
 
 /// Whether `tier` is set in a `1 << TierType` bitmask.
@@ -351,14 +383,16 @@ fn tier_in_mask(mask: u32, tier: i32) -> bool {
     tier >= 0 && mask & (1u32 << tier) != 0
 }
 
-/// One block's placement at one worker: token count plus, per tier held, the resident component bitmask.
+/// One block's placement at one worker: token count plus, per tier held, the
+/// resident component bitmask (mask `0` = legacy whole-block, held with no detail).
 #[derive(Debug, Clone)]
 pub struct BlockComponents {
     pub token_count: u32,
     pub tier_masks: Vec<(i32, u32)>,
 }
 
-/// One candidate worker for the rule engine: routing identity, optional spec, and per-query-block placement.
+/// One candidate worker for the rule engine: routing identity, optional spec, and
+/// per-query-block placement (`None` where the worker does not hold the block).
 #[derive(Debug, Clone)]
 pub struct WorkerPrefixInput {
     pub worker_id: String,
@@ -423,7 +457,7 @@ pub(crate) fn compute_prefix_response(
 }
 
 /// The reusable prefix length for one worker: a safe lower bound on what it can
-/// serve.
+/// serve. Returns 0 (the worker is excluded) when a component-aware store lacks a
 /// spec or the spec carries an unusable rule.
 pub(crate) fn compute_worker_prefix(
     spec: Option<&WorkerCacheSpec>,
@@ -436,7 +470,9 @@ pub(crate) fn compute_worker_prefix(
     scanner.prefix()
 }
 
-/// Incremental form of the component rule engine: one forward pass, one block at a time, O(1) state.
+/// Incremental form of the component rule engine: one forward pass, one block at
+/// a time, O(1) state. Lets a backend answer a prefix query without materializing
+/// a `workers × request_blocks` placement array.
 #[derive(Debug)]
 pub(crate) struct WorkerPrefixScanner {
     processed: u32,
@@ -445,8 +481,9 @@ pub(crate) struct WorkerPrefixScanner {
 
 #[derive(Debug)]
 enum PrefixScanState {
-    /// A worker reporting no components: the count of leading blocks it
-    /// holds, unless some block carries a component mask.
+    /// A worker reporting no components: the count of leading blocks it holds,
+    /// unless some block carries a component mask, which fails the whole result
+    /// closed.
     Legacy {
         prefix: u32,
         /// False once a gap appears, after which `prefix` is final.
@@ -457,6 +494,9 @@ enum PrefixScanState {
     Invalid,
     /// The largest boundary `N` where every required component's rule holds:
     ///   * FULL (always required)  — present on every block `0..N`.
+    ///   * SWA (if present)        — an unbroken run ending at `N-1` covering
+    ///     `swa_window_tokens`, or reaching the head.
+    ///   * MAMBA (if present)      — present on block `N-1`.
     ComponentAware {
         /// Cleared once FULL is missing, which freezes `best`.
         active: bool,
@@ -577,6 +617,8 @@ impl WorkerPrefixScanner {
     }
 }
 
+/// Whether `component` (a single bit) is resident on `block` at some tier that is
+/// both declared servable for that component (`spec_tier_mask`) and servable by
 /// the indexer (`SERVABLE_TIER_MASK`).
 fn component_available(
     block: Option<&BlockComponents>,
@@ -869,6 +911,7 @@ mod tests {
         })
     }
 
+    /// A legacy whole-block placement (mask 0) at HBM.
     fn legacy_blk() -> Option<BlockComponents> {
         blk(&[(hbm(), 0)], 0)
     }
@@ -928,21 +971,24 @@ mod tests {
 
     #[test]
     fn trailing_window_requires_unbroken_window_before_boundary() {
-        // window = 100 tokens, tokens per block: contiguous swa blocks cover a window. full is present.
+        // window = 100 tokens, 50 tokens per block: two contiguous swa blocks
+        // cover a window. full is present on every block.
         let s = spec(COMPONENT_FULL | COMPONENT_SWA, 100, &[hbm()], &[hbm()], &[]);
         let with_swa = || blk(&[(hbm(), COMPONENT_FULL | COMPONENT_SWA)], 50);
         let no_swa = || blk(&[(hbm(), COMPONENT_FULL)], 50);
         // swa present everywhere -> full length reusable.
         let blocks = vec![with_swa(), with_swa(), with_swa(), with_swa(), with_swa()];
         assert_eq!(compute_worker_prefix(Some(&s), &blocks), 5);
+        // swa tombstoned at block index 3: the largest boundary whose trailing
+        // 100-token window is unbroken is N=3 (blocks 1..2 cover 100 tokens).
         let holed = vec![with_swa(), with_swa(), with_swa(), no_swa(), with_swa()];
         assert_eq!(compute_worker_prefix(Some(&s), &holed), 3);
     }
 
     #[test]
     fn trailing_window_head_is_always_valid() {
-        // Fewer tokens than a window, but an unbroken run from the head is
-        // valid.
+        // Fewer tokens than a window, but an unbroken run from the head is valid
+        // (matches the unified cache's window accumulator seeded at infinity).
         let s = spec(
             COMPONENT_FULL | COMPONENT_SWA,
             1000,
@@ -956,6 +1002,7 @@ mod tests {
 
     #[test]
     fn exact_boundary_only_matches_at_a_checkpoint() {
+        // mamba lives only on the 4th block (a leaf checkpoint). full is on all.
         let s = spec(
             COMPONENT_FULL | COMPONENT_MAMBA,
             0,
@@ -976,7 +1023,8 @@ mod tests {
 
     #[test]
     fn unusable_specs_are_excluded() {
-        // Each of these declared specs is unusable and must fail closed: an empty component set, a future/unsupported version.
+        // Each of these declared specs is unusable and must fail closed: an empty
+        // component set, a future/unsupported version, and SWA without a window.
         let blocks = vec![blk(&[(hbm(), COMPONENT_FULL | COMPONENT_SWA)], 16)];
         let empty = spec(0, 0, &[hbm()], &[], &[]);
         let mut future = spec(COMPONENT_FULL, 0, &[hbm()], &[], &[]);
@@ -989,6 +1037,8 @@ mod tests {
 
     #[test]
     fn missing_component_data_under_spec_excludes() {
+        // Spec requires full+swa but the worker reported legacy whole-block
+        // placement (mask 0), so full cannot be confirmed and it is excluded.
         let s = spec(COMPONENT_FULL | COMPONENT_SWA, 100, &[hbm()], &[hbm()], &[]);
         let blocks = vec![legacy_blk(), legacy_blk()];
         assert_eq!(compute_worker_prefix(Some(&s), &blocks), 0);

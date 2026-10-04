@@ -1,7 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# Start the Intel XPU CI container (ci_sglang_xpu) using the intel/sglang-dev:latest image published.
+# Start the Intel XPU CI container (ci_sglang_xpu) using the intel/sglang-dev:latest
+# image published by .github/workflows/release-docker-intel-xpu-nightly.yml.
+#
+# Pulls the :latest tag and starts a long-running container that subsequent
+# steps `docker exec` into.
 
 CONTAINER_NAME="ci_sglang_xpu"
 IMAGE_REPO="intel/sglang-dev"
@@ -66,7 +70,9 @@ else
   IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
   echo "Using image: ${IMAGE}"
 fi
-# Always pull so each stage runs the registry's current image.
+# Always pull so each stage runs the registry's current image; the cleanup
+# step removes the image after the stage so the runner doesn't accumulate
+# stale layers across runs.
 retry_with_backoff 6 docker pull "${IMAGE}"
 
 # Export the resolved image so the cleanup step can rmi the exact tag used.
@@ -83,6 +89,8 @@ fi
 VIDEO_GID=$(getent group video | cut -d: -f3)
 RENDER_GID=$(getent group render | cut -d: -f3)
 
+# Forward ZE_AFFINITY_MASK so each runner pins to its own GPU (else all pile onto L0 dev 0).
+# ONEAPI_DEVICE_SELECTOR keeps SYCL consistent with the L0-filtered device.
 GPU_AFFINITY_ARGS=()
 if [[ -n "${ZE_AFFINITY_MASK:-}" ]]; then
   echo "Pinning container to GPU via ZE_AFFINITY_MASK=${ZE_AFFINITY_MASK}"
@@ -113,7 +121,7 @@ else
   GPU_KEY="gpu${ZE_AFFINITY_MASK:-shared}"
   if [[ -n "${IMG_ID_SHORT}" ]]; then
     XPU_KERNEL_CACHE_HOST="${CACHE_ROOT}/kernel-cache-${GPU_KEY}-${IMG_ID_SHORT}"
-    # Prune caches for other image IDs + the unversioned dir (root-owned).
+    # Prune caches for other image IDs + the legacy unversioned dir (root-owned).
     shopt -s nullglob
     stale_siblings=("${CACHE_ROOT}"/kernel-cache-"${GPU_KEY}"-* "${CACHE_ROOT}/kernel-cache-${GPU_KEY}")
     shopt -u nullglob
@@ -133,6 +141,7 @@ fi
 mkdir -p "${XPU_KERNEL_CACHE_HOST}"/{triton,inductor,neo,sycl}
 echo "Using persistent XPU kernel cache: ${XPU_KERNEL_CACHE_HOST}"
 
+# Cap the cache (default 5 GiB); over-cap resets it via busybox (root-owned).
 XPU_KERNEL_CACHE_MAX_MB="${XPU_KERNEL_CACHE_MAX_MB:-5120}"
 cache_mb=$(du -sm "${XPU_KERNEL_CACHE_HOST}" 2>/dev/null | cut -f1)
 if [[ -n "${cache_mb}" && "${cache_mb}" -gt "${XPU_KERNEL_CACHE_MAX_MB}" ]]; then
@@ -144,9 +153,11 @@ fi
 
 echo "Launching container: ${CONTAINER_NAME} from ${IMAGE}"
 # SGLANG_SERVER_LAUNCH_TIMEOUT=36000 matches /data/pgirijal/scripts/setup_upstream_env.sh:
-# 4-GPU MoE loads (Qwen3.5-35B-A3B, gemma-4-26B-A4B, ...) on Arc Pro B60 can take >1h from
-# a cold HF cache, so give sglang server startup a 10h ceiling. Keep off until Intel ships
-# a fix in newer runtimes.
+# 4-GPU MoE loads (Qwen3.5-35B-A3B, gemma-4-26B-A4B, ...) on Arc Pro B60 can
+# take >1h from a cold HF cache, so give sglang server startup a 10h ceiling.
+# SYCL_CACHE_PERSISTENT=0: the SYCL runtime's persistent kernel cache mishandles
+# torch 2.13's XPU aten.topk kernel on compute-runtime 26.05 / IGC 2.28 -- reload
+# segfaults inside libsycl. Keep off until Intel ships a fix in newer runtimes.
 docker run -dt \
   --shm-size 8g \
   --group-add 992 \
@@ -169,11 +180,14 @@ docker run -dt \
   --name "${CONTAINER_NAME}" \
   "${IMAGE}"
 
-# Mark the workspace mount as a safe directory so git operations.
+# Mark the workspace mount as a safe directory so git operations as root
+# inside the container don't trip the cross-user repo guard.
 docker exec "${CONTAINER_NAME}" git config --global --add safe.directory /sglang-checkout || true
 
-# Pre-warm the HF cache for models used by tests that time out on cold
-# download. popen_launch_server's inner timeout counts network time.
+# Pre-warm the HF cache for models used by tests that time out on cold download.
+# popen_launch_server's inner timeout counts network time, so a slow HF Hub can
+# eat the whole window before shard loading begins. Best-effort: on failure the
+# test still tries a live download.
 if [[ -n "${HF_TOKEN_VALUE}" ]]; then
   docker exec "${CONTAINER_NAME}" /bin/bash -c \
     "/opt/venv/bin/hf auth login --token '${HF_TOKEN_VALUE}' >/dev/null 2>&1 || true"

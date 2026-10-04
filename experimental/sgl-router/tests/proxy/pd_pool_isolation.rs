@@ -1,7 +1,20 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! PD pool isolation — end-to-end at the HTTP layer using MockWorker.
+//!
+//! Drives the chat handler with:
+//!
+//! * A model whose registered workers are all `WorkerMode::Decode`. The
+//!   handler dispatches **prefill** traffic (chat-completions is the
+//!   prefill phase of a PD request), so it must return 503 with
+//!   `no_prefill_workers_available`.
+//! * A model with no workers at all → 503 `no_healthy_workers`
+//!   (existing code path; pinned here so a future PD wiring change
+//!   doesn't silently swap codes).
+//! * A PD-disagg model with both pools healthy → request flows to the
+//!   prefill worker (sanity check; the decode worker MUST NOT be selected for
+//!   the chat route).
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -140,7 +153,7 @@ async fn pd_decode_stream_expires_after_prefill_completes() {
             .to_string(),
         ))
         .unwrap();
-    // Prior faults make any accidental expiry failure trip the default breaker.
+    // Two prior faults make any accidental expiry failure trip the default breaker.
     decode_worker.breaker.record_failure();
     decode_worker.breaker.record_failure();
     let response = build_router(ctx.clone()).oneshot(request).await.unwrap();
@@ -185,7 +198,9 @@ async fn pd_decode_stream_expires_after_prefill_completes() {
     assert_eq!(decode_worker.breaker.snapshot().state_code, 1);
 }
 
-/// Gap closer #: PD mode with only decode workers → with `no_prefill_workers_available`.
+/// Gap closer #1: PD mode with only decode workers → 503 with
+/// `no_prefill_workers_available`. The chat route is a prefill
+/// dispatch, so a decode-only pool means partial failure.
 #[tokio::test]
 async fn pd_mode_decode_only_returns_no_prefill_workers_available() {
     let worker = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -212,7 +227,9 @@ async fn pd_mode_decode_only_returns_no_prefill_workers_available() {
     );
 }
 
-/// Pin the existing-code-path branch: no workers at all → with `no_healthy_workers`.
+/// Pin the existing-code-path branch: no workers at all → 503 with
+/// `no_healthy_workers`. Ensures the new PD code path didn't swap the
+/// code for the "model has zero workers" case.
 #[tokio::test]
 async fn no_workers_returns_no_healthy_workers() {
     let ctx = build_ctx(vec![]);
@@ -226,7 +243,15 @@ async fn no_workers_returns_no_healthy_workers() {
     );
 }
 
-/// PD-disagg deployment with both pools healthy → chat dispatch fans out to BOTH the prefill and the decode worker.
+/// PD-disagg deployment with both pools healthy → chat dispatch fans
+/// out to BOTH the prefill and the decode worker (Pattern B: prefill
+/// in a detached task, decode awaited for the client response). Both
+/// receive the same bootstrap-injected body so the SGLang engine can
+/// match KV transfers via `bootstrap_room`. Pool *isolation* — the
+/// guarantee that the policy's prefill candidate set excludes decode
+/// workers — is exercised at the resolver layer
+/// (`policies::registry::tests::pd_resolution_returns_distinct_pools`).
+/// Here we only assert the HTTP-layer wiring of the dual dispatch.
 #[tokio::test]
 async fn pd_mode_chat_dispatch_fans_to_both_prefill_and_decode() {
     let prefill = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -249,7 +274,10 @@ async fn pd_mode_chat_dispatch_fans_to_both_prefill_and_decode() {
     ]);
     let app = build_router(ctx);
 
-    // Fire a single request; both prefill (spawn-and-forget) and decode (awaited) must receive a body.
+    // Fire a single request; both prefill (spawn-and-forget) and
+    // decode (awaited) must receive a body with the injected
+    // bootstrap fields. The decode body is what the client sees on
+    // the response.
     let res = app.oneshot(chat_request()).await.unwrap();
     assert_eq!(
         res.status(),
@@ -258,7 +286,9 @@ async fn pd_mode_chat_dispatch_fans_to_both_prefill_and_decode() {
     );
 
     // Decode receives its body synchronously (we awaited it), so it's
-    // guaranteed captured by the time the response returned.
+    // guaranteed captured by the time the response returned. Scope
+    // the lock guard to this block so it doesn't span the `.await`
+    // below (clippy: await_holding_lock).
     {
         let decode_seen = decode.captured.lock().unwrap();
         assert!(
@@ -286,7 +316,9 @@ async fn pd_mode_chat_dispatch_fans_to_both_prefill_and_decode() {
     assert!(!prefill_body.is_empty());
 }
 
-/// PD-mode chat request carries an `x-sgl-decode-url` header for the final Decode decision.
+/// PD-mode chat request carries an `x-sgl-decode-url` header for the final
+/// Decode decision. Step 1 defaults to Decode P2; the header remains an
+/// observability contract regardless of which Decode policy produced it.
 #[tokio::test]
 async fn pd_mode_chat_dispatch_sets_final_decode_header() {
     use std::collections::HashSet;
@@ -329,21 +361,23 @@ async fn pd_mode_chat_dispatch_sets_final_decode_header() {
     ]);
     let app = build_router(ctx);
 
-    // Fire multiple requests; both prefill workers see traffic via round-robin.
+    // Fire 4 requests; both prefill workers see traffic via round-robin.
     for _ in 0..4 {
         let res = app.clone().oneshot(chat_request()).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
     }
 
     // Every request that hit a prefill mock MUST carry the final-decode
-    // header. The value MUST be one of both registered Decode URLs.
+    // header. The value MUST be one of the two registered Decode URLs.
     let decode_urls: HashSet<String> = [decode_a.url.clone(), decode_b.url.clone()]
         .into_iter()
         .collect();
     for (label, p) in [("prefill_a", &prefill_a), ("prefill_b", &prefill_b)] {
         let g = p.captured.lock().unwrap();
         if g.last_body.is_none() {
-            // This prefill didn't receive a request — round-robin's dashmap iteration is non-deterministic.
+            // This prefill didn't receive a request — round-robin's
+            // dashmap iteration is non-deterministic, so one side may
+            // skip in a 4-request fire. Continue.
             continue;
         }
         let hdr = g.headers.get("x-sgl-decode-url").unwrap_or_else(|| {
@@ -359,7 +393,10 @@ async fn pd_mode_chat_dispatch_sets_final_decode_header() {
     }
 }
 
-/// Task C: plain-mode (non-PD) request does NOT carry the `x-sgl-decode-url` header.
+/// Task C: plain-mode (non-PD) request does NOT carry the
+/// `x-sgl-decode-url` header. Pin: the affinity step is gated on
+/// `worker.mode() == Prefill` so plain workers are not asked to
+/// bootstrap nonexistent decode peers.
 #[tokio::test]
 async fn plain_mode_chat_dispatch_omits_decode_affinity_header() {
     let plain = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -383,7 +420,9 @@ async fn plain_mode_chat_dispatch_omits_decode_affinity_header() {
     );
 }
 
-/// Task C: PD-mode prefill request with NO decode workers → `no_decode_workers_available`.
+/// Task C: PD-mode prefill request with NO decode workers → 503
+/// `no_decode_workers_available`. Pin: failure mode is loud and
+/// distinct from the existing `no_prefill_workers_available` path.
 #[tokio::test]
 async fn pd_mode_prefill_only_returns_no_decode_workers_available() {
     let prefill = crate::common::mock_worker::MockWorker::start(vec![]).await;
@@ -404,7 +443,10 @@ async fn pd_mode_prefill_only_returns_no_decode_workers_available() {
     );
 }
 
-/// PD-mode chat response carries `x-sgl-decode-url` so external tests can observe final Decode selection end-to-end.
+/// PD-mode chat response carries `x-sgl-decode-url` so external tests
+/// can observe final Decode selection end-to-end (without sniffing the proxy
+/// hop into the upstream prefill worker). Mirrors the request-side
+/// behavior asserted by `pd_mode_chat_dispatch_sets_final_decode_header`.
 #[tokio::test]
 async fn pd_mode_chat_response_carries_decode_affinity_header() {
     use std::collections::HashSet;
@@ -459,7 +501,8 @@ async fn pd_mode_chat_response_carries_decode_affinity_header() {
     );
 }
 
-/// Plain-mode chat response does NOT carry `x-sgl-decode-url`.
+/// Plain-mode chat response does NOT carry `x-sgl-decode-url`. Pin: the
+/// response-side mirror is gated on PD-mode dispatch.
 #[tokio::test]
 async fn plain_mode_chat_response_omits_decode_affinity_header() {
     let plain = crate::common::mock_worker::MockWorker::start(vec![]).await;

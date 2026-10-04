@@ -8,9 +8,9 @@ use crate::tokenizer_manager::channel::{ToSchedulerRx, to_scheduler};
 use crate::utils::fsm::RequestState;
 use tokio::sync::mpsc;
 
-/// An `Intake` plus its detok-shard receiver, to_scheduler channel consumer
-/// (keep alive — dropping it closes the channel → false QueueFull), tm
-/// inbox sender.
+/// An `Intake` plus its detok-shard receiver, to_scheduler channel consumer (keep alive —
+/// dropping it closes the channel → false QueueFull), tm inbox sender, and the
+/// mm-pool receiver (keep alive — dropping it makes mm submits fail).
 fn make_intake() -> (
     Intake,
     flume::Receiver<DetokMsg>,
@@ -68,7 +68,8 @@ fn make_intake_inner(
     let (to_scheduler_tx, consumer) = to_scheduler(16);
     let (tm_tx, tm_rx) = flume::unbounded();
     let (mm_tx, mm_rx) = flume::unbounded();
-    // Keep the shutdown sender alive (leak) so its branch never fires — tests end `run` by dropping `tm_tx`.
+    // Keep the shutdown sender alive (leak) so its branch never fires — tests
+    // end `run` by dropping `tm_tx`, not by shutdown.
     let (sd_tx, sd_rx) = flume::unbounded::<()>();
     std::mem::forget(sd_tx);
     let intake = Intake::new(
@@ -92,7 +93,15 @@ fn test_mm(tx: flume::Sender<MmRequest>, enabled: bool) -> MmDispatch {
     }
 }
 
-/// Both abort sources do the same things: drop the detok entry so no further chunk can be delivered.
+/// Both abort sources do the same two things: drop the detok entry so no
+/// further chunk can be delivered, and tell the scheduler to stop generating.
+///
+/// Neither releases anything, and nothing needs them to. Release ordering used
+/// to be the delicate part here — `AbortGuard::drop` releasing a rid right
+/// after enqueuing the abort ordered the SEND, not the EFFECT, so a retry of
+/// the same rid could `Register` ahead of the stale abort and be torn down by
+/// it. `Rid::from_client` removes the premise: a retry carries a different
+/// `Rid`, so no abort in flight can name it.
 #[test]
 fn every_abort_source_deregisters_and_stops_the_scheduler() {
     for source in [
@@ -132,9 +141,17 @@ fn every_abort_source_deregisters_and_stops_the_scheduler() {
     }
 }
 
-/// A context ceiling high enough that only a test which sets one on purpose can reach it.
+/// A context ceiling high enough that only a test which sets one on purpose
+/// can reach it. `context_len` is mandatory now, so "no ceiling" has to be a
+/// large number rather than `None`; kept well below `u64::MAX` so the
+/// `as i64` in the auto-truncate clamp cannot go negative if a future test
+/// does reach this path.
 const NO_CONTEXT_CEILING: u64 = 1 << 40;
 
+/// The default test limits: a real tokenizer, vocab 1000, no context ceiling.
+/// Spelled out rather than `..Default::default()` — `Limits` deliberately has
+/// no `Default`, because a zero `vocab_size`/`context_len` would reject every
+/// request instead of behaving like "unset".
 fn test_limits() -> Limits {
     Limits {
         skip_tokenizer_init: false,
@@ -161,7 +178,9 @@ fn generate_req(id: u64, sampling_params: SamplingParams) -> Request {
     }
 }
 
-/// `input + max_new_tokens` past the context window is an actionable.
+/// `input + max_new_tokens` past the context window is an actionable 400, not a
+/// silently truncated 200 (Python `TokenizerManager._validate_one_request`).
+/// The message names both halves so the client can fix the right one.
 #[test]
 fn total_tokens_over_context_is_rejected() {
     let limits = Limits {
@@ -188,7 +207,8 @@ fn total_tokens_over_context_is_rejected() {
     assert_eq!(g.sampling_params.max_new_tokens, Some(7), "left alone");
 }
 
-/// The reserved slots (eagle draft tokens) count as input.
+/// The reserved slots (eagle draft tokens) count as input, so a request can be
+/// rejected for them even when the prompt alone would fit.
 #[test]
 fn reserved_tokens_count_toward_the_limit() {
     let limits = Limits {
@@ -199,7 +219,7 @@ fn reserved_tokens_count_toward_the_limit() {
     let mut g = GenerateRequest {
         input_ids: Some(vec![1, 2, 3]),
         sampling_params: SamplingParams {
-            max_new_tokens: Some(3),
+            max_new_tokens: Some(3), // 3 + 3 fits, but 3 + 5 + 3 does not
             ..Default::default()
         },
         ..Default::default()
@@ -208,7 +228,8 @@ fn reserved_tokens_count_toward_the_limit() {
     assert!(msg.contains("8 tokens from the input"), "{msg}");
 }
 
-/// `--allow-auto-truncate` opts into clamping instead of rejecting.
+/// `--allow-auto-truncate` opts into clamping instead of rejecting; with no
+/// context length, or no `max_new_tokens` cap, there is nothing to check.
 #[test]
 fn auto_truncate_clamps_and_unknowns_skip() {
     let sp = |max_new_tokens| SamplingParams {
@@ -233,7 +254,8 @@ fn auto_truncate_clamps_and_unknowns_skip() {
     assert!(check_total_tokens(&mut g, &test_limits()).is_ok());
     assert_eq!(g.sampling_params.max_new_tokens, Some(100), "untouched");
 
-    // No cap requested → nothing to add to the input length.
+    // No cap requested → nothing to add to the input length, but the input
+    // itself is still checked (see `input_length_is_checked_unconditionally`).
     g.sampling_params = sp(None);
     let roomy = Limits {
         context_len: 100,
@@ -242,7 +264,11 @@ fn auto_truncate_clamps_and_unknowns_skip() {
     assert!(check_total_tokens(&mut g, &roomy).is_ok());
 }
 
-/// `max_new_tokens: null` means "no cap", NOT "skip the checks" — the input alone must still fit.
+/// `max_new_tokens: null` means "no cap", NOT "skip the checks" — the input
+/// alone must still fit. Gating the whole function on `max_new_tokens` let an
+/// over-long prompt through to the scheduler with no error at all.
+/// Python compares with `>=`: a prompt that exactly fills the window leaves no
+/// room to generate.
 #[test]
 fn input_length_is_checked_unconditionally() {
     let limits = Limits {
@@ -285,7 +311,10 @@ fn input_length_is_checked_unconditionally() {
     );
 }
 
-/// The clamp runs AFTER `verify` (which happens in `Normalizing`).
+/// The clamp runs AFTER `verify` (which happens in `Normalizing`), so lowering
+/// `max_new_tokens` can leave `min_new_tokens > max_new_tokens`. Nothing
+/// downstream re-checks — `is_normalized: true` makes the scheduler's own
+/// verify early-return — so the clamp has to re-assert it here.
 #[test]
 fn auto_truncate_cannot_invert_min_and_max_new_tokens() {
     let limits = Limits {
@@ -294,7 +323,7 @@ fn auto_truncate_cannot_invert_min_and_max_new_tokens() {
         ..test_limits()
     };
     let mut g = GenerateRequest {
-        input_ids: Some(vec![1, 2, 3]),
+        input_ids: Some(vec![1, 2, 3]), // clamps max_new_tokens to 7
         sampling_params: SamplingParams {
             max_new_tokens: Some(100),
             min_new_tokens: 50, // …which is below min_new_tokens
@@ -314,7 +343,9 @@ fn auto_truncate_cannot_invert_min_and_max_new_tokens() {
     assert_eq!(g.sampling_params.max_new_tokens, Some(7));
 }
 
-/// `return_hidden_states` on a server not launched for it is a: the scheduler never computes them.
+/// `return_hidden_states` on a server not launched for it is a 400: the
+/// scheduler never computes them, so the request would otherwise 200 with
+/// `meta_info.hidden_states` silently missing.
 #[test]
 fn hidden_states_gated_on_server_support() {
     let req = |want| {
@@ -331,7 +362,9 @@ fn hidden_states_gated_on_server_support() {
         err.to_string().contains("--enable-return-hidden-states"),
         "message must name the flag: {err}"
     );
-    // Not asking for them (the client sent `false`, or sent nothing and `into_requests` resolved the default).
+    // Not asking for them (the client sent `false`, or sent nothing and
+    // `into_requests` resolved the default), or asking on a server that
+    // supports them, is fine.
     assert!(validate(&mut req(false), &disabled).is_ok());
     let enabled = Limits {
         enable_return_hidden_states: true,
@@ -340,7 +373,8 @@ fn hidden_states_gated_on_server_support() {
     assert!(validate(&mut req(true), &enabled).is_ok());
 }
 
-/// End-to-end through `drive`: an over-context request is rejected on the way to the ring, after registration — so it must be deregistered.
+/// End-to-end through `drive`: an over-context request is rejected on the way
+/// to the ring, after registration — so it must be deregistered, not leaked.
 #[test]
 fn over_context_request_deregisters_and_never_reaches_the_ring() {
     let (mut intake, detok_rx, consumer, _tm_tx, _mm_rx) = make_intake_with(Limits {
@@ -368,7 +402,12 @@ fn over_context_request_deregisters_and_never_reaches_the_ring() {
     );
 }
 
-/// A `Detokenize` request terminates at the detok stage.
+/// A `Detokenize` request terminates at the detok stage, and the shard must
+/// see its `Register` BEFORE its `Decode` — the shard delivers the result
+/// through the sink registered under that rid, so a `Decode` that arrives
+/// unregistered is silently dropped and the caller waits forever. Both
+/// messages ride one channel from this one thread, which is the FIFO this
+/// pins. Nothing may reach the scheduler ring.
 #[test]
 fn detokenize_flows_register_then_decode_and_skips_the_ring() {
     let (mut intake, detok_rx, consumer, _tm_tx, _mm_rx) = make_intake();
@@ -403,7 +442,10 @@ fn detokenize_flows_register_then_decode_and_skips_the_ring() {
     );
 }
 
-/// Negative ids cannot decode (the shard's domain is `&[u32]`): rejected by `validate` at `Received` — an `Error` to the sink.
+/// Negative ids cannot decode (the shard's domain is `&[u32]`): rejected by
+/// `validate` at `Received` — an `Error` to the sink, and the shard sees
+/// NOTHING (validation runs before registration, so there is no entry to
+/// leak and no decode job to drop).
 #[test]
 fn detokenize_negative_ids_reject_before_registration() {
     let (mut intake, detok_rx, consumer, _tm_tx, _mm_rx) = make_intake();
@@ -425,7 +467,15 @@ fn detokenize_negative_ids_reject_before_registration() {
     assert!(consumer.drain(16).headers.is_empty());
 }
 
-/// A dropped ring push is survivable, and this pins WHY.
+/// A dropped ring push is survivable, and this pins WHY. The ring is bounded,
+/// so under load the scheduler never learns to stop and keeps generating; its
+/// chunks then arrive for a rid the detok table no longer holds and are
+/// dropped. That wastes GPU work but cannot MISDELIVER, because
+/// `Rid::from_client` guarantees no later request ever answers to that rid.
+/// The detok entry is dropped either way — that is the half that must not
+/// depend on the ring.
+///
+/// Ring capacity 1: the first abort pushes, the second finds it full.
 #[test]
 fn abort_deregisters_even_when_the_ring_push_is_dropped() {
     let (tok_tx, _tok_rx) = flume::unbounded();
@@ -463,7 +513,8 @@ fn abort_deregisters_even_when_the_ring_push_is_dropped() {
     }
 }
 
-/// The rid keys the detok table and rides on every chunk of every decode step, so an unbounded client-supplied one is a recurring cost.
+/// The rid keys the detok table and rides on every chunk of every decode step,
+/// so an unbounded client-supplied one is a recurring cost, not a one-off.
 #[test]
 fn oversized_rid_is_rejected() {
     let mut req = generate_req(51, SamplingParams::default());
@@ -478,7 +529,10 @@ fn oversized_rid_is_rejected() {
     assert!(validate(&mut req, &test_limits()).is_ok());
 }
 
-/// A request rejected BEFORE `register_detok` must not send `Deregister`: the handler is a bare `table.remove(&rid)`.
+/// A request rejected BEFORE `register_detok` must not send `Deregister`: the
+/// handler is a bare `table.remove(&rid)`, so it would evict whatever entry
+/// holds that key — a concurrent request's sink — leaving that client hung with
+/// no terminal frame. Python validates before it inserts, so it cannot hit this.
 #[test]
 fn pre_registration_failure_does_not_deregister() {
     // Rejected inside `validate` (out-of-vocab id), which runs before registration.
@@ -510,10 +564,12 @@ fn pre_registration_failure_does_not_deregister() {
     ));
 }
 
-/// A request rejected at normalization (post-register) must not leak: the shard sees `Register` then `Deregister`.
+/// A request rejected at normalization (post-register) must not leak: the shard
+/// sees `Register` then `Deregister`. Regression for RSS growth on bad input.
 #[test]
 fn rejected_request_deregisters_from_shard() {
     let (mut intake, detok_rx, _consumer, _tm_tx, _mm_rx) = make_intake();
+    // top_p = 2.0 is outside (0, 1], so `SamplingParams::normalize` rejects it.
     let bad = SamplingParams {
         top_p: 2.0,
         ..Default::default()
@@ -534,7 +590,9 @@ fn rejected_request_deregisters_from_shard() {
     );
 }
 
-/// Regression: an out-of-vocabulary client token id must be rejected at with a — passed through.
+/// Regression: an out-of-vocabulary client token id must be rejected at
+/// with a 400 — passed through, it reaches the embedding lookup
+/// and kills the scheduler process (`make_intake` bounds vocab at 1000).
 #[test]
 fn out_of_vocab_input_ids_rejected() {
     let (mut intake, detok_rx, _consumer, _tm_tx, _mm_rx) = make_intake();
@@ -618,7 +676,8 @@ fn admitted_request_keeps_registration() {
     );
 }
 
-/// A pool return in `Failed` state (failed encode) is rejected via the same path and deregistered, not leaked.
+/// A pool return in `Failed` state (failed encode) is rejected via the same
+/// path and deregistered, not leaked.
 #[test]
 fn tokenize_failure_deregisters_via_intake() {
     let (intake, detok_rx, _consumer, tm_tx, _mm_rx) = make_intake();
@@ -628,7 +687,7 @@ fn tokenize_failure_deregisters_via_intake() {
         .state
         .apply(Event::Error(Error::Tokenize("boom".into())));
     tm_tx.send(TmEvent::Tokenized(req)).unwrap();
-    // Close the inbox so the run loop returns after draining the event.
+    // Close the inbox so the run loop returns after draining the one event.
     drop(tm_tx);
     intake.run();
 
@@ -639,7 +698,8 @@ fn tokenize_failure_deregisters_via_intake() {
     assert!(detok_rx.try_recv().is_err(), "no further shard messages");
 }
 
-/// An abort deregisters (by the id hashed from the rid string).
+/// An abort deregisters (by the id hashed from the rid string), so a request
+/// aborted before any terminal chunk can't leak.
 #[test]
 fn abort_deregisters_from_shard() {
     // Aborts arrive on their own unbounded lane now, not the request inbox.
@@ -657,7 +717,8 @@ fn abort_deregisters_from_shard() {
     assert!(detok_rx.try_recv().is_err(), "no further shard messages");
 }
 
-/// A successful pool return (Queued, ids filled) is pushed to the ring, not rejected; its registration is untouched.
+/// A successful pool return (Queued, ids filled) is pushed to the ring, not
+/// rejected; its registration is untouched.
 #[test]
 fn tokenized_return_pushes_without_deregister() {
     let (intake, detok_rx, _consumer, tm_tx, _mm_rx) = make_intake();
@@ -678,7 +739,8 @@ fn tokenized_return_pushes_without_deregister() {
     );
 }
 
-/// If the pool is gone, a request needing tokenization is rejected + deregistered, not silently dropped.
+/// If the pool is gone, a request needing tokenization is rejected +
+/// deregistered, not silently dropped.
 #[test]
 fn tokenize_pool_gone_deregisters() {
     let (mut intake, detok_rx, _consumer, _tm_tx, _mm_rx) = make_intake();
@@ -721,7 +783,9 @@ fn mm_generate_req(rid: &str) -> Request {
     }
 }
 
-/// An abort while the request is parked for MM cancels it: the pending entry is removed, the worker's late result is dropped.
+/// An abort while the request is parked for MM cancels it: the pending
+/// entry is removed, the worker's late result is dropped, and its parked
+/// result-store entry is purged — no scheduler work runs for a dead client.
 #[test]
 fn abort_cancels_parked_mm_request() {
     let (mut intake, _detok_rx, consumer, _tm_tx, mm_rx) = make_intake();
@@ -754,7 +818,9 @@ fn abort_cancels_parked_mm_request() {
     assert!(intake.mm.results.take("mm-gone").is_none(), "entry purged");
 }
 
-/// A multimodal request parks in `Encoding` (submitted to the mm worker pool, not the tokenizer pool, not the ring).
+/// A multimodal request parks in `Encoding` (submitted to the mm worker
+/// pool, not the tokenizer pool, not the ring) until `MmEncoded` resumes
+/// it → ring.
 #[test]
 fn mm_request_parks_then_mm_encoded_pushes_to_ring() {
     let (mut intake, _detok_rx, consumer, _tm_tx, mm_rx) = make_intake();
@@ -801,7 +867,9 @@ fn mm_failure_rejects_parked_request() {
     assert!(consumer.drain(16).headers.is_empty(), "nothing queued");
 }
 
-/// On a non-multimodal model (`MmDispatch::enabled == false`), image_data is silently ignored and the request tokenizes as plain text.
+/// On a non-multimodal model (`MmDispatch::enabled == false`), image_data is silently
+/// ignored and the request tokenizes as plain text — the Python
+/// TokenizerManager behavior when `mm_processor is None`.
 #[test]
 fn mm_fields_ignored_when_disabled() {
     let (tok_tx, tok_rx) = flume::unbounded();
@@ -840,7 +908,8 @@ fn mm_fields_ignored_when_disabled() {
     );
 }
 
-/// A late mm result for a rid that is no longer parked is dropped without panicking (e.g. hash-collision overwrite).
+/// A late mm result for a rid that is no longer parked is dropped without
+/// panicking (e.g. hash-collision overwrite) — regression guard.
 #[test]
 fn late_mm_result_is_dropped() {
     let (mut intake, _detok_rx, consumer, _tm_tx, _mm_rx) = make_intake();

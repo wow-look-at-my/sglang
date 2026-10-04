@@ -115,8 +115,7 @@ fn prepare_response(
 ) -> Result<CompletionResponseContext, ResponseError> {
     let echo = request.echo.unwrap_or(false);
     let n = request.n.unwrap_or(1) as usize;
-    // Echo uses the input, even when preprocessing truncates engine input
-    // IDs.
+    // Echo uses the original input, even when preprocessing truncates engine input IDs.
     let prompt_echoes = if !echo {
         vec![String::new(); choice_count / n]
     } else if matches!(&request.prompt, Prompt::String(_) | Prompt::StringArray(_)) {
@@ -162,7 +161,9 @@ pub(crate) async fn unary_completion(
     echo: bool,
     want_logprobs: bool,
 ) -> Result<CompletionResponseWire, ResponseError> {
-    // Every request is already submitted, so draining in choice order does not serialize generation.
+    // Every request is already submitted, so draining in choice order does not
+    // serialize generation. The non-streaming native path sends one terminal
+    // result, and the accumulator also tolerates intermediate frames.
     let mut choices = Vec::with_capacity(submitted.len());
     let mut prompt_tokens = BTreeMap::<usize, u32>::new();
     let mut completion_tokens = 0u64;
@@ -231,7 +232,8 @@ fn completion_choice(
         .map(|matched| match matched {
             MatchedStop::Token(id) => MatchedStopWire::Token(*id),
             MatchedStop::Text(value) => MatchedStopWire::Text(value.clone()),
-            // Python's OpenAI schema supports an integer or string here, not a multi-token list.
+            // Python's OpenAI schema supports an integer or string here, not a
+            // multi-token list. Preserve the native value rather than dropping it.
             MatchedStop::Tokens(ids) => MatchedStopWire::Tokens(ids.clone()),
         });
     CompletionChoiceWire {

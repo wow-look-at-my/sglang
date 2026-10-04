@@ -1,5 +1,9 @@
 name: Release Docker Runtime Images
-# Builds and publishes runtime Docker images (production-optimized, ~50% smaller): - lmsysorg/sglang:v{version}-runtime, lmsysorg/sglang:latest-runtime - lmsysorg/sglang:v{version}-cu130-runtime, lmsysorg/sglang:latest-cu130-runtime
+#
+# Builds and publishes runtime Docker images (production-optimized, ~50% smaller):
+#   - lmsysorg/sglang:v{version}-runtime, lmsysorg/sglang:latest-runtime
+#   - lmsysorg/sglang:v{version}-cu130-runtime, lmsysorg/sglang:latest-cu130-runtime
+#
 on:
   push:
     tags:

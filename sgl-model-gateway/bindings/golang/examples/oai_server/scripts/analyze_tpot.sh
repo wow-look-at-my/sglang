@@ -1,6 +1,17 @@
 #!/bin/bash
 
-# TPOT performance bottleneck analysis script Specifically designed to analyze why Go Router is twice as slow as Rust Router Usage.
+# TPOT performance bottleneck analysis script
+# Specifically designed to analyze why Go Router is twice as slow as Rust Router
+#
+# Usage:
+#   ./scripts/analyze_tpot.sh [options]
+#
+# Options:
+#   --duration SECONDS     CPU profile duration (default: 60)
+#   --requests NUM        Number of requests (default: 100)
+#   --concurrency NUM     Concurrency level (default: 20)
+#   --pprof-port PORT     pprof port (default: 6060)
+#   --server-url URL      Server URL (default: http://localhost:8080)
 
 set -e
 
@@ -110,6 +121,9 @@ fi
 echo -e "${GREEN}✓ pprof is enabled${NC}"
 echo ""
 
+# ============================================
+# Step 1: Collect baseline profiles
+# ============================================
 echo -e "${GREEN}[Step 1/8] Collecting baseline profiles...${NC}"
 
 # Baseline memory
@@ -123,6 +137,9 @@ go tool pprof -proto -output="${OUTPUT_DIR}/goroutine_before.pb.gz" \
 echo -e "${GREEN}✓ Baseline profiles collected${NC}"
 echo ""
 
+# ============================================
+# Step 2: Start CPU profile collection
+# ============================================
 echo -e "${GREEN}[Step 2/8] Starting CPU profile collection (${DURATION}s)...${NC}"
 go tool pprof -proto -output="${OUTPUT_DIR}/cpu_${DURATION}s.pb.gz" \
     "http://localhost:${PPROF_PORT}/debug/pprof/profile?seconds=${DURATION}" &
@@ -131,6 +148,9 @@ sleep 2
 echo -e "${GREEN}✓ CPU profile collection started${NC}"
 echo ""
 
+# ============================================
+# Step 3: Run load test with streaming requests
+# ============================================
 echo -e "${GREEN}[Step 3/8] Running load test ($NUM_REQUESTS streaming requests, concurrency=$CONCURRENCY)...${NC}"
 
 # Function to run a single streaming request
@@ -155,7 +175,8 @@ run_streaming_request() {
     echo "$duration" >> "${OUTPUT_DIR}/request_times.txt"
 }
 
-# Run requests with controlled concurrency Use a temporary file to track job PIDs to avoid conflicts with CPU_PID
+# Run requests with controlled concurrency
+# Use a temporary file to track job PIDs to avoid conflicts with CPU_PID
 JOB_PIDS_FILE="${OUTPUT_DIR}/.job_pids_$$"
 > "$JOB_PIDS_FILE"
 
@@ -196,17 +217,23 @@ rm -f "$JOB_PIDS_FILE" "${JOB_PIDS_FILE}.tmp" 2>/dev/null || true
 echo -e "${GREEN}✓ Load test completed${NC}"
 echo ""
 
+# ============================================
+# Step 4: Wait for CPU profile to complete
+# ============================================
 echo -e "${GREEN}[Step 4/8] Waiting for CPU profile to complete...${NC}"
 # Wait for the process, but handle the case where it might have already completed
 if kill -0 $CPU_PID 2>/dev/null; then
     wait $CPU_PID 2>/dev/null || true
 else
-    # Process already completed, wait a bit to ensure file is written
+    # Process already completed, just wait a bit to ensure file is written
     sleep 1
 fi
 echo -e "${GREEN}✓ CPU profile collection completed${NC}"
 echo ""
 
+# ============================================
+# Step 5: Collect final profiles
+# ============================================
 echo -e "${GREEN}[Step 5/8] Collecting final profiles...${NC}"
 
 # Final memory
@@ -228,6 +255,9 @@ go tool pprof -proto -output="${OUTPUT_DIR}/block.pb.gz" \
 echo -e "${GREEN}✓ Final profiles collected${NC}"
 echo ""
 
+# ============================================
+# Step 6: Generate analysis reports
+# ============================================
 echo -e "${GREEN}[Step 6/8] Generating analysis reports...${NC}"
 
 # CPU analysis
@@ -310,6 +340,9 @@ fi
 echo -e "${GREEN}✓ Analysis reports generated${NC}"
 echo ""
 
+# ============================================
+# Step 7: Generate summary report
+# ============================================
 echo -e "${GREEN}[Step 7/8] Generating summary report...${NC}"
 
 SUMMARY_FILE="${OUTPUT_DIR}/00_SUMMARY.md"
@@ -463,6 +496,9 @@ EOF
 echo -e "${GREEN}✓ Summary report generated${NC}"
 echo ""
 
+# ============================================
+# Step 8: Display summary
+# ============================================
 echo -e "${GREEN}[Step 8/8] Analysis Complete!${NC}"
 echo ""
 echo -e "${BLUE}========================================${NC}"

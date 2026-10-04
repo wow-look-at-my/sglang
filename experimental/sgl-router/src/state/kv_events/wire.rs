@@ -1,4 +1,23 @@
 //! Wire-format types for SGLang's KV cache event stream.
+//!
+//! SGLang's `ZmqEventPublisher` (Python:
+//! `python/sglang/srt/disaggregation/kv_events.py`) encodes batches with
+//! `msgspec.msgpack`. Two struct families are involved:
+//!
+//! * `EventBatch` (the outer payload) — declared with
+//!   `array_like=True, gc=False` (no tag), so it is a msgpack **array**
+//!   `[ts, events, attn_dp_rank]`.
+//! * `KVCacheEvent` (each inner event variant) — declared with
+//!   `omit_defaults=True, tag=True` and no `array_like`, so each event is a
+//!   msgpack **map** whose `type` key carries the class name and whose other
+//!   keys are field names. Optional fields left at `None` are omitted. This
+//!   is the same encoding vLLM uses for its KV events.
+//!
+//! Older publishers emitted each event as a tagged **array**
+//! `[class_name_str, field1, ...]`; that shape is rejected.
+//!
+//! This module deserializes those bytes into Rust types and exposes a single
+//! [`decode_event_batch`] entry point.
 
 use std::fmt;
 
@@ -6,21 +25,31 @@ use serde::de::{self, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 
 /// Top-level batch payload published by SGLang.
+///
+/// Wire shape (`EventBatch`, `array_like`):
+/// `[ts: f64, events: [...], attn_dp_rank: int_or_nil]`.
+/// SGLang declares `attn_dp_rank` as a Python `Optional[int]`; we decode
+/// it as `u32` since DP ranks are non-negative and bounded by the
+/// publisher's `dp_size`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KvEventBatch {
     /// Wall-clock timestamp from the publisher (seconds since epoch).
     pub ts: f64,
     /// Ordered list of cache events in this batch.
     pub events: Vec<KvCacheEvent>,
-    /// Optional DP-attention rank that produced this batch. `None` if the publisher emitted nil.
+    /// Optional DP-attention rank that produced this batch. `None` if the
+    /// publisher emitted nil. The decoder also accepts an omitted field for
+    /// compatibility.
     pub attn_dp_rank: Option<u32>,
 }
 
-/// A single KV cache event.
+/// A single KV cache event. The Python base class `KVCacheEvent` uses
+/// `tag=True`, so each event carries its class name under the `type` key.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KvCacheEvent {
     /// `{"type": "BlockStored", "block_hashes", "parent_block_hash",
-    /// "token_ids", "block_size", "lora_id", "medium"?, ...}`.
+    /// "token_ids", "block_size", "lora_id", "medium"?, ...}`. Keys the
+    /// gateway does not route on (`cache_salt`, `session_id`) are ignored.
     BlockStored(BlockStored),
     /// `{"type": "BlockRemoved", "block_hashes", "medium"?}`.
     BlockRemoved(BlockRemoved),
@@ -30,7 +59,8 @@ pub enum KvCacheEvent {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockStored {
-    /// 64-bit block hashes in declaration order.
+    /// 64-bit block hashes in declaration order. Hashes can exceed `i32`
+    /// range; signedness matches SGLang's Python `int`.
     pub block_hashes: Vec<i64>,
     /// Hash of the parent block, or `None` for the first block in a chain.
     pub parent_block_hash: Option<i64>,
@@ -41,6 +71,8 @@ pub struct BlockStored {
     /// LoRA adapter ID this block is associated with, if any.
     pub lora_id: Option<i64>,
     /// Storage tier (`"GPU"`, `"CPU_PINNED"`, `"DISK"`, `"EXTERNAL"`).
+    /// Optional in the Python schema (`= None` default), so it may be
+    /// omitted entirely under `omit_defaults`.
     pub medium: Option<String>,
 }
 
@@ -51,9 +83,17 @@ pub struct BlockRemoved {
     pub medium: Option<String>,
 }
 
-/// Maximum number of block hashes a single decoded `BlockStored` / `BlockRemoved` event may carry.
+/// Maximum number of block hashes a single decoded `BlockStored` /
+/// `BlockRemoved` event may carry. A misbehaving worker (or a corrupted
+/// frame) could otherwise prompt a multi-gigabyte allocation in the
+/// gateway. Workers are inside the trust boundary, so this is
+/// defense-in-depth — but the cost of *not* capping is unbounded memory
+/// amplification, so we cap.
 pub(crate) const MAX_HASHES_PER_EVENT: usize = 65_536;
-/// Same rationale as [`MAX_HASHES_PER_EVENT`], but for `token_ids`.
+/// Same rationale as [`MAX_HASHES_PER_EVENT`], but for `token_ids`. A
+/// 1M-token block list is already absurdly larger than any realistic
+/// `BlockStored` payload — the cap exists to bound the worst case, not
+/// to constrain normal operation.
 pub(crate) const MAX_TOKENS_PER_EVENT: usize = 1_048_576;
 
 /// Errors produced by [`decode_event_batch`].
@@ -62,7 +102,9 @@ pub enum DecodeError {
     /// The msgpack payload was malformed or did not match the expected schema.
     #[error("failed to decode KV event batch: {0}")]
     Msgpack(#[from] rmp_serde::decode::Error),
-    /// A single event's variable-length field exceeded its hard cap.
+    /// A single event's variable-length field exceeded its hard cap. We
+    /// surface this as an error rather than panicking so a single bad
+    /// payload only kills its batch, not the consumer task.
     #[error("KV event field {field} length {len} exceeds cap {cap}")]
     PayloadTooLarge {
         field: &'static str,
@@ -71,7 +113,9 @@ pub enum DecodeError {
     },
 }
 
-/// Sentinel string a custom visitor uses.
+/// Sentinel string a custom visitor uses to encode a "field too large"
+/// error through serde's `de::Error::custom` channel. We rewrap as the
+/// typed [`DecodeError::PayloadTooLarge`] in [`decode_event_batch`].
 const PAYLOAD_TOO_LARGE_TAG: &str = "kv_events::wire::PAYLOAD_TOO_LARGE";
 
 /// Decode a single ZMQ payload frame from SGLang's `ZmqEventPublisher`.
@@ -81,13 +125,16 @@ const PAYLOAD_TOO_LARGE_TAG: &str = "kv_events::wire::PAYLOAD_TOO_LARGE";
 /// frames and are NOT part of the msgpack input here.
 ///
 /// Caps the per-event `block_hashes` and `token_ids` lengths
-/// ([`MAX_HASHES_PER_EVENT`].
+/// ([`MAX_HASHES_PER_EVENT`], [`MAX_TOKENS_PER_EVENT`]) so a misbehaving
+/// worker — or a corrupted msgpack length prefix — cannot trigger an
 /// unbounded allocation in the gateway.
 pub fn decode_event_batch(bytes: &[u8]) -> Result<KvEventBatch, DecodeError> {
     match rmp_serde::from_slice::<KvEventBatch>(bytes) {
         Ok(b) => Ok(b),
         Err(e) => {
-            // Rewrap the size-cap sentinel into the typed variant.
+            // Rewrap the size-cap sentinel into the typed variant. The
+            // sentinel string is set by `BoundedI64Vec` / `BoundedU32Vec`
+            // below; everything else is a true msgpack decode failure.
             let s = e.to_string();
             if let Some(rest) = s.strip_prefix(PAYLOAD_TOO_LARGE_TAG) {
                 // Format: "<TAG>:<field>:<len>:<cap>"
@@ -111,7 +158,11 @@ pub fn decode_event_batch(bytes: &[u8]) -> Result<KvEventBatch, DecodeError> {
     }
 }
 
-/// Newtype wrapping `Vec<i64>` whose `Deserialize` impl rejects sequences announcing more.
+/// Newtype wrapping `Vec<i64>` whose `Deserialize` impl rejects sequences
+/// announcing more than [`MAX_HASHES_PER_EVENT`] elements *before* doing
+/// the per-element work. Required because `rmp-serde` pre-sizes the
+/// destination `Vec` from the msgpack length prefix; a malicious or
+/// corrupted prefix would otherwise prompt a multi-gigabyte allocation.
 #[derive(Debug, Clone, PartialEq)]
 struct BoundedI64Vec(Vec<i64>);
 
@@ -158,7 +209,12 @@ impl<'de> Deserialize<'de> for BoundedI64Vec {
     }
 }
 
-/// One element of a `token_ids` array.
+/// One element of a `token_ids` array. SGLang emits a flat `u32` per token for
+/// unigram pages, but a 2-element `[t_i, t_{i+1}]` array per token for *bigram*
+/// pages (`mem_cache/events.py`, `is_bigram` branch — DeepSeek-V4-class models).
+/// `token_ids` is purely informational for the gateway (routing keys off the
+/// engine-provided `block_hashes`), so we accept either shape and flatten the
+/// ints rather than model the bigram pairing.
 enum TokenCell {
     One(u32),
     Many(Vec<u32>),
@@ -175,6 +231,9 @@ impl<'de> Deserialize<'de> for TokenCell {
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str("a token id (u32) or an array of token ids")
             }
+            // serde's default visit_u8/u16/u32 forward to visit_u64, and
+            // visit_i8/i16/i32 forward to visit_i64, so these two cover every
+            // integer width msgpack might use for a scalar token id.
             fn visit_u64<E: de::Error>(self, v: u64) -> Result<TokenCell, E> {
                 Ok(TokenCell::One(v as u32))
             }
@@ -205,7 +264,9 @@ impl<'de> Deserialize<'de> for TokenCell {
     }
 }
 
-/// `BoundedI64Vec`'s `u32` twin. Same shape, different cap.
+/// `BoundedI64Vec`'s `u32` twin. Same shape, different cap. Accepts both flat
+/// (unigram) token ids and bigram `[t_i, t_{i+1}]` pairs via [`TokenCell`],
+/// flattening the latter.
 #[derive(Debug, Clone, PartialEq)]
 struct BoundedU32Vec(Vec<u32>);
 
@@ -294,9 +355,11 @@ impl<'de> Deserialize<'de> for KvEventBatch {
                 let events: Vec<KvCacheEvent> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::missing_field("events"))?;
-                // attn_dp_rank may be present-as-nil, present-as-int.
+                // attn_dp_rank may be present-as-nil, present-as-int, or
+                // omitted entirely under msgspec's `omit_defaults`.
                 let attn_dp_rank: Option<u32> = seq.next_element()?.unwrap_or(None);
-                // Drain any extra trailing fields a future schema might add (forward-compat).
+                // Drain any extra trailing fields a future schema might add
+                // (forward-compat).
                 while seq.next_element::<IgnoredAny>()?.is_some() {}
                 Ok(KvEventBatch {
                     ts,
@@ -425,7 +488,11 @@ impl<'de> Deserialize<'de> for KvCacheEvent {
     }
 }
 
-// --------------------------------------------------------------------------- Tests — golden bytes are constructed.
+// ---------------------------------------------------------------------------
+// Tests — golden bytes are constructed via the `rmp` low-level encoder so
+// they exercise the exact msgpack map layout SGLang emits, independent of
+// any Rust-side serializer.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -483,7 +550,10 @@ mod tests {
         5 + u32::from(medium.is_some()) + extra.len() as u32
     }
 
-    /// Write the `BlockStored` fields that follow `type`.
+    /// Write the `BlockStored` fields that follow `type`. `parent_block_hash`
+    /// and `lora_id` have no default in the Python schema, so msgspec always
+    /// emits them (nil when unset); `medium` is omitted when `None`; `extra`
+    /// adds string-valued keys the gateway must ignore.
     #[allow(clippy::too_many_arguments)]
     fn write_block_stored_fields(
         buf: &mut Vec<u8>,
@@ -638,7 +708,11 @@ mod tests {
         buf
     }
 
-    /// Regression: bigram models (e.g. DeepSeek-V4-Flash) emit `token_ids` as `[[t_i, t_{i+1}], ...]`.
+    /// Regression: bigram models (e.g. DeepSeek-V4-Flash) emit `token_ids` as
+    /// `[[t_i, t_{i+1}], ...]`. The decoder previously read `token_ids` as a
+    /// flat `u32` array and failed the entire batch with
+    /// "wrong msgpack marker FixArray(2)", silently disabling cache-aware
+    /// routing. It must instead accept the bigram shape (flattening the ints).
     #[test]
     fn decodes_block_stored_with_bigram_token_ids() {
         let event = build_block_stored_bigram_bytes(
@@ -693,7 +767,8 @@ mod tests {
         }
     }
 
-    /// `parent_block_hash` and `lora_id` present as nil, `medium` key omitted (msgspec `omit_defaults`).
+    /// `parent_block_hash` and `lora_id` present as nil, `medium` key omitted
+    /// (msgspec `omit_defaults`).
     #[test]
     fn decodes_block_stored_with_nil_and_omitted_optionals() {
         let event = build_block_stored_bytes(&[1, 2, 3], None, &[5, 6], 16, None, None);
@@ -711,7 +786,8 @@ mod tests {
         }
     }
 
-    /// Attribution keys (`cache_salt`, `session_id`) and any future key the gateway does not route on are skipped.
+    /// Attribution keys (`cache_salt`, `session_id`) and any future key the
+    /// gateway does not route on are skipped, not rejected.
     #[test]
     fn unknown_keys_are_ignored() {
         let event = build_block_stored_bytes_with_extra(
@@ -849,7 +925,8 @@ mod tests {
         );
     }
 
-    /// The pre-map publishers encoded events as tagged arrays.
+    /// The pre-map publishers encoded events as tagged arrays; that shape is
+    /// no longer produced and is rejected rather than half-decoded.
     #[test]
     fn legacy_array_event_is_rejected() {
         let mut buf = Vec::new();
@@ -869,6 +946,8 @@ mod tests {
         ));
     }
 
+    /// Golden bytes captured from the SGLang Python publisher
+    /// (`msgspec.msgpack.Encoder().encode(KVEventBatch(...))`), msgspec 0.21.1,
     /// against the schema in `python/sglang/srt/disaggregation/kv_events.py`.
     /// They lock down the exact wire format the decoder consumes.
     mod msgspec_golden {
@@ -883,6 +962,9 @@ mod tests {
 
         #[test]
         fn full_block_stored() {
+            // EventBatch(ts=123.456, events=[BlockStored([1234567890123, -987654321],
+            //   parent=42, tokens=[10,20,30,40], block_size=4, lora=7, medium="GPU")],
+            //   attn_dp_rank=2)
             let bytes = hex_to_bytes("93cb405edd2f1a9fbe779187a474797065ab426c6f636b53746f726564ac626c6f636b5f68617368657392cf0000011f71fb04cbd2c521974fb1706172656e745f626c6f636b5f686173682aa9746f6b656e5f696473940a141e28aa626c6f636b5f73697a6504a76c6f72615f696407a66d656469756da347505502");
             let batch = decode_event_batch(&bytes).expect("decode msgspec golden");
             assert_eq!(batch.ts, 123.456);
@@ -903,6 +985,8 @@ mod tests {
 
         #[test]
         fn block_stored_with_nil_optionals() {
+            // ts=0.0, BlockStored([1,2,3], parent=None, tokens=[5,6], block_size=16,
+            //   lora=None, medium=None -> key omitted), attn_dp_rank=None
             let bytes = hex_to_bytes("93cb00000000000000009186a474797065ab426c6f636b53746f726564ac626c6f636b5f68617368657393010203b1706172656e745f626c6f636b5f68617368c0a9746f6b656e5f696473920506aa626c6f636b5f73697a6510a76c6f72615f6964c0c0");
             let batch = decode_event_batch(&bytes).expect("decode msgspec golden");
             assert_eq!(batch.attn_dp_rank, None);
@@ -921,6 +1005,7 @@ mod tests {
 
         #[test]
         fn block_removed_with_medium() {
+            // ts=1.0, [BlockRemoved([100, 200], medium="DISK")], attn_dp_rank=0
             let bytes = hex_to_bytes("93cb3ff00000000000009183a474797065ac426c6f636b52656d6f766564ac626c6f636b5f6861736865739264ccc8a66d656469756da44449534b00");
             let batch = decode_event_batch(&bytes).expect("decode msgspec golden");
             assert_eq!(batch.ts, 1.0);
@@ -936,6 +1021,7 @@ mod tests {
 
         #[test]
         fn all_blocks_cleared() {
+            // ts=2.0, [AllBlocksCleared()], attn_dp_rank=None
             let bytes = hex_to_bytes(
                 "93cb40000000000000009181a474797065b0416c6c426c6f636b73436c6561726564c0",
             );
@@ -948,6 +1034,7 @@ mod tests {
 
         #[test]
         fn mixed_batch() {
+            // ts=99.0, [BlockStored, BlockRemoved, AllBlocksCleared], attn_dp_rank=3
             let bytes = hex_to_bytes("93cb4058c000000000009387a474797065ab426c6f636b53746f726564ac626c6f636b5f686173686573910ab1706172656e745f626c6f636b5f6861736801a9746f6b656e5f696473920102aa626c6f636b5f73697a6502a76c6f72615f6964c0a66d656469756da347505582a474797065ac426c6f636b52656d6f766564ac626c6f636b5f686173686573911481a474797065b0416c6c426c6f636b73436c656172656403");
             let batch = decode_event_batch(&bytes).expect("decode msgspec golden");
             assert_eq!(batch.ts, 99.0);
@@ -976,6 +1063,9 @@ mod tests {
 
         #[test]
         fn mixed_batch_with_attribution_keys() {
+            // ts=1.0, attn_dp_rank=0: three BlockStored (the second carries
+            // cache_salt and session_id, the third session_id only), one
+            // BlockRemoved, one AllBlocksCleared.
             let bytes = hex_to_bytes("93cb3ff00000000000009587a474797065ab426c6f636b53746f726564ac626c6f636b5f686173686573920b0cb1706172656e745f626c6f636b5f68617368c0a9746f6b656e5f6964739401020304aa626c6f636b5f73697a6502a76c6f72615f6964c0a66d656469756da347505589a474797065ab426c6f636b53746f726564ac626c6f636b5f6861736865739115b1706172656e745f626c6f636b5f686173680ca9746f6b656e5f696473920506aa626c6f636b5f73697a6502a76c6f72615f6964c0a66d656469756da3475055aa63616368655f73616c74a874656e616e742d61aa73657373696f6e5f6964a6736573732d3188a474797065ab426c6f636b53746f726564ac626c6f636b5f686173686573911fb1706172656e745f626c6f636b5f68617368c0a9746f6b656e5f696473920708aa626c6f636b5f73697a6502a76c6f72615f6964c0a66d656469756da3475055aa73657373696f6e5f6964a6736573732d3283a474797065ac426c6f636b52656d6f766564ac626c6f636b5f686173686573910ba66d656469756da347505581a474797065b0416c6c426c6f636b73436c656172656400");
             let batch = decode_event_batch(&bytes).expect("decode msgspec golden");
             assert_eq!(batch.ts, 1.0);
@@ -1016,18 +1106,23 @@ mod tests {
     #[test]
     fn empty_payload_is_an_error() {
         let err = decode_event_batch(&[]).expect_err("empty payload should fail");
-        // Assert we surfaced a Msgpack decode error.
+        // Just assert we surfaced a Msgpack decode error.
         assert!(matches!(err, DecodeError::Msgpack(_)));
     }
 
-    /// A `BlockStored` event whose `block_hashes` array prefix exceeds the per-event cap must be rejected with `PayloadTooLarge`.
+    /// A `BlockStored` event whose `block_hashes` array prefix exceeds
+    /// the per-event cap must be rejected with `PayloadTooLarge` so a
+    /// misbehaving worker (or a corrupted msgpack length prefix) cannot
+    /// trigger an unbounded allocation in the gateway. We don't fill the
+    /// whole array — the visitor refuses on the size_hint alone.
     #[test]
     fn block_stored_with_too_many_hashes_rejected() {
         let claimed = (MAX_HASHES_PER_EVENT + 1) as u32;
         let mut event = Vec::new();
         write_event_map(&mut event, "BlockStored", 1);
         write_key(&mut event, "block_hashes");
-        // Oversize block_hashes prefix; only one real element.
+        // Oversize block_hashes prefix; only one real element. The
+        // visitor's size_hint check fires before reading anything.
         mp::write_array_len(&mut event, claimed).unwrap();
         mp::write_sint(&mut event, 0).unwrap();
         // Trailing bytes are ignored — decoder errors out earlier.
@@ -1044,6 +1139,10 @@ mod tests {
     }
 
     /// `token_ids` cap — uses an oversize msgpack array length prefix.
+    /// rmp-serde reports `size_hint` from the prefix (an `array_len` is a
+    /// known length), so the visitor refuses before reading any element.
+    /// We deliberately under-fill the array to keep the test cheap; the
+    /// decoder rejects on the prefix alone.
     #[test]
     fn block_stored_oversize_token_ids_prefix_rejected() {
         let claimed = (MAX_TOKENS_PER_EVENT + 1) as u32;
@@ -1052,7 +1151,8 @@ mod tests {
         write_key(&mut event, "block_hashes");
         write_i64_array(&mut event, &[42_i64]);
         write_key(&mut event, "token_ids");
-        // Oversize token_ids: announce huge length but only write a single element.
+        // Oversize token_ids: announce huge length but only write a single
+        // element. The visitor's size_hint check fires immediately.
         mp::write_array_len(&mut event, claimed).unwrap();
         mp::write_uint(&mut event, 0).unwrap();
         let bytes = build_batch_bytes(0.0, &[event], None, true);

@@ -47,7 +47,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Pin to the event SHA (not the branch name) so every job in this run checks out the same commit even if the branch advances mid-run.
+          # Pin to the event SHA (not the branch name) so every job in this run
+          # checks out the same commit even if the branch advances mid-run.
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Determine run mode
@@ -112,7 +113,8 @@ jobs:
         run: |
           echo "CANN_image_a3=swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:9.1.0-a3-ubuntu22.04-py3.12" >> $GITHUB_OUTPUT
 
-  # Stage-A gate: CPU-only unit tests. The NPU attention-backend UTs stub out torch_npu / sgl_kernel_npu before importing, so a hosted runner suffices.
+  # Stage-A gate: CPU-only unit tests. The NPU attention-backend UTs stub out
+  # torch_npu / sgl_kernel_npu before importing, so a hosted runner suffices.
   base-a-test-npu:
     needs: [check-changes, pr-gate]
     if: ${{ !failure() && !cancelled() && inputs.coverage_mode != true && needs.check-changes.outputs.main_package == 'true' }}
@@ -462,7 +464,9 @@ jobs:
       upload_test_logs: ${{ inputs.coverage_mode != true }}
 
 
-  # ==================== Recommend Tests from Coverage ==================== # Recommends PR-affected test cases from the pre-built coverage baseline. continue-on-error so it never blocks the PR gate.
+  # ==================== Recommend Tests from Coverage ==================== #
+  # Recommends PR-affected test cases from the pre-built coverage baseline.
+  # continue-on-error so it never blocks the PR gate.
   recommend-tests-from-coverage:
     name: Recommend tests from coverage
     runs-on: ubuntu-latest
@@ -513,7 +517,8 @@ jobs:
 
       - name: Recommend tests for current PR
         env:
-          # test_selector.py falls back to `git diff base head` from this checkout when the GitHub API keeps answering 503.
+          # test_selector.py falls back to `git diff base head` from this
+          # checkout when the GitHub API keeps answering 503.
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
@@ -551,7 +556,9 @@ jobs:
             echo "::notice::recommended_pytest_paths.txt not found"
           fi
 
-  # ==================== Analyze Failure Report ==================== # Cross-references test failures with coverage recommendations. !cancelled() only: skipped jobs in needs poison success().
+  # ==================== Analyze Failure Report ==================== #
+  # Cross-references test failures with coverage recommendations.
+  # !cancelled() only: skipped jobs in needs poison success().
   analyze-failure-report:
     name: Analyze failure report
     needs:
@@ -579,7 +586,9 @@ jobs:
       log_artifact_pattern: selected-test-logs-*
       recommendations_content: ${{ needs.recommend-tests-from-coverage.outputs.coverage_paths || '' }}
 
-  # ==================== Coverage Assembly & Publish ==================== # Assembles coverage data and publishes the baseline to the shared disk. !failure() && !cancelled() (not success()): skipped upstream poisons success().
+  # ==================== Coverage Assembly & Publish ==================== #
+  # Assembles coverage data and publishes the baseline to the shared disk.
+  # !failure() && !cancelled() (not success()): skipped upstream poisons success().
   setup-covstub:
     needs:
       [
@@ -602,7 +611,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Pin to the event SHA (not the branch name) so every job in this run checks out the same commit even if the branch advances mid-run.
+          # Pin to the event SHA (not the branch name) so every job in this run
+          # checks out the same commit even if the branch advances mid-run.
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Copy sglang source to covstub

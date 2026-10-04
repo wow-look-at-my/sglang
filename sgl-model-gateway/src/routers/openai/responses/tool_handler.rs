@@ -14,7 +14,9 @@ use crate::protocols::event_types::{
     is_function_call_type, FunctionCallEvent, OutputItemEvent, ResponseEvent,
 };
 
-// ============================================================================ Stream Action Enum.
+// ============================================================================
+// Stream Action Enum
+// ============================================================================
 
 /// Action to take based on streaming event processing
 #[derive(Debug)]
@@ -24,7 +26,9 @@ pub(super) enum StreamAction {
     ExecuteTools, // Function call complete, execute now
 }
 
-// ============================================================================ Output Index Mapper.
+// ============================================================================
+// Output Index Mapper
+// ============================================================================
 
 /// Maps upstream output indices to sequential downstream indices
 #[derive(Debug, Default)]

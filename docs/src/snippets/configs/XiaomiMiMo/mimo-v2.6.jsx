@@ -35,7 +35,7 @@ export const config = {
   curl: `curl http://{{CURL_HOST}}:{{CURL_PORT}}/v1/chat/completions \\
   -H 'Content-Type: application/json' \\
   -d '{"model":"{{MODEL_NAME}}","messages":[{"role":"user","content":"What is 15% of 240?"}],"chat_template_kwargs":{"enable_thinking":true}}'`,
-  // The MiMo-V2.6 support is on main, so the nightly tag carries it.
+  // The MiMo-V2.6 support (PR #40448) is on main, so the nightly tag carries it.
   dockerImages: { h200: "lmsysorg/sglang:dev", b300: "lmsysorg/sglang:dev" },
   dockerMounts: ["\"{{MODEL_ROOT}}:/model:ro\""],
   github: { cookbookModel: "MiMo-V2.6 (Flash / Pro)" },

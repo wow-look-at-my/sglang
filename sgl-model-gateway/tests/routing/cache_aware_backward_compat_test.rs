@@ -151,7 +151,8 @@ async fn test_remove_worker_by_url_backward_compat() {
     policy.add_worker(&worker1);
     policy.add_worker(&worker2);
 
-    // Remove by URL (backward compatibility method) Should remove from all trees since we don't know the model
+    // Remove by URL (backward compatibility method)
+    // Should remove from all trees since we don't know the model
     policy.remove_worker_by_url("http://worker1:8080");
 
     let workers: Vec<Arc<dyn Worker>> = vec![Arc::new(worker2.clone())];

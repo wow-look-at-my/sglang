@@ -47,7 +47,10 @@ on:
         default: false
 
 concurrency:
-  # - event_name prevents scheduled runs from colliding with fork PRs whose branch is named 'main' (without it, both resolve the branch segment to 'main' and block each other) - a PR keys on its number: github.head_ref is a bare branch name with no owner, so two forks using the same name would share one group and cancel each other
+  # - event_name prevents scheduled runs from colliding with fork PRs whose branch is named 'main'
+  #   (without it, both resolve the branch segment to 'main' and block each other)
+  # - a PR keys on its number: github.head_ref is a bare branch name with no owner,
+  #   so two forks using the same name would share one group and cancel each other
   group: pr-test-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name || 'default' }}-${{ inputs.git_ref || 'all' }}
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 
@@ -219,11 +222,18 @@ jobs:
       skip_pr_test_health_check: ${{ inputs.skip_pr_test_health_check == true || inputs.test_parallel_dispatch == true || inputs.run_all_tests == true }}
     secrets: inherit
 
-  # =============================================== Rust extensions ==================================================== diffusion-only PRs do not consume SRT Rust extensions; other runs seed or reuse the source-hash cache
+  # =============================================== Rust extensions ====================================================
 
+  # diffusion-only PRs do not consume SRT Rust extensions; other runs seed or
+  # reuse the source-hash cache
   rust-ext-build:
     needs: [check-changes, call-gate]
-    # Ungated on the event, unlike the jobs above: a cache entry is visible to every PR only if it was written from the default branch's ref, so every main-ref run - schedule, dispatch, workflow_call - has to seed it. !cancelled() so a skipped call-gate does not take this job with it, since a docs-only PR still installs sglang in every stage.
+    # Ungated on the event, unlike the jobs above: a cache entry is visible to
+    # every PR only if it was written from the default branch's ref, so every
+    # main-ref run - schedule, dispatch, workflow_call - has to seed it.
+    #
+    # !cancelled() so a skipped call-gate does not take this job with it, since a
+    # docs-only PR still installs sglang in every stage.
     if: |
       !cancelled() &&
       needs.check-changes.result == 'success' &&
@@ -240,10 +250,12 @@ jobs:
       skip_pr_test_health_check: ${{ inputs.skip_pr_test_health_check == true || inputs.test_parallel_dispatch == true || inputs.run_all_tests == true }}
     secrets: inherit
 
-  # gb300 is Grace, and PyO3 modules are portable across neither arch nor interpreter, so it can use nothing the job above builds.
+  # gb300 is Grace, and PyO3 modules are portable across neither arch nor
+  # interpreter, so it can use nothing the job above builds.
   rust-ext-build-aarch64:
     needs: [check-changes, call-gate]
-    # Same gate as rust-ext-build: every main-ref run has to seed the cache, and a docs-only PR still installs sglang on gb300.
+    # Same gate as rust-ext-build: every main-ref run has to seed the cache, and a
+    # docs-only PR still installs sglang on gb300.
     if: |
       !cancelled() &&
       needs.check-changes.result == 'success' &&
@@ -285,7 +297,9 @@ jobs:
 
   call-jit-kernel-tests:
     needs: [check-changes, call-gate, sgl-kernel-build-wheels, rust-ext-build]
-    # Run on scheduled/parallel-dispatch runs (same pattern as the base-* stages) so the jit_kernel suite is exercised on main 3x daily, not only on PRs that touch kernels/**. check-changes already forces jit_kernel='true' on scheduled runs (run_all_tests).
+    # Run on scheduled/parallel-dispatch runs (same pattern as the base-* stages) so the
+    # jit_kernel suite is exercised on main 3x daily, not only on PRs that touch kernels/**.
+    # check-changes already forces jit_kernel='true' on scheduled runs (run_all_tests).
     if: |
       github.repository == 'sgl-project/sglang' && (
         always() &&
@@ -296,7 +310,9 @@ jobs:
     with:
       runs_on_map: ${{ needs.check-changes.outputs.runs_on_map }}
       jit_kernel: ${{ needs.check-changes.outputs.jit_kernel }}
-      # On scheduled/parallel-dispatch runs sgl-kernel-build-wheels is skipped, so the wheel artifact does not exist. Force sgl_kernel='false' there so the jit-kernel jobs skip the wheel download and run against the released/pinned sgl-kernel instead of a fresh build.
+      # On scheduled/parallel-dispatch runs sgl-kernel-build-wheels is skipped, so the wheel
+      # artifact does not exist. Force sgl_kernel='false' there so the jit-kernel jobs skip the
+      # wheel download and run against the released/pinned sgl-kernel instead of a fresh build.
       sgl_kernel: ${{ (github.event_name == 'schedule' || inputs.test_parallel_dispatch == true) && 'false' || needs.check-changes.outputs.sgl_kernel }}
       git_ref: ${{ inputs.git_ref || '' }}
       test_parallel_dispatch: ${{ inputs.test_parallel_dispatch == true && 'true' || 'false' }}
@@ -304,8 +320,10 @@ jobs:
       rust_ext_artifact: ${{ needs.rust-ext-build.outputs.artifact_name }}
     secrets: inherit
 
-  # =============================================== primary ==================================================== `name:` is load-bearing: wait-for-jobs gates a stage by job-name prefix, and check-pr-test-health carves h20 out by the same name.
+  # =============================================== primary ====================================================
 
+  # `name:` is load-bearing: wait-for-jobs gates a stage by job-name prefix,
+  # and check-pr-test-health carves h20 out by the same name.
   base-a-test:
     name: base-a-test-${{ matrix.runner_config }}
     needs: [check-changes, call-gate, sgl-kernel-build-wheels, rust-ext-build]
@@ -345,7 +363,8 @@ jobs:
       partitions: ${{ needs.check-changes.outputs.partitions }}
       run_timeout_minutes: '15'
       rust_ext_artifact: ${{ needs.rust-ext-build.outputs.artifact_name }}
-    # No `secrets: inherit`: this stage has no secret consumer, unlike the GPU stages' coredump upload. GITHUB_TOKEN and permissions inherit regardless.
+    # No `secrets: inherit`: this stage has no secret consumer, unlike the GPU
+    # stages' coredump upload. GITHUB_TOKEN and permissions inherit regardless.
 
   base-b-test:
     name: base-b-test-${{ matrix.runner_config }}
@@ -435,7 +454,8 @@ jobs:
       rust_ext_artifact: ${{ needs.rust-ext-build.outputs.artifact_name }}
     secrets: inherit
 
-  # Separate only because `needs` cannot vary per matrix row: this stage takes the aarch64 build, and neither table should wait on the other's.
+  # Separate only because `needs` cannot vary per matrix row: this stage takes
+  # the aarch64 build, and neither table should wait on the other's.
   base-c-test-aarch64:
     name: base-c-test-${{ matrix.runner_config }}
     needs: [check-changes, call-gate, wait-for-base-b, sgl-kernel-build-wheels, rust-ext-build-aarch64]
@@ -457,7 +477,8 @@ jobs:
       rust_ext_artifact: ${{ needs.rust-ext-build-aarch64.outputs.artifact_name }}
     secrets: inherit
 
-  # List every build and test job: `skipped` passes here, so an omission turns that job's failure into a green run with no tests.
+  # List every build and test job: `skipped` passes here, so an omission turns that
+  # job's failure into a green run with no tests.
   pr-test-finish:
     needs:
       [
@@ -512,7 +533,16 @@ jobs:
           echo "All jobs completed successfully"
           exit 0
 
-  # =============================================== notify pr-states ==================================================== Dispatches pr-states.yml after every attempt (initial + every rerun). workflow_run.completed only fires on the initial completion (one workflow_run record across attempts), so we explicitly dispatch — workflow_dispatch is the only event GITHUB_TOKEN can cascade-create. Fork PRs are excluded: their pull_request GITHUB_TOKEN is forced read-only regardless of declared `actions: write`, so dispatch 403s. Fork PRs get pr-states updates via the workflow_run subscription there (initial completion) and pull_request_target (push / label).
+  # =============================================== notify pr-states ====================================================
+  # Dispatches pr-states.yml after every attempt (initial + every rerun).
+  # workflow_run.completed only fires on the initial completion (one
+  # workflow_run record across attempts), so we explicitly dispatch —
+  # workflow_dispatch is the only event GITHUB_TOKEN can cascade-create.
+  #
+  # Fork PRs are excluded: their pull_request GITHUB_TOKEN is forced
+  # read-only regardless of declared `actions: write`, so dispatch 403s.
+  # Fork PRs get pr-states updates via the workflow_run subscription
+  # there (initial completion) and pull_request_target (push / label).
   notify-pr-states:
     needs: [pr-test-finish]
     if: |

@@ -26,6 +26,8 @@ struct TrieNode {
   int32_t freq = 0;
   // Logical generation of this TrieNode. retireNode() bumps it before the node
   // goes back to the pool so stale NodeRefs fail validation after reuse.
+  // Starts at 1 so that a default-constructed NodeRef (version=0) never
+  // accidentally resolves to a live node.
   uint64_t version = 1;
 
   struct CompareByFreq {
@@ -44,6 +46,9 @@ struct NodeRef {
   uint64_t version = 0;
 };
 
+// Per-request cached anchors. anchors[d - 1] caches the trie match for the
+// length-d suffix ending at the current last token; processed_total_len records
+// the full request length covered by those cached anchors.
 struct MatchState {
   uint64_t trie_epoch = 0;
   size_t processed_total_len = 0;
@@ -85,7 +90,9 @@ class Trie {
   // `context`. Returns only the suffix matches that are currently expandable.
   std::vector<std::pair<const TrieNode*, int32_t>>
   match(const int32_t* context, size_t len, MatchState& state, size_t total_len) const;
-  // Recompute all cached anchors from the current tail.
+  // Recompute all cached anchors from the current tail. After this, for every
+  // d in [1, min(len, max_trie_depth)], anchors[d - 1] represents the suffix of
+  // length d ending at context[len - 1].
   void rebuildMatchState_(const int32_t* context, size_t len, MatchState& state, size_t total_len) const;
   // Advance the cached anchors by consuming the newly appended suffix one
   // token at a time, without re-walking all suffixes from root.

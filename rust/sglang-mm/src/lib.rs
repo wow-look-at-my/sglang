@@ -1,4 +1,10 @@
 //! sglang-mm: Rust-accelerated multimodal preprocessing for SGLang.
+//!
+//! Built two ways:
+//! * PyO3 extension `sglang.srt.rust_extensions._multimodal` (feature `python`),
+//!   used by Python processors (e.g. Inkling) and by parity tests.
+//! * Pure-Rust `rlib` (`default-features = false`), linked by `sglang-server`'s
+//!   MM worker path — no pyo3 in that dependency graph.
 
 pub mod common;
 pub mod driver;

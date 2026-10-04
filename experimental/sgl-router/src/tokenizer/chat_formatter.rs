@@ -1,7 +1,11 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Chat rendering via dynamo-render for cache-aware routing and input ID forwarding.
+//!
+//! Mirrors SGLang reasoning controls, assistant continuations, and DeepSeek-V4
+//! task selection before rendering. Forwarding remains guarded until parity
+//! has been verified for each request shape.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -187,7 +191,8 @@ impl ChatFormatter {
             return None;
         }
         let PromptFormatter::OAI(formatter) = deepseek_formatter_for(&model_type, &name)?;
-        // Same rule dynamo-render applies for the name fallback: `deepseek` + one separator + a `v4` segment.
+        // Same rule dynamo-render applies for the name fallback: `deepseek` + one
+        // separator + a `v4` segment.
         let version = name.strip_prefix("deepseek").unwrap_or("");
         let version = version.strip_prefix(['-', '_', '.']).unwrap_or(version);
         let is_deepseek_v4 = model_type
@@ -201,7 +206,7 @@ impl ChatFormatter {
                 t == "deepseek_v41"
             });
         // Engine defaults: chat mode (`SGLANG_DEFAULT_THINKING=false`) and no
-        // reasoning-effort preamble.
+        // reasoning-effort preamble; dynamo-render defaults to thinking at high effort.
         let defaults = HashMap::from([
             ("thinking".into(), false.into()),
             ("reasoning_effort".into(), "low".into()),
@@ -226,7 +231,9 @@ impl ChatFormatter {
             None | Some(JsonValue::Null) => ChatTemplateKwargs::new(),
             Some(v) => serde_json::from_value(v.clone()).context("chat_template_kwargs")?,
         };
-        // `reasoning.effort` overrides top-level `reasoning_effort`; `enabled` alone turns thinking on; any effort decides thinking.
+        // `reasoning.effort` overrides top-level `reasoning_effort`; `enabled`
+        // alone turns thinking on; any effort decides thinking by `!= "none"`.
+        // Explicit kwargs keep their values (the engine uses setdefault).
         let reasoning = &request["reasoning"];
         let mut thinking = None;
         if reasoning.is_object() {
@@ -386,7 +393,7 @@ const GENERIC_MESSAGE_KEYS: [&str; 7] = [
 ];
 
 /// Normalize a message as SGLang's pydantic dump does before rendering: roles
-/// lowercased, unknown and null fields dropped.
+/// lowercased, unknown and null fields dropped, `user` reduced to role and
 /// content, null content blanked.
 fn engine_message(message: &JsonValue) -> JsonValue {
     let role = message["role"].as_str().unwrap_or_default().to_lowercase();
@@ -445,7 +452,9 @@ impl OAIChatLikeRequest for ChatRequest<'_> {
     }
     fn tools(&self) -> Option<Value> {
         let tools = self.request.get("tools")?;
-        // HF and the engine treat an empty list as "no tools".
+        // HF and the engine treat an empty list as "no tools"; dynamo-render's schema
+        // fixer would hand the template `[]`, which tools-branching templates
+        // render as a tool preamble.
         if tools.as_array().is_none_or(|t| t.is_empty()) {
             return None;
         }
@@ -518,7 +527,8 @@ mod tests {
             .is_none());
     }
 
-    /// A sibling `chat_template.jinja` wins over `tokenizer_config.json`, as in transformers, and suffices on its own.
+    /// A sibling `chat_template.jinja` wins over `tokenizer_config.json`, as in
+    /// transformers, and suffices on its own.
     #[test]
     fn chat_template_jinja_file_takes_precedence() {
         let cfg = json!({"chat_template": "CONFIG"});
@@ -557,7 +567,8 @@ mod tests {
         );
     }
 
-    /// The list form `[{name, template}, ...]` and the `AddedToken` object form of `bos_token` are both accepted.
+    /// The list form `[{name, template}, ...]` and the `AddedToken` object form
+    /// of `bos_token` are both accepted.
     #[test]
     fn list_form_and_bos_object_form() {
         let enc = jinja(json!({
@@ -682,7 +693,8 @@ mod tests {
         assert!(ChatFormatter::deepseek_native(None, "Qwen/Qwen3-0.6B").is_none());
     }
 
-    /// Byte-exact against the engine's `/tokenize` in its default chat mode.
+    /// Byte-exact against the engine's `/tokenize` in its default chat mode:
+    /// `[{user:"ABCD"}]` -> `[0, 128803, 51453, 128804, 128822]`.
     #[test]
     fn v4_single_user_turn() {
         let out = deepseek_v4()
@@ -710,7 +722,9 @@ mod tests {
         );
     }
 
-    /// The engine's V4 encoder reads only `chat_template_kwargs.thinking` (`serving_chat.py`); `enable_thinking` alone leaves chat mode.
+    /// The engine's V4 encoder reads only `chat_template_kwargs.thinking`
+    /// (`serving_chat.py`); `enable_thinking` alone leaves chat mode, while
+    /// `reasoning_effort` sets both keys through the normalization above.
     #[test]
     fn v4_thinking_kwarg_overrides_chat_default() {
         let mut req = request(json!([{"role":"user","content":"ABCD"}]));
@@ -749,7 +763,8 @@ mod tests {
         assert!(out.contains("False none") || out.ends_with("</think>"));
     }
 
-    /// Mirrors `protocol.py::normalize_reasoning_inputs`: effort decides both thinking keys via setdefault.
+    /// Mirrors `protocol.py::normalize_reasoning_inputs`: effort decides both
+    /// thinking keys via setdefault, so explicit kwargs win.
     #[test]
     fn reasoning_effort_sets_thinking_defaults_with_explicit_kwargs_winning() {
         let enc = jinja(json!({

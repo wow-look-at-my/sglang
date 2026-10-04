@@ -151,7 +151,7 @@ Sample 5:
 
 ## Notes
 
-- Audio samples longer than many seconds are automatically filtered out (Whisper limitation)
+- Audio samples longer than 30 seconds are automatically filtered out (Whisper limitation)
 - The benchmark performs a warmup request before measuring performance
 - Results are normalized using the model's tokenizer when available
 - When using `--stream` with `--show-predictions`, use `--concurrency 1` for clean sequential output

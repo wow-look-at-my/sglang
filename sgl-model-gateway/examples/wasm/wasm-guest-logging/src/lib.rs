@@ -1,4 +1,11 @@
 //! WASM Guest Logging Example for sgl-model-gateway
+//!
+//! This example demonstrates logging and tracing middleware
+//! for sgl-model-gateway using the WebAssembly Component Model.
+//!
+//! Features:
+//! - Request tracking and tracing headers
+//! - Response status code conversion
 
 wit_bindgen::generate!({
     path: "../../../src/wasm/interface",
@@ -33,7 +40,8 @@ impl OnRequestGuest for Middleware {
             body_replace: None,
         };
 
-        // Request Logging and Tracing Add tracing headers with request ID
+        // Request Logging and Tracing
+        // Add tracing headers with request ID
         modify_action
             .headers_add
             .push(create_header("x-request-id", &req.request_id));
@@ -59,6 +67,7 @@ impl OnRequestGuest for Middleware {
 // Implement on-response interface
 impl OnResponseGuest for Middleware {
     fn on_response(resp: Response) -> Action {
+        // Status code conversion: Convert 500 to 503 for better client handling
         if resp.status == 500 {
             let modify_action = ModifyAction {
                 status: Some(503),

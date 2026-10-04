@@ -1,4 +1,5 @@
-//! Typed multimodal inputs of the `/generate` body — the Rust form of Python `MultimodalDataInputFormat` (`io_struct.py`) —.
+//! Typed multimodal inputs of the `/generate` body — the Rust form of Python
+//! `MultimodalDataInputFormat` (`io_struct.py`) — and their per-request fan-out.
 
 use std::fmt;
 
@@ -10,13 +11,20 @@ use super::request::{HeapBytes, check_broadcast_budget};
 use crate::utils::error::Error;
 
 /// One media item: Python `MultimodalDataInputItem` as it can arrive over JSON.
+/// `bytes` and PIL images exist only on the in-process Engine path, so they have
+/// no variant here.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MmItem {
     /// URL, `file://` / absolute path, `data:` URI, or bare base64 (Python `str`).
     Source(String),
-    /// Python `ImageData` / `VideoData` (`{"url": …, …}`).
+    /// Python `ImageData` / `VideoData` (`{"url": …, …}`). Only `url` is kept:
+    /// the hint keys (`detail`, `max_dynamic_patch`, `preprocess_kwargs`, ...)
+    /// are read by model families this pipeline does not run, and Python's
+    /// `load_image` itself reduces the item to `.url`.
     Ref { url: String },
     /// A preprocessed item (`{"format": "processor_output" | "precomputed_embedding", …}`).
+    /// Parsed only far enough to be rejected by name at the MM stage; Python
+    /// ignores it the same way on a text-only model.
     Preprocessed { format: String },
 }
 
@@ -41,7 +49,8 @@ impl HeapBytes for MmItem {
     }
 }
 
-/// The object form of an item, as Python's `Dict[str, Any]`: `format` marks a preprocessed item (checked first, as `glm4v` does).
+/// The object form of an item, as Python's `Dict[str, Any]`: `format` marks a
+/// preprocessed item (checked first, as `glm4v` does), `url` an `ImageData`.
 #[derive(Deserialize)]
 struct ItemObject {
     #[serde(default)]
@@ -95,7 +104,9 @@ impl<'de> Deserialize<'de> for MmItem {
     }
 }
 
-/// One `image_data` / `video_data` / `audio_data` field as sent: Python `MultimodalDataInputFormat`.
+/// One `image_data` / `video_data` / `audio_data` field as sent: Python
+/// `MultimodalDataInputFormat`, whose three shapes read differently for a single
+/// request and a batch (see [`fan_out`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum MmDataInput {
     /// One item: a single request's whole input, or a broadcast to every batch entry.
@@ -230,6 +241,7 @@ fn present(items: Vec<Option<MmItem>>) -> Vec<MmItem> {
 ///   * batch + one item → broadcast to every entry;
 ///   * batch + list → per entry, length must equal the batch size.
 ///
+/// The Python image path wraps a broadcast as `[[img]] * num` while video and
 /// audio broadcast bare; the difference vanishes here because every request's
 /// input is already an item list.
 pub fn fan_out(
@@ -252,7 +264,8 @@ pub fn fan_out(
     }
     match value {
         MmDataInput::One(item) => {
-            // A broadcast deep-clones once per prompt — same blow-up as sampling_params, so bound the product.
+            // A broadcast deep-clones once per prompt — same blow-up as
+            // sampling_params, so bound the product before any clone.
             check_broadcast_budget(item.heap_bytes(), n, name)?;
             Ok(vec![vec![item]; n])
         }
@@ -295,7 +308,8 @@ mod tests {
         MmItem::Source(s.to_owned())
     }
 
-    /// The Python shapes parse to their own variants.
+    /// The three Python shapes parse to their own variants, with `null`
+    /// entries kept in place so batch fan-out can index them.
     #[test]
     fn parses_python_shapes() {
         assert_eq!(parse(r#""u""#).unwrap(), MmDataInput::One(src("u")));
@@ -310,7 +324,8 @@ mod tests {
         );
     }
 
-    /// Object items: `format` wins over `url` (a preprocessed item may carry both).
+    /// Object items: `format` wins over `url` (a preprocessed item may carry
+    /// both), and an object with neither is named in the error.
     #[test]
     fn parses_item_objects() {
         assert_eq!(
@@ -327,7 +342,8 @@ mod tests {
         assert!(err.contains("`url` or a `format`"), "{err}");
     }
 
-    /// Anything Python's item union does not cover is rejected up front, with the expected shape in the message.
+    /// Anything Python's item union does not cover is rejected up front, with
+    /// the expected shape in the message.
     #[test]
     fn rejects_non_items() {
         for (json, expect) in [

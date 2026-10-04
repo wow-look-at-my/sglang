@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Candidate eligibility and scoring policies.
@@ -402,7 +402,8 @@ impl ScoringPolicy for FusedScorePolicy {
     }
 }
 
-/// Owned boxes as the borrowed views [`admit`] consumes. Shared by the tests in this module and its siblings.
+/// Owned boxes as the borrowed views [`admit`] consumes. Shared by the tests
+/// in this module and its siblings.
 #[cfg(test)]
 pub(crate) fn refs(
     fs: &[Box<dyn EligibilityFilter>],
@@ -838,7 +839,10 @@ mod tests {
         assert_eq!(mapped.primary.id, proposal.primary.id);
     }
 
-    /// Order is priority: the LOWER-priority filter yields, and what the higher-priority one narrowed to is kept.
+    /// Order is priority: the LOWER-priority filter yields, and what the
+    /// higher-priority one narrowed to is kept. Asserted on the surviving set
+    /// rather than on the winner, because with three workers a wrong rule can
+    /// still land on the right one by luck.
     #[test]
     fn a_conflict_yields_the_later_filter_and_keeps_the_earlier_narrowing() {
         let ws = fleet();

@@ -1,4 +1,5 @@
-//! Transport-neutral chat preprocessing over a canonical OpenAI-compatible message vocabulary.
+//! Transport-neutral chat preprocessing over a canonical OpenAI-compatible
+//! message vocabulary.
 
 use std::collections::HashMap;
 
@@ -121,6 +122,10 @@ fn numeric_reasoning_effort(value: f64) -> Result<ReasoningEffort, String> {
 }
 
 /// Renderer-owned normalized chat state.
+///
+/// Message and tool values remain Dynamo OpenAI protocol types until
+/// [`ChatPreprocessor`] applies the model chat template and lowers the request
+/// to the same [`TextRequest`] consumed by text completions.
 #[derive(Debug, Clone)]
 pub struct ChatRequest {
     pub rid: String,

@@ -10,7 +10,9 @@ use async_trait::async_trait;
 use super::{get_healthy_worker_indices, LoadBalancingPolicy, SelectWorkerInfo};
 use crate::core::Worker;
 
-/// Round-robin selection policy Selects workers in sequential order, cycling through all healthy workers.
+/// Round-robin selection policy
+///
+/// Selects workers in sequential order, cycling through all healthy workers.
 #[derive(Debug, Default)]
 pub struct RoundRobinPolicy {
     counter: AtomicUsize,

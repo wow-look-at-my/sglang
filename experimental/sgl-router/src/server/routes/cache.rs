@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Cache-management admin endpoints.
@@ -15,7 +15,9 @@ use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Cap on concurrent in-flight `/flush_cache` requests.
+/// Cap on concurrent in-flight `/flush_cache` requests. Bounds how many
+/// flushes are issued at once when a large fleet is flushed; the rest queue
+/// and run as slots free up.
 const MAX_CONCURRENT_FLUSH: usize = 32;
 
 /// One worker that failed to flush, with a human-readable reason.
@@ -25,7 +27,10 @@ pub struct FailedWorker {
     pub error: String,
 }
 
-/// Per-worker breakdown of a `/flush_cache` fan-out.
+/// Per-worker breakdown of a `/flush_cache` fan-out. `total_workers` is the
+/// registry size snapshotted at call time; every registered worker is
+/// attempted, so `successful.len() + failed.len() == total_workers`.
+/// `message` is a human/log summary — the HTTP status is authoritative.
 #[derive(Serialize)]
 pub struct FlushCacheResult {
     pub successful: Vec<String>,
@@ -71,9 +76,12 @@ impl FlushCacheResult {
 ///
 /// Targets the whole fleet (plain, prefill, and decode workers all hold KV
 /// cache), not just one model's pool. Deliberately **bypasses the circuit
+/// breaker**: an operator flushing caches wants every worker hit — including
+/// ones whose breaker is open — and recording breaker success/failure for an
+/// out-of-band admin call would skew the state the request router uses to
 /// pick workers.
 ///
-/// Status.
+/// Status: `200 OK` when every worker flushed successfully (or the fleet is
 /// empty); `502 BAD_GATEWAY` when at least one worker failed. The JSON body
 /// always carries the full breakdown so a partial failure is actionable.
 pub async fn flush_cache(State(ctx): State<Arc<AppContext>>) -> Response {
@@ -81,7 +89,9 @@ pub async fn flush_cache(State(ctx): State<Arc<AppContext>>) -> Response {
     let total_workers = workers.len();
 
     if workers.is_empty() {
-        // A flush against an empty fleet is a no-op.
+        // A flush against an empty fleet is a no-op, but it usually means a
+        // discovery/config problem (the router knows of no workers), so warn
+        // rather than stay silent.
         tracing::warn!("flush_cache called but no workers are registered");
         return (
             StatusCode::OK,
@@ -128,6 +138,8 @@ pub async fn flush_cache(State(ctx): State<Arc<AppContext>>) -> Response {
         .into_response()
 }
 
+/// POST `/flush_cache` to each worker concurrently (bounded by
+/// [`MAX_CONCURRENT_FLUSH`]) and partition the outcomes into
 /// (successful URLs, failed workers). A non-2xx status or a transport
 /// error both count as failures.
 async fn fan_out_flush(
@@ -135,7 +147,8 @@ async fn fan_out_flush(
     client: &Client,
     timeout: Duration,
 ) -> (Vec<String>, Vec<FailedWorker>) {
-    // Snapshot the URLs into owned Strings up front.
+    // Snapshot the URLs into owned Strings up front so the per-worker stream
+    // does not borrow the `workers` slice across the await points.
     let urls: Vec<String> = workers.iter().map(|w| w.url.clone()).collect();
 
     let outcomes = stream::iter(urls)
@@ -160,9 +173,9 @@ async fn fan_out_flush(
                 worker: url,
                 error: format!("HTTP {}", resp.status()),
             }),
-            // Render the full source chain (`{:#}`), not reqwest's outer
+            // Render the full source chain (`{:#}`), not just reqwest's outer
             // message, so a connect-refused / DNS / TLS / timeout cause is
-            // visible.
+            // visible in the per-worker error rather than collapsed away.
             Err(e) => failed.push(FailedWorker {
                 worker: url,
                 error: format!("{:#}", anyhow::Error::new(e)),
@@ -293,7 +306,8 @@ mod tests {
         assert_eq!(failed[0]["worker"], url);
     }
 
-    /// A non-5xx, non-2xx status (e.g.) is still a failure and still drives the top-level.
+    /// A non-5xx, non-2xx status (e.g. 404) is still a failure and still
+    /// drives the top-level 502, with the status echoed in the error.
     #[tokio::test]
     async fn non_5xx_error_status_is_reported_failed() {
         let (ok_url, _s1) = spawn_fake_flush_worker(StatusCode::OK).await;
@@ -306,7 +320,10 @@ mod tests {
         assert!(failed[0]["error"].as_str().unwrap().contains("404"));
     }
 
-    /// A worker URL with a trailing slash must still resolve to `<url>/flush_cache` (not `<url>//flush_cache`).
+    /// A worker URL with a trailing slash must still resolve to
+    /// `<url>/flush_cache` (not `<url>//flush_cache`). Guards the
+    /// `trim_end_matches('/')` in `fan_out_flush` against a regression that
+    /// would 404 every slash-suffixed worker.
     #[tokio::test]
     async fn worker_url_with_trailing_slash_is_flushed() {
         let (base, _s) = spawn_fake_flush_worker(StatusCode::OK).await;
@@ -320,7 +337,11 @@ mod tests {
         assert!(body["failed"].as_array().unwrap().is_empty());
     }
 
-    /// The fan-out targets the whole fleet, not one model's pool: prefill and decode workers (which also hold KV cache).
+    /// The fan-out targets the whole fleet, not one model's pool: prefill
+    /// and decode workers (which also hold KV cache) must both be flushed.
+    /// Asserted through the handler — `registry::all()` returning mixed modes
+    /// is necessary but not sufficient if a mode filter ever slips into the
+    /// handler path.
     #[tokio::test]
     async fn flushes_prefill_and_decode_workers() {
         let (p_url, _s1) = spawn_fake_flush_worker(StatusCode::OK).await;

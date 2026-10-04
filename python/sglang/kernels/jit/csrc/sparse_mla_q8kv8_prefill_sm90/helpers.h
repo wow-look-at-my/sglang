@@ -1,6 +1,6 @@
-/* Copyright SGLang Team. All Rights Reserved.
+/* Copyright 2025 SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version.0 (the "License");
+Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -43,7 +43,9 @@ __forceinline__ __device__ int64_t createpolicy_evict_first() {
 }
 
 __forceinline__ __device__ int get_AorC_row_idx(int local_row_idx, int idx_in_warpgroup) {
-  // In the layout of fragment A and fragment C during WGMMA, the data each thread holds resides in particular rows.
+  // In the layout of fragment A and fragment C during WGMMA, the data each thread holds resides in two particular rows.
+  // This function converts the local_row_idx (0~2) to the actual row_idx You may refer to this link for the detailed
+  // layout: https://docs.nvidia.com/cuda/parallel-thread-execution/#wgmma-64n16-a
   int row_idx = (idx_in_warpgroup / 32) * 16 + local_row_idx * 8 + (idx_in_warpgroup % 32 / 4);
   return row_idx;
 }

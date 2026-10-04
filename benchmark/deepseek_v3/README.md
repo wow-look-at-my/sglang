@@ -8,7 +8,7 @@ For optimizations made on the DeepSeek series models regarding SGLang, please re
 
 ## Installation & Launch
 
-If you encounter errors when starting the server, ensure the weights have finished downloading. It is recommended to download them beforehand or restart multiple times until all weights are downloaded.
+If you encounter errors when starting the server, ensure the weights have finished downloading. It's recommended to download them beforehand or restart multiple times until all weights are downloaded.
 
 ### Using Docker (Recommended)
 
@@ -22,9 +22,9 @@ docker run --gpus all --shm-size 32g -p 30000:30000 -v ~/.cache/huggingface:/roo
     python3 -m sglang.launch_server --model deepseek-ai/DeepSeek-V3 --tp 8 --trust-remote-code --port 30000
 ```
 
-If you are using RDMA, please:
+If you are using RDMA, please note that:
 
-1. `--network host` and `--privileged` are required by RDMA. If you do not need RDMA, you can remove them.
+1. `--network host` and `--privileged` are required by RDMA. If you don't need RDMA, you can remove them.
 2. You may need to set `NCCL_IB_GID_INDEX` if you are using RoCE, for example: `export NCCL_IB_GID_INDEX=3`.
 
 Add [performance optimization options](#performance-optimization-options) as needed.
@@ -48,7 +48,7 @@ Add [performance optimization options](#performance-optimization-options) as nee
 [MLA optimizations](https://lmsys.org/blog/2024-09-04-sglang-v0-3/#deepseek-multi-head-latent-attention-mla-throughput-optimizations) are enabled by default. Here are some optional optimizations can be enabled as needed.
 
 - [Data Parallelism Attention](https://lmsys.org/blog/2024-12-04-sglang-v0-4/#data-parallelism-attention-for-deepseek-models): For high QPS scenarios, add the `--enable-dp-attention` argument to boost throughput.
-- [Torch.compile Optimization](https://lmsys.org/blog/2024-09-04-sglang-v0-3/#torchcompile-latency-optimizations): Add `--enable-torch-compile` argument to enable it. This will take some time while server starts. The maximum batch size for torch.compile optimization can be controlled with `--torch-compile-max-bs`. It is recommended to set it between `1` and `8`. (e.g., `--torch-compile-max-bs 8`)
+- [Torch.compile Optimization](https://lmsys.org/blog/2024-09-04-sglang-v0-3/#torchcompile-latency-optimizations): Add `--enable-torch-compile` argument to enable it. This will take some time while server starts. The maximum batch size for torch.compile optimization can be controlled with `--torch-compile-max-bs`. It's recommended to set it between `1` and `8`. (e.g., `--torch-compile-max-bs 8`)
 
 ### Usage: Chat with DeepSeek
 
@@ -98,7 +98,7 @@ Answer:
 ```
 h
 ```
-* The correct response must be 'A', as the correct answer to the question is 'Paris'.
+* The correct response should be 'A', as the correct answer to the question is 'Paris'.
 ##### Thinking
 ```python3
 import openai
@@ -170,7 +170,7 @@ If you have two H100 nodes, the usage is similar to the aforementioned H20.
 
 ### Example: Serving with one B200 node
 
-There is one B200 node with 4 (for FP4) GPUs or 8 (for FP4 or FP8) GPUs. Both FP4 and FP8 models are supported for DeepSeek R1. The flags to achieve optimal performance for each are slightly different.
+There is one B200 node with 4 (for FP4) GPUs or 8 (for FP4 or FP8) GPUs.  Both FP4 and FP8 models are supported for DeepSeek R1.  The flags to achieve optimal performance for each are slightly different.
 
 #### FP4
 
@@ -194,7 +194,8 @@ SGLANG_ENABLE_JIT_DEEPGEMM=false python3 -m sglang.launch_server --model-path=de
 
 ### Example: Serving with two H200\*8 nodes and docker
 
-There are two H200 nodes, each with 8 GPUs. The first node's IP is `192.168.114.10`, and the second node's IP is `192.168.114.11`. Configure the endpoint to expose it to another Docker container using `--host 0.0.0.0` and `--port 40000`, and set up communications with `--dist-init-addr 192.168.114.10:20000`. A single H200 with multiple devices can run DeepSeek V3, the dual H200 setup is just to demonstrate multi-node usage.
+There are two H200 nodes, each with 8 GPUs. The first node's IP is `192.168.114.10`, and the second node's IP is `192.168.114.11`. Configure the endpoint to expose it to another Docker container using `--host 0.0.0.0` and `--port 40000`, and set up communications with `--dist-init-addr 192.168.114.10:20000`.
+A single H200 with 8 devices can run DeepSeek V3, the dual H200 setup is just to demonstrate multi-node usage.
 
 ```bash
 # node 1
@@ -248,7 +249,7 @@ docker run --gpus all \
 
 To serve DeepSeek-V3 with A100 GPUs, we need to convert the [FP8 model checkpoints](https://huggingface.co/deepseek-ai/DeepSeek-V3) to BF16 with [script](https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/fp8_cast_bf16.py) mentioned [here](https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/fp8_cast_bf16.py) first.
 
-Since the BF16 model is over 1.3 TB, we need to prepare four A100 nodes, each with 8 80GB GPUs. Assume the first node's IP is `10.0.0.1`, and the converted model path is `/path/to/DeepSeek-V3-BF16`. We can have following commands to launch the server.
+Since the BF16 model is over 1.3 TB, we need to prepare four A100 nodes, each with 8 80GB GPUs. Assume the first node's IP is `10.0.0.1`, and the converted model path is `/path/to/DeepSeek-V3-BF16`, we can have following commands to launch the server.
 
 ```bash
 # node 1
@@ -283,7 +284,8 @@ python3 -m sglang.bench_one_batch_server --model None --base-url http://10.0.0.1
 
 **Recommended Usage**
 
-Add `--quantization moe_wna16` flag to enable moe wna16 kernel for better performance. One example is as follows:
+Add `--quantization moe_wna16` flag to enable moe wna16 kernel for better performance.
+One example is as follows:
 
 ```bash
 python3 -m sglang.launch_server --model cognitivecomputations/DeepSeek-R1-AWQ --tp 8 --trust-remote-code --quantization moe_wna16
@@ -299,7 +301,7 @@ Note that `awq_marlin` only supports `float16` now, which may lead to some preci
 
 ### Example: Serving with 16 A100/A800 with int8 Quantization
 
-There are block-wise and per-channel quantization methods. The quantization parameters have already been uploaded to Huggingface. One example is as follows:
+There are block-wise and per-channel quantization methods, and the quantization parameters have already been uploaded to Huggingface. One example is as follows:
 
 - [meituan/DeepSeek-R1-Block-INT8](https://huggingface.co/meituan/DeepSeek-R1-Block-INT8)
 - [meituan/DeepSeek-R1-Channel-INT8](https://huggingface.co/meituan/DeepSeek-R1-Channel-INT8)
@@ -318,7 +320,7 @@ python3 -m sglang.launch_server \
 
 > **Note that the launch command here enables `torch.compile` Optimization**. For optimal performance, please refer to the command options in [Performance Optimization Options](#option_args).
 
-Then on the **master node**, supposing the ShareGPT data is located at `/path/to/ShareGPT_V3_unfiltered_cleaned_split.json`. You can run the following commands to benchmark the launched server:
+Then on the **master node**, supposing the ShareGPT data is located at `/path/to/ShareGPT_V3_unfiltered_cleaned_split.json`, you can run the following commands to benchmark the launched server:
 
 ```bash
 # bench accuracy
@@ -395,7 +397,7 @@ edit your `config.json` and remove the `quantization_config` block. For example:
 Removing this block typically resolves the error. For more details, see the discussion in [sgl-project/sglang#3491](https://github.com/sgl-project/sglang/issues/3491#issuecomment-2650779851).
 
 # Example: Serving with 4 H200 with w4fp8 Quantization
-There are mixed-precision quantization methods where MoE layers are computed using W4(int)A(FP)8 quantization while the dense layers remain in FP8 precision. Users can run these models efficiently on 4xH200 GPUs (or potentially 8xH100 GPUs), as the pre-quantized weights are already available on Hugging Face. Here is an example:
+There are mixed-precision quantization methods where MoE layers are computed using W4(int)A(FP)8 quantization while the dense layers remain in FP8 precision. Users can run these models efficiently on 4xH200 GPUs (or potentially 8xH100 GPUs), as the pre-quantized weights are already available on Hugging Face. Here's an example:
 
 ```bash
 python -m sglang.launch_server --model novita/Deepseek-V3-0324-W4AFP8 --mem-fraction-static 0.85 --disable-shared-experts-fusion --tp-size 4

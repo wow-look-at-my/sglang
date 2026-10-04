@@ -76,27 +76,32 @@ jobs:
           password: ${{ secrets.DOCKERHUB_AMD_TOKEN }}
 
       - name: Build and push to rocm/sgl-dev
+        env:
+          BUILD_TYPE: ${{ matrix.build_type }}
+          GPU_ARCH: ${{ matrix.gpu_arch }}
+          PRETEND_VERSION: ${{ steps.version.outputs.pretend_version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          case "${{ matrix.gpu_arch }}" in
+          case "$GPU_ARCH" in
             gfx942-rocm1000) rocm_tag="rocm10-mi30x" ;;
             gfx950-rocm1000) rocm_tag="rocm10-mi35x" ;;
             *)
-              echo "Unsupported GPU arch: ${{ matrix.gpu_arch }}"
+              echo "Unsupported GPU arch: $GPU_ARCH"
               exit 1
               ;;
           esac
 
-          image_tag="v${{ steps.version.outputs.version }}-${rocm_tag}-${DATE}"
+          image_tag="v${VERSION}-${rocm_tag}-${DATE}"
           echo "IMAGE_TAG=${image_tag}" >> "$GITHUB_ENV"
 
           docker build . \
             -f docker/rocm.Dockerfile \
             --build-arg "SGL_BRANCH=${GITHUB_SHA}" \
-            --build-arg "BUILD_TYPE=${{ matrix.build_type }}" \
-            --build-arg "GPU_ARCH=${{ matrix.gpu_arch }}" \
+            --build-arg "BUILD_TYPE=${BUILD_TYPE}" \
+            --build-arg "GPU_ARCH=${GPU_ARCH}" \
             --build-arg ENABLE_MORI=1 \
             --build-arg ENABLE_NIXL=1 \
-            --build-arg "SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.version.outputs.pretend_version }}" \
+            --build-arg "SETUPTOOLS_SCM_PRETEND_VERSION=${PRETEND_VERSION}" \
             --build-arg UBUNTU_MIRROR=https://archive.ubuntu.com \
             -t "rocm/sgl-dev:${image_tag}" \
             --no-cache
@@ -113,7 +118,9 @@ jobs:
           docker tag "rocm/sgl-dev:${IMAGE_TAG}" "lmsysorg/sglang-rocm:${IMAGE_TAG}"
           docker push "lmsysorg/sglang-rocm:${IMAGE_TAG}"
 
-  # gfx1250 (MI45x) runs on the same schedule as the pair above but stays a separate job: no MI450 runner pool consumes the image, so a bring-up build failure must not gate the released gfx942/gfx950 images.
+  # gfx1250 (MI45x) runs on the same schedule as the pair above but stays a
+  # separate job: no MI450 runner pool consumes the image, so a bring-up build
+  # failure must not gate the released gfx942/gfx950 images.
   publish-gfx1250:
     if: github.repository == 'sgl-project/sglang' && (github.event_name != 'workflow_dispatch' || inputs.job_select == 'all' || inputs.job_select == 'publish-gfx1250')
     runs-on: amd-docker-scale
@@ -155,8 +162,11 @@ jobs:
           password: ${{ secrets.DOCKERHUB_AMD_TOKEN }}
 
       - name: Build and push to rocm/sgl-dev
+        env:
+          PRETEND_VERSION: ${{ steps.version.outputs.pretend_version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          image_tag="v${{ steps.version.outputs.version }}-rocm10-mi45x-${DATE}"
+          image_tag="v${VERSION}-rocm10-mi45x-${DATE}"
           echo "IMAGE_TAG=${image_tag}" >> "$GITHUB_ENV"
 
           docker build . \
@@ -166,7 +176,7 @@ jobs:
             --build-arg GPU_ARCH=gfx1250-rocm1000 \
             --build-arg ENABLE_MORI=1 \
             --build-arg ENABLE_NIXL=1 \
-            --build-arg "SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.version.outputs.pretend_version }}" \
+            --build-arg "SETUPTOOLS_SCM_PRETEND_VERSION=${PRETEND_VERSION}" \
             --build-arg UBUNTU_MIRROR=https://archive.ubuntu.com \
             -t "rocm/sgl-dev:${image_tag}" \
             --no-cache

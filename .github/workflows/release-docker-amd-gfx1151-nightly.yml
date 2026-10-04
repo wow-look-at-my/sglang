@@ -50,8 +50,10 @@ jobs:
           password: ${{ secrets.DOCKERHUB_AMD_TOKEN }}
 
       - name: Build and push to rocm/sgl-dev
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          IMAGE_TAG="v${{ steps.version.outputs.version }}-rocm724-gfx1151-${DATE}"
+          IMAGE_TAG="v${VERSION}-rocm724-gfx1151-${DATE}"
           docker build . \
             -f docker/rocm-gfx1151.Dockerfile \
             --no-cache \

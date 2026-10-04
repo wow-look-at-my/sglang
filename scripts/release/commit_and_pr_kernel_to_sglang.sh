@@ -1,7 +1,12 @@
 #!/bin/bash
 set -e
 
-# Script to commit kernel version bump changes to SGLang and create a pull request Usage.
+# Script to commit kernel version bump changes to SGLang and create a pull request
+# Usage: commit_and_pr_kernel_to_sglang.sh <kernel_version> <branch_name>
+#
+# Arguments:
+#   kernel_version: The kernel version being synced
+#   branch_name: The git branch name to push to
 
 KERNEL_VERSION="$1"
 BRANCH_NAME="$2"

@@ -1,7 +1,10 @@
 FlashInfer TRTLLM MoE Overlay
 =============================
 
-This directory contains only the editable overlay files used by SGLang's `experimental_sgl_trtllm` SM100 TRTLLM fused MoE backend. Unmodified FlashInfer and TRTLLM sources are compiled from the installed `flashinfer` package at JIT time.
+This directory contains only the editable overlay files used by SGLang's
+`experimental_sgl_trtllm` SM100 TRTLLM fused MoE backend. Unmodified FlashInfer
+and TRTLLM sources are compiled from the installed `flashinfer` package at JIT
+time.
 
 Local overlay source:
 
@@ -11,4 +14,7 @@ Local overlay source:
 - `data/include/flashinfer/trtllm/fused_moe/DevKernel.h`
 - `data/include/flashinfer/trtllm/fused_moe/runner.h`
 
-The backend still depends on the installed `flashinfer` and `flashinfer_cubin` packages for the rest of the FlashInfer/TRTLLM JIT source tree. TRTLLM-Gen BMM cubin artifacts. The local include directory is passed before FlashInfer's installed include directory so these overlay headers shadow the originals.
+The backend still depends on the installed `flashinfer` and `flashinfer_cubin`
+packages for the rest of the FlashInfer/TRTLLM JIT source tree and TRTLLM-Gen
+BMM cubin artifacts. The local include directory is passed before FlashInfer's
+installed include directory so these overlay headers shadow the originals.

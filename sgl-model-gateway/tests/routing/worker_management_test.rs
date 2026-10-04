@@ -1,6 +1,10 @@
 //! Worker management integration tests
 //!
 //! Tests for dynamic worker add/remove operations via management API.
+//! The actual worker management API uses:
+//! - POST /workers - create a worker
+//! - GET /workers - list workers
+//! - DELETE /workers/{worker_id} - remove a worker
 
 use axum::{
     body::Body,

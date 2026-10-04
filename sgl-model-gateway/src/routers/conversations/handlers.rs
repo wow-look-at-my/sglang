@@ -17,7 +17,9 @@ use tracing::{info, warn};
 
 use crate::routers::persistence_utils::item_to_json;
 
-// ============================================================================ Constants.
+// ============================================================================
+// Constants
+// ============================================================================
 
 pub const MAX_METADATA_PROPERTIES: usize = 16;
 const MAX_ITEMS_PER_REQUEST: usize = 20;
@@ -53,7 +55,8 @@ const IMPLEMENTED_ITEM_TYPES: &[&str] = &[
 ];
 
 // ============================================================================
-// Error Response Helpers.
+// Error Response Helpers
+// ============================================================================
 
 fn bad_request(message: impl Into<String>) -> Response {
     (
@@ -369,7 +372,7 @@ async fn process_item(
         .and_then(|v| v.as_str())
         .unwrap_or("message");
 
-    // Handle item_reference specially - link existing item
+    // Handle item_reference specially - just link existing item
     if item_type == "item_reference" {
         return process_item_reference(item_storage, conversation_id, item_val, added_at).await;
     }

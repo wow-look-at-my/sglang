@@ -136,6 +136,7 @@ fn generate_ca_certificate(key: &PKey<Private>) -> Result<X509, Box<dyn std::err
     cert_builder.set_issuer_name(&name)?; // Self-signed
     cert_builder.set_pubkey(key)?;
 
+    // Validity: 1 year from now
     let not_before = Asn1Time::days_from_now(0)?;
     let not_after = Asn1Time::days_from_now(365)?;
     cert_builder.set_not_before(&not_before)?;

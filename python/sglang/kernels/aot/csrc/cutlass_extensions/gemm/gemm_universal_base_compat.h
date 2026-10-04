@@ -1,6 +1,6 @@
-/* Copyright SGLang Team. All Rights Reserved.
+/* Copyright 2025 SGLang Team. All Rights Reserved.
 
-Licensed under the Apache License, Version.0 (the "License");
+Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -30,7 +30,7 @@ namespace device {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
-    This is the device layer from CUTLASS.10 (SHA - cc85b64cf676c45f98a17e3a47c0aafcf817f088)
+    This is the device layer from CUTLASS 2.10 (SHA - cc85b64cf676c45f98a17e3a47c0aafcf817f088)
     It is replicated here since we needed to duplicate kernel level APIs for mixed dtype GEMMs
     and SmoothQuant. The newer device layer is not compatible with these older kernel level APIs.
 
@@ -309,6 +309,7 @@ class GemmUniversalBaseCompat {
 
     //
     // Configure grid and block dimensions
+    //
 
     ThreadblockSwizzle threadblock_swizzle;
 
@@ -319,6 +320,7 @@ class GemmUniversalBaseCompat {
 
     //
     // Launch kernel
+    //
 
     CUTLASS_TRACE_HOST("  grid: (" << grid << "),  block: (" << block << "),  SMEM: " << smem_size << " bytes");
 
@@ -327,6 +329,7 @@ class GemmUniversalBaseCompat {
 
     //
     // Query for errors
+    //
     cudaError_t result = cudaGetLastError();
 
     if (result != cudaSuccess) {

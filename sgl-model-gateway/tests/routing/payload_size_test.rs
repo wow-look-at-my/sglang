@@ -171,6 +171,7 @@ mod payload_size_tests {
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
+        // Should be rejected with 413 Payload Too Large or similar
         assert!(
             resp.status() == StatusCode::PAYLOAD_TOO_LARGE
                 || resp.status() == StatusCode::BAD_REQUEST,

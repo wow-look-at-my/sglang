@@ -12,7 +12,7 @@ SGLang provides a direct inference engine without the need for an HTTP server. T
 
 ### [Offline Batch Inference](./offline_batch_inference.py)
 
-In this example, we launch an SGLang engine and feed a batch of inputs for inference. If you provide a large batch, the engine will intelligently schedule the requests to process efficiently and prevent OOM (Out of Memory) errors.
+In this example, we launch an SGLang engine and feed a batch of inputs for inference. If you provide a very large batch, the engine will intelligently schedule the requests to process efficiently and prevent OOM (Out of Memory) errors.
 
 ### [Embedding Generation](./embedding.py)
 

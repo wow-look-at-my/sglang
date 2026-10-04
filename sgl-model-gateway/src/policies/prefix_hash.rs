@@ -1,4 +1,33 @@
-//! Prefix Hash routing policy.
+//! Prefix Hash routing policy for KV cache-aware load balancing
+//!
+//! A lightweight alternative to the full radix tree cache_aware policy.
+//! Routes requests based on a hash of their prefix tokens to maximize
+//! KV cache hits across workers.
+//!
+//! ## Algorithm
+//!
+//! 1. Extract first N tokens from the request (configurable prefix length)
+//! 2. Hash the token sequence using xxhash for fast, stable hashing
+//! 3. Use consistent hash ring to find the target worker
+//! 4. If worker is overloaded (load > avg * load_factor), find least loaded
+//! 5. Return least loaded worker that passes load check, or initial if all overloaded
+//!
+//! ## Complexity
+//!
+//! - Hash computation: O(prefix_length)
+//! - Ring lookup: O(log n) binary search
+//! - Load balance fallback: O(n) scan for least loaded
+//!
+//! ## Comparison with cache_aware
+//!
+//! | Aspect          | prefix_hash       | cache_aware (radix) |
+//! |-----------------|-------------------|---------------------|
+//! | Lookup          | O(log n)          | O(prefix_len)       |
+//! | Memory          | O(workers × vn)   | O(total_tokens)     |
+//! | Update          | O(1)              | O(prefix_len)       |
+//! | Precision       | Prefix grouping   | Exact matching      |
+//!
+//! prefix_hash trades optimal cache utilization for predictable O(log n) performance.
 
 use std::sync::Arc;
 
@@ -8,10 +37,16 @@ use crate::{core::Worker, observability::metrics::Metrics};
 /// Configuration for the PrefixHash load balancing policy
 #[derive(Debug, Clone)]
 pub struct PrefixHashConfig {
-    /// Number of prefix tokens to use for hashing. Longer prefixes = more precise routing but less grouping.
+    /// Number of prefix tokens to use for hashing.
+    /// Longer prefixes = more precise routing but less grouping.
+    /// Shorter prefixes = more requests grouped together.
+    /// Default: 256 tokens (~1 paragraph of text)
     pub prefix_token_count: usize,
 
     /// Load factor threshold for walking the ring.
+    /// If a worker's load > (total_load / num_workers) * load_factor,
+    /// walk clockwise to the next worker.
+    /// Default: 1.25 (125% of average load)
     pub load_factor: f64,
 }
 
@@ -47,7 +82,10 @@ impl Branch {
     }
 }
 
-/// Prefix Hash load balancing policy Routes requests based on prefix token hash for KV cache locality.
+/// Prefix Hash load balancing policy
+///
+/// Routes requests based on prefix token hash for KV cache locality.
+/// Uses consistent hashing with bounded load balancing.
 #[derive(Debug)]
 pub struct PrefixHashPolicy {
     config: PrefixHashConfig,
@@ -276,13 +314,13 @@ mod tests {
     #[test]
     fn test_shared_prefix_routes_same() {
         let policy = PrefixHashPolicy::new(PrefixHashConfig {
-            prefix_token_count: 5, // Only look at first tokens
+            prefix_token_count: 5, // Only look at first 5 tokens
             ..Default::default()
         });
         let workers = create_workers(&["http://w1:8000", "http://w2:8000", "http://w3:8000"]);
         let ring = Arc::new(HashRing::new(&workers));
 
-        // Sequences with same first tokens should route to same worker
+        // Two sequences with same first 5 tokens should route to same worker
         let tokens1: Vec<u32> = vec![1, 2, 3, 4, 5, 100, 200, 300];
         let tokens2: Vec<u32> = vec![1, 2, 3, 4, 5, 999, 888, 777];
 
@@ -359,8 +397,9 @@ mod tests {
             ..Default::default()
         });
 
-        assert!(policy.load_ok(30, 100, 4));
-        assert!(!policy.load_ok(35, 100, 4));
+        // Total load 100, 4 workers -> avg 25, threshold 31.25
+        assert!(policy.load_ok(30, 100, 4)); // 30 <= 31.25
+        assert!(!policy.load_ok(35, 100, 4)); // 35 > 31.25
 
         // Edge cases
         assert!(policy.load_ok(0, 0, 4)); // No load = OK

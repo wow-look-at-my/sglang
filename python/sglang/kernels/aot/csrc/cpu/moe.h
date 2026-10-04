@@ -42,6 +42,7 @@ inline void copy_stub(scalar_t* __restrict__ out, const float* __restrict__ inpu
 
 template <>
 inline void copy_stub<uint8_t>(uint8_t* __restrict__ out, const uint8_t* __restrict__ input, int64_t size) {
+  // size might be 64x + 32
   std::memcpy(out, input, size * sizeof(uint8_t));
 }
 

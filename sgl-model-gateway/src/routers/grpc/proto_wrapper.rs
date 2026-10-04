@@ -1,4 +1,7 @@
-//! Protocol buffer type wrappers for SGLang.
+//! Protocol buffer type wrappers for SGLang and vLLM backends
+//!
+//! This module provides unified enums that wrap proto types from both SGLang and vLLM,
+//! allowing the router to work with either backend transparently.
 
 use futures_util::StreamExt;
 use smg_grpc_client::{
@@ -177,6 +180,8 @@ impl ProtoGenerateStreamChunk {
         }
     }
 
+    /// Get index (for n>1 support)
+    /// vLLM doesn't support n>1, so always returns 0
     pub fn index(&self) -> u32 {
         match self {
             Self::Sglang(c) => c.index,
@@ -291,6 +296,8 @@ impl ProtoGenerateComplete {
         }
     }
 
+    /// Get index (for n>1 support)
+    /// vLLM doesn't support n>1, so always returns 0
     pub fn index(&self) -> u32 {
         match self {
             Self::Sglang(c) => c.index,
@@ -340,7 +347,8 @@ impl ProtoGenerateComplete {
     }
 }
 
-/// Unified GenerateError Note: vLLM proto no longer has GenerateError - errors are returned via gRPC status
+/// Unified GenerateError
+/// Note: vLLM proto no longer has GenerateError - errors are returned via gRPC status
 #[derive(Clone)]
 pub enum ProtoGenerateError {
     Sglang(sglang::GenerateError),

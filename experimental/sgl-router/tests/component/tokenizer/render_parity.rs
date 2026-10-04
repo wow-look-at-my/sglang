@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Compare Dynamo prompt IDs with SGLang-generated fixtures using cached tokenizers.
+//! CI skips this matrix unless model snapshots are available.
 
 use serde::Deserialize;
 use sgl_router::config::{
@@ -26,7 +27,8 @@ struct Case {
     expected_token_ids: Vec<u32>,
 }
 
-/// String-to-array conversion is a known parity gap, so these templates must opt out of forwarding.
+/// String-to-array conversion is a known parity gap, so these templates must
+/// opt out of forwarding. This fixture needs no cached model files.
 #[test]
 fn array_only_template_content_parity() {
     let fixture: serde_json::Value =
@@ -50,10 +52,14 @@ fn array_only_template_content_parity() {
     }
 }
 
-/// Replace every `YYYY-MM-DD` with a placeholder. Templates that call
-/// `strftime_now` render the day the prompt is built, so a fixture captured
-/// earlier differs from today's render in the date alone. That is not drift:
-/// the engine consumes forwarded IDs verbatim and never re-renders.
+/// Replace every `YYYY-MM-DD` with a placeholder.
+///
+/// Templates that call `strftime_now` render the day the prompt is built, so a
+/// fixture captured earlier differs from today's render in the date alone. That
+/// is not drift: the engine consumes forwarded IDs verbatim and never re-renders.
+/// Masking keeps the rest of the prompt under exact comparison, and dates that
+/// come from the request render the same on both sides, so masking them is a
+/// no-op.
 fn mask_dates(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;

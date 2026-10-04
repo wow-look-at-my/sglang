@@ -25,7 +25,7 @@ pytest python/sglang/multimodal_gen/apps/ComfyUI_SGLDiffusion/test/test_zimage_p
 
 ## Environment Variables
 
-You can configure model paths via environment variables. Model paths support multiple formats:
+You can configure model paths via environment variables. Model paths support two formats:
 - **Safetensors file**: Path to a single `.safetensors` file (e.g., `/path/to/model.safetensors`)
 - **Diffusers format**: HuggingFace model ID or local diffusers directory (e.g., `Tongyi-MAI/Z-Image-Turbo`)
 
@@ -61,6 +61,6 @@ Each test file follows a similar structure:
 ## Notes
 
 - These tests use `comfyui_mode=True` to enable ComfyUI-specific behavior
-- Tests use pre-processed inputs (latents, timesteps, embeddings) as ComfyUI will provide
+- Tests use pre-processed inputs (latents, timesteps, embeddings) as ComfyUI would provide
 - The tests verify that `noise_pred` can be retrieved from the `OutputBatch` after processing
-- All tests use dummy/ones tensors for simplicity - in production, these will be actual model outputs
+- All tests use dummy/ones tensors for simplicity - in production, these would be actual model outputs

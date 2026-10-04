@@ -1,10 +1,10 @@
-// Hy3 cookbook config. Consumed by _deployment.jsx + _playground.jsx; see
-// _deployment.jsx header for the field contract.
+// Hy3 cookbook config. Consumed by _deployment.jsx + _playground.jsx;
+// see _deployment.jsx header for the field contract.
 //
 // The shipping Hy3 tokenizer appends a shared suffix to every special token
 // (e.g. <tool_calls:TAG>); SGLang's `hunyuan` reasoning/tool-call parsers
-// resolve the real token strings from the vocab at runtime, so the same
-// recipe serves both the preview (suffix-less) and the shipping (suffixed)
+// resolve the real token strings from the vocab at runtime (PR #29920), so the
+// same recipe serves both the preview (suffix-less) and the shipping (suffixed)
 // tokenizer — no per-model hard-coding.
 //
 // BF16 weights are ~590GB. Single-node TP fits: H200 (141GB, TP8 = 74GB/GPU),
@@ -93,7 +93,8 @@ sgl-eval run aime26 \\
   },
 
   dockerImages: {
-    // The dev image bundles the HYV3 model code + the suffix-aware `hunyuan` parser.
+    // The dev image bundles the HYV3 model code + the suffix-aware `hunyuan`
+    // parser. Switch to `:latest` once a tagged release picks it up.
     h200:  "lmsysorg/sglang:dev",
     b200:  "lmsysorg/sglang:dev",
     b300:  "lmsysorg/sglang:dev",
@@ -107,6 +108,11 @@ sgl-eval run aime26 \\
 
   playgroundFeatures: {
 
+    // ----- Card 1: "Attention Parallelism" -----
+    // No CP knob: prefill Context Parallel needs model-side integration in
+    // SGLang (DeepSeek-family / Qwen-MoE / Mellum have it) and HYV3ForCausalLM
+    // has none — the engine's CP knob would emit --enable-prefill-cp flags
+    // that don't work on this model.
     attention: {
       knobs: [
         { id: "tp", label: "TP", values: [
@@ -133,6 +139,7 @@ sgl-eval run aime26 \\
       ],
     },
 
+    // ----- Card 2: "MoE Parallelism" -----
     moe: {
       backend: {
         options: [
@@ -155,6 +162,7 @@ sgl-eval run aime26 \\
       ]},
     },
 
+    // ----- Card 3: "Parsers" -----
     parsers: {
       items: [
         { id: "reasoning", label: "Reasoning Parser", flag: "--reasoning-parser auto" },
@@ -162,6 +170,7 @@ sgl-eval run aime26 \\
       ],
     },
 
+    // ----- Card 4: "Speculative Decoding" -----
     speculative: {
       options: [
         { id: "current",    label: "Inherited from base" },
@@ -181,6 +190,7 @@ sgl-eval run aime26 \\
       ],
     },
 
+    // ----- Card 5: "PD Disaggregation" -----
     pdDisagg: {
       modes: [
         { id: "off",     label: "Off" },
@@ -211,6 +221,7 @@ sgl-eval run aime26 \\
       },
     },
 
+    // ----- Card 6: "Hierarchical KV Cache" -----
     hicache: {
       backends: [
         { id: "null_placeholder", label: "Auto" },
@@ -359,6 +370,9 @@ sgl-eval run aime26 \\
       ],
     },
 
+    // ====================================================================
+    // GB200 (sm_100 + aarch64) — TP=4 (single-node 4×192GB = 768GB fits BF16 590GB)
+    // ====================================================================
     {
       match: { hw: "gb200", variant: "default", quant: "bf16", strategy: "low-latency", nodes: "single" },
       env: [],

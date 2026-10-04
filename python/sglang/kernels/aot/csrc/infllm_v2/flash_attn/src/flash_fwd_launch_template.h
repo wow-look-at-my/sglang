@@ -1,4 +1,6 @@
-/***************************************************************************** */
+/******************************************************************************
+ * Copyright (c) 2023, Tri Dao.
+ ******************************************************************************/
 
 #pragma once
 #include <c10/cuda/CUDAException.h>  // For C10_CUDA_CHECK and C10_CUDA_KERNEL_LAUNCH_CHECK
@@ -114,7 +116,7 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
   constexpr size_t smem_size = Kernel_traits::kSmemSize;
   // printf("smem_size = %d\n", smem_size);
 
-  // It doesn't like nested BOOL_SWITCH.
+  // Work-around for gcc 7. It doesn't like nested BOOL_SWITCH.
   // https://github.com/kokkos/kokkos-kernels/issues/349
   // https://github.com/HazyResearch/flash-attention/issues/21
 
@@ -136,6 +138,7 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
           // ALIBI_SWITCH(params.alibi_slopes_ptr != nullptr, Has_alibi, [&] {
           constexpr static bool Has_alibi = false;
           {  // TODO remove debug info
+            // SOFTCAP_SWITCH(params.softcap > 0.0, Is_softcap, [&] {
             constexpr static bool Is_softcap = false;
             {
               // Will only return softmax if dropout, to reduce compilation time.
@@ -193,6 +196,7 @@ void run_flash_splitkv_fwd(Flash_fwd_params& params, cudaStream_t stream) {
             // ALIBI_SWITCH(params.alibi_slopes_ptr != nullptr, Has_alibi, [&] {
             constexpr static bool Has_alibi = false;
             {  // TODO remove debug info
+              // SOFTCAP_SWITCH(params.softcap > 0.0, Is_softcap, [&] {
               constexpr static bool Is_softcap = false;
               {  // TODO remove debug info
                 // If Append_KV, then we must have seqlen_offsets, which means cu_seqlens_k != nullptr.
@@ -217,6 +221,8 @@ void run_flash_splitkv_fwd(Flash_fwd_params& params, cudaStream_t stream) {
   });
   if (params.num_splits > 1) {
     // We want kBlockM to be as small as possible for more parallelism.
+    // With 128 threads we can load 512 elements at a time, so if headdim is divisible by 128, kBlockM = 4.
+    // If headdim is divisible by 64, then we set kBlockM = 8, etc.
     constexpr static int kBlockM =
         Kernel_traits::kHeadDim % 128 == 0 ? 4 : (Kernel_traits::kHeadDim % 64 == 0 ? 8 : 16);
     dim3 grid_combine((params.b * params.h * params.seqlen_q + kBlockM - 1) / kBlockM);
@@ -276,6 +282,7 @@ void run_flash_splitkv_fwd_stage1(Flash_fwd_params& params, cudaStream_t stream)
             // ALIBI_SWITCH(params.alibi_slopes_ptr != nullptr, Has_alibi, [&] {
             constexpr static bool Has_alibi = false;
             {  // TODO remove debug info
+              // SOFTCAP_SWITCH(params.softcap > 0.0, Is_softcap, [&] {
               constexpr static bool Is_softcap = false;
               {  // TODO remove debug info
                 // If Append_KV, then we must have seqlen_offsets, which means cu_seqlens_k != nullptr.
@@ -303,6 +310,9 @@ template <typename T, int Headdim, bool Is_causal>
 void run_mha_fwd_splitkv_dispatch(Flash_fwd_params& params, cudaStream_t stream) {
   if (params.blockmask == nullptr) {
     constexpr static int kBlockM = 64;  // Fixed for all head dimensions
+    // TD [2023-08-28]: nvcc segfaults for headdim 96 with block size 64 x 256,
+    // and for headdim 192 with block size 64 x 128.
+    // Also for headdim 160 with block size 64 x 128 after the rotary addition.
     constexpr static int kBlockN = Headdim <= 64 ? 256 : (Headdim <= 128 ? 128 : 64);
     if (params.m_block_dim == 1) {
       run_flash_splitkv_fwd<Flash_fwd_kernel_traits<Headdim, kBlockM, kBlockN, 4, false, false, T>, Is_causal>(

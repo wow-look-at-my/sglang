@@ -23,6 +23,7 @@ use crate::{
     routers::grpc::client::GrpcClient,
 };
 
+/// Default worker priority (mid-range on 0-100 scale)
 pub const DEFAULT_WORKER_PRIORITY: u32 = 50;
 
 /// Default worker cost factor (baseline cost)
@@ -144,10 +145,12 @@ pub trait Worker: Send + Sync + fmt::Debug {
     fn url(&self) -> &str;
     /// Get the worker's API key
     fn api_key(&self) -> &Option<String>;
-    /// Get the worker's type (Regular, Prefill, or Decode) Returns a reference to avoid cloning on every access
+    /// Get the worker's type (Regular, Prefill, or Decode)
+    /// Returns a reference to avoid cloning on every access
     fn worker_type(&self) -> &WorkerType;
 
-    /// Get the worker's connection mode (HTTP or gRPC) Returns a reference to avoid cloning on every access
+    /// Get the worker's connection mode (HTTP or gRPC)
+    /// Returns a reference to avoid cloning on every access
     fn connection_mode(&self) -> &ConnectionMode;
 
     /// Get the bootstrap hostname for PD mode
@@ -171,8 +174,15 @@ pub trait Worker: Send + Sync + fmt::Debug {
     /// Perform an async health check on the worker
     async fn check_health_async(&self) -> WorkerResult<()>;
 
-    /// Synchronous health check wrapper (for compatibility) # Deprecation
-    /// Notice This method creates a new Tokio runtime for each call.
+    /// Synchronous health check wrapper (for compatibility)
+    ///
+    /// # Deprecation Notice
+    /// This method creates a new Tokio runtime for each call, which is expensive.
+    /// Prefer using `check_health_async()` within an async context instead.
+    ///
+    /// # Performance Warning
+    /// Creating a runtime per call has significant overhead. Only use this
+    /// method when you cannot use the async version.
     #[deprecated(
         since = "0.4.6",
         note = "Use check_health_async() instead. This method creates a new Tokio runtime per call."
@@ -197,6 +207,7 @@ pub trait Worker: Send + Sync + fmt::Debug {
     /// Decrement the load counter
     fn decrement_load(&self);
 
+    /// Reset the load counter to 0 (for sync/recovery)
     fn reset_load(&self) {}
 
     /// Get the worker routing key load tracker
@@ -283,6 +294,7 @@ pub trait Worker: Send + Sync + fmt::Debug {
             .unwrap_or(DEFAULT_WORKER_PRIORITY)
     }
 
+    /// Get the cost factor of this worker (baseline = 1.0)
     fn cost(&self) -> f32 {
         self.metadata()
             .labels
@@ -385,6 +397,7 @@ pub trait Worker: Send + Sync + fmt::Debug {
     /// Set models for this worker (for lazy discovery).
     /// Default implementation does nothing - only BasicWorker supports this.
     fn set_models(&self, _models: Vec<ModelCard>) {
+        // Default: no-op. BasicWorker overrides this.
     }
 
     /// Check if models have been discovered for this worker.
@@ -393,7 +406,8 @@ pub trait Worker: Send + Sync + fmt::Debug {
         !self.metadata().models.is_empty()
     }
 
-    /// Get or create a gRPC client for this worker Returns None for HTTP workers, Some(client) for gRPC workers
+    /// Get or create a gRPC client for this worker
+    /// Returns None for HTTP workers, Some(client) for gRPC workers
     async fn get_grpc_client(&self) -> WorkerResult<Option<Arc<GrpcClient>>>;
 
     /// Reset the gRPC client connection (for reconnection scenarios)
@@ -464,7 +478,8 @@ pub enum RuntimeType {
     Sglang,
     /// vLLM runtime
     Vllm,
-    /// External OpenAI-compatible API (not local inference) Used for routing to external providers like OpenAI, Azure OpenAI, xAI.
+    /// External OpenAI-compatible API (not local inference)
+    /// Used for routing to external providers like OpenAI, Azure OpenAI, xAI, etc.
     External,
 }
 
@@ -584,9 +599,11 @@ pub struct WorkerMetadata {
     pub bootstrap_host: String,
     /// Cached bootstrap port (from WorkerType::Prefill)
     pub bootstrap_port: Option<u16>,
-    /// Models this worker can serve. If empty, worker accepts any model (backward compatible behavior).
+    /// Models this worker can serve.
+    /// If empty, worker accepts any model (backward compatible behavior).
     pub models: Vec<ModelCard>,
-    /// Default provider for this worker (used when model doesn't specify one). `None` means native/passthrough.
+    /// Default provider for this worker (used when model doesn't specify one).
+    /// `None` means native/passthrough.
     pub default_provider: Option<ProviderType>,
     /// Default model type for unknown models (defaults to LLM capabilities).
     pub default_model_type: ModelType,
@@ -639,9 +656,12 @@ pub struct BasicWorker {
     pub consecutive_failures: Arc<AtomicUsize>,
     pub consecutive_successes: Arc<AtomicUsize>,
     pub circuit_breaker: CircuitBreaker,
-    /// Lazily initialized gRPC client for gRPC workers. Uses OnceCell for lock-free reads after initialization.
+    /// Lazily initialized gRPC client for gRPC workers.
+    /// Uses OnceCell for lock-free reads after initialization.
     pub grpc_client: Arc<OnceCell<Arc<GrpcClient>>>,
-    /// Runtime-mutable models override (for lazy discovery) When set, overrides metadata.models for routing decisions.
+    /// Runtime-mutable models override (for lazy discovery)
+    /// When set, overrides metadata.models for routing decisions.
+    /// Uses std::sync::RwLock for synchronous access in supports_model().
     pub models_override: Arc<StdRwLock<Option<Vec<ModelCard>>>>,
 }
 
@@ -665,7 +685,7 @@ impl BasicWorker {
             let base_url = &self.url()[..at_pos];
             let rank_str = &self.url()[at_pos + 1..];
 
-            // Validate that the rank part is a number
+            // Validate that the rank part is actually a number
             if rank_str.parse::<usize>().is_ok() {
                 Ok(base_url)
             } else {
@@ -889,8 +909,8 @@ impl Worker for BasicWorker {
     }
 
     async fn reset_grpc_client(&self) -> WorkerResult<()> {
-        // OnceCell doesn't support resetting. This is intentional for
-        // lock-free performance.
+        // OnceCell doesn't support resetting. This is intentional for lock-free performance.
+        // If a connection fails, the worker should be removed and re-added.
         tracing::debug!(
             "reset_grpc_client called for {} (no-op with OnceCell)",
             self.metadata.url
@@ -1118,8 +1138,12 @@ impl Worker for DPAwareWorker {
     }
 }
 
-/// RAII guard for worker load management Automatically decrements worker load
-/// when dropped.
+/// RAII guard for worker load management
+///
+/// Automatically decrements worker load when dropped. Can be attached to
+/// an axum Response to tie the guard's lifetime to the response body,
+/// which is essential for streaming responses where the function returns
+/// immediately but the stream continues in the background.
 pub struct WorkerLoadGuard {
     worker: Arc<dyn Worker>,
     routing_key: Option<String>,
@@ -1154,6 +1178,10 @@ impl Drop for WorkerLoadGuard {
 }
 
 /// Body wrapper that holds an attached value.
+///
+/// When this body is dropped (stream ends or client disconnects),
+/// the attached value is dropped automatically. This is useful for RAII guards
+/// like WorkerLoadGuard that need to be tied to a response body's lifetime.
 pub struct AttachedBody<T> {
     inner: Body,
     _attached: T,
@@ -1984,6 +2012,7 @@ mod tests {
         assert_eq!(workers[5].worker_type(), &WorkerType::Decode);
     }
 
+    // === Phase 1.3: WorkerMetadata model methods tests ===
 
     #[test]
     fn test_worker_metadata_empty_models_accepts_all() {

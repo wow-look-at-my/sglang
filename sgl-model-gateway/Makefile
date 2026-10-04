@@ -149,7 +149,7 @@ show-version: ## Show current version across all files
 	@echo "  bindings/python/pyproject.toml: $$(grep -m1 '^version = ' bindings/python/pyproject.toml | sed 's/version = "\(.*\)"/\1/')"
 	@echo "  bindings/python/.../version.py: $$(grep '__version__' bindings/python/src/sglang_router/version.py | sed 's/__version__ = "\(.*\)"/\1/')"
 
-bump-version:
+bump-version: ## Bump version across all files (usage: make bump-version VERSION=0.3.3)
 	@if [ -z "$(VERSION)" ]; then \
 		echo "Usage: make bump-version VERSION=<new-version>"; \
 		echo "Example: make bump-version VERSION=0.3.3"; \

@@ -82,6 +82,7 @@ async fn try_grpc_health_check(
     }
 }
 
+/// Step 1: Detect connection mode by probing HTTP and gRPC.
 pub struct DetectConnectionModeStep;
 
 #[async_trait]

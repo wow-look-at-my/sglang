@@ -1,4 +1,8 @@
-//! Request context types for gRPC router pipeline This module provides the core context types that flow through the router pipeline.
+//! Request context types for gRPC router pipeline
+//!
+//! This module provides the core context types that flow through the router pipeline,
+//! eliminating deep parameter passing chains and providing a single source of truth
+//! for request state.
 
 use std::sync::Arc;
 
@@ -22,8 +26,11 @@ use crate::{
     tool_parser::ParserFactory as ToolParserFactory,
 };
 
-/// Main request processing context This is the source of truth for all
-/// request state as it flows through the pipeline stages.
+/// Main request processing context
+///
+/// This is the single source of truth for all request state as it flows
+/// through the pipeline stages. Uses Rust's type system to enforce proper
+/// stage ordering at compile time.
 pub(crate) struct RequestContext {
     pub input: RequestInput,
     pub components: Arc<SharedComponents>,
@@ -59,25 +66,33 @@ pub(crate) struct SharedComponents {
 /// Mutable processing state (evolves through pipeline stages)
 #[derive(Default)]
 pub(crate) struct ProcessingState {
+    // Stage 1: Preparation outputs
     pub preparation: Option<PreparationOutput>,
 
-    /// Resolved tokenizer (set once in preparation, reused in response processing).
+    /// Resolved tokenizer (set once in preparation, reused in response processing)
+    /// This avoids redundant registry lookups across pipeline stages.
     pub tokenizer: Option<Arc<dyn Tokenizer>>,
 
+    // Stage 2: Worker selection outputs
     pub workers: Option<WorkerSelection>,
 
+    // Stage 3: Client acquisition outputs
     pub clients: Option<ClientSelection>,
 
+    // Stage 4: Request building outputs
     pub proto_request: Option<ProtoRequest>,
 
+    // Stage 5: Dispatch metadata
     pub dispatch: Option<DispatchMetadata>,
 
     // Load guard for worker load tracking (created at execution stage)
     pub load_guards: Option<LoadGuards>,
 
+    // Stage 6: Response processing state
     pub response: ResponseState,
 }
 
+/// Output from preparation stage (Step 1)
 pub(crate) struct PreparationOutput {
     /// Original text (for chat) or resolved text (for generate)
     pub original_text: Option<String>,
@@ -94,7 +109,8 @@ pub(crate) struct PreparationOutput {
     /// Filtered request (if tools were filtered)
     pub filtered_request: Option<ChatCompletionRequest>,
 
-    // Harmony-specific fields Whether this is a Harmony request (default: false)
+    // Harmony-specific fields
+    /// Whether this is a Harmony request (default: false)
     pub harmony_mode: bool,
 
     /// Selection text for worker routing (Harmony only)
@@ -108,6 +124,7 @@ pub(crate) struct PreparationOutput {
     pub harmony_stop_ids: Option<Vec<u32>>,
 }
 
+/// Worker selection (Step 2)
 pub(crate) enum WorkerSelection {
     Single {
         worker: Arc<dyn Worker>,
@@ -118,6 +135,7 @@ pub(crate) enum WorkerSelection {
     },
 }
 
+/// Client selection (Step 3)
 pub(crate) enum ClientSelection {
     Single {
         client: GrpcClient,
@@ -128,7 +146,7 @@ pub(crate) enum ClientSelection {
     },
 }
 
-/// Dispatch metadata (Step)
+/// Dispatch metadata (Step 5)
 #[derive(Clone)]
 pub(crate) struct DispatchMetadata {
     pub request_id: String,
@@ -163,7 +181,7 @@ impl LoadGuards {
     }
 }
 
-/// Response processing state (Step)
+/// Response processing state (Step 6)
 #[derive(Default)]
 pub(crate) struct ResponseState {
     /// Stop sequence decoder
@@ -321,8 +339,10 @@ impl RequestContext {
         }
     }
 
-    /// Get the cached tokenizer, cloning the Arc (cheap 8-byte clone) Returns
-    /// None if tokenizer hasn't been resolved yet.
+    /// Get the cached tokenizer, cloning the Arc (cheap 8-byte clone)
+    ///
+    /// Returns None if tokenizer hasn't been resolved yet.
+    /// The tokenizer is resolved once in the preparation stage and cached for reuse.
     pub fn tokenizer_arc(&self) -> Option<Arc<dyn Tokenizer>> {
         self.state.tokenizer.clone()
     }

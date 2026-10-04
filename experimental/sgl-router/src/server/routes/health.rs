@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::discovery::ModelId;
@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use std::sync::Arc;
 
+/// Always returns 200 — liveness probe.
 pub async fn healthz() -> StatusCode {
     StatusCode::OK
 }
@@ -69,6 +70,10 @@ mod tests {
 
     #[tokio::test]
     async fn readyz_503_when_ready_but_registry_empty() {
+        // Regression: `/readyz` previously returned 200 the moment
+        // `mark_ready()` was called, even with an empty worker
+        // registry. The Service would route traffic to a pod that
+        // could only return 503 no_healthy_workers.
         let app = crate::server::app::build_router(test_ctx(true, false));
         let res = app
             .oneshot(

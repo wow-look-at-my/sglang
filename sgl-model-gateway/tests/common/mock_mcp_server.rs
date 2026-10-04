@@ -127,6 +127,8 @@ impl MockMCPServer {
         })
     }
 
+    /// Start a mock server speaking the legacy HTTP+SSE transport (protocol 2024-11-05):
+    /// `GET /sse` opens the event stream, `POST /message?sessionId=..` carries requests.
     pub async fn start_sse() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();

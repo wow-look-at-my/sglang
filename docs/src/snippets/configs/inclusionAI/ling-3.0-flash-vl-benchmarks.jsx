@@ -1,8 +1,15 @@
 // Ling-3.0-flash-VL per-cell benchmark numbers, keyed by the same `match` tuple as
 // ling-3.0-flash-vl.jsx cells. See _deployment.jsx for the speed/accuracy schema.
 //
-// TTFT/TPOT are P50; tokens_per_sec_per_gpu = total (input + output) token throughput ÷
-// GPU count.
+// Speed: bench_serving --flush-cache --random-range-ratio 1, temperature 0. Speed cards
+// use the `random` dataset (text-only, isl 8192 / osl 1024) across LL (conc 1/16) and HT
+// (conc 1024/4096); per-cell notes carry the separate `image` workload (one random 720p
+// JPEG per request, +883 vision tokens, isl/osl 1024/1024, conc 1/16/64/128). TTFT/TPOT
+// are P50; tokens_per_sec_per_gpu = total (input + output) token throughput ÷ GPU count.
+// HT columns are queue-dominated because the KDA state cache caps concurrent requests
+// (GB300 TP=4: 935; H200 TP=4: 314).
+// Accuracy: sgl-eval MMMU-Pro, full 1730 examples, single-shot, thinking on (template
+// default), temperature 0 / top_p 0.95.
 export const benchmarks = [
   {
     match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "balanced", nodes: "single" },

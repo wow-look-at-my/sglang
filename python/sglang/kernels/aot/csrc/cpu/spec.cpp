@@ -18,6 +18,7 @@ void assign_req_to_token_pool_kernel_impl(
     int64_t num_cache_locs,
     int64_t batch_size,
     int64_t pool_len) {
+  // Pre-compute exclusive prefix sum of (end - start) to avoid O(N^2) work.
   std::vector<int64_t> prefix(batch_size + 1, 0);
   for (int64_t i = 0; i < batch_size; ++i) {
     prefix[i + 1] = prefix[i] + (end_offset[i] - start_offset[i]);
@@ -61,7 +62,7 @@ void verify_tree_greedy_kernel_impl(
       int64_t off = bx * num_draft_tokens;
       int64_t ai_off = bx * num_spec_step;
 
-      int64_t last_accept_index = retrive_index[off];
+      int64_t last_accept_index = retrive_index[off];  // retrive_index[bx, 0]
       accept_index[ai_off] = static_cast<int32_t>(last_accept_index);
 
       int32_t num_correct_drafts = 0;
@@ -90,6 +91,9 @@ void verify_tree_greedy_kernel_impl(
   });
 }
 
+// Find the node index in `selected_index[bid]` holding `token_idx`; -1 when the
+// tree is malformed and the parent is absent (callers warn and stop the walk,
+// mirroring the CUDA kernel's "invalid eagle tree" printf).
 template <typename index_t>
 int64_t
 find_parent_node(const index_t* __restrict__ selected_index, int64_t row_off, int64_t sel_stride, int64_t token_idx) {
@@ -119,7 +123,8 @@ void build_tree_kernel_efficient_impl(
   int64_t parent_stride = topk * (depth - 1) + 1;
   int64_t sel_stride = draft_token_num - 1;
 
-  // FULL_MASK row offsets depend on a prefix sum over verified_seq_len.
+  // FULL_MASK row offsets depend on a prefix sum over verified_seq_len;
+  // precompute it so the batch loop can run in parallel.
   std::vector<int64_t> mask_offsets(bs, 0);
   if (tree_mask_mode == 0) {  // FULL_MASK
     int64_t acc = 0;
@@ -137,7 +142,7 @@ void build_tree_kernel_efficient_impl(
 
       // tid == 0 logic: build retrive_index, retrive_next_token, retrive_next_sibling
       positions[off] = seq_len;
-      retrive_index[off] = off;
+      retrive_index[off] = off;  // retrive_index[bid, 0] = bid * draft_token_num
 
       for (int64_t i = draft_token_num - 1; i > 0; --i) {
         retrive_index[off + i] = off + i;
@@ -166,7 +171,7 @@ void build_tree_kernel_efficient_impl(
         int64_t mask_stride = draft_token_num;
         for (int64_t tid = 0; tid < draft_token_num; ++tid) {
           int64_t row_start = (off + tid) * mask_stride;
-          tree_mask[row_start] = true;
+          tree_mask[row_start] = true;  // attend to the root token (column 0)
           for (int64_t j = 1; j < draft_token_num; ++j) {
             tree_mask[row_start + j] = false;
           }
@@ -191,12 +196,12 @@ void build_tree_kernel_efficient_impl(
           }
           positions[off + tid] = position + seq_len;
         }
-      } else {
+      } else {  // FULL_MASK (mode 0)
         // Full mask includes the seq_len prefix
         int64_t seq_tree_idx = mask_offsets[bid];
         for (int64_t tid = 0; tid < draft_token_num; ++tid) {
           int64_t row_start = seq_tree_idx + (seq_len + draft_token_num) * tid + seq_len;
-          tree_mask[row_start] = true;
+          tree_mask[row_start] = true;  // attend to the root token (column 0)
           for (int64_t j = 1; j < draft_token_num; ++j) {
             tree_mask[row_start + j] = false;
           }
@@ -232,10 +237,15 @@ void build_tree_kernel_efficient_impl(
 // Greedy tree verification: walk each request's draft tree, accepting the
 // longest root path whose draft tokens match the target model's argmax.
 //
-// predicts: [bs * num_draft_tokens] int32; out, verified tokens by flat draft
-// index accept_index: [bs, num_spec_step] int32; out, flat indices of
-// accepted
+// predicts:            [bs * num_draft_tokens] int32; out, verified tokens by flat draft index
+// accept_index:        [bs, num_spec_step] int32; out, flat indices of accepted
 //                      tokens; caller pre-fills with -1 (rejected slots keep it)
+// accept_token_num:    [bs] int32; out, accepted drafts per request (bonus excluded)
+// candidates:          [bs, num_draft_tokens] int32 or int64; draft tokens
+// retrive_index:       [bs, num_draft_tokens] int32 or int64; flat index of each tree node
+// retrive_next_token:  [bs, num_draft_tokens] int32 or int64; first child, -1 = none
+// retrive_next_sibling:[bs, num_draft_tokens] int32 or int64; next sibling, -1 = none
+// target_predict:      [bs, num_draft_tokens] int32 or int64; target argmax per draft slot
 void verify_tree_greedy_cpu(
     at::Tensor predicts,
     at::Tensor accept_index,
@@ -280,8 +290,24 @@ void verify_tree_greedy_cpu(
 }
 
 // Build the draft token tree consumed by target verify: tree attention mask,
-// per-token positions, and the retrieval linkage (index / first child / next
-// sibling) used by verify_tree_greedy.
+// per-token positions, and the retrieval linkage (index / first child /
+// next sibling) used by verify_tree_greedy.
+//
+// parent_list:         [bs, topk * (depth - 1) + 1] int32 or int64
+//                      (empty [bs, 0] when depth == 1, e.g. MTP steps=1)
+// selected_index:      [bs, draft_token_num - 1] int32 or int64
+// verified_seq_len:    [bs] int32 or int64; committed prefix length per request
+// tree_mask:           out, bool.
+//                      QLEN_ONLY: [bs * draft_token_num * draft_token_num]; rows
+//                      are fully overwritten here.
+//                      FULL_MASK: [sum_i(seq_len_i * draft_token_num) + bs * draft_token_num^2];
+//                      only each row's qlen block is written -- the caller must
+//                      pre-fill the seq_len prefix columns with true.
+// positions:           [bs * draft_token_num]; out, same dtype as parent_list
+// retrive_index:       [bs, draft_token_num]; out
+// retrive_next_token:  [bs, draft_token_num]; out, pre-filled with -1
+// retrive_next_sibling:[bs, draft_token_num]; out, pre-filled with -1
+// tree_mask_mode:      0 = FULL_MASK, 1 = QLEN_ONLY (2 = QLEN_ONLY_BITPACKING is rejected)
 void build_tree_kernel_efficient_cpu(
     const at::Tensor& parent_list,
     const at::Tensor& selected_index,
@@ -298,6 +324,8 @@ void build_tree_kernel_efficient_cpu(
   CHECK_INPUT(parent_list);
   CHECK_DIM(2, parent_list);
 
+  // CPU workers always use FULL_MASK (0) or QLEN_ONLY (1); QLEN_ONLY_BITPACKING
+  // (2) has no CPU producer and any other value is a caller bug.
   TORCH_CHECK(
       tree_mask_mode == 0 || tree_mask_mode == 1,
       "build_tree_kernel_efficient_cpu: only FULL_MASK (0) and QLEN_ONLY (1) are supported, got ",
@@ -306,7 +334,9 @@ void build_tree_kernel_efficient_cpu(
   const auto index_dtype = parent_list.scalar_type();
   int64_t bs = parent_list.size(0);
 
-  // depth == 1 (e.g. MTP steps=1) has no non-root parents.
+  // depth == 1 (e.g. MTP steps=1) has no non-root parents, so
+  // organize_draft_results emits an empty (bs, 0) parent_list that the kernel
+  // never indexes; only the multi-step layout is width topk*(depth-1)+1.
   if (depth > 1) {
     CHECK_EQ(parent_list.size(1), topk * (depth - 1) + 1);
   }
@@ -348,12 +378,12 @@ void build_tree_kernel_efficient_cpu(
 // req_to_token[req_pool_indices[i], start_offset[i]:end_offset[i]] =
 // out_cache_loc[prefix[i]:prefix[i+1]].
 //
-// req_pool_indices: [bs] int32 or int64 req_to_token: [max_num_reqs,
-// pool_len] int32; out start_offset: [bs] int32 or int64 (independent of
-// req_pool_indices;
+// req_pool_indices: [bs] int32 or int64
+// req_to_token:     [max_num_reqs, pool_len] int32; out
+// start_offset:     [bs] int32 or int64 (independent of req_pool_indices;
 //                   eagle_prepare_for_decode passes int64 indices with int32 kv lens)
-// end_offset: [bs] same dtype as start_offset out_cache_loc:
-// [sum_i(end_offset[i] - start_offset[i])] int64
+// end_offset:       [bs] same dtype as start_offset
+// out_cache_loc:    [sum_i(end_offset[i] - start_offset[i])] int64
 void assign_req_to_token_pool_cpu(
     const at::Tensor& req_pool_indices,
     at::Tensor req_to_token,
@@ -394,13 +424,13 @@ void assign_req_to_token_pool_cpu(
 }
 
 // Expand req_to_token for multi-step draft decode: row b*topk+tk holds the
-// committed prefix of request b followed by candidate tk's draft slots (which
-// assign_draft_cache_locs_contiguous laid out at sl + tk*num_steps).
+// committed prefix of request b followed by candidate tk's draft slots
+// (which assign_draft_cache_locs_contiguous laid out at sl + tk*num_steps).
 //
-// req_to_token: [max_num_reqs, pool_len] int32 req_pool_indices: [num_seqs]
-// int32 or int64 seq_lens: [num_seqs] int32 or int64 (independent of
-// req_pool_indices) returns: [num_seqs * topk, pool_len] int32; only the
-// first
+// req_to_token:     [max_num_reqs, pool_len] int32
+// req_pool_indices: [num_seqs] int32 or int64
+// seq_lens:         [num_seqs] int32 or int64 (independent of req_pool_indices)
+// returns:          [num_seqs * topk, pool_len] int32; only the first
 //                   seq_lens[b] + num_steps entries of each row are defined
 at::Tensor build_draft_decode_metadata_cpu(
     const at::Tensor& req_to_token,
@@ -459,6 +489,10 @@ at::Tensor build_draft_decode_metadata_cpu(
 }
 
 // Pick the last accepted token of each request as its bonus token.
+//
+// accept_tokens: [bs, accept_stride] int32; row-major, accept_stride = accept_index.shape[1]
+// accept_lens:   [bs] int32; number of accepted tokens per request (bonus included)
+// bonus_tokens:  [bs] int32; out
 void fill_bonus_tokens_cpu(
     const at::Tensor& accept_tokens, const at::Tensor& accept_lens, at::Tensor bonus_tokens, int64_t accept_stride) {
   CHECK_INPUT(accept_tokens);
@@ -483,9 +517,13 @@ void fill_bonus_tokens_cpu(
   });
 }
 
-// Sequential by design: the output write position depends on how many prior
-// entries were accepted.
+// Compact the accepted tokens' KV slots: gather out_cache_loc at the accepted
+// indices, skipping -1 (rejected) entries. Sequential by design: the output
+// write position depends on how many prior entries were accepted.
 //
+// accept_index:         [bs * num_spec_step] int32 or int64; flat, -1 = rejected
+// out_cache_loc:        [bs * num_draft_tokens] int64
+// accept_out_cache_loc: [>= num_accept] int64; out, only the first num_accept
 //                       entries are written
 void fill_accept_out_cache_loc_cpu(
     const at::Tensor& accept_index, const at::Tensor& out_cache_loc, at::Tensor accept_out_cache_loc) {
@@ -516,12 +554,12 @@ void fill_accept_out_cache_loc_cpu(
 }
 
 // Read back the draft KV slots reserved by the allocator: for each request,
-// copy the topk*num_steps slots starting at seq_lens[pid] out of
-// req_to_token.
+// copy the topk*num_steps slots starting at seq_lens[pid] out of req_to_token.
 //
-// req_pool_indices: [bs] int32 or int64 req_to_token: [max_num_reqs,
-// pool_len] int32 seq_lens: [bs] int32 or int64 (independent of
-// req_pool_indices) out_cache_loc: [bs * topk * num_steps] int64; out
+// req_pool_indices: [bs] int32 or int64
+// req_to_token:     [max_num_reqs, pool_len] int32
+// seq_lens:         [bs] int32 or int64 (independent of req_pool_indices)
+// out_cache_loc:    [bs * topk * num_steps] int64; out
 void assign_draft_cache_locs_contiguous_cpu(
     const at::Tensor& req_pool_indices,
     const at::Tensor& req_to_token,
@@ -572,10 +610,11 @@ void assign_draft_cache_locs_contiguous_cpu(
 // Gather each request's KV slots in [start_offset, end_offset) out of
 // req_to_token into a dense int64 vector (verify/extend cache locations).
 //
-// req_pool_indices: [bs] int32 or int64 req_to_token: [max_num_reqs,
-// pool_len] int32 start_offset: [bs] int32 or int64 (independent of
-// req_pool_indices) end_offset: [bs] same dtype as start_offset
-// out_cache_loc: [sum_i(end_offset[i] - start_offset[i])] int64; out
+// req_pool_indices: [bs] int32 or int64
+// req_to_token:     [max_num_reqs, pool_len] int32
+// start_offset:     [bs] int32 or int64 (independent of req_pool_indices)
+// end_offset:       [bs] same dtype as start_offset
+// out_cache_loc:    [sum_i(end_offset[i] - start_offset[i])] int64; out
 void assign_extend_cache_locs_cpu(
     const at::Tensor& req_pool_indices,
     const at::Tensor& req_to_token,
@@ -641,11 +680,12 @@ void assign_extend_cache_locs_cpu(
 // Recover tree linkage from a QLEN-layout boolean tree mask (NGRAM path):
 // depth/position, retrieval index, first child and next sibling per node.
 //
-// tree_mask: [bs * draft_token_num * draft_token_num] bool verified_seq_len:
-// [bs] int32 or int64 positions: [bs * draft_token_num]; out, same dtype as
-// verified_seq_len retrive_index: [bs, draft_token_num]; out
-// retrive_next_token: [bs, draft_token_num]; out retrive_next_sibling:[bs,
-// draft_token_num]; out
+// tree_mask:           [bs * draft_token_num * draft_token_num] bool
+// verified_seq_len:    [bs] int32 or int64
+// positions:           [bs * draft_token_num]; out, same dtype as verified_seq_len
+// retrive_index:       [bs, draft_token_num]; out
+// retrive_next_token:  [bs, draft_token_num]; out
+// retrive_next_sibling:[bs, draft_token_num]; out
 void reconstruct_indices_from_tree_mask_cpu(
     const at::Tensor& tree_mask,
     const at::Tensor& verified_seq_len,
@@ -692,6 +732,7 @@ void reconstruct_indices_from_tree_mask_cpu(
         int64_t token_idx = bid * draft_token_num;
         int64_t tree_mask_offset = bid * base_offset;
 
+        // Step 1: depth and parent via backward scan
         int64_t depth = 0;
         int64_t parent_idx = -1;
         for (int64_t i = tid - 1, start_idx = tree_mask_offset + tid * draft_token_num; i >= 0; --i) {
@@ -703,10 +744,13 @@ void reconstruct_indices_from_tree_mask_cpu(
           }
         }
 
+        // Step 2: retrive_index (identity)
         ri_ptr[token_idx + tid] = token_idx + tid;
 
+        // Step 3: position = depth + verified_seq_len
         pos_ptr[token_idx + tid] = depth + seq_len_ptr[bid];
 
+        // Step 4: first child (next_token)
         int64_t next_token_idx = -1;
         for (int64_t i = tid + 1; i < draft_token_num; ++i) {
           if (mask_ptr[tree_mask_offset + i * draft_token_num + tid]) {
@@ -716,6 +760,7 @@ void reconstruct_indices_from_tree_mask_cpu(
         }
         rnt_ptr[token_idx + tid] = next_token_idx;
 
+        // Step 5: next sibling (shares parent, no intervening ancestors)
         int64_t next_sibling_idx = -1;
         if (parent_idx != -1) {
           for (int64_t i = tid + 1; i < draft_token_num; ++i) {
@@ -746,12 +791,12 @@ void reconstruct_indices_from_tree_mask_cpu(
 // draft token at the end (or at select_index when given). Mutates input_ids
 // in place; callers rely on this.
 //
-// input_ids: [num_extend_tokens] int64; in/out extend_start_loc: [bs] int32
-// or int64 extend_seq_lens: [bs] int32 or int64 (independent of
-// extend_start_loc.
+// input_ids:        [num_extend_tokens] int64; in/out
+// extend_start_loc: [bs] int32 or int64
+// extend_seq_lens:  [bs] int32 or int64 (independent of extend_start_loc; the
 //                   spec decode-extend batch pairs int64 lens with int32 locs)
-// topk_index: [bs] int64; new draft token per request select_index: [bs]
-// int64 or None; global slot for the new token
+// topk_index:       [bs] int64; new draft token per request
+// select_index:     [bs] int64 or None; global slot for the new token
 void rotate_input_ids_cpu(
     at::Tensor input_ids,
     const at::Tensor& extend_start_loc,
@@ -790,6 +835,7 @@ void rotate_input_ids_cpu(
           int64_t seq_len = lens_ptr[pid];
           int64_t new_token = topk_ptr[pid];
 
+          // Shift left by 1
           if (seq_len > 1) {
             std::memmove(ids_ptr + start, ids_ptr + start + 1, (seq_len - 1) * sizeof(int64_t));
           }

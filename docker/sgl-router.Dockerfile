@@ -1,6 +1,6 @@
 # Multi-stage build for sgl-router.
 #
-# Stages, each scoped to its caching contract:
+# Three stages, each scoped to its caching contract:
 #   1. chef   — generate a `recipe.json` describing the dep graph.
 #   2. builder — compile deps from the recipe, then the workspace.
 #   3. runtime — distroless cc-debian12 with the stripped binary.
@@ -23,12 +23,13 @@
 #       -v $(pwd)/docker/sgl-router.sample.yaml:/etc/sgl-router/sgl-router.yaml \
 #       sgl-router:dev --config /etc/sgl-router/sgl-router.yaml
 #
-# Image budget: < 100 MB stripped (M6 acceptance).
+# Image budget: < 100 MB stripped (M6 acceptance). Verify with
 #   `docker image inspect sgl-router:dev --format '{{.Size}}'`.
 
 ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=bookworm
 
+######################## STAGE 1 — chef recipe ##########################
 FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS chef
 RUN cargo install cargo-chef --locked --version ^0.1
 WORKDIR /work/sgl-router
@@ -45,6 +46,7 @@ RUN mkdir -p src sgl-kv-indexer/src/bin \
     && cargo chef prepare --recipe-path recipe.json \
     && rm -rf src sgl-kv-indexer/src
 
+######################## STAGE 2 — builder ##############################
 FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler \
@@ -52,10 +54,12 @@ RUN apt-get update \
     && cargo install cargo-chef --locked --version ^0.1
 WORKDIR /work/sgl-router
 
-# That dynamic dep is absent from the distroless runtime, so the binary fails
-# at startup with "libpcre2-8.so.0: cannot open shared object file". Force
-# pcre2-sys to compile its vendored PCRE2 and link it statically, keeping the
-# runtime self-contained.
+# `dynamo-tokenizers` pulls in `pcre2-sys`, whose build.rs links the SYSTEM
+# libpcre2-8 whenever pkg-config finds it (it does here — the rust:bookworm
+# base ships libpcre2-dev). That dynamic dep is absent from the distroless
+# runtime, so the binary fails at startup with "libpcre2-8.so.0: cannot open
+# shared object file". Force pcre2-sys to compile its vendored PCRE2 and link
+# it statically, keeping the runtime self-contained.
 ENV PCRE2_SYS_STATIC=1
 
 COPY --from=chef /work/sgl-router/recipe.json ./recipe.json
@@ -78,6 +82,7 @@ RUN touch sgl-kv-indexer/build.rs \
     && cargo build --locked --release --bin sgl-router \
     && strip target/release/sgl-router
 
+######################## STAGE 3 — runtime ##############################
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
 COPY --from=builder /work/sgl-router/target/release/sgl-router /usr/local/bin/sgl-router
@@ -86,7 +91,7 @@ COPY --from=builder /work/sgl-router/target/release/sgl-router /usr/local/bin/sg
 ENV SGL_ROUTER_CONFIG=/etc/sgl-router/sgl-router.yaml
 EXPOSE 8090
 
-# The router doesn't need root.
+# distroless `nonroot` runs as uid 65532. The router doesn't need root.
 USER nonroot:nonroot
 
 ENTRYPOINT ["/usr/local/bin/sgl-router"]

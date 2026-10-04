@@ -1,5 +1,5 @@
-// One entry per cell `match` tuple (same keys as config cells). Every entry is a
-// bare match with no numbers, so the card shows "pending".
+// One entry per cell `match` tuple (same 5 keys as config cells). Every entry is
+// a bare match with no numbers, so the card shows "pending".
 
 export const benchmarks = [
   { match: { hw: "h200", variant: "default", quant: "fp8", strategy: "balanced", nodes: "multi-4" } },

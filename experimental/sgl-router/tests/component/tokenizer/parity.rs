@@ -1,7 +1,31 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Bit-parity check: dynamo-tokenizers must produce the same token_ids as SGLang's reference (transformers.AutoTokenizer) for every.
+//! Bit-parity check: dynamo-tokenizers must produce the same token_ids as
+//! SGLang's reference (transformers.AutoTokenizer) for every (model, shape)
+//! fixture. Any drift is a regression.
+//!
+//! ## Running
+//!
+//! `cargo test --release --test component tokenizer::parity` runs the test.
+//!
+//! Each fixture cell needs the model's `tokenizer.json` on disk; the test
+//! looks in the local HuggingFace cache (`HF_HOME` or `~/.cache/huggingface`).
+//! Cells whose snapshot isn't cached are skipped (with a warning); cells
+//! whose snapshot IS cached are asserted bit-identical.
+//!
+//! Locally, when no fixtures can be checked (fresh cache) the test emits a
+//! warning and passes — useful for contributors without the model snapshots.
+//! In CI (`SGLANG_IS_IN_CI=true`) the same condition is a hard failure: a
+//! parity matrix that validates nothing is worse than no test at all, since
+//! it gives a false sense of coverage. The e2e HTTP tokenize test remains
+//! the authoritative live-model parity gate, but this matrix must actually
+//! run against cached snapshots when present in CI.
+//!
+//! ## Regenerating fixtures
+//!
+//! Run `tests/scripts/generate_parity_fixtures.py` after changing a prompt
+//! shape or adding a model, then commit the new JSON.
 
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -22,8 +46,10 @@ fn fixture_root() -> PathBuf {
 
 /// Resolve a model's tokenizer.json file from the local HF cache.
 ///
-/// Check HF_HOME env var, or default to ~/.cache/huggingface
-/// Return None if not found — the test cell is skipped.
+/// Strategy:
+/// 1. Check HF_HOME env var, or default to ~/.cache/huggingface
+/// 2. Look for models--<safe-name>/snapshots/<hash>/tokenizer.json
+/// 3. Return None if not found — the test cell is skipped.
 fn resolve_tokenizer_path(model_id: &str) -> Option<PathBuf> {
     let hf_home = std::env::var("HF_HOME")
         .ok()
@@ -41,6 +67,9 @@ fn resolve_tokenizer_path(model_id: &str) -> Option<PathBuf> {
 }
 
 /// Parity matrix: dynamo-tokenizers vs. transformers.AutoTokenizer.
+///
+/// Skips cells whose tokenizer.json isn't in the local HF cache. See
+/// module-level docs.
 #[test]
 fn parity_matrix() {
     let mut checked = 0;

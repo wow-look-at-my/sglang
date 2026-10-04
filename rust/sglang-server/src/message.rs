@@ -1,4 +1,6 @@
-//! Messages moved between stages via `flume` (zero-copy moves).
+//! Messages moved between stages via `flume` (zero-copy moves); variable-length
+//! buffers are `bytes::Bytes`, so fanning one out to several detok shards is a
+//! refcount bump, not a copy.
 
 pub mod config;
 pub mod detok;

@@ -54,6 +54,7 @@ void murmur_hash32_kernel_impl(
 
       const uint32_t col = static_cast<uint32_t>(col_indices_ptr[col_idx]);
 
+      // Split 64-bit seed into two 32-bit blocks.
       const uint32_t seed_low = static_cast<uint32_t>(seed);
 
       const uint32_t seed_high = static_cast<uint32_t>(seed >> 32);

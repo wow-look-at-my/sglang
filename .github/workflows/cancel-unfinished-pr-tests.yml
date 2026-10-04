@@ -34,6 +34,7 @@ jobs:
       - name: Cancel unfinished PR-associated runs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           WORKFLOWS: ${{ github.event.inputs.workflows }}
           INCLUDE_HIGHEST_PRIORITY: ${{ github.event.inputs.include_highest_priority }}
           INCLUDE_RERUN_TEST: ${{ github.event.inputs.include_rerun_test }}
@@ -78,19 +79,19 @@ jobs:
               return
             fi
 
-            local pr_url="https://github.com/${{ github.repository }}/pull/$pr_number"
+            local pr_url="https://github.com/$REPO/pull/$pr_number"
             echo "  PR: $pr_url ($pr_state)"
 
             # Closed PR (merged or not): always cancel, skip label checks.
             if [ "$pr_state" = "closed" ]; then
               echo "  🚫 Cancelling (PR closed)..."
-              gh run cancel "$run_id" --repo "${{ github.repository }}" || echo "  ⚠️  Cancellation failed"
+              gh run cancel "$run_id" --repo "$REPO" || echo "  ⚠️  Cancellation failed"
               return
             fi
 
             # Open PR: apply label-based skip rules.
             local labels
-            labels=$(gh pr view "$pr_number" --repo "${{ github.repository }}" --json labels \
+            labels=$(gh pr view "$pr_number" --repo "$REPO" --json labels \
               | jq -r '.labels[].name' 2>/dev/null || true)
 
             if echo "$labels" | grep -Fxq "bypass-maintenance"; then
@@ -107,7 +108,7 @@ jobs:
             fi
 
             echo "  🚫 Cancelling..."
-            gh run cancel "$run_id" --repo "${{ github.repository }}" || echo "  ⚠️  Cancellation failed"
+            gh run cancel "$run_id" --repo "$REPO" || echo "  ⚠️  Cancellation failed"
           }
           export -f maybe_cancel_for_pr
 
@@ -123,7 +124,7 @@ jobs:
             all_runs=""
             for status in queued in_progress waiting; do
               batch=$(gh run list \
-                --repo "${{ github.repository }}" \
+                --repo "$REPO" \
                 --workflow "$workflow_file" \
                 --status "$status" \
                 --json databaseId,status,event,url,createdAt,displayTitle \
@@ -177,7 +178,7 @@ jobs:
                 echo "Run ($run_status): $run_url"
 
                 run_details=$(gh api -H "Accept: application/vnd.github+json" \
-                  "repos/${{ github.repository }}/actions/runs/$run_id" 2>/dev/null || true)
+                  "repos/$REPO/actions/runs/$run_id" 2>/dev/null || true)
                 if [ -z "$run_details" ]; then
                   echo "  ⚠️  Could not fetch run details, skipping"
                   continue
@@ -192,7 +193,7 @@ jobs:
 
                 echo "  Branch: ${head_owner}:${head_branch}"
                 maybe_cancel_for_pr "$run_id" \
-                  "repos/${{ github.repository }}/pulls?state=all&head=${head_owner}:${head_branch}" \
+                  "repos/$REPO/pulls?state=all&head=${head_owner}:${head_branch}" \
                   "head=${head_owner}:${head_branch}"
               done
               echo ""
@@ -221,7 +222,7 @@ jobs:
 
                 echo "  pr_head_sha: $last_token"
                 maybe_cancel_for_pr "$run_id" \
-                  "repos/${{ github.repository }}/commits/$last_token/pulls" \
+                  "repos/$REPO/commits/$last_token/pulls" \
                   "sha=$last_token"
               done
               echo ""

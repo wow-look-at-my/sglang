@@ -1,4 +1,11 @@
 //! Model card definitions for worker model configuration.
+//!
+//! This module defines [`ModelCard`] which consolidates model-related configuration
+//! that was previously scattered in `WorkerMetadata.labels` HashMap.
+//!
+//! Also defines [`ProviderType`] for vendor-specific API transformations.
+//!
+//! Inspired by Dynamo's ModelDeploymentCard but simplified for router needs.
 
 use std::collections::HashMap;
 
@@ -9,7 +16,13 @@ use super::{
     UNKNOWN_MODEL_ID,
 };
 
-/// Provider type for external API transformations. Different providers have different API formats and requirements.
+/// Provider type for external API transformations.
+///
+/// Different providers have different API formats and requirements.
+/// This enum identifies which vendor's API format to use for transformations.
+///
+/// Note: `None` (when used as `Option<ProviderType>`) means native/passthrough -
+/// no transformation needed. This is the case for local SGLang backends.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderType {
@@ -71,9 +84,35 @@ impl std::fmt::Display for ProviderType {
 }
 
 /// Model card containing model configuration and capabilities.
+///
+/// Consolidates fields previously scattered in `WorkerMetadata.labels`:
+/// - `model_id` -> `id`
+/// - `tokenizer_path` -> `tokenizer_path`
+/// - `chat_template` -> `chat_template`
+/// - `reasoning_parser` -> `reasoning_parser`
+/// - `tool_parser` -> `tool_parser`
+///
+/// # Example
+///
+/// ```
+/// use smg::core::{model_type::ModelType, ModelCard, ProviderType};
+///
+/// let card = ModelCard::new("meta-llama/Llama-3.1-8B-Instruct")
+///     .with_display_name("Llama 3.1 8B Instruct")
+///     .with_alias("llama-3.1-8b")
+///     .with_model_type(ModelType::VISION_LLM)
+///     .with_context_length(128_000)
+///     .with_tokenizer_path("meta-llama/Llama-3.1-8B-Instruct");
+///
+/// assert!(card.matches("llama-3.1-8b"));
+/// assert!(card.model_type.supports_vision());
+/// assert!(card.provider.is_none()); // Local model, no external provider
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCard {
-    // === Identity === Primary model ID (e.g., "meta-llama/Llama-3.1-8B-Instruct"): labels.get("model_id")
+    // === Identity ===
+    /// Primary model ID (e.g., "meta-llama/Llama-3.1-8B-Instruct")
+    /// Previously: labels.get("model_id")
     pub id: String,
 
     /// Optional display name (e.g., "Llama 3.1 8B Instruct")
@@ -84,11 +123,13 @@ pub struct ModelCard {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
 
-    // === Capabilities === Supported endpoint types (bitflags)
+    // === Capabilities ===
+    /// Supported endpoint types (bitflags)
     #[serde(default = "default_model_type")]
     pub model_type: ModelType,
 
-    /// HuggingFace model type string (e.g., "llama", "qwen2", "gpt-oss") This is different from `model_type`.
+    /// HuggingFace model type string (e.g., "llama", "qwen2", "gpt-oss")
+    /// This is different from `model_type` which is capability bitflags.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hf_model_type: Option<String>,
 
@@ -96,7 +137,8 @@ pub struct ModelCard {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub architectures: Vec<String>,
 
-    /// Provider hint for API transformations. `None` means native/passthrough (no transformation needed).
+    /// Provider hint for API transformations.
+    /// `None` means native/passthrough (no transformation needed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderType>,
 
@@ -104,19 +146,24 @@ pub struct ModelCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_length: Option<u32>,
 
-    // === Tokenization & Parsing ( in labels) === Path to tokenizer (e.g., HuggingFace model ID or local path).
+    // === Tokenization & Parsing (previously in labels) ===
+    /// Path to tokenizer (e.g., HuggingFace model ID or local path)
+    /// Previously: labels.get("tokenizer_path")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokenizer_path: Option<String>,
 
-    /// Chat template (Jinja2 template string or path): labels.get("chat_template")
+    /// Chat template (Jinja2 template string or path)
+    /// Previously: labels.get("chat_template")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_template: Option<String>,
 
-    /// Reasoning parser type (e.g., "deepseek", "qwen"): labels.get("reasoning_parser")
+    /// Reasoning parser type (e.g., "deepseek", "qwen")
+    /// Previously: labels.get("reasoning_parser")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_parser: Option<String>,
 
-    /// Tool/function calling parser type (e.g., "llama", "mistral"): labels.get("tool_parser")
+    /// Tool/function calling parser type (e.g., "llama", "mistral")
+    /// Previously: labels.get("tool_parser")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_parser: Option<String>,
 
@@ -124,11 +171,14 @@ pub struct ModelCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
 
-    // === Classification Support === Classification label mapping (class index -> label name).
+    // === Classification Support ===
+    /// Classification label mapping (class index -> label name).
+    /// Empty if not a classification model.
+    /// Example: {0: "negative", 1: "positive"}
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub id2label: HashMap<u32, String>,
 
-    /// Number of classification labels ( if not a classifier).
+    /// Number of classification labels (0 if not a classifier).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub num_labels: u32,
 }

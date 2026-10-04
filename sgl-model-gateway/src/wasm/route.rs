@@ -1,4 +1,9 @@
-//! WASM HTTP API Routes Provides REST API endpoints for managing WASM modules.
+//! WASM HTTP API Routes
+//!
+//! Provides REST API endpoints for managing WASM modules:
+//! - POST /wasm - Add modules
+//! - DELETE /wasm/:uuid - Remove a module
+//! - GET /wasm - List all modules with metrics
 
 use std::{sync::Arc, time::Duration};
 
@@ -56,7 +61,11 @@ async fn wait_for_job_completion(
                 }
             }
         } else {
-            // Job completed successfully (status
+            // Job completed successfully (status was removed by record_job_completion)
+            // We need to get the result from the job execution
+            // Since job queue removes status on success, we can't get the result here
+            // We'll need to query the wasm manager to find the module by name
+            // For now, return a success message and let caller extract UUID from manager
             return Ok("Job completed successfully".to_string());
         }
     }
@@ -91,15 +100,14 @@ pub async fn add_wasm_module(
         // Submit job to queue
         match job_queue.submit(job).await {
             Ok(_) => {
-                // Wait for job completion (timeout: a few minutes)
+                // Wait for job completion (timeout: 5 minutes)
                 let timeout = Duration::from_secs(300);
                 match wait_for_job_completion(job_queue, &worker_url, timeout).await {
                     Ok(_) => {
-                        // Job completed successfully, but we need to get the
-                        // UUID Since job queue removes status on success, we
-                        // need to query the workflow engine or wasm manager
-                        // to get the UUID let's try to get it from the wasm
-                        // manager by name
+                        // Job completed successfully, but we need to get the UUID
+                        // Since job queue removes status on success, we need to query
+                        // the workflow engine or wasm manager to get the UUID
+                        // For now, let's try to get it from the wasm manager by name
                         if let Some(wasm_manager) = state.context.wasm_manager.as_ref() {
                             if let Ok(all_modules) = wasm_manager.get_modules() {
                                 if let Some(registered_module) = all_modules
@@ -177,6 +185,7 @@ pub async fn remove_wasm_module(
     // Submit job to queue
     match job_queue.submit(job).await {
         Ok(_) => {
+            // Wait for job completion (timeout: 1 minute)
             let timeout = Duration::from_secs(60);
             match wait_for_job_completion(job_queue, &worker_url, timeout).await {
                 Ok(_) => (StatusCode::OK, "Module removed successfully").into_response(),

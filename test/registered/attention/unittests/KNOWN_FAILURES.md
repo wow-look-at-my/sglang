@@ -1,10 +1,12 @@
 # Known Failures — Attention Backend Unit Tests
 
-This file catalogs every backend issue (production-side bug, structural reject, container gap, or hardware-architecture gate) that affects the unit-test suite, **organized by the action needed to address it**.
+This file catalogs every backend issue (production-side bug, structural
+reject, container gap, or hardware-architecture gate) that affects the
+unit-test suite, **organized by the action needed to address it**.
 
-Anything failing that is not listed here must be treated as a regression.
+Anything failing that is not listed here should be treated as a regression.
 
-Last updated:
+Last updated: 2026-06-05
 
 ## Reference runs
 
@@ -22,7 +24,11 @@ Last updated:
 | **C** | Backend production-side bug or structural reject | **Production code change** in `python/sglang/srt/layers/attention/` |
 | **D** | Production-design constraint | None — these are intentional rejects (page-size pins, topk limits) |
 
-Within **C**, sub-sections by bug category (layout / speculative / graph-runner / split-op / sparse-kernel / DSA-specific). Each entry tags its current test status: `[gated]` (skipTest gate fires today), `[no test]` (no test attempts it. Documented in per-method README), or `[gated on X]` (gate fires only on hardware/version X).
+Within **C**, sub-sections by bug category (layout / speculative / graph-runner /
+split-op / sparse-kernel / DSA-specific). Each entry tags its current test
+status: `[gated]` (skipTest gate fires today), `[no test]` (no test attempts
+it; documented in per-method README), or `[gated on X]` (gate fires only on
+hardware/version X).
 
 ---
 
@@ -40,9 +46,13 @@ Within **C**, sub-sections by bug category (layout / speculative / graph-runner 
 RuntimeError: namespace "tl" has no member "wait_wgmma"
 ```
 
-**Root cause**: tilelang JIT generates `wait_wgmma` (a Blackwell WGMMA-sync intrinsic) on SM10.x, but the container's MMA template library is missing it. PTX compilation fails.
+**Root cause**: tilelang JIT generates `wait_wgmma` (a Blackwell WGMMA-sync
+intrinsic) on SM10.x, but the container's MMA template library is missing
+it. PTX compilation fails.
 
-**Gate**: `dsa_impl_capability("tilelang")` in `common/attention_methods/dsa_attention.py` skips on `major >= 10`. Override with `SGLANG_TEST_DSA_TILELANG_FORCE=1` after re-imaging.
+**Gate**: `dsa_impl_capability("tilelang")` in
+`common/attention_methods/dsa_attention.py` skips on `major >= 10`. Override
+with `SGLANG_TEST_DSA_TILELANG_FORCE=1` after re-imaging.
 
 **Fix**: Re-image with an SM10.x-compatible tilelang version.
 
@@ -50,7 +60,9 @@ RuntimeError: namespace "tl" has no member "wait_wgmma"
 
 # B. Hardware-architecture gates (no action needed)
 
-These tests skip cleanly when the running SM does not match the backend's required architecture. The gates are correct as designed. The table is here so that "skipped: ..." results have a quick lookup.
+These tests skip cleanly when the running SM doesn't match the backend's
+required architecture. The gates are correct as designed; the table is here
+so that "skipped: ..." results have a quick lookup.
 
 | Backend | Required SM | Gate location | Error if unguarded |
 |---|---|---|---|
@@ -62,7 +74,10 @@ These tests skip cleanly when the running SM does not match the backend's requir
 | `dsa` `trtllm` impl | exactly SM 10.0 | `dsa_impl_capability("trtllm")` | `Missing TRTLLM-GEN kernel` (compiled for SM10.0) |
 | `fa3` (non-MLA) | SM 80 or SM 90 | `_is_fa3_supported` in `flash_attention_v3.py` | `attention_registry.py:177-180` reject |
 
-**SM10.3 vs SM10.0**: GB300 is SM10.3. Gates that require exactly SM10.0 (dsa trtllm) intentionally skip on GB300 because the kernel binaries in the container are not compiled for sm_103. Flip the gates to `major == 10` (drop the `minor == 0`) once GB300-compiled binaries land.
+**SM10.3 vs SM10.0**: GB300 is SM10.3. Gates that require exactly SM10.0
+(dsa trtllm) intentionally skip on GB300 because the kernel
+binaries in the container aren't compiled for sm_103. Flip the gates to
+`major == 10` (drop the `minor == 0`) once GB300-compiled binaries land.
 
 ---
 
@@ -70,7 +85,11 @@ These tests skip cleanly when the running SM does not match the backend's requir
 
 ## C.1. Layout-handling bugs (gated via `LAYOUT_KNOWN_FAILURES`)
 
-Surfaced by the layout-robustness arc. The default layout for every test is now `shuffled_pages`. The more aggressive `interleaved_pages` and `non_monotonic_extend` are exercised by per-backend `test_layout_robustness_cases` methods that record each backend's failure mode inline as `LAYOUT_KNOWN_FAILURES`. Each entry below `[gated]` and skips cleanly.
+Surfaced by the layout-robustness arc. The default layout for every test
+is now `shuffled_pages`; the more aggressive `interleaved_pages` and
+`non_monotonic_extend` are exercised by per-backend `test_layout_robustness_cases`
+methods that record each backend's failure mode inline as
+`LAYOUT_KNOWN_FAILURES`. Each entry below `[gated]` and skips cleanly.
 
 ### FA dense
 
@@ -94,7 +113,8 @@ Surfaced by the layout-robustness arc. The default layout for every test is now 
 
 ## C.2. Speculative-mode rejects
 
-Mix of `[gated]` (skipTest fires today) and `[no test]` (probed during fixture investigation. No test in the suite).
+Mix of `[gated]` (skipTest fires today) and `[no test]` (probed during
+fixture investigation; no test in the suite).
 
 | Backend | Spec mode/kind | Status | Root cause |
 |---|---|---|---|
@@ -118,7 +138,8 @@ Mix of `[gated]` (skipTest fires today) and `[no test]` (probed during fixture i
 
 ## C.4. Split-op (PCG / BCG) rejects
 
-All four have the adapter helpers wired so the test can be enabled the moment production is fixed. No test method invokes them today.
+All four have the adapter helpers wired so the test can be enabled the
+moment production is fixed; no test method invokes them today.
 
 | Backend | Status | Root cause |
 |---|---|---|
@@ -144,7 +165,10 @@ All four have the adapter helpers wired so the test can be enabled the moment pr
 
 # D. Production-design constraints (intentional, not bugs)
 
-These are documented for context — they make many "natural" test shapes impossible because production rejects the combination at construction time. No action needed. Useful for fixture authors to know what shapes will fail at backend init.
+These are documented for context — they make many "natural" test shapes
+impossible because production rejects the combination at construction time.
+No action needed; just useful for fixture authors to know what shapes will
+fail at backend init.
 
 ## D.1. Backend page-size hard-pins
 

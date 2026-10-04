@@ -1,5 +1,29 @@
 #!/usr/bin/env bash
 # Launch one interactive Codex PR babysitter per tmux window.
+#
+# Usage:
+#   scripts/playground/launch_pr_babysitters.sh PR_NUMBER...
+#
+# Environment variables:
+#   SGLANG_PR_TMUX_SESSION   tmux session name. Default: sglang-prs.
+#   SGLANG_PR_WORKTREE_ROOT  directory for PR worktrees. Default: a sibling
+#                            directory named sglang-pr-babysitters.
+#
+# Examples:
+#   scripts/playground/launch_pr_babysitters.sh 35002 35001 35000
+#   SGLANG_PR_TMUX_SESSION=release-prs \
+#       scripts/playground/launch_pr_babysitters.sh 35002 35001
+#
+# Each babysitter monitors exactly lint.yml and pr-test.yml. The script creates
+# or reuses a clean tracking worktree for every PR, starts the yolo2 Bash alias
+# in a PR-numbered tmux window, and leaves the session detached. Here yolo2 is:
+#
+#   with-proxy codex --dangerously-bypass-approvals-and-sandbox \
+#       --dangerously-enable-internet-mode
+#
+# Attach with:
+#
+#   tmux attach -t sglang-prs
 
 set -euo pipefail
 
@@ -232,6 +256,12 @@ launch_window() {
     local window_id
 
     prompt="$(prompt_for_pr "${pr}" "${worktree}")"
+    # yolo2 expands to:
+    #   with-proxy codex --dangerously-bypass-approvals-and-sandbox
+    #       --dangerously-enable-internet-mode
+    # The GIT_CONFIG_* variables make a plain `git push` update the differently
+    # named upstream PR branch without changing repository or user config.
+    # $1 is intentionally expanded by the inner interactive Bash process.
     # shellcheck disable=SC2016
     printf -v launch_command 'env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=upstream bash -ic %q bash %q' \
         'yolo2 "$1"; exec bash -i' "${prompt}"

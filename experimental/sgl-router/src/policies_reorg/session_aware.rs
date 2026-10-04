@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Bucket-scoped session placement.
+//! Bucket-scoped session placement. Admission rejection preserves the binding
+//! and returns to the bucket loop; it never selects a backup inside the group.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -86,7 +87,9 @@ impl Policy for SessionAwarePolicy {
                 });
             }
 
-            // The nested power-of-policy uses AdmissionLimits::default().
+            // The nested power-of-two policy uses AdmissionLimits::default().
+            // The session owner checks its chosen engine before creating or
+            // replacing a binding.
             let mut pick = self.pick_fallback(engines, request).await?;
             let load = self.engine_load.capture_snapshot(Instant::now());
             self.check(&pick.engine, &load)?;
@@ -97,7 +100,8 @@ impl Policy for SessionAwarePolicy {
 
             let effective = self.store.bind(key, &pick.engine, engines);
             if !Arc::ptr_eq(effective, &pick.engine) {
-                // A racing first assignment wins.
+                // A racing first assignment wins. Check it once, without
+                // rewriting a rejected binding or retrying another engine.
                 self.check(effective, &load)?;
                 pick.reason = "session_primary";
             } else {

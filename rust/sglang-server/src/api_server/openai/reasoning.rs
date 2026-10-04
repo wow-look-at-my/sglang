@@ -1,14 +1,29 @@
 //! Reasoning-content splitting for Chat Completions (`--reasoning-parser`).
+//!
+//! Mirrors the Python frontend (`sglang.srt.parser.reasoning_parser` +
+//! `serving_chat._process_reasoning_stream`): when the
+//! server was launched with `--reasoning-parser <name>` (and the request keeps
+//! the default `separate_reasoning=true`, which the Dynamo request type cannot
+//! express), the model's `<think>`-style markers are stripped out of `content`
+//! into `reasoning_content` — for unary responses and streaming deltas alike.
+//!
+//! The parser lifecycle (lazy build, per-frame incremental split, terminal
+//! flush of *both* buffered columns) lives here so the endpoint cannot drop
+//! the tail half.
 
 use dynamo_parsers::reasoning::{
     ReasoningParser as _, ReasoningParserType, ReasoningParserWrapper,
 };
 
-/// Build the parser the Python `--reasoning-parser` name selects. The names
-/// come from Python's `ReasoningParser.DetectorMap`.
-/// dynamo-parsers registry keys in a few spellings (deepseek-r1 vs
-/// deepseek_r1, kimi_k2 vs kimi_k25, …) and has a few entries that Python
-/// maps onto a forced-reasoning `<think>` parser (qwen3-thinking, minimax).
+/// Build the parser the Python `--reasoning-parser` name selects.
+///
+/// The names come from Python's `ReasoningParser.DetectorMap`, which differs
+/// from the dynamo-parsers registry keys in a few spellings (deepseek-r1 vs
+/// deepseek_r1, kimi_k2 vs kimi_k25, …) and has a few entries that Python maps
+/// onto a forced-reasoning `<think>` parser (qwen3-thinking, minimax). Names
+/// dynamo does not know (hunyuan, inkling, apertus2509, mimo, poolside_v1,
+/// cohere_command4 — all tokenizer-driven parsers) fall through to the
+/// registry, which warns and falls back to the non-forced Basic parser.
 pub(super) fn build_reasoning_parser(server_name: &str) -> ReasoningParserWrapper {
     let name = match server_name {
         // Python DetectorMap spellings that differ from the dynamo registry keys.
@@ -17,7 +32,8 @@ pub(super) fn build_reasoning_parser(server_name: &str) -> ReasoningParserWrappe
         "gpt-oss" => "gpt_oss",
         "nemotron_3" => "nemotron3",
         "interns1" => "qwen3",
-        // Python forces reasoning for these.
+        // Python forces reasoning for these; the R1 parser is the same
+        // `<think>` / `</think>` configuration with `force_reasoning=true`.
         "qwen3-thinking" | "minimax" => "deepseek_r1",
         _ => server_name,
     };
@@ -44,7 +60,14 @@ pub(super) fn split_reasoning_unary(
     (split.reasoning_text, split.normal_text)
 }
 
-/// Stateful reasoning split for one streaming response.
+/// Stateful reasoning split for one streaming response. Mirrors Python's
+/// `reasoning_parser_dict` entries: the parser is built lazily on the first
+/// content delta, each frame is split into `(reasoning, normal)` deltas, and
+/// [`finish`](Self::finish) flushes the parser-buffered tail — *both* columns,
+/// since the buffered text can sit in either one (e.g. MiniMax M3's
+/// implicit-tool-start recovery holds the leading answer text until the think
+/// opener or a tool marker establishes the mode, and releases it as normal
+/// text at EOF).
 #[derive(Default)]
 pub(super) struct ReasoningStreamSplitter {
     name: Option<String>,
@@ -164,7 +187,10 @@ mod tests {
         );
     }
 
-    /// REASONING_P1: MiniMax M3's implicit-tool-start recovery buffers the answer text until a boundary establishes the mode.
+    /// REASONING_P1: MiniMax M3's implicit-tool-start recovery buffers the
+    /// answer text until a boundary establishes the mode; with no opener the
+    /// whole buffer is released as normal text only at `finish`. The chat
+    /// terminal flush must emit the normal half of the tail.
     #[test]
     fn streaming_tail_releases_normal_text_only_at_finish() {
         let mut splitter = ReasoningStreamSplitter::new(Some("minimax_m3"), false);

@@ -80,6 +80,8 @@ fn match_params(key: &Vec<i64>) -> MatchPrefixParams<'_, Vec<i64>> {
     }
 }
 
+// A two-node arena-built path: A[1,2] and B[3,4], both with FULL device
+// values; mamba data is seeded by the caller.
 fn two_node_path(tc: &mut UnifiedTreeCore<Vec<i64>>) -> (NodeIdx_, NodeIdx_) {
     let root = tc.arena.root();
     let a = tc
@@ -524,7 +526,7 @@ fn reinsert_keeps_the_existing_slot_and_flags_the_caller() {
     let leaf = tc
         .match_prefix(&match_params(&vec![1, 2]))
         .best_match_node_id;
-    // The slot stays; the caller frees the unused donated one.
+    // The original slot stays; the caller frees the unused donated one.
     assert!(
         tc.arena
             .node(tc.arena.resolve(leaf).expect("live test node"))
@@ -640,6 +642,7 @@ fn match_reports_the_chunk_aligned_branching_seqlen() {
     let (a, _b) = two_node_path(&mut tc);
     set_mamba_device(&mut tc, a, 7);
     let result = tc.match_prefix(&match_params(&vec![1, 2, 3, 4]));
+    // The walk covers 4 tokens past the mamba anchor; 4 aligns down to 3.
     assert_eq!(result.best_match_node_id, tc.arena.node(a).id);
     assert_eq!(result.mamba_branching_seqlen, Some(3));
     assert_eq!(result.mamba_host_hit_length, 0);
@@ -667,6 +670,7 @@ fn branching_seqlen_uses_the_joint_chunk_and_tree_page_grid() {
     let result = tc.match_prefix(&match_params(&vec![1, 2, 3, 4, 5, 6, 7, 8, 9]));
 
     assert_eq!(result.full_kv_hit_length, 9);
+    // lcm(chunk=2, page=3) is 6; chunk-only alignment would incorrectly yield 8.
     assert_eq!(result.mamba_branching_seqlen, Some(6));
 }
 
@@ -676,6 +680,7 @@ fn short_walks_have_no_branching_seqlen() {
     let (a, _b) = two_node_path(&mut tc);
     set_mamba_device(&mut tc, a, 7);
     let result = tc.match_prefix(&match_params(&vec![1, 2, 3, 4]));
+    // 4 walked tokens align down to zero at chunk 8.
     assert_eq!(result.mamba_branching_seqlen, None);
 }
 
@@ -697,7 +702,8 @@ fn hicache_branching_seqlen_uses_the_full_kv_hit() {
     let (a, _b) = two_node_path(&mut tc);
     set_mamba_device(&mut tc, a, 7);
     let result = tc.match_prefix(&match_params(&vec![1, 2, 3, 4]));
-    // The full walk hit tokens; chunk-3 alignment lands past the 2-token mamba boundary.
+    // The full walk hit 4 tokens; chunk-3 alignment lands past the 2-token
+    // mamba boundary, so the branch point fills even under HiCache.
     assert_eq!(result.full_kv_hit_length, 4);
     assert_eq!(result.mamba_branching_seqlen, Some(3));
 }
@@ -813,7 +819,8 @@ fn device_walk_advances_one_allocator_mutation_per_call() {
     tc.evict_device_start(MAMBA, /* request_cnt = */ 2);
     let (first, step) = tc.evict_device_next_node(MAMBA, &tracker);
     accumulate_step(step, &mut tracker, &mut device_frees, &mut host_frees);
-    // The internal node is a complete step so its free can be reused before the walk hands out another victim.
+    // The internal node is a complete step so its free can be reused before
+    // the walk hands out another victim.
     assert_eq!(first, None);
     assert!(
         !tc.arena
@@ -993,6 +1000,7 @@ fn swa_triggered_cascade_takes_the_mamba_slot() {
     let mut tracker = HashMap::from([(SWA, 0)]);
     let mut device_frees = HashMap::new();
     let mut host_frees = HashMap::new();
+    // The SWA internal tier (1) outranks mamba (0): the cascade takes it.
     tc.cascade_evict_(
         a,
         SWA,
@@ -1032,6 +1040,7 @@ fn mamba_triggered_cascade_spares_the_higher_tiers() {
         &mut host_frees,
         EvictLayer::Device,
     );
+    // FULL (2) and SWA (1) both outrank the mamba trigger (0).
     assert!(tc.arena.has_device_value(a, FULL));
     assert!(tc.arena.has_device_value(a, SWA));
     assert!(device_frees.is_empty());
@@ -1866,7 +1875,8 @@ fn release_after_a_restore_and_relock_keeps_the_other_lock() {
         /* lock_host = */ false,
     );
     assert_eq!(tc.arena.node(a).device_lock_ref(MAMBA), 1);
-    // The tombstone is restored under the held lock (credited to protected) and a second request stacks its own lock.
+    // The tombstone is restored under the held lock (credited to protected)
+    // and a second request stacks its own lock on it.
     tc.set_component_device_value_(a, MAMBA, Tensor::from_slice(&[7i64]));
     let _ = mamba.acquire_component_lock(
         &mut tc,

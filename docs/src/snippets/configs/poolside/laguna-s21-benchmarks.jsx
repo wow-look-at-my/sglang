@@ -1,5 +1,8 @@
 export const benchmarks = [
 
+  // ── H200 (8×H200, tp 8, sglang 0.5.15.post1, random ISL=8192/OSL=1024) ──
+  // tokens_per_sec_per_gpu = (input+output) tok/s/GPU = output_tok_s / 8 * (8192+1024)/1024
+  // TTFT/TPOT are mean values from bench_serving.
 
   {
     match: { hw: "h200", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" },
@@ -9,6 +12,8 @@ export const benchmarks = [
       { workload: { dataset: "random", isl: 8192, osl: 1024, max_concurrency: 1024 },
         ttft_ms: 23742, tpot_ms: 256.8, tokens_per_sec_per_gpu: 5264 },
     ],
+    // BF16 reasons ~2× longer than FP8/INT4 (median 34.8k vs 16.9k tokens);
+    // truncation at max_tokens=64000 invalidates the result. Needs max_tokens ≥ 131072.
     accuracy: { gsm8k_pct: 93.18, aime25_pct: null },
   },
   {
@@ -68,6 +73,10 @@ export const benchmarks = [
     accuracy: { gsm8k_pct: 94.24, aime25_pct: null },
   },
 
+  // ── B300 (8×B300, tp 8, sglang 0.5.15.post1) ──
+  // AIME25 (high-throughput cells): sgl-eval run aime25, 30 problems × 16 repeats,
+  // temp 1.0, top_p 0.95, max_tokens 64000 (BF16: 131072), 128 threads, thinking ON
+  // via enable_thinking-patched sgl-eval. 2026-07-21.
 
   {
     match: { hw: "b300", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" },
@@ -118,6 +127,9 @@ export const benchmarks = [
     accuracy: { gsm8k_pct: 94.69, aime25_pct: null },
   },
 
+  // ── GB300 (4×GB300, tp 4, sglang 0.5.15.post1, random ISL=8192/OSL=1024) ──
+  // tokens_per_sec_per_gpu = output_tok_s / 4 * (8192+1024)/1024
+  // TTFT/TPOT are median values from bench_serving.
 
   {
     match: { hw: "gb300", variant: "default", quant: "bf16", strategy: "high-throughput", nodes: "single" },

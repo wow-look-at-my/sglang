@@ -22,7 +22,9 @@ pub(super) struct LegacySpec {
     pub(super) roles: (String, String),
     pub(super) style: String,
     pub(super) sep: String,
-    /// `None` = Python's `Conversation.sep2` default.
+    /// `None` = Python's `Conversation.sep2` default. Styles that alternate
+    /// seps (`seps[i % 2]`) need it set; Python crashes on `None` there and we
+    /// error deliberately.
     pub(super) sep2: Option<String>,
     /// Python `Conversation.stop_str` (`str | list[str] | None`).
     pub(super) stop_str: Option<OneOrMany<String>>,
@@ -47,7 +49,9 @@ impl Default for LegacySpec {
     }
 }
 
-/// Rust implementation of Python `generate_chat_conv` + `Conversation.get_prompt()`: fold system messages into the system prompt.
+/// Rust implementation of Python `generate_chat_conv` + `Conversation.get_prompt()`:
+/// fold system messages into the system prompt, keep user/assistant messages in
+/// order, always append the assistant opening, then render per `sep_style`.
 #[derive(Clone)]
 pub struct LegacyFormatter {
     pub(super) spec: LegacySpec,
@@ -75,8 +79,10 @@ impl LegacyFormatter {
                                     ChatCompletionRequestUserMessageContentPart::Text(part) => {
                                         text.push_str(&part.text);
                                     }
-                                    // Python will splice media tokens in
-                                    // here.
+                                    // Python would splice media tokens in here;
+                                    // the OpenAI adapter rejects media content
+                                    // upstream, so this is unreachable — error
+                                    // rather than silently drop.
                                     _ => {
                                         return Err(TemplateError::MediaContent { role: "user" });
                                     }
@@ -480,7 +486,10 @@ impl LegacyFormatter {
                     } else {
                         let mut message = content.clone();
                         while message.contains(&spec.audio_token) {
-                            // Python: `audio_token.format(idx=counter)`.
+                            // Python: `audio_token.format(idx=counter)`. A
+                            // token without `{idx}` makes the replace a no-op
+                            // and Python's loop infinite; bail out instead of
+                            // hanging the server.
                             let indexed = spec.audio_token.replace("{idx}", &counter.to_string());
                             if indexed == spec.audio_token {
                                 break;

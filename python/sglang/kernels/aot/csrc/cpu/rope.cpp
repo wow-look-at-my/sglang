@@ -4,6 +4,10 @@
 namespace {
 
 struct RopeParams {
+  // Treat all tensors as [B, S, H, D]
+  //   2D [S, H * D] -> [1, S, H, D]
+  //   3D [S, H, D]  -> [1, S, H, D]
+  //   4D               [B, S, H, D]
   int64_t rotary_dim{0};
   int64_t head_size{0};
   int64_t batches{1}, seqlen{1}, num_heads{1}, num_heads_kv{1};
@@ -261,6 +265,12 @@ void rotary_embedding_kernel_impl(
 
 }  // namespace
 
+// query: [num_tokens, num_heads, head_dim]
+// key:   [num_tokens, num_heads, head_dim]
+// cos:   [num_tokens, head_dim]
+// sin:   [num_tokens, head_dim]
+// Gemma 4's vision tower rotates ndim = 2 head_dim chunks independently, so
+// this is apply_rotary_pos_emb_cpu run once per chunk, in place.
 void apply_multidimensional_rope_cpu(at::Tensor& query, at::Tensor& key, at::Tensor& cos, at::Tensor& sin) {
   CHECK_DIM(3, query);
   const auto input_dtype = query.scalar_type();
@@ -296,8 +306,9 @@ void apply_multidimensional_rope_cpu(at::Tensor& query, at::Tensor& key, at::Ten
   });
 }
 
-// 2D: [num_tokens, num_heads*head_size] inplace 3D: [num_tokens, num_heads,
-// head_size] outplace 4D: [batch_size, seq_len, num_heads, head_size] inplace
+// 2D : [num_tokens, num_heads*head_size] inplace
+// 3D : [num_tokens, num_heads, head_size] outplace
+// 4D : [batch_size, seq_len, num_heads, head_size] inplace
 std::tuple<at::Tensor, at::Tensor> rotary_embedding_cpu(
     at::Tensor& positions,
     at::Tensor& query,
@@ -368,8 +379,10 @@ std::tuple<at::Tensor, at::Tensor> rotary_embedding_cpu(
   return std::make_tuple(query_out, key_out);
 }
 
-// query: [num_tokens, num_heads, head_size] key: [num_tokens, num_heads,
-// head_size] cos: [num_tokens, head_size] sin: [num_tokens, head_size]
+// query: [num_tokens, num_heads, head_size]
+// key: [num_tokens, num_heads, head_size]
+// cos: [num_tokens, head_size]
+// sin: [num_tokens, head_size]
 std::tuple<at::Tensor, at::Tensor>
 apply_rotary_pos_emb_cpu(at::Tensor& query, at::Tensor& key, at::Tensor& cos, at::Tensor& sin) {
   CHECK_DIM(3, query);
@@ -399,10 +412,11 @@ apply_rotary_pos_emb_cpu(at::Tensor& query, at::Tensor& key, at::Tensor& cos, at
   return std::make_tuple(query, key);
 }
 
-// positions: [num_tokens] (text only) or [num_tokens] (T/H/W positions
-// with multimodal inputs) query: [num_tokens, num_heads * head_size] key:
-// [num_tokens, num_kv_heads * head_size] cos_sin_cache:
-// [max_position_embeddings, rotary_dim] mrope_section: [t, h, w]
+// positions: [num_tokens] (text only) or [3, num_tokens] (T/H/W positions with multimodal inputs)
+// query: [num_tokens, num_heads * head_size]
+// key: [num_tokens, num_kv_heads * head_size]
+// cos_sin_cache: [max_position_embeddings, rotary_dim]
+// mrope_section: [t, h, w]
 void multimodal_rotary_embedding_cpu(
     at::Tensor& positions,
     at::Tensor& query,

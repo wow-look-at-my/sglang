@@ -1,4 +1,6 @@
-//! Self-contained LRU order over `NodeIdx_`s: MRU at the head side, LRU at the tail side.
+//! Self-contained LRU order over `NodeIdx_`s: MRU at the head side, LRU at the
+//! tail side. Node semantics stay with callers through predicates; the reset
+//! walks read parent links from the arena.
 
 use std::collections::HashSet;
 
@@ -7,7 +9,8 @@ use crate::node::Node;
 use crate::node::NodeArena;
 use crate::node::{NodeIdx_, ValueSlotIdx};
 
-/// Index into the cell table; distinct from `NodeIdx_` so shifted and unshifted ids cannot be mixed.
+/// Index into the cell table; distinct from `NodeIdx_` so shifted and unshifted
+/// ids cannot be mixed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 struct CellId(usize);
 
@@ -27,10 +30,12 @@ struct Cell {
 }
 
 /// LRU list over `NodeIdx_`s, with head/tail sentinel cells keeping the link
-/// operations branchless.
+/// operations branchless. External APIs take `NodeIdx_`s; internal (`_`-suffixed)
+/// interfaces work on `CellId`s.
 pub struct UnifiedLRUList {
     /// The (component × tier) value slot whose lock gates this list's walkers.
     slot: ValueSlotIdx,
+    /// Cell table indexed by `NodeIdx_ + OFFSET`; cells 0/1 are the sentinels.
     cells: Vec<Cell>,
     /// Number of member cells, excluding the sentinels.
     len: usize,
@@ -41,7 +46,8 @@ impl UnifiedLRUList {
         UnifiedLRUList {
             slot,
             cells: vec![
-                // Sentinels link to each other and stay permanently flagged so the gated cell accessors admit them.
+                // Sentinels link to each other and stay permanently flagged so
+                // the gated cell accessors admit them.
                 Cell {
                     prev: HEAD,
                     next: TAIL,
@@ -302,6 +308,8 @@ impl UnifiedLRUList {
     }
 
     /// Panics if the links, membership flags, or member counter are inconsistent.
+    /// Reads cells raw: it inspects possibly-inconsistent state that the gated
+    /// accessors would reject.
     #[cfg(test)]
     pub fn validate(&self) {
         let mut count = 0;

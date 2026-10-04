@@ -333,8 +333,8 @@ mod pd_routing_unit_tests {
 
     #[test]
     fn test_bootstrap_injection_simulation() {
-        // Since we can't test the actual inject_bootstrap_fields function
-        // here (it's private in the router module).
+        // Since we can't test the actual inject_bootstrap_fields function here
+        // (it's private in the router module), we'll test the expected behavior
 
         let mut single_json = json!({
             "text": "Hello world",
@@ -676,7 +676,7 @@ mod pd_routing_unit_tests {
         use smg::core::{BasicWorkerBuilder, Worker, WorkerType};
 
         let mut benchmark_request = json!({
-            "input_ids": vec![vec![1, 2, 3, 4]; 16],
+            "input_ids": vec![vec![1, 2, 3, 4]; 16], // Batch size 16
             "sampling_params": {
                 "temperature": 0.0,
                 "max_new_tokens": 8,
@@ -782,6 +782,7 @@ mod pd_routing_unit_tests {
             .count();
         let total_count = implemented_endpoints.len();
 
+        // We've implemented 10 out of 11 endpoints (register is not needed for Phase 1/2)
         assert_eq!(implemented_count, 10);
         assert_eq!(total_count, 11);
 
@@ -879,9 +880,10 @@ mod pd_routing_unit_tests {
         ];
 
         for (batch_size, input_len, _output_len) in test_cases {
-            // Estimate payload size (rough calculation) Each token is a few bytes (i32), plus JSON overhead
-            let tokens_size = batch_size * input_len * 4;
-            let json_overhead = batch_size * 100; // Many bytes overhead per request
+            // Estimate payload size (rough calculation)
+            // Each token is ~4 bytes (i32), plus JSON overhead
+            let tokens_size = batch_size * input_len * 4; // 4 bytes per token
+            let json_overhead = batch_size * 100; // ~100 bytes overhead per request
             let total_size = tokens_size + json_overhead;
 
             println!(
@@ -891,6 +893,7 @@ mod pd_routing_unit_tests {
                 total_size / (1024 * 1024)
             );
 
+            // For the benchmark case (8192, 4096), this should be ~134 MB
             if batch_size == 8192 && input_len == 4096 {
                 assert!(
                     total_size > 100 * 1024 * 1024,

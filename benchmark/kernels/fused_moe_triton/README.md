@@ -149,7 +149,7 @@ python benchmark/kernels/fused_moe_triton/tuning_fused_moe_triton.py \
 
 After tuning, configuration files will be generated:
 - **Standard tuning**: `E=64,N=640,device_name=NVIDIA_GeForce_RTX_4090,dtype=fp8_w8a8.json`
-- **Separate kernel tuning**: Files for up/down kernels with TMA optimization flags
+- **Separate kernel tuning**: Two files for up/down kernels with TMA optimization flags
 
 Move these files to `sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_version/` directory to use them in SGLang.
 

@@ -111,7 +111,8 @@ export const Gemma4Deployment = () => {
       '26b-a4b': 'google/gemma-4-26B-A4B-it',
     };
 
-    // QAT releases keep bf16 weights (q4_0-unquantized).
+    // QAT releases keep bf16 weights (q4_0-unquantized), so the only change is
+    // the model-path suffix; TP/memory requirements match the standard checkpoints.
     const qatSuffix = values.checkpoint === 'qat' ? '-qat-q4_0-unquantized' : '';
     const modelPath = `${modelNames[modelSize]}${qatSuffix}`;
 

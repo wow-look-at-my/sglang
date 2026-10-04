@@ -1,4 +1,7 @@
 //! Test configuration builders to reduce duplication across tests
+//!
+//! Provides pre-configured RouterConfig and MockWorkerConfig builders
+//! for common test scenarios.
 
 use smg::config::{
     CircuitBreakerConfig, ManualAssignmentMode, PolicyConfig, RetryConfig, RouterConfig,
@@ -75,7 +78,7 @@ impl TestRouterConfig {
             .build_unchecked()
     }
 
-    /// Create a power-of-config
+    /// Create a power-of-two config
     pub fn power_of_two(port: u16) -> RouterConfig {
         RouterConfig::builder()
             .regular_mode(vec![])

@@ -1,4 +1,10 @@
 //! Model type definitions using bitflags for endpoint support.
+//!
+//! This module defines [`ModelType`] using bitflags to represent which endpoints
+//! a model can support. This allows combining capabilities like
+//! `ModelType::CHAT | ModelType::COMPLETIONS`.
+//!
+//! Inspired by Dynamo's model_type.rs implementation.
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
@@ -246,6 +252,8 @@ impl<'de> Deserialize<'de> for ModelType {
 }
 
 /// Endpoint types for routing decisions.
+///
+/// This enum represents the different API endpoints that can be routed to workers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Endpoint {

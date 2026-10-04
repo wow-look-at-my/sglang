@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Builds bounded cache-aware candidates from ingress Indexer results.
@@ -39,6 +39,9 @@ impl CacheAwarePolicy {
             return None;
         }
 
+        // The #33370 indexer contract routes on the worker address (matched
+        // byte-for-byte against registered worker URLs); worker_id is for
+        // logs only.
         let by_url: HashMap<&str, &Arc<Worker>> = workers
             .iter()
             .map(|worker| (worker.url.as_str(), worker))
@@ -192,8 +195,10 @@ impl Policy for CacheAwarePolicy {
     }
 }
 
-/// Caps an indexer-supplied matched-block count at the blocks the query asked
-/// about: a query cannot match more blocks than it contains.
+/// Caps an indexer-supplied matched-block count at the blocks the query
+/// actually asked about: a query cannot match more blocks than it contains.
+/// Both the token estimate and the diverted-overlap histogram read the capped
+/// value, so the clamp lives here rather than at each use.
 fn cap_matched_prefix_blocks(query_blocks: usize, matched_prefix_blocks: u32) -> u32 {
     matched_prefix_blocks.min(u32::try_from(query_blocks).unwrap_or(u32::MAX))
 }
@@ -222,7 +227,8 @@ mod tests {
 
     #[test]
     fn matched_block_cap_is_shared_by_the_estimate_and_the_candidate() {
-        // One clamp, readers: the histogram must never see a block count the token estimate would have thrown away.
+        // One clamp, two readers: the histogram must never see a block count
+        // the token estimate would have thrown away.
         assert_eq!(cap_matched_prefix_blocks(8, 99), 8);
         assert_eq!(cap_matched_prefix_blocks(8, 3), 3);
         assert_eq!(cap_matched_prefix_blocks(0, 3), 0);

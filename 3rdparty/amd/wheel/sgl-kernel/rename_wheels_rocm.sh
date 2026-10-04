@@ -3,6 +3,9 @@ set -ex
 
 WHEEL_DIR="dist"
 
+# ROCm version for the wheel's local version tag (e.g. 720 -> +rocm720). It is
+# read from the /opt/rocm-<version> tree when the caller does not name one; the
+# pip-installed ROCm 10 SDK has no such tree, so that flavor passes it in.
 ROCM_WHEEL_VERSION="${1:-}"
 
 wheel_files=($WHEEL_DIR/*.whl)

@@ -1,4 +1,6 @@
-/***************************************************************************** */
+/******************************************************************************
+ * Copyright (c) 2024, Tri Dao.
+ ******************************************************************************/
 
 #pragma once
 
@@ -104,6 +106,11 @@ struct Flash_fwd_kernel_traits : public Base {
 
   static constexpr int kGmemElemsPerLoad = sizeof(cute::uint128_t) / sizeof(Element);
   static_assert(kHeadDim % kGmemElemsPerLoad == 0, "kHeadDim must be a multiple of kGmemElemsPerLoad");
+  // Using kBlockKSmem here is 6-10% faster than kBlockKGmem for d=128 because of bank conflicts.
+  // For example, for d=128, smem is split into 2 "pages", each page takes care of columns
+  // 0-63 and 64-127. If we have 16 threads per row for gmem read, when we write to smem,
+  // thread 0 - 7 will write to the first page and thread 8 - 15 will write to the second page,
+  // to the same banks.
   static constexpr int kGmemThreadsPerRow = kBlockKSmem / kGmemElemsPerLoad;
   static_assert(kNThreads % kGmemThreadsPerRow == 0, "kNThreads must be a multiple of kGmemThreadsPerRow");
   using GmemLayoutAtom =
@@ -118,33 +125,33 @@ struct Flash_fwd_kernel_traits : public Base {
   using GmemTiledCopyQKV = decltype(make_tiled_copy(
       Copy_Atom<Gmem_copy_struct, Element>{},
       GmemLayoutAtom{},
-      Layout<Shape<_1, _8>>{}));  // Val layout, vals per read
+      Layout<Shape<_1, _8>>{}));  // Val layout, 8 vals per read
   using GmemTiledCopyO = decltype(make_tiled_copy(
       Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, Element>{},
       GmemLayoutAtom{},
-      Layout<Shape<_1, _8>>{}));  // Val layout, vals per store
+      Layout<Shape<_1, _8>>{}));  // Val layout, 8 vals per store
 
   using GmemLayoutAtomOaccum = std::conditional_t<
       kBlockKSmem == 32,
       Layout<
-          Shape<_16, _8>,  // Thread layout, threads per row
+          Shape<_16, _8>,  // Thread layout, 8 threads per row
           Stride<_8, _1>>,
       Layout<
-          Shape<_8, _16>,  // Thread layout, threads per row
+          Shape<_8, _16>,  // Thread layout, 16 threads per row
           Stride<_16, _1>>>;
   using GmemTiledCopyOaccum = decltype(make_tiled_copy(
       Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, ElementAccum>{},
       GmemLayoutAtomOaccum{},
-      Layout<Shape<_1, _4>>{}));  // Val layout, vals per store
+      Layout<Shape<_1, _4>>{}));  // Val layout, 4 vals per store
   using GmemLayoutAtomRotcossin = GmemLayoutAtom;
   using GmemTiledCopyRotcossin = decltype(make_tiled_copy(
       Copy_Atom<UniversalCopy<uint64_t>, Element>{},
       GmemLayoutAtomRotcossin{},
-      Layout<Shape<_1, _4>>{}));  // Val layout, vals per load
+      Layout<Shape<_1, _4>>{}));  // Val layout, 4 vals per load
   using GmemTiledCopyRotcossinCont = decltype(make_tiled_copy(
       Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, Element>{},
       GmemLayoutAtomRotcossin{},
-      Layout<Shape<_1, _8>>{}));  // Val layout, vals per load
+      Layout<Shape<_1, _8>>{}));  // Val layout, 8 vals per load
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -7,6 +7,9 @@ use wfaas::{StepExecutor, StepResult, WorkflowContext, WorkflowError, WorkflowRe
 use crate::core::steps::workflow_data::WorkerRemovalWorkflowData;
 
 /// Step to update cache-aware policies for remaining workers.
+///
+/// After workers are removed, this step re-initializes cache-aware policies
+/// for the affected models using the remaining workers.
 pub struct UpdateRemainingPoliciesStep;
 
 #[async_trait]

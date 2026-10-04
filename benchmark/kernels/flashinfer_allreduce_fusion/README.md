@@ -1,8 +1,8 @@
 # FlashInfer Fused AllReduce + RMSNorm Benchmark
 
-This benchmark script is modified from the [original implementation](https://github.com/vllm-project/vllm/blob/237e1fb887c7f5a579420fa0295097f24b006594/benchmarks/kernels/benchmark_fused_collective.py) by the vLLM community. It aims to compare the performance differences between FlashInfer fused operators in SGLang (trtllm_allreduce_fusion: AllReduce + Residual Add + RMSNorm + optional quantization) and conventional implementations (standard `tensor_model_parallel_all_reduce` + separate RMSNorm/quantization). Specifically, this script tests the timing performance of multiple implementation paths: 1) Standard AllReduce and RMSNorm executed separately. 2) FlashInfer's fused operator combining AllReduce, Residual Add, RMSNorm, and optional quantization operations.
+This benchmark script is modified from the [original implementation](https://github.com/vllm-project/vllm/blob/237e1fb887c7f5a579420fa0295097f24b006594/benchmarks/kernels/benchmark_fused_collective.py) by the vLLM community. It aims to compare the performance differences between FlashInfer fused operators in SGLang (trtllm_allreduce_fusion: AllReduce + Residual Add + RMSNorm + optional quantization) and conventional implementations (standard `tensor_model_parallel_all_reduce` + separate RMSNorm/quantization). Specifically, this script tests the timing performance of two implementation paths: 1) Standard AllReduce and RMSNorm executed separately; 2) FlashInfer's fused operator combining AllReduce, Residual Add, RMSNorm, and optional quantization operations.
 
-This benchmark script helps us tune the ipc workspace size of the `flashinfer_allreduce_residual_rmsnorm` operator in SGLang. Prepare for applications with FP8/FP4 quantized fused operators.
+This benchmark script helps us tune the ipc workspace size of the `flashinfer_allreduce_residual_rmsnorm` operator in SGLang and prepare for applications with FP8/FP4 quantized fused operators.
 
 Script path: `benchmark/kernels/flashinfer_allreduce_fusion/benchmark_fused_collective.py`
 
@@ -67,7 +67,7 @@ benchmark/kernels/flashinfer_allreduce_fusion/benchmark_fused_collective.py \
   - `--disable-oneshot`: Disable oneshot mode (default enables oneshot and tests twoshot simultaneously)
 - Runtime configuration:
   - `--warmup`: Warmup count before graph capture and before graph replay (default 5)
-  - `--trials`: Benchmark iteration count (default 20. Internally each `graph.replay()` will batch replay multiple times)
+  - `--trials`: Benchmark iteration count (default 20; internally each `graph.replay()` will batch replay multiple times)
   - `--output-file`: Save results as Markdown file (only rank0 takes effect)
 
 ## Output Example
@@ -94,7 +94,7 @@ If `--output-file` is specified, all configurations will be summarized in Markdo
 - World size: Requires `WORLD_SIZE > 1` to perform communication operator benchmarks. Otherwise, the script will error and prompt.
 - FlashInfer:
   - If not installed or interfaces are missing, the script will only run standard paths and provide prompts in the logs.
-  - The fused operator internally uses "oneshot"/"twoshot" trigger methods. Oneshot is enabled by default and twoshot is tested simultaneously.
+  - The fused operator internally uses "oneshot"/"twoshot" two trigger methods; oneshot is enabled by default and twoshot is tested simultaneously.
 - FP8/FP4:
   - FP8 uses sglang's FP8 tools and dtype, with underlying platform selection of `e4m3`/`e4m3fnuz` etc.
   - FP4 uses sglang's `fp4_quantize` (FlashInfer-backed), requiring corresponding platform support.

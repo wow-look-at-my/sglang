@@ -1,7 +1,21 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! In-flight HTTP accounting, for the termination drain to report on.
+//!
+//! [`RouterInflightLoadRegistry`](crate::state::load_monitor::router_inflight_load::RouterInflightLoadRegistry)
+//! counts *proxied* requests — what the workers are busy with. Axum's graceful
+//! shutdown waits on something different and larger: every HTTP exchange still
+//! open on an accepted connection, on any route, until its response body has
+//! finished streaming. The two diverge exactly where the drain gets stuck — a
+//! stalled SSE consumer, a held `/metrics` scrape, a request on a non-proxied
+//! route — so a heartbeat reporting only the first says "0 in flight" about a
+//! pod that is minutes from being SIGKILLed with work outstanding.
+//!
+//! The count is taken at the edge middleware and released when the response
+//! **body** completes, not when the handler returns: for a streaming
+//! completion the handler returns as soon as the headers are ready, which is
+//! the beginning of the wait, not the end of it.
 
 use axum::body::{Body, Bytes, HttpBody};
 use http_body::{Frame, SizeHint};
@@ -21,7 +35,9 @@ impl InflightHttp {
         Arc::new(Self::default())
     }
 
-    /// Exchanges whose response body has not finished.
+    /// Exchanges whose response body has not finished. Relaxed throughout:
+    /// this is a diagnostic gauge, and a reader racing an increment sees the
+    /// count one tick later, never a torn value.
     pub fn count(&self) -> usize {
         self.open.load(Ordering::Relaxed)
     }
@@ -33,7 +49,9 @@ impl InflightHttp {
     }
 }
 
-/// Releases its exchange on drop — including when the request future is cancelled (client gone before the response was built).
+/// Releases its exchange on drop — including when the request future is
+/// cancelled (client gone before the response was built), which is why this is
+/// a guard and not a pair of explicit increment/decrement calls.
 pub struct InflightGuard(Arc<InflightHttp>);
 
 impl Drop for InflightGuard {
@@ -66,7 +84,8 @@ impl HttpBody for TrackedBody {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        // `Body` and `InflightGuard` are both `Unpin`.
+        // `Body` and `InflightGuard` are both `Unpin`, so the projection is a
+        // plain field borrow rather than anything `pin-project` is needed for.
         Pin::new(&mut self.get_mut().inner).poll_frame(cx)
     }
 
@@ -98,7 +117,10 @@ mod tests {
         assert_eq!(counter.count(), 0);
     }
 
-    /// The property the whole module exists for: a response whose headers are ready is NOT finished.
+    /// The property the whole module exists for: a response whose headers are
+    /// ready is NOT finished. A counter released when the handler returns
+    /// reports 0 while a streaming completion is still being written — which is
+    /// precisely the drain the heartbeat is supposed to explain.
     #[tokio::test]
     async fn a_streaming_body_stays_counted_until_its_last_frame() {
         let counter = InflightHttp::new();
@@ -127,7 +149,10 @@ mod tests {
         assert_eq!(counter.count(), 0, "a finished body must release the count");
     }
 
-    /// A client that disconnects mid-stream drops the body rather than draining it.
+    /// A client that disconnects mid-stream drops the body rather than
+    /// draining it. That must release the count too, or the gauge ratchets up
+    /// over the life of the process and the drain heartbeat reads permanently
+    /// busy.
     #[tokio::test]
     async fn an_abandoned_body_releases_the_count() {
         let counter = InflightHttp::new();

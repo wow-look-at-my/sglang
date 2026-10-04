@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Quick pprof analysis script Collects 30-second CPU profile and immediately displays top results
+# Quick pprof analysis script
+# Collects 30-second CPU profile and immediately displays top results
 
 set -e
 

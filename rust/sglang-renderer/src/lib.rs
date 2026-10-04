@@ -1,4 +1,11 @@
 //! Reusable request preprocessing for SGLang.
+//!
+//! The core renders normalized chat requests, lowers textual completions,
+//! tokenizes prompts, and produces the token-in contract consumed by SGLang.
+//! OpenAI operations and generation decoding are independent of transport.
+//! The optional `http` feature adds HTTP adapters, the SGLang HTTP engine client,
+//! and the process runtime. Protocol adapters own middleware and framing;
+//! shared services own request preparation, submission policy, and decoding.
 
 mod config;
 // Shared serving code is compiled without HTTP; production adapters are optional.

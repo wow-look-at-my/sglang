@@ -9,6 +9,17 @@ export const MiMoV25Deployment = () => {
   //     GB300 → tp=8,  2 nodes,     FP8 (Blackwell verified: fa4 + flashinfer_trtllm + NCCL_MNNVL)
   //   V2.5 (310B / 15B active) — multimodal. Checkpoint is TP=4 interleaved,
   //   so attention-TP per DP group must be 4; effective parallelism = TP/DP = 4.
+  //     H200  → tp=8, dp=2, single-node, FP8 (verified)
+  //     H100  → tp=8, dp=2, single-node, FP8
+  //     B200  → tp=4, dp=1, single-node, FP8 (Blackwell: vision fa4)
+  //     GB300 → tp=4, dp=1, single-node, FP8 (Blackwell: vision fa4)
+  //
+  //   Optional toggles:
+  //     EAGLE MTP — adds --speculative-* flags.
+  //     DeepEP    — Hopper only (Blackwell uses flashinfer_trtllm). Adds
+  //                 --moe-a2a-backend deepep + --moe-dense-tp-size 1
+  //                 (and --ep on Pro) + SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=256.
+  //                 Requires `pip install deep_ep`.
 
   const options = {
     modelVariant: {
@@ -125,9 +136,12 @@ export const MiMoV25Deployment = () => {
     const blackwell = spec ? spec.blackwell : false;
     const jax = spec ? spec.jax : false;
     const c = {};
-    // When the spec carries dp>1 (Pro/Hopper tp=16, base tp=8) DP-attention
-    // with `--dp = tp/factor` is required; without it a bare `--tp` gives
-    // attn_tp = tp != factor and the loader rejects the checkpoint.
+    // Both checkpoints are TP-interleaved (Pro: 8, base: 4), so attention-TP per
+    // DP group must equal that factor. When the spec carries dp>1 (Pro/Hopper
+    // tp=16, base tp=8) DP-attention with `--dp = tp/factor` is required; without
+    // it a bare `--tp` gives attn_tp = tp != factor and the loader rejects the
+    // checkpoint. When no dp>1 (Pro/Blackwell tp=8, base tp=4) it's a single
+    // attention group and DP-attention must stay off.
     if (spec && !jax) {
       const factor = isPro ? 8 : 4;
       if (spec.dp > 1) {
@@ -137,11 +151,14 @@ export const MiMoV25Deployment = () => {
       }
     }
     if (blackwell) {
-      // DeepEP upstream targets Ampere/Hopper PTX.
+      // DeepEP upstream targets Ampere/Hopper PTX; only experimental paths exist
+      // for sm_100 in sglang and the verified Blackwell stack uses flashinfer_trtllm.
       c.deepep = { force: "disabled", reason: "Blackwell uses flashinfer_trtllm; DeepEP is Hopper / Ampere only." };
     }
     if (jax) {
-      // sgl-jax stack: only V2.5-Pro is supported on TPU today.
+      // sgl-jax stack: only V2.5-Pro is supported on TPU today; speculative
+      // decoding and the DeepEP CUDA backend do not apply to the JAX runtime.
+      // EP is always on (both verified launch commands set --ep-size = --tp-size).
       c.modelVariant = { force: "pro", reason: "sgl-jax TPU runtime only supports MiMo-V2.5-Pro today." };
       c.eagleMtp = { force: "disabled", reason: "EAGLE MTP is not supported on the sgl-jax TPU runtime." };
       c.deepep = { force: "disabled", reason: "DeepEP is a CUDA-only backend; sgl-jax uses the fused Pallas MoE kernel." };
@@ -153,7 +170,8 @@ export const MiMoV25Deployment = () => {
   const resolveItems = (option, constraints) => {
     const c = constraints[option.name];
     if (!c) return option.items;
-    // Gray out every item that doesn't match the forced choice.
+    // Gray out every item that doesn't match the forced choice. Works for both
+    // binary (enabled/disabled) toggles and N-way options like modelVariant.
     return option.items.map((item) =>
       item.id !== c.force ? { ...item, disabled: true, disabledReason: c.reason } : item,
     );
@@ -218,6 +236,15 @@ export const MiMoV25Deployment = () => {
 
     // ---------------- sgl-jax (TPU) branch ----------------
     if (jax) {
+      // Recipe sources:
+      //   v7x: tp=ep=32, dp=4, omits --attention-backend, mem-frac 0.95, swa 0.25
+      //   v6e: tp=ep=64, dp=8, --attention-backend fa,    mem-frac 0.92, swa 0.15
+      //
+      // sgl-jax conventions:
+      //   - `--tp-size` is always the total JAX device count; per-DP TP is
+      //     derived automatically as tp/dp.
+      //   - No `--enable-dp-attention` flag — DP attention is the default
+      //     (FFN layers auto-pick EP-split for MoE, attn-TP-split for dense).
       const isV7x = hardware === "tpu-v7x";
       const useEp = expertParallelism === "enabled";
       const useDpAttn = dpAttention === "enabled";
@@ -256,12 +283,16 @@ export const MiMoV25Deployment = () => {
       return prependMultiNodeNote(cmd, nnodes);
     }
 
-    // ---------------- CUDA (sglang serve) branch ---------------- Toggles.
+    // ---------------- CUDA (sglang serve) branch ----------------
+    // Toggles. EAGLE MTP / EP / DeepEP / DP-attn are gated by hardware + variant
+    // through computeConstraints; here we just read the (already-snapped) value.
     const useMtp = eagleMtp === "enabled";
     const useDeepep = !blackwell && deepep === "enabled";
     const useEp = isPro && !blackwell && expertParallelism === "enabled";
     const useDpAttn = dpAttention === "enabled";
-    // dp size = required DP-attention degree from the spec (tp/factor), for both variants.
+    // dp size = required DP-attention degree from the spec (tp/factor), for both
+    // variants. Only read when useDpAttn is on, which computeConstraints forces
+    // exactly for the specs that carry dp>1 (Pro/Hopper tp=16 → 2, base tp=8 → 2).
     const dpSize = spec.dp;
 
     // ---- env (kept inline before `sglang serve`, matching the verified launch style) ----
@@ -319,6 +350,7 @@ export const MiMoV25Deployment = () => {
       }
     } else {
       if (blackwell) {
+        // fa4 is required, not tuning: trtllm_mha rejects MiMoV2's 192/128 KV.
         flags.push("  --attention-backend fa4");
         flags.push("  --mm-attention-backend fa4");
       }

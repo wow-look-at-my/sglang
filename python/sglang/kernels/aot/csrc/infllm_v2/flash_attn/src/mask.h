@@ -1,4 +1,6 @@
-/***************************************************************************** */
+/******************************************************************************
+ * Copyright (c) 2024, Tri Dao.
+ ******************************************************************************/
 
 #pragma once
 
@@ -11,7 +13,7 @@ using namespace cute;
 template <typename Engine, typename Layout>
 __forceinline__ __device__ void
 apply_mask(Tensor<Engine, Layout>& tensor, const int max_seqlen_k, const int col_idx_offset_ = 0) {
-  // tensor has shape (nrow=(MMA_M), ncol=(MMA_N))
+  // tensor has shape (nrow=(2, MMA_M), ncol=(2, MMA_N))
   static_assert(Layout::rank == 2, "Only support 2D Tensor");
   const int lane_id = threadIdx.x % 32;
   const int col_idx_offset = col_idx_offset_ + (lane_id % 4) * 2;
@@ -43,7 +45,7 @@ __forceinline__ __device__ void apply_mask_local(
     const int window_size_left,
     const int window_size_right,
     const int m_block_dim = 1) {
-  // tensor has shape (nrow=(MMA_M), ncol=(MMA_N))
+  // tensor has shape (nrow=(2, MMA_M), ncol=(2, MMA_N))
   static_assert(Layout::rank == 2, "Only support 2D Tensor");
   const int lane_id = threadIdx.x % 32;
   const int col_idx_offset = col_idx_offset_ + (lane_id % 4) * 2;
@@ -102,7 +104,7 @@ __forceinline__ __device__ void apply_mask_causal_w_idx(
     const int col_idx_offset_,
     const int max_seqlen_k,
     const int row_idx_offset) {
-  // tensor has shape (nrow=(MMA_M), ncol=(MMA_N))
+  // tensor has shape (nrow=(2, MMA_M), ncol=(2, MMA_N))
   static_assert(Layout0::rank == 2, "Only support 2D Tensor");
   static_assert(Layout1::rank == 2, "Only support 2D Tensor");
   CUTE_STATIC_ASSERT_V(size<0>(tensor) == size<0>(idx_rowcol));
@@ -156,7 +158,7 @@ struct Mask {
     // if (cute::thread0()) { printf("Has_alibi = %d, Causal_mask=%d, Is_local=%d, Is_even_MN = %d, Need_masking =
     // %d\n", Has_alibi, Causal_mask, Is_local, Is_even_MN, Need_masking); }
     if constexpr (Need_masking) {
-      // Reshape tensor_ from (MMA=4, MMA_M, MMA_N) to (nrow=(MMA_M), ncol=(MMA_N))
+      // Reshape tensor_ from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
       Tensor tensor = make_tensor(tensor_.data(), flash::convert_layout_acc_rowcol(tensor_.layout()));
       // Do we need both row and column indices, or just column incides?
       static constexpr bool Col_idx_only = !(Has_alibi && !Is_causal) && !Is_local && !Causal_mask;
@@ -251,7 +253,7 @@ struct Mask {
     // if (cute::thread0()) { printf("Has_alibi = %d, Causal_mask=%d, Is_local=%d, Is_even_MN = %d, Need_masking =
     // %d\n", Has_alibi, Causal_mask, Is_local, Is_even_MN, Need_masking); }
     if constexpr (Need_masking) {
-      // Reshape tensor_ from (MMA=4, MMA_M, MMA_N) to (nrow=(MMA_M), ncol=(MMA_N))
+      // Reshape tensor_ from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
       Tensor tensor = make_tensor(tensor_.data(), flash::convert_layout_acc_rowcol(tensor_.layout()));
       // Do we need both row and column indices, or just column incides?
       static constexpr bool Col_idx_only = !(Has_alibi && !Is_causal) && !Is_local && !Causal_mask;
@@ -299,6 +301,8 @@ struct Mask {
 
             const int col_idx_limit_left = std::max(0, (orig_row_idx - stride + 1) / stride - window_size_left);
             const int col_idx_limit_right = std::min(_max_seqlen_k, (offset_row_idx + window_size_right));
+            // const int col_idx_limit_right = std::min(max_seqlen_k, (orig_row_idx - stride + 1) / stride +
+            // window_size_right);
 
             // if (cute::thread0()) {
             // if (stride == 64) {

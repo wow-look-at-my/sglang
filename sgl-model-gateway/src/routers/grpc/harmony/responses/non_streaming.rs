@@ -39,8 +39,10 @@ use crate::{
 
 /// Execute Harmony Responses API request with multi-turn MCP tool support
 ///
-/// Execute request through full pipeline
-/// If tool calls found:
+/// This function orchestrates the multi-turn conversation flow:
+/// 1. Execute request through full pipeline
+/// 2. Check for tool calls in commentary channel
+/// 3. If tool calls found:
 ///    - Execute MCP tools
 ///    - Build next request with tool results
 ///    - Repeat from step 1 (full pipeline re-execution)
@@ -249,6 +251,10 @@ async fn execute_with_mcp_loop(
                         "Function tool calls present - exiting MCP loop and returning to caller"
                     );
 
+                    // Build response that includes:
+                    // 1. Reasoning/message from this iteration
+                    // 2. MCP tools as completed (with output) - these were executed
+                    // 3. Function tools as completed (without output) - need caller execution
                     let mut response = build_tool_response(
                         mcp_tool_calls,
                         mcp_results,
@@ -281,6 +287,7 @@ async fn execute_with_mcp_loop(
                 )
                 .map_err(|e| *e)?;
 
+                // Continue loop - next iteration will select workers and execute
             }
             ResponsesIterationResult::Completed {
                 mut response,

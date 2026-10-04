@@ -1,4 +1,8 @@
-//! Parser module for function calls and reasoning extraction This module provides parsing operations for model output, including.
+//! Parser module for function calls and reasoning extraction
+//!
+//! This module provides parsing operations for model output, including:
+//! - Function call extraction from text
+//! - Reasoning separation from normal text
 
 mod handlers;
 

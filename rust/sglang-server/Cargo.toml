@@ -14,7 +14,7 @@ debug = false
 [lib]
 name = "sglang_server"
 # cdylib: the pyo3 module imported by the (embedded) Python scheduler process.
-# rlib: so optional standalone bins / integration tests can link the core.
+# rlib:   so optional standalone bins / integration tests can link the core.
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

@@ -1,20 +1,34 @@
-/*All rights reserved. Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer. Redistributions in binary
- * form must reproduce the above copyright notice, this list of conditions and the
- * following disclaimer in the documentation and/or other materials provided with the
- * distribution. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from this software
- * without specific prior written permission. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT
- * NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
- * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * ************************************************************************************** */
+/*****************************************************************************************
+ * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ ****************************************************************************************/
 #include "flash_attn.h"
 
 #include "common.h"
@@ -76,13 +90,16 @@ void flash_attn_kernel_impl(
     // Btmp: [BLOCK_N, max(head_size, head_size_v)]
     scalar_t* __restrict__ Btmp = reinterpret_cast<scalar_t*>(v_prime + BLOCK_M * head_size_v);
 
-    // init Btmp and Btmp2 once for each thread to prevent NaN
+    // init Btmp and Btmp2 just once for each thread to prevent NaN
     fill_stub(Btmp, 0.f, BLOCK_N * ldb_tmp);
 
     alignas(64) float s_prime[BLOCK_M];
     alignas(64) float m_prime[BLOCK_M];
 
     for (int i = begin; i < end; ++i) {
+      // [Note] use int64_t to avoid overflow
+      // For large inputs, for example bs = 4096, seqlen_q = 4097, m = 0, q_strideM = 128:
+      // The index calculated below: (seq_q_start_loc + m) * q_strideM = 4096 * 4097 * 128 will overflow int
       int64_t seq_q_start_loc = bs * seqlen_q;
       int64_t seq_k_start_loc = bs * seqlen_k;
 
@@ -106,6 +123,7 @@ void flash_attn_kernel_impl(
       for (int n = 0; n < num_keys; n += BLOCK_N) {
         int n_size = std::min(BLOCK_N, num_keys - n);
 
+        // `n_size` is K in 2nd gemm, pad to TILE_K;
         const int padded_n_size = div_up(n_size, TILE_K) * TILE_K;
 
         // get key and pack
@@ -130,12 +148,14 @@ void flash_attn_kernel_impl(
             /* B     */ Btmp,
             /* C     */ s_i);
 
-        // apply causal mask See [Note] condition to apply causal mask.
+        // apply causal mask
+        // See [Note] condition to apply causal mask.
         if (causal && n + n_size - 1 > m) {
           for (int row = 0; row < m_size; ++row) {
             int last_col = m + row - n;
+            // See [Note] mask the entire row if last_col < 0.
             last_col = std::max(last_col, -1);
-            // fill [last_col + n_size) to -inf
+            // fill [last_col + 1, n_size) to -inf
             float* row_ptr = s_i + row * BLOCK_N;
             fill_stub(row_ptr + last_col + 1, -std::numeric_limits<float>::infinity(), n_size - last_col - 1);
           }
@@ -211,7 +231,8 @@ void flash_attn_varlen_kernel_impl(
   const int o_strideM = num_heads * head_size_v;
   const int o_strideH = head_size_v;
 
-  // compute index (bs, mb_offset) for Query blocks do this sequentially as usually problem size won't be big
+  // compute index (bs, mb_offset) for Query blocks
+  // do this sequentially as usually problem size won't be big
   int idx = 0;
   for (int32_t bs = 0; bs < batches; ++bs) {
     int32_t seqlen_q = cu_seqlens_q[bs + 1] - cu_seqlens_q[bs];
@@ -250,7 +271,7 @@ void flash_attn_varlen_kernel_impl(
     // Btmp: [BLOCK_N, max(head_size, head_size_v)]
     scalar_t* __restrict__ Btmp = reinterpret_cast<scalar_t*>(v_prime + BLOCK_M * head_size_v);
 
-    // init Btmp once for each thread to prevent NaN
+    // init Btmp just once for each thread to prevent NaN
     fill_stub(Btmp, 0.f, BLOCK_N * ldb_tmp);
 
     alignas(64) float s_prime[BLOCK_M];
@@ -286,6 +307,7 @@ void flash_attn_varlen_kernel_impl(
       for (int n = 0; n < num_keys; n += BLOCK_N) {
         int n_size = std::min(BLOCK_N, num_keys - n);
 
+        // `n_size` is K in 2nd gemm, pad to TILE_K;
         const int padded_n_size = div_up(n_size, TILE_K) * TILE_K;
 
         // get key and pack
@@ -310,12 +332,14 @@ void flash_attn_varlen_kernel_impl(
             /* B     */ Btmp,
             /* C     */ s_i);
 
-        // apply causal mask See [Note] condition to apply causal mask.
+        // apply causal mask
+        // See [Note] condition to apply causal mask.
         if (causal && n + n_size - 1 > m) {
           for (int row = 0; row < m_size; ++row) {
             int last_col = m + row - n;
+            // See [Note] mask the entire row if last_col < 0.
             last_col = std::max(last_col, -1);
-            // fill [last_col + n_size) to -inf
+            // fill [last_col + 1, n_size) to -inf
             float* row_ptr = s_i + row * BLOCK_N;
             fill_stub(row_ptr + last_col + 1, -std::numeric_limits<float>::infinity(), n_size - last_col - 1);
           }
@@ -410,6 +434,7 @@ inline void resize_indices(at::Tensor& indices, int num_seqs, int max_seqlen_q) 
 //   cu_seqlens_q: [num_seqs + 1]
 //   cu_seqlens_k: [num_seqs + 1]
 //   out: [num_tokens, num_heads, head_size_v]
+//
 at::Tensor flash_attn_varlen_func(
     const at::Tensor& q,
     const at::Tensor& k,

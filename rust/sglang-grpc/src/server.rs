@@ -108,9 +108,14 @@ async fn build_engine_state_snapshot(
     })
 }
 
+/// 64 MiB — leaves headroom for multimodal inputs and OpenAI JSON pass-through bodies,
+/// well above tonic's 4 MiB decode default.
 pub const DEFAULT_GRPC_MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
 /// Resolve the per-message size cap (bytes) applied to the Tonic encoder/decoder.
+//
+// TODO(grpc-args): promote SGLANG_TONIC_PAYLOAD to a proper `--grpc-max-message-size`
+// server argument once the launcher PR (3/4) wires server args through.
 fn resolve_max_message_size() -> usize {
     match std::env::var("SGLANG_TONIC_PAYLOAD") {
         Ok(raw) => match raw.parse::<usize>() {
@@ -135,7 +140,11 @@ fn resolve_max_message_size() -> usize {
 }
 
 /// Classify a bridge `PyErr` into the right gRPC `Status`.
+///
+/// `PyValueError` / `PyTypeError` mean the client sent bad input — surface as
 /// `INVALID_ARGUMENT` so callers can distinguish them from server failures.
+/// Everything else (typically `PyRuntimeError`, but also Python tracebacks
+/// from inside the tokenizer manager) maps to `INTERNAL`.
 fn pyerr_to_status(err: PyErr, context: &str) -> Status {
     let is_client_error = Python::attach(|py| {
         err.is_instance_of::<PyValueError>(py) || err.is_instance_of::<PyTypeError>(py)
@@ -188,7 +197,8 @@ impl RequestAbortGuard {
 impl Drop for RequestAbortGuard {
     fn drop(&mut self) {
         if self.armed {
-            // Dropping a response stream means the client stopped consuming.
+            // Dropping a response stream means the client stopped consuming; propagate
+            // cancellation to Python without blocking the Tokio worker.
             spawn_abort(self.bridge.clone(), self.rid.clone());
         }
     }

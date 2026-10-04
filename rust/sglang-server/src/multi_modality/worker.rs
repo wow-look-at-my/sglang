@@ -1,4 +1,5 @@
-//! The worker pool: drain MM requests, run the `sglang-mm` pipeline, park the result buffers.
+//! The worker pool: drain MM requests, run the `sglang-mm` pipeline, park
+//! the result buffers.
 
 use std::sync::Arc;
 
@@ -36,7 +37,7 @@ fn apply_caller_hashes<'a>(hashes: impl ExactSizeIterator<Item = &'a mut u64>, c
 }
 
 /// Hex of any width, as Python's `int(hex_hash, 16)` takes it (a full SHA-256
-/// being the common case).
+/// being the common case), keeping the low 64 bits — only the low 30 are
 /// observable, through `_compute_pad_value`.
 fn parse_caller_hash(entry: &str) -> Option<u64> {
     let hex = entry.strip_prefix("0x").unwrap_or(entry);
@@ -53,6 +54,8 @@ pub struct MmProcessOutput {
 }
 
 /// Multimodal processor shared by built-in and external implementations.
+/// Implementations run on the fixed Rust worker pool and must not retain
+/// request-scoped Python objects.
 pub trait MmProcessor: Send + Sync {
     fn process(
         &self,
@@ -162,13 +165,17 @@ fn process(ctx: &MmContext, rid: &Rid, mut work: MmWorkItem) -> Result<Vec<i32>,
 }
 
 /// Boot-time wiring of the MM path, held privately by the `Runtime` for the
-/// late pool spawn.
+/// late pool spawn (`Runtime::start_mm_workers`, once Python has resolved
+/// the spec).
 pub struct MmWiring {
-    /// Requests parked in `Encoding`, drained by the worker pool.
+    /// Requests parked in `Encoding`, drained by the worker pool. Stays empty
+    /// for non-multimodal models — nothing routes to it.
     pub mm_rx: flume::Receiver<MmRequest>,
-    /// Back-channel for the workers' `MmEncoded` / `MmFailed` into the to-scheduler loop.
+    /// Back-channel for the workers' `MmEncoded` / `MmFailed` into the
+    /// to-scheduler loop.
     pub tm_tx: flume::Sender<TmEvent>,
-    /// The loaded tokenizer, shared with the tokenizer pool (`None` under `skip_tokenizer_init`).
+    /// The loaded tokenizer, shared with the tokenizer pool (`None` under
+    /// `skip_tokenizer_init`).
     pub tokenizer: Option<Arc<dyn TextTokenizer>>,
 }
 
@@ -296,7 +303,8 @@ mod tests {
         }
     }
 
-    /// Caller hashes override computed ones; mismatched lengths and malformed entries fall back per item.
+    /// Caller hashes override computed ones; mismatched lengths and malformed
+    /// entries fall back per item, never reject (Python parity).
     #[test]
     fn caller_hashes_override_with_fallback() {
         let mut hashes = vec![1, 2, 3];
@@ -313,14 +321,15 @@ mod tests {
         assert_eq!(hashes, [0xff, 2, 0x10]);
     }
 
-    /// A full SHA-256 (what routers send) keeps its low bits rather than falling back.
+    /// A full SHA-256 (what routers send) keeps its low 64 bits rather than
+    /// falling back, so the pad value matches Python's wide `int`.
     #[test]
     fn caller_hashes_accept_arbitrary_width() {
         let sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         let mut hashes = vec![1];
         apply_caller_hashes(hashes.iter_mut(), &[sha256.into()]);
         assert_eq!(hashes, [0xa495991b7852b855]);
-        assert_eq!(hashes[0] % (1 << 30), 944_945_237);
+        assert_eq!(hashes[0] % (1 << 30), 944_945_237); // int(sha256, 16) % (1 << 30)
 
         // Width alone is never malformed; a non-hex digit still is.
         assert_eq!(parse_caller_hash(&"f".repeat(64)), Some(u64::MAX));

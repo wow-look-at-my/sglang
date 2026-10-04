@@ -1,4 +1,6 @@
-/***************************************************************************** */
+/******************************************************************************
+ * Copyright (c) 2024, Tri Dao.
+ ******************************************************************************/
 
 #pragma once
 
@@ -24,7 +26,7 @@ struct Dropout {
   template <bool encode_dropout_in_sign_bit = false, typename Engine, typename Layout>
   __forceinline__ __device__ void
   apply_dropout(Tensor<Engine, Layout>& tensor_, int block_row_start, int block_col_start, int block_row_stride) {
-    // convert shape from (, MMA_M, MMA_N) to (, MMA_M, MMA_N /)
+    // convert shape from (4, MMA_M, MMA_N) to (8, MMA_M, MMA_N / 2)
     Tensor tensor = make_tensor(tensor_.data(), flash::convert_layout_acc_dropout(tensor_.layout()));
     using T = typename Engine::value_type;
     auto encode_dropout = [](bool keep, T val) { return keep ? val : (encode_dropout_in_sign_bit ? -val : T(0)); };
@@ -38,18 +40,20 @@ struct Dropout {
       uint2 rowcol = make_uint2(block_row_start, block_col_start);
 #pragma unroll
       for (int n = 0; n < size<2>(tensor) / 2; ++n, ++rowcol.y) {
+        // if (cute::thread(32, 0)) { printf("m = %d, n = %d, row = %d, col = %d\n", m, n, int(rowcol.x),
+        // int(rowcol.y));}
         uint4 random_uint4 = flash::philox(seed, reinterpret_cast<unsigned long long&>(rowcol), offset);
         // if (cute::thread0()) { printf("philox = %u, %d, %d, %d\n", random_uint4.x, random_uint4.y, random_uint4.z,
         // random_uint4.w);}
         uint8_t (&rnd_8)[16] = reinterpret_cast<uint8_t (&)[16]>(random_uint4);
-        // Special implementation for 16-bit types: we duplicate the threshold to the low
-        // and high several bits of a 32-bit value, then use the f16x2 comparison
-        // instruction to get a mask. The low several bits of the mask will be either 0xffff
-        // or 0x0000, and the high several bits will be either 0xffff or 0x0000, depending
-        // on whether the random value is less than the threshold. We then do a bit-wise AND
-        // between the mask and the original value (in 32-bit). We're exploiting the fact
-        // that floating point comparison is equivalent to integer comparison, since we're
-        // comparing unsigned integers whose top 8-bits are zero.
+        // Special implementation for 16-bit types: we duplicate the threshold to the
+        // low and high 16 bits of a 32-bit value, then use the f16x2 comparison instruction
+        // to get a mask. The low 16 bits of the mask will be either 0xffff or 0x0000,
+        // and the high 16 bits will be either 0xffff or 0x0000, depending on whether
+        // the random value is less than the threshold.
+        // We then do a bit-wise AND between the mask and the original value (in 32-bit).
+        // We're exploiting the fact that floating point comparison is equivalent to integer
+        // comparison, since we're comparing unsigned integers whose top 8-bits are zero.
         if (!encode_dropout_in_sign_bit &&
             (std::is_same<T, cutlass::half_t>::value || std::is_same<T, cutlass::bfloat16_t>::value)) {
           uint16_t rnd_16[16];
@@ -61,6 +65,9 @@ struct Dropout {
 #pragma unroll
           for (int j = 0; j < 2; j++) {
             Tensor tensor_uint32 = recast<uint32_t>(tensor(_, m, n * 2 + j));
+// if (cute::thread0()) { printf("random = 0x%x, 0x%x, 0x%x, 0x%x\n", rnd_32[j * 4 + 0], rnd_32[j * 4 + 1], rnd_32[j * 4
+// + 2], rnd_32[j * 4 + 3]); } if (cute::thread0()) { printf("tensor_uint32 = 0x%x, 0x%x, 0x%x, 0x%x\n",
+// tensor_uint32(0), tensor_uint32(1), tensor_uint32(2), tensor_uint32(3)); }
 #pragma unroll
             for (int i = 0; i < 4; i++) {
               uint32_t mask;
@@ -85,8 +92,9 @@ struct Dropout {
             // tensor_uint32(1), tensor_uint32(2), tensor_uint32(3)); }
           }
         }
-        // // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0)) { // printf("n = %d, ph
-        // Philox: %u, %u, %u, %u\n", n, rnd_8.x, rnd_8.y, rnd_8.z, rnd_8.w); // }
+        // // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0)) {
+        // //     printf("n = %d, ph  Philox: %u, %u, %u, %u\n", n, rnd_8.x, rnd_8.y, rnd_8.z, rnd_8.w);
+        // // }
       }
     }
   }

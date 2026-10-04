@@ -271,7 +271,8 @@ fn cache_repo(repo_id: &str, revision: Option<&str>) -> hf_hub::CacheRepo {
 
     // Python resolves the cache dir as HF_HUB_CACHE > HUGGINGFACE_HUB_CACHE >
     // HF_HOME/hub > ~/.cache/huggingface/hub; the hf-hub crate only knows
-    // HF_HOME.
+    // HF_HOME. Honor the explicit cache-dir overrides first, or the Rust
+    // server misses models the Python scheduler already downloaded.
     let cache = ["HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"]
         .iter()
         .find_map(|var| std::env::var(var).ok())
@@ -284,6 +285,9 @@ fn cache_repo(repo_id: &str, revision: Option<&str>) -> hf_hub::CacheRepo {
     ))
 }
 
+/// Real tokenizer over two already-loaded dynamo handles. Dynamo fixes
+/// `add_special_tokens` when loading, so selecting the mode at request time
+/// requires one handle for each setting.
 pub struct DynamoTokenizer {
     without_specials: dynamo_tokenizers::Tokenizer,
     with_specials: dynamo_tokenizers::Tokenizer,
@@ -336,7 +340,9 @@ fn resolve_stop_token_window(sampling_params: &mut SamplingParams, tokenizer: &d
     if let Some(stop_tokens) = sampling_params
         .stop_strs
         .iter()
-        // A stop that won't encode falls back to its byte length rather than failing the request: still an over-estimate, never an under-estimate.
+        // A stop that won't encode falls back to its byte length rather
+        // than failing the request: still an over-estimate, never an
+        // under-estimate, so the scheduler cannot miss that stop.
         .map(|stop| {
             tokenizer
                 .encode(stop, false)

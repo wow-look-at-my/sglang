@@ -16,9 +16,10 @@ source-inputs = ["../../proto"]
 debug = false
 
 [lib]
-# The importable Python module is still `_core`: the name comes from the
-# `#[pymodule]` entry point and the setuptools-rust `target` in
-# python/pyproject.toml, which renames the built artifact.
+# Unique per-crate artifact name (the shared workspace target/ dir cannot hold
+# two `lib_core` cdylibs). The importable Python module is still `_core`: the
+# name comes from the `#[pymodule]` entry point and the setuptools-rust
+# `target` in python/pyproject.toml, which renames the built artifact.
 name = "sglang_grpc_core"
 crate-type = ["cdylib"]
 

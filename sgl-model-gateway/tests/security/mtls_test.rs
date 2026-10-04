@@ -1,4 +1,11 @@
-//! mTLS (Mutual TLS) integration tests Tests for TLS and mTLS communication between router and workers. Covers.
+//! mTLS (Mutual TLS) integration tests
+//!
+//! Tests for TLS and mTLS communication between router and workers.
+//! Covers:
+//! - Successful mTLS communication with client certificates
+//! - TLS failure without client certificate when required
+//! - TLS-only mode (server authentication only)
+//! - TLS failure without CA certificate
 
 use std::{io::BufReader, time::Duration};
 
@@ -113,7 +120,12 @@ fn create_client_without_ca() -> Result<reqwest::Client, Box<dyn std::error::Err
 mod mtls_tests {
     use super::*;
 
-    /// Test successful mTLS communication between client and TLS worker This test verifies that:.
+    /// Test successful mTLS communication between client and TLS worker
+    ///
+    /// This test verifies that:
+    /// 1. TLS mock worker starts with mTLS configuration
+    /// 2. Client with proper certificates can connect and communicate
+    /// 3. Requests succeed with proper authentication
     #[tokio::test]
     async fn test_mtls_successful_communication() {
         // Generate test certificates
@@ -183,7 +195,11 @@ mod mtls_tests {
         worker.stop().await;
     }
 
-    /// Test that mTLS worker rejects connections without client certificate This test verifies that:. mTLS worker requires client.
+    /// Test that mTLS worker rejects connections without client certificate
+    ///
+    /// This test verifies that:
+    /// 1. mTLS worker requires client certificate
+    /// 2. Connection without client cert fails
     #[tokio::test]
     async fn test_mtls_failure_without_client_cert() {
         // Generate test certificates
@@ -222,7 +238,11 @@ mod mtls_tests {
         worker.stop().await;
     }
 
-    /// Test TLS-only mode (server authentication only, no client cert required) This test verifies that:.
+    /// Test TLS-only mode (server authentication only, no client cert required)
+    ///
+    /// This test verifies that:
+    /// 1. TLS worker can operate without requiring client certificates
+    /// 2. Client can connect with just CA certificate for server verification
     #[tokio::test]
     async fn test_tls_server_auth_only() {
         // Generate test certificates
@@ -245,7 +265,7 @@ mod mtls_tests {
             .await
             .expect("Failed to start TLS worker");
 
-        // Create client with CA cert for server verification (no client cert)
+        // Create client with just CA cert for server verification (no client cert)
         let client = create_tls_client(&certs).expect("Failed to create TLS client");
 
         // Test health endpoint - should succeed without client cert
@@ -287,7 +307,11 @@ mod mtls_tests {
         worker.stop().await;
     }
 
-    /// Test TLS failure when client doesn't have CA certificate This test verifies that:.
+    /// Test TLS failure when client doesn't have CA certificate
+    ///
+    /// This test verifies that:
+    /// 1. Client cannot verify server without proper CA certificate
+    /// 2. Connection fails due to certificate verification
     #[tokio::test]
     async fn test_tls_failure_without_ca_cert() {
         // Generate test certificates
@@ -322,7 +346,9 @@ mod mtls_tests {
         worker.stop().await;
     }
 
-    /// Test multiple concurrent mTLS requests This test verifies that mTLS connections work correctly.
+    /// Test multiple concurrent mTLS requests
+    ///
+    /// This test verifies that mTLS connections work correctly under concurrent load
     #[tokio::test]
     async fn test_mtls_concurrent_requests() {
         use std::sync::{

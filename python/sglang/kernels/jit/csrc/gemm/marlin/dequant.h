@@ -80,8 +80,8 @@ __device__ inline int lop3(int a, int b, int c) {
   return res;
 }
 
-// Constructs destination register by taking bytes from multiple sources
-// (based on mask)
+// Constructs destination register by taking bytes from 2 sources (based on
+// mask)
 template <int start_byte, int mask>
 __device__ inline uint32_t prmt(uint32_t a) {
   uint32_t res;
@@ -93,11 +93,14 @@ template <typename scalar_t2, host::ScalarTypeId w_type_id, bool skip_flop = fal
 __device__ inline void dequant(int q, scalar_t2* frag_b);
 
 //
-// Efficiently dequantize 4bit values packed in an int32 value into a full B-fragment of multiple fp16 values. We mostly follow the strategy in the link below, with some small
-// changes: - FP16:
+// Efficiently dequantize 4bit values packed in an int32 value into a full
+// B-fragment of 4 fp16 values. We mostly follow the strategy in the link below,
+// with some small changes:
+// - FP16:
 // https://github.com/NVIDIA/FasterTransformer/blob/release/v5.3_tag/src/fastertransformer/cutlass_extensions/include/cutlass_extensions/interleaved_numeric_conversion.h#L215-L287
 // - BF16:
 // https://github.com/NVIDIA/FasterTransformer/blob/release/v5.3_tag/src/fastertransformer/cutlass_extensions/include/cutlass_extensions/interleaved_numeric_conversion.h#L327-L385
+//
 template <>
 __device__ inline void dequant<half2, host::kU4B8.id(), true>(int q, half2* frag_b) {
   const int MASK = 0x000f000f;
@@ -166,6 +169,7 @@ __device__ inline void dequant<nv_bfloat162, host::kU4B8.id(), true>(int q, nv_b
   int lo = lop3<(0xf0 & 0xcc) | 0xaa>(q, MASK, EX);
   q >>= 4;
   int hi = lop3<(0xf0 & 0xcc) | 0xaa>(q, MASK, EX);
+  // clang-format on
 
   frag_b[0] = *reinterpret_cast<nv_bfloat162*>(&lo);
   frag_b[1] = *reinterpret_cast<nv_bfloat162*>(&hi);
@@ -203,6 +207,7 @@ __device__ inline void dequant<nv_bfloat162, host::kU4.id(), false>(int q, nv_bf
 // https://github.com/NVIDIA/FasterTransformer/blob/release/v5.3_tag/src/fastertransformer/cutlass_extensions/include/cutlass_extensions/interleaved_numeric_conversion.h#L53-L85
 // - BF16:
 // https://github.com/NVIDIA/FasterTransformer/blob/release/v5.3_tag/src/fastertransformer/cutlass_extensions/include/cutlass_extensions/interleaved_numeric_conversion.h#L125-L175
+//
 template <>
 __device__ inline void dequant<half2, host::kU8B128.id(), true>(int q, half2* frag_b) {
   static constexpr uint32_t mask_for_elt_01 = 0x5250;
@@ -341,6 +346,8 @@ __device__ inline void dequant<nv_bfloat162, host::kFE4M3fn.id(), false>(int q, 
 
   // Construct and apply exponent bias
   constexpr int BIAS_OFFSET = (1 << (BF16_EXPONENT - 1)) - (1 << (FP8_EXPONENT - 1));
+  // Add 127 (float exponent bias) to BIAS_OFFSET and shift to float exponent
+  // position
   constexpr uint32_t BIAS = (BIAS_OFFSET + 127) << 23;
   const nv_bfloat162 bias_reg = __float2bfloat162_rn(*reinterpret_cast<const float*>(&BIAS));
 
@@ -408,6 +415,8 @@ __device__ inline void dequant<nv_bfloat162, host::kFE2M1f.id(), false>(int q, n
 
   // Construct and apply exponent bias
   constexpr int BIAS_OFFSET = (1 << (BF16_EXPONENT - 1)) - (1 << (FP4_EXPONENT - 1));
+  // Add 127 (float exponent bias) to BIAS_OFFSET and shift to float exponent
+  // position
   constexpr uint32_t BIAS = (BIAS_OFFSET + 127) << 23;
   const nv_bfloat162 bias_reg = __float2bfloat162_rn(*reinterpret_cast<const float*>(&BIAS));
 
@@ -481,6 +490,8 @@ __device__ inline void dequant_fp8_scales<nv_bfloat162, host::kFE4M3fn.id()>(int
 
 template <>
 __device__ inline void dequant_fp8_scales<nv_bfloat162, host::kFE8M0fnu.id()>(int q, nv_bfloat162* frag_b) {
+  // In this conversion, 2 ** -127 in FP8E8M0 would become 0 in BF16,
+  // but we assume that such a extreme value would not occur in real models.
   int Out1 = (q & 0xFF00FF00) >> 1;
   q <<= 7;
   int Out2 = q & 0x7F807F80;

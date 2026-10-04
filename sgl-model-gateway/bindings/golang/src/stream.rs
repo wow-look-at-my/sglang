@@ -1,4 +1,19 @@
-//! Stream handling FFI.
+//! Stream handling FFI functions
+//!
+//! This module provides FFI (Foreign Function Interface) functions for managing
+//! streaming responses from the SGLang gRPC API. It handles:
+//!
+//! - Creating and managing stream handles
+//! - Reading chunks from streams and converting them to OpenAI format
+//! - Managing automatic abort on stream drop (via AbortOnDropStream)
+//! - Thread-safe access to streams and response converters
+//!
+//! # Safety
+//!
+//! All FFI functions are marked `unsafe` as per Rust FFI conventions. Callers must:
+//! - Pass valid pointers
+//! - Ensure proper pointer lifetime management
+//! - Call corresponding free functions for cleanup
 
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
@@ -20,8 +35,17 @@ use super::grpc_converter::{convert_proto_chunk_to_openai, GrpcResponseConverter
 static RUNTIME: Lazy<Runtime> =
     Lazy::new(|| Runtime::new().expect("Failed to create tokio runtime for stream FFI"));
 
-/// Handle for an active streaming request. This struct manages the stream and
-/// response converter for a single request.
+/// Handle for an active streaming request.
+///
+/// This struct manages the stream and response converter for a single request.
+/// It is wrapped in Arc and Mutex for thread-safe concurrent access.
+///
+/// # Fields
+///
+/// * `stream` - The gRPC stream wrapped in AbortOnDropStream for automatic cleanup
+/// * `converter` - Response converter that transforms proto messages to OpenAI format
+/// * `client` - The underlying gRPC client connection
+/// * `prompt_tokens` - Number of prompt tokens from the original request
 pub struct SglangStreamHandle {
     pub(crate) stream: Arc<tokio::sync::Mutex<AbortOnDropStream>>,
     pub(crate) converter: Arc<tokio::sync::Mutex<GrpcResponseConverterHandle>>,
@@ -32,6 +56,40 @@ pub struct SglangStreamHandle {
 }
 
 /// Read next chunk from stream and convert to OpenAI format.
+///
+/// This function reads the next chunk from the gRPC stream, converts it from the
+/// internal protocol format to OpenAI-compatible JSON format, and returns it via
+/// the output parameters.
+///
+/// # Arguments
+///
+/// * `stream_handle` - Mutable pointer to the stream handle
+/// * `response_json_out` - Pointer to receive OpenAI format JSON string
+///   - Caller must free this with `sgl_free_string`
+///   - May be NULL if no data available
+/// * `is_done_out` - Pointer to receive completion status
+///   - 0 = stream has more data
+///   - 1 = stream is complete
+/// * `error_out` - Optional pointer to receive error message
+///   - Only set if function returns an error code
+///   - Must be freed with `sgl_free_string` if not NULL
+///
+/// # Returns
+///
+/// * `SglErrorCode::Success` - Successfully read a chunk or reached end of stream
+/// * Other error codes - See `SglErrorCode` for details
+///
+/// # Safety
+///
+/// - All pointers must be valid and properly aligned
+/// - `stream_handle` must point to a valid `SglangStreamHandle`
+/// - Output pointers must be writable
+///
+/// # Notes
+///
+/// - Complete messages are identified by the presence of `proto::GenerateResponse::Complete`
+/// - When is_done=1, this may be the last readable chunk or the stream may be ending
+/// - Subsequent calls after is_done=1 will mark the stream as complete internally
 #[no_mangle]
 pub unsafe extern "C" fn sgl_stream_read_next(
     stream_handle: *mut SglangStreamHandle,
@@ -125,7 +183,9 @@ pub unsafe extern "C" fn sgl_stream_read_next(
                             stream_guard.mark_completed();
                             // Keep the guard until mark_completed() is fully executed
                             drop(stream_guard);
-                            // Yield to ensure Release ordering is propagated before returning This prevents race condition where Free() is called immediately.
+                            // Yield to ensure Release ordering is propagated before returning
+                            // This prevents race condition where Free() is called immediately
+                            // and Drop might not see the mark_completed() write
                             tokio::task::yield_now().await;
                         });
                     }
@@ -133,13 +193,16 @@ pub unsafe extern "C" fn sgl_stream_read_next(
                     SglErrorCode::Success
                 }
                 Ok(None) => {
-                    // No response to send (e.g., empty chunk) Don't mark as completed - stream might continue return null.
+                    // No response to send (e.g., empty chunk)
+                    // Don't mark as completed - stream might continue
+                    // Just return null and let caller read more
                     *response_json_out = ptr::null_mut();
-                    *is_done_out = 0; // Keep stream open.
+                    *is_done_out = 0; // Keep stream open, not done yet
                     SglErrorCode::Success
                 }
                 Err(e) => {
-                    // Conversion error - don't mark as completed Let the stream end naturally.
+                    // Conversion error - don't mark as completed
+                    // Let the stream end naturally or return error without stopping stream
                     set_error_message(error_out, &format!("Conversion error: {}", e));
                     *response_json_out = ptr::null_mut();
                     *is_done_out = 0; // Don't mark as done - let caller decide
@@ -180,6 +243,27 @@ pub unsafe extern "C" fn sgl_stream_read_next(
 }
 
 /// Free a stream handle and release all associated resources.
+///
+/// This function must be called exactly once for each stream handle returned by
+/// `sgl_client_chat_completion_stream`. It marks the stream as completed internally
+/// to prevent abort signals from being sent when resources are cleaned up.
+///
+/// # Arguments
+///
+/// * `handle` - Mutable pointer to the stream handle to free
+///   - If NULL, this function does nothing
+///
+/// # Safety
+///
+/// - Must be called only once per handle
+/// - Handle must not be used after calling this function
+/// - After this call, the stream is no longer valid
+///
+/// # Notes
+///
+/// - This function internally calls `mark_completed()` before freeing to ensure
+///   the stream cleanup doesn't trigger an abort RPC to the server
+/// - Memory fences are used to ensure visibility across threads
 #[no_mangle]
 pub unsafe extern "C" fn sgl_stream_free(handle: *mut SglangStreamHandle) {
     if !handle.is_null() {
@@ -197,10 +281,12 @@ pub unsafe extern "C" fn sgl_stream_free(handle: *mut SglangStreamHandle) {
             tokio::task::yield_now().await;
         });
 
-        // Use a strong memory fence to ensure mark_completed()'s Release write is visible.
+        // Use a strong memory fence to ensure mark_completed()'s Release write
+        // is visible before we drop the last Arc reference
         std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
 
-        // Now drop all references - if mark_completed() was called successfully, the drop won't send an abort
+        // Now drop all references - if mark_completed() was called successfully,
+        // the drop won't send an abort
         drop(handle_ref.stream);
 
         // Free converter

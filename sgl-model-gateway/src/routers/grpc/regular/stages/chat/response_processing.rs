@@ -1,4 +1,7 @@
-//! Chat response processing stage: Handles both streaming and non-streaming responses - For streaming.
+//! Chat response processing stage: Handles both streaming and non-streaming responses
+//!
+//! - For streaming: Spawns background task and returns SSE response (early exit)
+//! - For non-streaming: Collects all responses and builds final ChatCompletionResponse
 
 use std::sync::Arc;
 
@@ -93,7 +96,7 @@ impl ChatResponseProcessingStage {
             // Streaming: Use StreamingProcessor and return SSE response
             let response = self.streaming_processor.clone().process_streaming_response(
                 execution_result,
-                ctx.chat_request_arc(), // Cheap Arc clone (several
+                ctx.chat_request_arc(), // Cheap Arc clone (8 bytes)
                 dispatch,
                 tokenizer,
             );

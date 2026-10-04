@@ -1,4 +1,13 @@
 //! Benchmarks for the radix tree implementation used in cache-aware routing.
+//!
+//! This benchmark simulates realistic cache-aware routing scenarios with:
+//! - Multiple tenants representing HTTP/gRPC endpoints (10 endpoints)
+//! - High-pressure workloads with concurrent operations
+//! - Realistic request text patterns (system prompts, user queries, etc.)
+//!
+//! Run with: cargo bench --bench tree_benchmark
+//!
+//! For quick validation (CI): cargo bench --bench tree_benchmark -- benchmark_summary --exact
 
 use std::{
     collections::BTreeMap,
@@ -33,7 +42,7 @@ fn add_result(category: &str, result: String) {
 }
 
 /// Simulated HTTP/gRPC endpoints representing worker nodes
-/// These mirror real-world deployment patterns with multiple tenants
+/// These mirror real-world deployment patterns with 10 tenants
 const ENDPOINT_TENANTS: [&str; 10] = [
     "http://worker-0.sglang.svc.cluster.local:8000",
     "http://worker-1.sglang.svc.cluster.local:8000",
@@ -75,6 +84,8 @@ fn generate_realistic_requests(count: usize) -> Vec<String> {
     (0..count)
         .map(|_| {
             let prefix_idx = rng.random_range(0..CONVERSATION_PREFIXES.len());
+            // Realistic LLM request sizes: 1000-3000 chars (~250-750 tokens)
+            // This represents typical user queries with context
             let query_len = rng.random_range(1000..3000);
             format!(
                 "{}{}",
@@ -210,6 +221,7 @@ fn bench_prefix_match_latency(c: &mut Criterion) {
         .flat_map(|p| random_prefixed_strings(p, 50, 1000))
         .collect();
 
+    // Distribute entries across all 10 endpoint tenants
     for (i, s) in strings.iter().enumerate() {
         let tenant = ENDPOINT_TENANTS[i % ENDPOINT_TENANTS.len()];
         tree.insert(s, tenant);
@@ -323,6 +335,7 @@ fn bench_prefix_match_latency(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark concurrent operations with high pressure (10 endpoint tenants)
 fn bench_concurrent_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent");
     group.sample_size(50); // Reduce sample size for concurrent tests
@@ -423,7 +436,7 @@ fn bench_concurrent_operations(c: &mut Criterion) {
             let duration = start.elapsed();
 
             if !printed.load(Ordering::Relaxed) {
-                let total_ops = iters * 10 * 200; // Threads * multiple ops (inserts + matches)
+                let total_ops = iters * 10 * 200; // 10 threads * 200 ops (100 inserts + 100 matches)
                 let ops_per_sec = total_ops as f64 / duration.as_secs_f64();
                 let result = format!(
                     "{:<25} | {:>8} | {:>12.0} | {:>12.0}",
@@ -491,7 +504,7 @@ fn bench_eviction(c: &mut Criterion) {
         );
     }
 
-    // Multi-tenant eviction: tenants with overlapping data
+    // Multi-tenant eviction: 10 tenants with overlapping data
     for tree_size in [1000, 5000, 10000].iter() {
         let printed = Arc::new(AtomicBool::new(false));
         group.bench_with_input(
@@ -503,7 +516,7 @@ fn bench_eviction(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     let mut total_duration = std::time::Duration::ZERO;
                     for _ in 0..iters {
-                        // Setup: create tree with entries distributed across multiple tenants
+                        // Setup: create tree with entries distributed across 10 tenants
                         let tree = Tree::new();
                         for i in 0..size {
                             let tenant = ENDPOINT_TENANTS[i % ENDPOINT_TENANTS.len()];
@@ -624,12 +637,13 @@ fn bench_utf8_vs_ascii(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark multi-tenant scenarios with multiple HTTP/gRPC endpoint tenants
+/// Benchmark multi-tenant scenarios with 10 HTTP/gRPC endpoint tenants
 fn bench_multi_tenant(c: &mut Criterion) {
     let mut group = c.benchmark_group("multi_tenant");
 
     let tree = Arc::new(Tree::new());
 
+    // Setup: 10 endpoint tenants with overlapping data patterns
     let prefixes = ["prompt:", "completion:", "context:", "system:", "user:"];
 
     for tenant in &ENDPOINT_TENANTS {
@@ -774,10 +788,11 @@ fn bench_summary(c: &mut Criterion) {
     // Configuration constants
     const TREE_SIZE: usize = 10_000; // Realistic cache size
     const INSERT_POOL_SIZE: usize = 10_000; // Unique requests for insert tests
-    const NUM_THREADS: usize = 64;
+    const NUM_THREADS: usize = 64; // Match GPU runner's 64 CPU cores
     const OPS_PER_THREAD: usize = 200;
 
-    // Worker scaling configurations to test Full range to demonstrate scaling behavior on GPU runner
+    // Worker scaling configurations to test
+    // Full range to demonstrate scaling behavior on GPU runner
     const WORKER_COUNTS: [usize; 4] = [10, 50, 100, 500];
 
     // Pre-generate requests for tree population and queries
@@ -814,7 +829,8 @@ fn bench_summary(c: &mut Criterion) {
         format!("  Worker counts tested: {:?}", WORKER_COUNTS),
     );
 
-    // Test INSERT performance at different worker scales Use large pool of unique requests.
+    // Test INSERT performance at different worker scales
+    // Use large pool of unique requests to avoid measuring cache-hit behavior
     let insert_requests = generate_realistic_requests(INSERT_POOL_SIZE);
 
     for &num_workers in &WORKER_COUNTS {
@@ -910,7 +926,8 @@ fn bench_summary(c: &mut Criterion) {
         });
     }
 
-    // Concurrent benchmark with scaling workers Reduced sample size and measurement time for CI
+    // Concurrent benchmark with scaling workers
+    // Reduced sample size and measurement time for CI
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(3));
     for &num_workers in &WORKER_COUNTS {

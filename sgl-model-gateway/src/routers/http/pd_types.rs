@@ -58,6 +58,7 @@ pub struct BatchRequestWithBootstrap<'a, T: Serialize> {
 
 /// Generate a random bootstrap room ID.
 pub fn generate_room_id() -> u64 {
+    // Generate a value in the range [0, 2^63 - 1] to match Python's random.randint(0, 2**63 - 1)
     rand::random::<u64>() & (i64::MAX as u64)
 }
 

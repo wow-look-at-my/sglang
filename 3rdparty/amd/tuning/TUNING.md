@@ -1,5 +1,7 @@
 ## Tuning SGLang Infer System with AMD GPUs
-This AppNote describes the SGLang performance tuning technical, code harness and running steps for systems with AMD Instinct GPUs. Harness code, examples and steps are provided in detail, to facilitate easy reproduce & use to tune performance towards workloads. Primary runtime areas are covered:
+This AppNote describes the SGLang performance tuning technical, code harness and running steps for systems with AMD Instinct GPUs.
+Harness code, examples and steps are provided in detail, to facilitate easy reproduce & use to tune performance towards workloads.
+Three primary runtime areas are covered:
 
 ## 1. Triton Kernels
 To maximize Triton kernel efficiency, several strategies can be employed:
@@ -95,7 +97,7 @@ TORCHINDUCTOR_FREEZING=1 your_script.sh
 To maximize moe kernel efficiency, need to use below scripts to find out the best launch configuration
 
 ### Key parameters:
-- **--model**: what moe model type to do tuning. It will automatically decide the size of d_model, model_intermediate_size, num_layers
+- **--model**: what moe model type to do tuning, it will automatically decide the size of d_model, model_intermediate_size, num_layers
 - **--tp-size**: simulate the whole model run configuration to set the dimension size using tp correctly
 - **--batch**: M dimension size of moe kernel, for prefill moe kernel the value is batch*input_len, for decode moe kernel the value is batch
 - **--dtype**: computation type

@@ -3,7 +3,9 @@
 
 // integration_test.go contains integration tests that require a running SGLang server
 //
-// Run: go test -tags=integration -run TestIntegration
+// To run these tests:
+// 1. Start an SGLang server: python -m sglang.launch_server --model-path meta-llama/Llama-2-7b-hf
+// 2. Run: go test -tags=integration -run TestIntegration
 
 package sglang
 

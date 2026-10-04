@@ -6,7 +6,9 @@ use serde_json::Value;
 
 use crate::protocols::common::ToolCall;
 
-/// Harmony message format Represents messages in the Harmony encoding format with role and content.
+/// Harmony message format
+///
+/// Represents messages in the Harmony encoding format with role and content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HarmonyMessage {
     pub role: String,
@@ -62,7 +64,10 @@ impl HarmonyMessage {
     }
 }
 
-/// Output from Harmony encoding process Contains the encoded input_ids, stop tokens, selection text for worker routing.
+/// Output from Harmony encoding process
+///
+/// Contains the encoded input_ids, stop tokens, selection text for worker routing,
+/// and the Harmony message history.
 #[derive(Debug, Clone)]
 pub(crate) struct HarmonyBuildOutput {
     /// Encoded token IDs to send to the model
@@ -78,7 +83,9 @@ pub(crate) struct HarmonyBuildOutput {
     pub harmony_messages: Vec<HarmonyMessage>,
 }
 
-/// Parsed output from all Harmony channels Represents the complete response after parsing analysis, commentary.
+/// Parsed output from all three Harmony channels
+///
+/// Represents the complete response after parsing analysis, commentary, and final channels.
 #[derive(Debug, Clone)]
 pub(crate) struct HarmonyChannelOutput {
     /// Analysis/reasoning content (from analysis channel)
@@ -100,7 +107,9 @@ pub(crate) struct HarmonyChannelOutput {
     pub reasoning_token_count: u32,
 }
 
-/// Streaming delta for SSE responses Represents incremental updates as tokens are parsed from the stream.
+/// Streaming delta for SSE responses
+///
+/// Represents incremental updates as tokens are parsed from the stream.
 #[derive(Debug, Clone)]
 pub(crate) struct HarmonyChannelDelta {
     /// Delta for analysis/reasoning content

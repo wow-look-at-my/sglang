@@ -10,6 +10,7 @@ offline = false
 scheme = ["http", "https"]
 
 exclude = [
+  # Slack invite link returns 403 to CI user-agents (anti-bot); the link is valid.
   "^https://slack\\.sglang\\.io(/|$)",
   # Local-only endpoints referenced in docs/examples.
   # These are expected to be unreachable in GitHub-hosted CI.

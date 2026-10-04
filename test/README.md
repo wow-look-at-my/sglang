@@ -7,7 +7,7 @@ This page covers principles and essentials: folder layout, how to run tests, reg
 
 ## CI Pipeline Overview
 
-The CI pipeline runs in multiple sequential stages: **A** (pre-flight, ~3 min) → **B** (basic, ~30 min) → **C** (advanced, ~30 min). Kernel and multimodal-gen tests run in parallel with stage B. For details on stage gating, fail-fast mechanisms, execution modes (PR vs scheduled vs manual dispatch), and debugging CI failures, see the [CI workflow guide](../.claude/skills/ci-workflow-guide/SKILL.md).
+The CI pipeline runs in three sequential stages: **A** (pre-flight, ~3 min) → **B** (basic, ~30 min) → **C** (advanced, ~30 min). Kernel and multimodal-gen tests run in parallel with stage B. For details on stage gating, fail-fast mechanisms, execution modes (PR vs scheduled vs manual dispatch), and debugging CI failures, see the [CI workflow guide](../.claude/skills/ci-workflow-guide/SKILL.md).
 
 ## Folder Organization
 
@@ -72,11 +72,23 @@ Parameters: `est_time` (seconds), `stage` + `runner_config` (target stage and ru
 
 Keep `est_time`, `stage`, `runner_config` as **literal values** — `run_suite.py` collects them by AST parsing.
 
-Directories under `test/registered/` group tests by topic and are free-form (`lora/`, `hicache/`, `disaggregation/`, `perf/`, ...). Unit tests cover one srt module, so they mirror the source tree under `unit/`. What a test costs, which stage gates it and which runner it needs are declared by its `register_*_ci` call -- including hardware. This is expressed by one or more `register_*_ci` calls and never by a new top-level directory. Kernel tests use `test/registered/kernels/{ops,benchmark}/<group>/`, retaining the established plural `kernels` root.
+Directories under `test/registered/` group tests by topic and are free-form
+(`lora/`, `hicache/`, `disaggregation/`, `perf/`, ...); unit tests cover one srt
+module, so they mirror the source tree under `unit/`. What a test costs, which
+stage gates it and which runner it needs are declared by its `register_*_ci`
+call -- including hardware, which is expressed by one or more `register_*_ci`
+calls and never by a new top-level directory. Kernel tests use
+`test/registered/kernels/{ops,benchmark}/<group>/`, retaining the established
+plural `kernels` root.
 
-Diffusion workflows also enter through `test/run_suite.py`. Registered bridge files preserve their case-level pytest partitioning until the remaining diffusion cases are moved out of the package test-support tree.
+Diffusion workflows also enter through `test/run_suite.py`; registered bridge
+files preserve their case-level pytest partitioning until the remaining
+diffusion cases are moved out of the package test-support tree.
 
-Kernel correctness tests and benchmarks use the established plural `kernels` root and mirror the operator group under `python/sglang/kernels/ops/`. Helpers stay alongside the kernel source under `python/sglang/kernels/jit/` and are imported by absolute path:
+Kernel correctness tests and benchmarks use the established plural `kernels`
+root and mirror the operator group under `python/sglang/kernels/ops/`. Helpers
+stay alongside the kernel source under `python/sglang/kernels/jit/` and are
+imported by absolute path:
 
 - Correctness tests: `test/registered/kernels/ops/<group>/test_*.py` → `base-b-kernel-unit-test-1-gpu-large`
 - Benchmarks: `test/registered/kernels/benchmark/<group>/bench_*.py` → `base-b-kernel-benchmark-test-1-gpu-large`
@@ -99,25 +111,33 @@ Use the lightest suite that meets your test's needs. Full suite tables are in th
 
 See the [write-sglang-test skill](../.claude/skills/write-sglang-test/SKILL.md) for templates, fixtures, model selection, and a complete checklist.
 
-Before adding a registered test, identify the production change that will make it fail. Prefer extending an existing fixture/server launch over adding another file. The incremental admission check applies these ratchets to new or modified registered tests:
+Before adding a registered test, identify the production change that would make
+it fail. Prefer extending an existing fixture/server launch over adding another
+file. The incremental admission check applies these ratchets to new or modified
+registered tests:
 
-- Temporary `disabled=` registrations and unconditional skips must reference an issue and include `until YYYY-MM-DD`. Expired entries fail lint.
-- A file registered on CUDA plus another accelerator must place a nearby `backend-specific:` comment above the extra registration. This is name the path or failure mode that only that backend can catch.
-- Default PR registrations are limited to 1,200 estimated weighted accelerator-seconds per backend (`est_time * GPU count`). Move larger matrices to extra/nightly, or document a nearby `ci-cost-override:` rationale.
+- Temporary `disabled=` registrations and unconditional skips must reference an
+  issue and include `until YYYY-MM-DD`; expired entries fail lint.
+- A file registered on CUDA plus another accelerator must place a nearby
+  `backend-specific:` comment above the extra registration and name the path or
+  failure mode that only that backend can catch.
+- Default PR registrations are limited to 1,200 estimated weighted accelerator-seconds
+  per backend (`est_time * GPU count`). Move larger matrices to extra/nightly,
+  or document a nearby `ci-cost-override:` rationale.
 
 ## Multi-Hardware Backends
 
-This README mostly describes the NVIDIA GPU CI pipeline. Other hardware backends (AMD, NPU) follow the same practices and use the multi-backend registry system. A scheduled job summarizes test coverage across all backends. [here is an example run](https://github.com/sgl-project/sglang/actions/runs/23424304300).
+This README mostly describes the NVIDIA GPU CI pipeline. Other hardware backends (AMD, NPU) follow the same practices and use the multi-backend registry system. A scheduled job summarizes test coverage across all backends; [here is an example run](https://github.com/sgl-project/sglang/actions/runs/23424304300).
 
 ## Tips
 
 - Learn from existing examples in [test/registered](https://github.com/sgl-project/sglang/tree/main/test/registered).
 - Reuse servers — launching is expensive. Share one server across many test methods via `setUpClass`.
 - Use as few GPUs as possible. Prefer 1-GPU runners.
-- Each test file must take < many seconds. Split if longer.
-- Each GitHub Actions job must take < many minutes. Split if longer.
+- Each test file should take < 500 seconds; split if longer.
+- Each GitHub Actions job should take < 30 minutes; split if longer.
 - If tests are too slow for per-commit, consider nightly suites.
-- New GSM8K or MMLU accuracy checks must use sgl-eval (`sglang.test.sgl_eval_utils.run_sgl_eval` or `sgl-eval run`) instead of adding another dataset or evaluator copy.
+- New GSM8K or MMLU accuracy checks should use sgl-eval (`sglang.test.sgl_eval_utils.run_sgl_eval` or `sgl-eval run`) instead of adding another dataset or evaluator copy.
 
 ## Other Notes
 

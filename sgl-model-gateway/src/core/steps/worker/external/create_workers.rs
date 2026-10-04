@@ -22,6 +22,7 @@ fn normalize_external_url(url: &str) -> String {
     }
 }
 
+/// Step 2: Create worker objects for each discovered model.
 pub struct CreateExternalWorkersStep;
 
 #[async_trait]

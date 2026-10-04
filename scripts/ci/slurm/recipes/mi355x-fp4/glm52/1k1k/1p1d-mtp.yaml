@@ -4,7 +4,7 @@
 # mechanism as DeepSeek-V4 — no external draft checkpoint. DSA attention is
 # auto-selected (see 1p1d.yaml).
 #
-# Consumed by.
+# Consumed by:
 #   * scripts/ci/slurm/process_result.py reads `resources` and
 #     `backend.sglang_config` (TP/EP/DP + worker counts) for the summary table.
 #   * scripts/ci/slurm/launch_mi355x.sh reads `runtime`, `bench`, and `mtp`.
@@ -71,8 +71,9 @@ bench:
   num_prompts_factor: 4      # num-prompts = concurrency * factor
   random_range_ratio: 1.0
 
-  # A regression here fails the nightly even when throughput looks fine ("fast
-  # but wrong").
+  # Correctness gate run through the PD path before the perf sweep (full GSM8K,
+  # 8-shot, accuracy > 0.91). A regression here fails the nightly even when
+  # throughput looks fine ("fast but wrong").
   accuracy:
     enabled: true
     num_shots: 8

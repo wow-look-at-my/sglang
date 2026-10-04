@@ -1,4 +1,9 @@
-//! Non-streaming execution for Regular Responses API This module handles non-streaming request execution.
+//! Non-streaming execution for Regular Responses API
+//!
+//! This module handles non-streaming request execution:
+//! - `route_responses_internal` - Core execution orchestration
+//! - `execute_tool_loop` - MCP tool loop execution
+//! - `execute_without_mcp` - Simple pipeline execution without MCP
 
 use std::{sync::Arc, time::Instant};
 
@@ -28,9 +33,11 @@ use crate::{
 
 /// Internal implementation for non-streaming responses
 ///
-/// This is the core execution path that.
-/// Checks for MCP tools
-/// Persists to storage
+/// This is the core execution path that:
+/// 1. Loads conversation history / response chain
+/// 2. Checks for MCP tools
+/// 3. Executes with or without MCP tool loop
+/// 4. Persists to storage
 pub(super) async fn route_responses_internal(
     ctx: &ResponsesContext,
     request: Arc<ResponsesRequest>,
@@ -139,9 +146,11 @@ pub(super) async fn execute_without_mcp(
 
 /// Execute the MCP tool calling loop
 ///
-/// This wraps pipeline.execute_chat_for_responses() in a loop that.
-/// Checks if response has tool calls
-/// Repeats until no more tool calls or limit reached
+/// This wraps pipeline.execute_chat_for_responses() in a loop that:
+/// 1. Executes the chat pipeline
+/// 2. Checks if response has tool calls
+/// 3. If yes, executes MCP tools and builds resume request
+/// 4. Repeats until no more tool calls or limit reached
 pub(super) async fn execute_tool_loop(
     ctx: &ResponsesContext,
     mut current_request: ResponsesRequest,
@@ -370,6 +379,7 @@ pub(super) async fn execute_tool_loop(
             // Build resume request with conversation history
             current_request = build_next_request(&state, &current_request);
 
+            // Continue to next iteration
         } else {
             // No more tool calls, we're done
             trace!(

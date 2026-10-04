@@ -17,6 +17,9 @@ WORKDIR="/sglang-checkout/test"
 declare -A ENV_MAP=(
   [SGLANG_IS_IN_CI_AMD]=1
   [SGLANG_IS_IN_CI]=1
+  # Disabled on AMD: the async-assert probes (#27461) fire torch._assert_async in
+  # the MXFP4 EAGLE-MTP decode path and abort the queue with an HSA hardware
+  # exception.
   [SGLANG_ENABLE_ASYNC_ASSERT]=0
   [SGLANG_USE_AITER]=1
 )
@@ -55,7 +58,10 @@ for key in "${!ENV_MAP[@]}"; do
 done
 
 # Run docker exec with retry logic for HuggingFace network/download issues
-# When HF model downloads fail due to network timeouts.
+# When HF model downloads fail due to network timeouts or rate limits,
+# retrying with HF_HUB_OFFLINE=1 uses cached models from previous downloads.
+#
+# First attempt: normal mode (allows HF downloads)
 if docker exec \
   -w "$WORKDIR" \
   "${ENV_ARGS[@]}" \
@@ -67,6 +73,11 @@ fi
 
 echo "First attempt failed with exit code $FIRST_EXIT_CODE"
 
+# Skip retry for test failures that won't be fixed by offline mode:
+#   - Exit 1: Test assertion failures (accuracy below threshold)
+#   - Exit 137 (128+9): Process killed by OOM
+#   - Exit 255: Test suite completed with test errors
+# Only retry for other exit codes (e.g., network timeouts, HF download failures)
 if [[ "$FIRST_EXIT_CODE" -eq 1 || "$FIRST_EXIT_CODE" -eq 137 || "$FIRST_EXIT_CODE" -eq 255 ]]; then
   echo "Exit code $FIRST_EXIT_CODE indicates test failure (not network issue), not retrying"
   exit $FIRST_EXIT_CODE

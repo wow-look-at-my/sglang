@@ -149,6 +149,7 @@ mod tests {
 
         let ages = tracker.collect_ages();
         assert_eq!(ages.len(), 3);
+        // Ages should be approximately 0, 45, 100 (order may vary due to DashMap)
         let mut sorted_ages = ages.clone();
         sorted_ages.sort();
         assert!(sorted_ages[0] <= 1); // ~0s

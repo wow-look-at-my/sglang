@@ -122,7 +122,8 @@ pub async fn create_and_link_item(
 }
 
 // ============================================================================
-// Response Persistence.
+// Response Persistence
+// ============================================================================
 
 /// Extract a string field from JSON, returning owned String
 fn get_string(json: &Value, key: &str) -> Option<String> {
@@ -261,7 +262,7 @@ fn item_to_new_conversation_item(
         .and_then(|v| v.as_str())
         .unwrap_or("message");
 
-    // Determine if we should store the whole item or the content field
+    // Determine if we should store the whole item or just the content field
     let store_whole_item = if is_input {
         item_type == "function_call" || item_type == "function_call_output"
     } else {
@@ -318,8 +319,11 @@ async fn link_items_to_conversation(
 
 /// Persist conversation items to storage
 ///
-/// Extracts and normalizes input items from the request
-/// If conversation provided, also links items to conversation
+/// This function:
+/// 1. Extracts and normalizes input items from the request
+/// 2. Extracts output items from the response
+/// 3. Stores ALL items in response storage (always)
+/// 4. If conversation provided, also links items to conversation
 pub async fn persist_conversation_items(
     conversation_storage: Arc<dyn ConversationStorage>,
     item_storage: Arc<dyn ConversationItemStorage>,

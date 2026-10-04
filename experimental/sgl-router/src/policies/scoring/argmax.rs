@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Selects one worker from per-worker scores.
@@ -11,7 +11,8 @@ use std::sync::Arc;
 pub const TIE_EPSILON: f32 = 1e-6;
 
 pub trait Selector: Send + Sync + std::fmt::Debug {
-    /// Index into `workers` of the chosen candidate, or `None` when there is nothing to choose from.
+    /// Index into `workers` of the chosen candidate, or `None` when there is
+    /// nothing to choose from. `scores[i]` belongs to `workers[i]`.
     fn pick(&self, workers: &[Arc<Worker>], scores: &[f32]) -> Option<usize>;
 }
 

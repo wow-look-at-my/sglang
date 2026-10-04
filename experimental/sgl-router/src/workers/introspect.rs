@@ -1,7 +1,29 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Introspection for newly-discovered workers.
+//!
+//! Two concurrent requests, because the worker answers two different
+//! questions on two different endpoints: `/model_info` reports the identity
+//! the worker currently serves under (a weight update moves it), while
+//! `/server_info` reports its launch configuration — kv-event publisher,
+//! disaggregation role, and whether the engine serves cleartext h2c. The
+//! result is dispatched by the manager: registry consumes
+//! `served_model_name` and `enable_http2`, the optional `KvEventIndex`
+//! consumes the resolved `EventConfig`.
+//!
+//! `served_model_name` is taken from `/model_info`, falling back to
+//! `/server_info` for workers that predate the field there.
+//!
+//! # Failure semantics
+//!
+//! `fetch` is **infallible** — any error (network, non-2xx, JSON parse,
+//! invalid worker URL) is logged and yields `None` for whatever that request
+//! was carrying, so the caller can register the worker with empty `model_ids`
+//! and no kv-events attachment. The two requests fail independently. Workers
+//! that need accuracy around publisher availability use
+//! `kv_events::discovery::fetch_event_config` directly (it returns
+//! `Result<Option<EventConfig>>`); the manager intentionally doesn't.
 
 use std::time::Duration;
 
@@ -11,24 +33,48 @@ use url::Url;
 
 use crate::state::kv_events::EventConfig;
 
-/// Default timeout for `/server_info`. Conservative for a small JSON payload served by SGLang's HTTP server.
+/// Default timeout for `/server_info`. Conservative for a small JSON
+/// payload served by SGLang's HTTP server.
 const SERVER_INFO_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Retry budget for transient `/server_info` failures (connect/timeout/5xx).
+/// 4xx + JSON-parse errors short-circuit — they're authoritative.
+/// EndpointSlice can flip ready=true before the worker's HTTP server is
+/// actually serving; without retry, that race lands a worker in the
+/// registry with empty model_ids and chat dispatch fails with 502.
 const FETCH_MAX_ATTEMPTS: u32 = 3;
 const FETCH_BACKOFF_BASE: Duration = Duration::from_millis(100);
 
 /// Resolved per-worker bootstrap state.
+///
+/// `served_model_name` populates the registry; `event_config` is handed
+/// to `KvEventIndex::add_worker` (skipping its own fetch);
+/// `disaggregation_role` lets the worker manager override the discovery
+/// backend's PD classification (and fill in `WorkerSpec.bootstrap_port`
+/// for prefill workers) — see `manager::register_one`.
 #[derive(Debug, Clone, Default)]
 pub struct ServerInfo {
     pub served_model_name: Option<String>,
     pub event_config: Option<EventConfig>,
     pub disaggregation_role: Option<DisaggregationRole>,
-    /// Whether the engine was launched with `--enable-http2` (Granian, serving cleartext h2c + HTTP/1.1).
+    /// Whether the engine was launched with `--enable-http2` (Granian,
+    /// serving cleartext h2c + HTTP/1.1), from the `/server_info` launch
+    /// record. `Some(true)` ⇒ the router may forward over h2c;
+    /// `Some(false)` / `None` ⇒ stay on HTTP/1.1 — which is also what a
+    /// worker whose `/server_info` did not answer gets, so an unread
+    /// protocol costs throughput and never correctness. Consumed by
+    /// `manager::register_one` to set [`crate::workers::WireProtocol`].
     pub enable_http2: Option<bool>,
 }
 
 /// PD classification derived from a worker's `/server_info` response.
+///
+/// `Some(_)` means the worker self-disclosed its role and we should trust
+/// it over the discovery backend's classification. `None` (the
+/// `ServerInfo::disaggregation_role` value, not a variant here) means the
+/// worker didn't tell us — older SGLang, missing field, or a partial
+/// response — and the backend's classification wins. See the resolution
+/// table in `resolve_disaggregation_role`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisaggregationRole {
     Plain,
@@ -36,15 +82,18 @@ pub enum DisaggregationRole {
     Decode,
 }
 
-/// Performs the round-trips concurrently and projects the responses into `ServerInfo`.
+/// Performs the two round-trips concurrently and projects the responses into
+/// `ServerInfo`. Cheap to clone — wraps a `reqwest::Client` (which is
+/// internally `Arc`-backed).
 #[derive(Clone)]
 pub struct WorkerIntrospector {
     client: reqwest::Client,
 }
 
 impl WorkerIntrospector {
-    /// Build with a private `reqwest::Client` carrying the supplied request
-    /// timeout.
+    /// Build with a private `reqwest::Client` carrying the supplied
+    /// request timeout.  Production callers pass `SERVER_INFO_TIMEOUT`
+    /// via `default()`; tests may pass shorter timeouts.
     pub fn new(timeout: Duration) -> Self {
         let client = reqwest::Client::builder()
             .timeout(timeout)
@@ -53,16 +102,20 @@ impl WorkerIntrospector {
         Self { client }
     }
 
-    /// Reuse a caller-owned `reqwest::Client`.
+    /// Reuse a caller-owned `reqwest::Client`. Useful in tests that want
+    /// to assert request shape via a fake HTTP transport, or to share a
+    /// connection pool across components.
     pub fn with_client(client: reqwest::Client) -> Self {
         Self { client }
     }
 
     /// Fetch `/model_info` and `/server_info` for the worker, concurrently.
     /// Never returns an error: any failure is logged at `warn!` and yields
+    /// `None` for the fields that request carried. Callers register the
+    /// worker with empty model IDs and no event subscription on the
     /// failure path; future re-discovery will retry.
     ///
-    /// Transient failures (network errors.
+    /// Transient failures (network errors, 5xx) are retried up to
     /// `FETCH_MAX_ATTEMPTS` times with exponential backoff. 4xx
     /// responses and JSON-parse errors short-circuit immediately —
     /// the worker answered authoritatively, retrying won't help.
@@ -74,10 +127,13 @@ impl WorkerIntrospector {
             Self::fetch_with_retry::<ServerInfoBody>(&self.client, &server_info_url, worker_url),
             Self::fetch_with_retry::<ModelInfoBody>(&self.client, &model_info_url, worker_url),
         );
-        // A worker that answers one endpoint and not the other still gets registered with whatever did answer.
+        // A worker that answers one endpoint and not the other still gets
+        // registered with whatever did answer.
         let parsed = parsed.unwrap_or_default();
 
-        // `/model_info` is the effective identity; `/server_info` is the launch record.
+        // `/model_info` is the effective identity; `/server_info` is the launch
+        // record, kept as the fallback for workers that predate the field
+        // there. An empty string is the same as absent on either.
         let non_empty = |name: String| Some(name).filter(|name| !name.is_empty());
         let served_model_name = model_info
             .and_then(|body| body.served_model_name)
@@ -115,7 +171,7 @@ impl WorkerIntrospector {
     }
 
     /// Issue one introspection GET with bounded retry on transient errors.
-    /// Returns `Some(body)` on success.
+    /// Returns `Some(body)` on success, `None` after exhausting retries or on
     /// an authoritative answer (4xx, unparsable JSON). The caller decides what
     /// a missing body costs — each endpoint carries different fields.
     async fn fetch_with_retry<T: serde::de::DeserializeOwned>(
@@ -181,11 +237,23 @@ impl WorkerIntrospector {
     }
 }
 
-/// Map both `disaggregation_*` fields from `/server_info` into a
-/// `DisaggregationRole`. Returns `None` when the worker hasn't told us enough
-/// to be useful — the caller treats that as "defer to the discovery
-/// backend's classification" instead of forcing Plain, which preserves
-/// backwards compatibility with SGLang versions that predate the field.
+/// Map the two `disaggregation_*` fields from `/server_info` into a
+/// `DisaggregationRole`. Returns `None` when the worker hasn't told us
+/// enough to be useful — the caller treats that as "defer to the
+/// discovery backend's classification" instead of forcing Plain, which
+/// preserves backwards compatibility with SGLang versions that predate
+/// the field.
+///
+/// Resolution table:
+///
+/// | `disaggregation_mode`        | `disaggregation_bootstrap_port` | Result                              |
+/// |------------------------------|----------------------------------|-------------------------------------|
+/// | `None` (older SGLang)        | _any_                            | `None` — defer to backend           |
+/// | `Some("null")`               | _any_                            | `Some(Plain)`                       |
+/// | `Some("prefill")`            | `Some(p)`                        | `Some(Prefill { bootstrap_port: p })` |
+/// | `Some("prefill")`            | `None`                           | warn + `None` — defer to backend    |
+/// | `Some("decode")`             | _any_                            | `Some(Decode)`                      |
+/// | `Some(other)`                | _any_                            | warn + `None`                       |
 fn resolve_disaggregation_role(
     mode: Option<&str>,
     bootstrap_port: Option<u16>,
@@ -225,9 +293,11 @@ impl Default for WorkerIntrospector {
     }
 }
 
-/// Substitute a wildcard bind host (`*`, `0.0.0.0`, `::`.
-/// a routable address. An unparsable worker URL leaves the host
-/// unchanged. wildcard literal.
+/// Substitute a wildcard bind host (`*`, `0.0.0.0`, `::`, `[::]`) with
+/// the host parsed from the worker URL — the gateway has to connect to
+/// a routable address.  An unparsable worker URL leaves the host
+/// unchanged: the subsequent ZMQ connect will fail visibly with the
+/// wildcard literal, which is the same observable failure mode that
 /// would occur today if the bind/connect were skipped.
 pub(crate) fn resolve_event_config(
     block: KvEventsBlock,
@@ -266,38 +336,56 @@ pub(crate) fn resolve_event_config(
     }
 }
 
-/// Projection of `/model_info` used by the introspector: the identity the worker serves under.
+/// Projection of `/model_info` used by the introspector: the identity the
+/// worker currently serves under. `#[serde(default)]` so an engine that
+/// predates the field still deserialises.
 #[derive(Debug, Default, Deserialize)]
 struct ModelInfoBody {
     #[serde(default)]
     served_model_name: Option<String>,
 }
 
-/// Projection of `/server_info` used by the introspector.
+/// Projection of `/server_info` used by the introspector. Every field is
+/// `#[serde(default)]` so a worker that exposes only some of them still
+/// deserialises; downstream callers handle `None` as "absent".
 #[derive(Debug, Default, Deserialize)]
 struct ServerInfoBody {
-    /// The launch record's value, and the fallback for a worker whose `/model_info` predates the field.
+    /// The launch record's value, and the fallback for a worker whose
+    /// `/model_info` predates the field.
     #[serde(default)]
     served_model_name: Option<String>,
     #[serde(default)]
     kv_events: Option<KvEventsBlock>,
-    /// Top-level `speculative_algorithm`.
+    /// Top-level `speculative_algorithm`. EAGLE-family values
+    /// (EAGLE / EAGLE3 / FROZEN_KV_MTP) ⇒ the worker hashes KV blocks over
+    /// token bigrams. Absent on workers without speculative decoding.
     #[serde(default)]
     speculative_algorithm: Option<String>,
-    /// Carries the value of `ServerArgs.disaggregation_mode` (`"null"` | `"prefill"` | `"decode"`).
+    /// Carries the value of `ServerArgs.disaggregation_mode`
+    /// (`"null"` | `"prefill"` | `"decode"`). Absent on older SGLang
+    /// versions that predate the field.
     #[serde(default)]
     disaggregation_mode: Option<String>,
-    /// `ServerArgs.disaggregation_bootstrap_port`.
+    /// `ServerArgs.disaggregation_bootstrap_port`. Meaningful only when
+    /// `disaggregation_mode == "prefill"`; the prefill server's
+    /// bootstrap server binds to exactly this port (no internal offset).
     #[serde(default)]
     disaggregation_bootstrap_port: Option<u16>,
-    /// `ServerArgs.enable_http2`.
+    /// `ServerArgs.enable_http2`. `true` ⇒ the engine runs Granian and
+    /// serves cleartext h2c alongside HTTP/1.1, so the router may forward
+    /// to it with prior knowledge. Absent on older SGLang versions that
+    /// predate the flag.
     #[serde(default)]
     enable_http2: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct KvEventsBlock {
-    // Forward-compatibility: the only publisher implementation supported on the gateway side is ZMQ.
+    // Forward-compatibility: the only publisher implementation
+    // supported on the gateway side is ZMQ. Keeping the field optional
+    // means a future SGLang that adds a non-ZMQ publisher string won't
+    // fail deserialize; the resulting subscriber will still try to open
+    // a ZMQ connection and fail visibly.
     #[allow(dead_code)]
     #[serde(default)]
     publisher: Option<String>,
@@ -305,7 +393,8 @@ pub(crate) struct KvEventsBlock {
     pub endpoint_port_base: u16,
     #[serde(default)]
     pub topic: String,
-    /// Base port of the dedicated load-snapshot socket range.
+    /// Base port of the dedicated load-snapshot socket range. Absent on
+    /// workers that predate load publishing (`None` ⇒ no load subscriber).
     #[serde(default)]
     pub load_endpoint_port_base: Option<u16>,
     #[serde(default)]
@@ -368,7 +457,10 @@ mod tests {
         WorkerIntrospector::new(Duration::from_millis(500))
     }
 
-    /// The PRIMARY `/server_info` path (the introspector, not the discovery.rs fallback) must flag `is_bigram` for an EAGLE worker.
+    /// The PRIMARY `/server_info` path (the introspector, not the discovery.rs
+    /// fallback) must flag `is_bigram` for an EAGLE worker so the policy picks
+    /// the bigram hasher. Regression guard for the duplicated parse + the
+    /// `resolve_event_config(.., is_bigram)` threading.
     #[tokio::test]
     async fn fetch_sets_is_bigram_for_eagle_worker() {
         let (url, _shutdown) = spawn_fake_worker(json!({
@@ -463,7 +555,8 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_returns_empty_on_connection_refused() {
-        // Port 1 is reserved; bind a temp listener to reserve a free port then drop it so the connect fails fast.
+        // Port 1 is reserved; bind a temp listener to reserve a free
+        // port then drop it so the connect fails fast.
         let temp = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = temp.local_addr().unwrap().port();
         drop(temp);
@@ -582,7 +675,9 @@ mod tests {
         assert_eq!(cfg.port_base, 5557);
     }
 
-    /// `disaggregation_mode=prefill` + a bootstrap port → manager should see the worker as a prefill peer.
+    /// `disaggregation_mode=prefill` + a bootstrap port → manager should
+    /// see the worker as a prefill peer with the supplied port. This is
+    /// the happy path that lets PD-on-K8s skip pod annotations entirely.
     #[tokio::test]
     async fn fetch_resolves_prefill_role_with_bootstrap_port() {
         let (url, _shutdown) = spawn_fake_worker(json!({
@@ -600,7 +695,8 @@ mod tests {
         );
     }
 
-    /// `disaggregation_mode=decode` → role is Decode regardless of any bootstrap-port field value.
+    /// `disaggregation_mode=decode` → role is Decode regardless of any
+    /// bootstrap-port field value (decode workers don't bind one).
     #[tokio::test]
     async fn fetch_resolves_decode_role() {
         let (url, _shutdown) = spawn_fake_worker(json!({
@@ -612,7 +708,10 @@ mod tests {
         assert_eq!(got.disaggregation_role, Some(DisaggregationRole::Decode));
     }
 
-    /// `disaggregation_mode="null"` is SGLang's explicit "not disaggregated" value — we trust it and force the worker to Plain even.
+    /// `disaggregation_mode="null"` is SGLang's explicit "not
+    /// disaggregated" value — we trust it and force the worker to Plain
+    /// even if the discovery backend mistakenly classified it as
+    /// prefill/decode.
     #[tokio::test]
     async fn fetch_resolves_plain_role_when_mode_is_null() {
         let (url, _shutdown) = spawn_fake_worker(json!({
@@ -636,7 +735,8 @@ mod tests {
         assert_eq!(got.enable_http2, Some(true));
     }
 
-    /// An explicit `enable_http2: false` (HTTP/1.1-only engine) is surfaced as `Some(false)`.
+    /// An explicit `enable_http2: false` (HTTP/1.1-only engine) is surfaced
+    /// as `Some(false)`, distinct from the older-SGLang absent case.
     #[tokio::test]
     async fn fetch_surfaces_enable_http2_false() {
         let (url, _shutdown) = spawn_fake_worker_with_model_info(
@@ -648,7 +748,9 @@ mod tests {
         assert_eq!(got.enable_http2, Some(false));
     }
 
-    /// Older SGLang predates `enable_http2`; its absence must read as `None` (the manager then keeps the safe HTTP/1.1 default).
+    /// Older SGLang predates `enable_http2`; its absence must read as
+    /// `None` (the manager then keeps the safe HTTP/1.1 default), not as a
+    /// parse failure.
     #[tokio::test]
     async fn fetch_enable_http2_absent_is_none() {
         let (url, _shutdown) = spawn_fake_worker(json!({"served_model_name": "m"})).await;
@@ -656,7 +758,10 @@ mod tests {
         assert_eq!(got.enable_http2, None);
     }
 
-    /// Partial data (`prefill` mode with no bootstrap port) returns `None`.
+    /// Partial data (`prefill` mode with no bootstrap port) returns
+    /// `None` so the manager keeps the discovery backend's
+    /// classification. The alternative — forcing Plain — would silently
+    /// demote a misconfigured prefill worker to plain dispatch.
     #[tokio::test]
     async fn fetch_defers_to_backend_when_prefill_mode_lacks_bootstrap_port() {
         let (url, _shutdown) = spawn_fake_worker(json!({
@@ -672,7 +777,10 @@ mod tests {
         );
     }
 
-    /// Older SGLang doesn't expose `disaggregation_mode`.
+    /// Older SGLang doesn't expose `disaggregation_mode`. The
+    /// introspector must not invent a classification — the discovery
+    /// backend's seed (K8s labels, static-urls Plain default) still
+    /// drives mode for these workers.
     #[tokio::test]
     async fn fetch_defers_to_backend_when_mode_field_is_absent() {
         let (url, _shutdown) = spawn_fake_worker(json!({
@@ -683,7 +791,9 @@ mod tests {
         assert!(got.disaggregation_role.is_none());
     }
 
-    /// Unknown `disaggregation_mode` value (future SGLang adds a new disaggregation flavor, network garbled the field, etc.) → defer.
+    /// Unknown `disaggregation_mode` value (future SGLang adds a new
+    /// disaggregation flavor, network garbled the field, etc.) → defer
+    /// to backend rather than guessing.
     #[tokio::test]
     async fn fetch_defers_to_backend_when_mode_is_unrecognized() {
         let (url, _shutdown) = spawn_fake_worker(json!({

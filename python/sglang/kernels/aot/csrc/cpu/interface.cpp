@@ -16,7 +16,8 @@ void initialize(int64_t size, int64_t rank) {
     return;
   }
 
-  // Check whether all ranks is on the same physical machine. If true, we will use an SHM based low latency allreduce
+  // Check whether all ranks is on the same physical machine.
+  // If true, we will use an SHM based low latency allreduce
 
   auto ls_string = std::getenv("LOCAL_SIZE");
   int ls = 0;

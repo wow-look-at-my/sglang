@@ -46,8 +46,9 @@ use crate::{
     },
 };
 
-/// A body wrapper that holds a token and returns it when the body is fully
-/// consumed or dropped.
+/// A body wrapper that holds a token and returns it when the body is fully consumed or dropped.
+/// This ensures that for streaming responses, the token is only returned after the entire
+/// stream has been sent to the client.
 pub struct TokenGuardBody {
     inner: Body,
     /// The token bucket to return tokens to. Uses Option so we can take() on drop.
@@ -88,7 +89,8 @@ impl http_body::Body for TokenGuardBody {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        // SAFETY: We never move the inner body, and Body is Unpin (it's a type alias for UnsyncBoxBody which is Unpin)
+        // SAFETY: We never move the inner body, and Body is Unpin
+        // (it's a type alias for UnsyncBoxBody which is Unpin)
         let this = self.get_mut();
         Pin::new(&mut this.inner).poll_frame(cx)
     }
@@ -162,7 +164,8 @@ fn generate_request_id(path: &str) -> String {
         "req-"
     };
 
-    // Generate a random string similar to OpenAI's format Use byte array indexing (O(1)) instead of chars().nth().
+    // Generate a random string similar to OpenAI's format
+    // Use byte array indexing (O(1)) instead of chars().nth() (O(n))
     let mut rng = rand::rng();
     let random_part: String = (0..24)
         .map(|_| {
@@ -332,6 +335,7 @@ impl<B> OnResponse<B> for ResponseLogger {
 
         let error_code = extract_error_code_from_response(response);
 
+        // Layer 1: HTTP metrics
         Metrics::record_http_response(status_code, error_code);
 
         // Record these in the span for structured logging/observability tools
@@ -435,7 +439,7 @@ impl QueueProcessor {
                 // Need to wait for token
                 let token_bucket = self.token_bucket.clone();
 
-                // Spawn task only when we need to wait
+                // Spawn task only when we actually need to wait
                 tokio::spawn(async move {
                     if token_bucket
                         .acquire_timeout(1.0, remaining_timeout)
@@ -532,7 +536,9 @@ pub async fn concurrency_limit_middleware(
         Metrics::record_http_rate_limit(metrics_labels::RATE_LIMIT_ALLOWED);
         let response = next.run(request).await;
 
-        // Wrap the response body with TokenGuardBody to return token when stream ends This ensures that for streaming responses.
+        // Wrap the response body with TokenGuardBody to return token when stream ends
+        // This ensures that for streaming responses, the token is only returned
+        // after the entire stream has been sent to the client.
         let (parts, body) = response.into_parts();
         let guarded_body = TokenGuardBody::new(body, token_bucket, 1.0);
         Response::from_parts(parts, Body::new(guarded_body))
@@ -608,11 +614,14 @@ pub async fn concurrency_limit_middleware(
     }
 }
 
+// ============================================================================
+// HTTP Metrics Layer (Layer 1: SMG metrics)
+// ============================================================================
 
 /// Global counter for active HTTP connections (handlers currently executing)
 static ACTIVE_HTTP_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
-/// Tower Layer for HTTP metrics collection (SMG Layer metrics)
+/// Tower Layer for HTTP metrics collection (SMG Layer 1 metrics)
 #[derive(Clone)]
 pub struct HttpMetricsLayer {
     tracker: Arc<InFlightRequestTracker>,
@@ -706,6 +715,7 @@ fn normalize_path_for_metrics(path: &str) -> String {
             let segment_end = if b == b'/' { pos } else { pos + 1 };
             let segment = &path[segment_start..segment_end];
 
+            // Check segments after index 2 for dynamic IDs
             if segment_idx > 2 && !segment.is_empty() && is_dynamic_id(segment) {
                 // Initialize result with everything before this segment
                 let result = result.get_or_insert_with(|| {
@@ -740,6 +750,7 @@ fn is_dynamic_id(s: &str) -> bool {
     if s.len() > 10 && s.contains('_') {
         return true;
     }
+    // UUIDs: 32+ hex chars with dashes
     if s.len() >= 32 && s.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
         return true;
     }
@@ -929,6 +940,7 @@ pub async fn wasm_middleware(
         // Process action - apply modifications incrementally
         match action {
             Action::Continue => {
+                // Continue to next module
             }
             Action::Reject(status_code) => {
                 // Override response status

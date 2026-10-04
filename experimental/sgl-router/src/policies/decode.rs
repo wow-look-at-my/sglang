@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Decode policy extension point, independent of prefill affinity.
@@ -57,6 +57,7 @@ pub trait DecodePolicy: Send + Sync + std::fmt::Debug {
     ) -> Option<SelectionProposal>;
 }
 
+/// Resolves decode admission and degrades to Power-of-Two when capacity is exhausted.
 pub fn resolve_decode_with_capacity_fallback(
     domain: &CandidateDomain,
     proposal: &SelectionProposal,
@@ -93,7 +94,7 @@ pub fn resolve_decode_with_capacity_fallback(
     })
 }
 
-/// Samples workers from a decode domain and orders them by decode pressure.
+/// Samples two workers from a decode domain and orders them by decode pressure.
 #[derive(Debug, Default)]
 pub struct DecodePowerOfTwoPolicy;
 

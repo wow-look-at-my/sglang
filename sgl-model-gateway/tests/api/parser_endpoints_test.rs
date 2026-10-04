@@ -159,6 +159,7 @@ mod parse_function_call_tests {
 
         let resp = app.oneshot(req).await.unwrap();
 
+        // Parser endpoint should return 200 for valid requests
         assert_eq!(
             resp.status(),
             StatusCode::OK,
@@ -197,6 +198,7 @@ mod parse_function_call_tests {
 
         let resp = app.oneshot(req).await.unwrap();
 
+        // Should return 400 (parser not found)
         assert_eq!(
             resp.status(),
             StatusCode::BAD_REQUEST,
@@ -275,6 +277,7 @@ mod parse_function_call_tests {
 
         let resp = app.oneshot(req).await.unwrap();
 
+        // Parser should handle empty text gracefully - return 200
         assert_eq!(
             resp.status(),
             StatusCode::OK,
@@ -309,6 +312,7 @@ mod separate_reasoning_tests {
 
         let resp = app.oneshot(req).await.unwrap();
 
+        // Should return 200 with parser factory initialized
         assert_eq!(
             resp.status(),
             StatusCode::OK,
@@ -348,6 +352,7 @@ mod separate_reasoning_tests {
 
         let resp = app.oneshot(req).await.unwrap();
 
+        // Should return 400 (parser not found)
         assert_eq!(
             resp.status(),
             StatusCode::BAD_REQUEST,
@@ -453,6 +458,7 @@ mod separate_reasoning_tests {
 
         let resp = app.oneshot(req).await.unwrap();
 
+        // Should return 200, parser should handle gracefully
         assert_eq!(
             resp.status(),
             StatusCode::OK,
@@ -466,7 +472,8 @@ mod separate_reasoning_tests {
         let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(body_json["success"], true);
-        // When there are no reasoning tags.
+        // When there are no reasoning tags, parser returns empty normal_text and empty reasoning_text
+        // since the detect_and_parse_reasoning method only extracts if it finds reasoning markers
         assert!(body_json.get("normal_text").is_some());
         assert!(body_json.get("reasoning_text").is_some());
 
@@ -530,6 +537,7 @@ mod api_routing_tests {
 
         let resp = app.clone().oneshot(req).await.unwrap();
 
+        // Should not be 404
         assert_ne!(resp.status(), StatusCode::NOT_FOUND);
 
         let payload = json!({
@@ -546,6 +554,7 @@ mod api_routing_tests {
 
         let resp = app.oneshot(req).await.unwrap();
 
+        // Should not be 404
         assert_ne!(resp.status(), StatusCode::NOT_FOUND);
 
         ctx.shutdown().await;
@@ -565,6 +574,7 @@ mod api_routing_tests {
 
         let resp = app.clone().oneshot(req).await.unwrap();
 
+        // Should not accept GET (should be 405 or 404)
         assert!(
             resp.status() == StatusCode::METHOD_NOT_ALLOWED
                 || resp.status() == StatusCode::NOT_FOUND,

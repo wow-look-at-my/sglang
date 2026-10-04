@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //! SSE passthrough — bridges a reqwest `bytes_stream()` into an axum Body.
@@ -46,7 +46,8 @@ fn is_error_event_line(line: &[u8]) -> bool {
 /// Line-start bytes that suffice to decide `is_error_event_line`.
 const LINE_PROBE: usize = 32;
 
-/// Finds error events emitted after an SSE response commits a.
+/// Finds error events emitted after an SSE response commits a 200.
+/// Line-anchored, so lookalike text inside event payloads cannot match.
 #[derive(Default)]
 struct ErrorEventScanner {
     line_start: Vec<u8>,
@@ -79,11 +80,13 @@ pub struct StreamLimits {
 
 /// Bridge a byte stream into an axum Body that streams chunks unchanged.
 ///
-/// slow client backpressures the upstream read.
+/// One tokio task pumps upstream chunks through a bounded 64-slot channel so a
+/// slow client backpressures the upstream read. The pump stops as soon as the
 /// client disconnects, even while upstream is silent, when `limits.idle_timeout`
 /// elapses between chunks, or when `limits.expiration` fires.
 ///
-/// data.
+/// The terminal result travels on a separate channel and is chained after the
+/// data, so a full queue cannot block cleanup or turn a failed stream into a
 /// clean EOF. A pump panic is reported the same way.
 ///
 /// `guards` is held until the pump finishes; `on_first_byte` runs on the first
@@ -404,7 +407,9 @@ mod tests {
     }
 
     /// A stream that yields one Ok chunk, then panics with a non-string
-    /// payload (`i32`).
+    /// payload (`i32`). Used to exercise the `<non-string panic payload>`
+    /// fallback in the downcast ladder — the existing
+    /// `PanicOnSecondPoll` test only covers the `&'static str` arm.
     struct PanicAnyOnSecondPoll {
         polls: usize,
     }
@@ -426,7 +431,12 @@ mod tests {
 
     #[tokio::test]
     async fn bytes_stream_to_body_handles_non_string_panic_payload() {
-        // `panic_any(42_i32)` skips the formatter entirely — neither the `&'static str` nor the `String` downcast arms match.
+        // `panic_any(42_i32)` skips the formatter entirely — neither the
+        // `&'static str` nor the `String` downcast arms match, so the
+        // catch_unwind handler must fall through to the
+        // `"<non-string panic payload>"` literal. If a refactor deletes
+        // that arm, the closure unwrap-or-elses would panic itself or
+        // produce an empty message, which this test catches.
         let s = PanicAnyOnSecondPoll { polls: 0 };
         let (body, end) = limited_body(s, StreamLimits::default());
         let result = body.collect().await;
@@ -449,7 +459,8 @@ mod tests {
 
     #[tokio::test]
     async fn bytes_stream_to_body_propagates_pump_panic() {
-        // The pump task panics mid-stream. The client must see a loud Err, NOT a silently-truncated success.
+        // The pump task panics mid-stream. The client must see a loud Err,
+        // NOT a silently-truncated success.
         let s = PanicOnSecondPoll { polls: 0 };
         let body = bytes_stream_to_body(s, None, None, None, StreamLimits::default());
         let result = body.collect().await;
@@ -466,13 +477,22 @@ mod tests {
     }
 
     /// Regression guard for the backpressure-via-disconnect invariant.
+    ///
+    /// The doc on `bytes_stream_to_body` claims "when the axum Body is dropped
+    /// the receiver is closed; `tx.send()` then returns `Err`, which breaks the
+    /// loop — no upstream bytes are read after the client disconnects." This
+    /// test pins that contract: a refactor that swaps the `if tx.send().await.
+    /// is_err() { break; }` for `let _ = tx.send().await;` would silently
+    /// regress (leaked upstream reads on every client cancel, visible only as
+    /// ops-side memory growth).
     #[tokio::test]
     async fn bytes_stream_to_body_breaks_on_client_disconnect() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
-        // A stream that yields N Ok chunks readily, counting polls via a
-        // shared atomic.
+        // A stream that yields N Ok chunks readily, counting polls via a shared
+        // atomic. After we read 1 chunk and drop the body, the pump must hit
+        // tx.send-err and break — not drain all 1000 chunks.
         struct CountingStream {
             polls: Arc<AtomicUsize>,
             yielded: usize,
@@ -509,14 +529,16 @@ mod tests {
         assert!(first.is_some(), "expected at least one chunk before drop");
         drop(data_stream);
 
-        // Give the pump generous time to make additional polls if its break is broken.
+        // Give the pump generous time to make additional polls if its break is
+        // broken. Healthy code: pump fills the 64-slot channel, then on the
+        // next iteration tx.send().await detects receiver-drop and breaks.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let final_polls = polls.load(Ordering::SeqCst);
         assert!(
             final_polls <= 70,
             "pump kept polling upstream after client disconnect: {final_polls} polls (expected <=70, channel bound + slack)"
         );
-        // And: the pump must NOT have drained all chunks.
+        // And: the pump must NOT have drained all 1000 chunks.
         assert!(
             final_polls < 1000,
             "pump drained the entire upstream after client disconnect ({final_polls} polls); the break-on-tx.send-err path is dead"

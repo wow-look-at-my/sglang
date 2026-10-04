@@ -79,7 +79,8 @@ env:
   SGLANG_PRECISION_FORCE_UPDATE: ${{ inputs.refresh_precision_baseline && '1' || '0' }}
   SGLANG_PRECISION_COMMIT: ${{ inputs.pr_head_sha || github.sha }}
 
-# Every job below sets its own `permissions`, which replaces rather than merges with a workflow-level block -- so keep the floor here minimal and grant per job.
+# Every job below sets its own `permissions`, which replaces rather than merges
+# with a workflow-level block -- so keep the floor here minimal and grant per job.
 permissions:
   contents: read
   issues: read
@@ -135,7 +136,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.pr_head_sha || github.sha }}
-          # This checkout can hold a fork's code that the steps below execute; without this the job token stays in .git/config, readable by it.
+          # This checkout can hold a fork's code that the steps below execute;
+          # without this the job token stays in .git/config, readable by it.
           persist-credentials: false
 
       - name: Mark runner picked up
@@ -161,7 +163,8 @@ jobs:
       - name: Install dependencies
         timeout-minutes: ${{ fromJson(inputs.install_timeout) }}
         env:
-          # Public-read-only PAT: the checkout above leaves no job token for the install script's github.com clones. Unset -> anonymous.
+          # Public-read-only PAT: the checkout above leaves no job token for the
+          # install script's github.com clones. Unset -> anonymous.
           GH_TOKEN: ${{ secrets.GH_PAT_FOR_CI_CLONE }}
         run: |
           if [[ "${{ inputs.runs_on }}" == "1-gpu-5090" ]]; then
@@ -268,7 +271,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.pr_head_sha || github.sha }}
-          # This checkout can hold a fork's code that the steps below execute; without this the job token stays in .git/config, readable by it.
+          # This checkout can hold a fork's code that the steps below execute;
+          # without this the job token stays in .git/config, readable by it.
           persist-credentials: false
 
       - name: Mark runner picked up
@@ -367,7 +371,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.pr_head_sha || github.sha }}
-          # This checkout can hold a fork's code that the steps below execute; without this the job token stays in .git/config, readable by it.
+          # This checkout can hold a fork's code that the steps below execute;
+          # without this the job token stays in .git/config, readable by it.
           persist-credentials: false
 
       - name: Mark runner picked up
@@ -392,11 +397,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      # Worth the most of the three jobs: this runner is hosted, so it has no persistent cargo target dir and every dispatch compiled cold. Its setup-python pins the same 3.10 the modules were built against.
+      # Worth the most of the three jobs: this runner is hosted, so it has no
+      # persistent cargo target dir and every dispatch compiled cold. Its
+      # setup-python pins the same 3.10 the modules were built against.
       - uses: ./.github/actions/download-rust-ext
         id: rust_ext
 
-      # Needed by setuptools-rust to build the bundled native gRPC extension (rust/sglang-grpc) when installing the main `sglang` wheel from source.
+      # Needed by setuptools-rust to build the bundled native gRPC extension
+      # (rust/sglang-grpc) when installing the main `sglang` wheel from source.
       - name: Install protoc + Rust toolchain
         if: ${{ steps.rust_ext.outputs.hit != 'true' }}
         timeout-minutes: 10

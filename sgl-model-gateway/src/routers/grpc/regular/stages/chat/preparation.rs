@@ -18,7 +18,10 @@ use crate::{
     },
 };
 
-/// Chat preparation stage Extracts chat-specific preparation logic from the unified PreparationStage.
+/// Chat preparation stage
+///
+/// Extracts chat-specific preparation logic from the old unified PreparationStage.
+/// This is a direct extraction without architectural changes.
 pub(crate) struct ChatPreparationStage;
 
 #[async_trait]
@@ -40,11 +43,14 @@ impl ChatPreparationStage {
         ctx: &mut RequestContext,
         request: &ChatCompletionRequest,
     ) -> Result<(), Response> {
+        // Step 0: Resolve tokenizer from registry (cached for reuse in response processing)
         let tokenizer =
             utils::resolve_tokenizer(ctx, "ChatPreparationStage::prepare_chat").map_err(|e| *e)?;
 
+        // Step 1: Filter tools if needed
         let body_ref = utils::filter_chat_request_by_tool_choice(request);
 
+        // Step 2: Process messages and apply chat template
         let processed_messages = match utils::process_chat_messages(&body_ref, &*tokenizer) {
             Ok(msgs) => msgs,
             Err(e) => {
@@ -53,6 +59,7 @@ impl ChatPreparationStage {
             }
         };
 
+        // Step 3: Tokenize the processed text (no special tokens - chat template already handles them)
         let encoding = match tokenizer.encode(&processed_messages.text, false) {
             Ok(encoding) => encoding,
             Err(e) => {
@@ -66,6 +73,7 @@ impl ChatPreparationStage {
 
         let token_ids = encoding.token_ids().to_vec();
 
+        // Step 4: Build tool constraints if needed
         let tool_call_constraint = if let Some(tools) = body_ref.tools.as_ref() {
             utils::generate_tool_constraints(tools, &request.tool_choice, &request.model)
                 .map_err(|e| {
@@ -76,6 +84,7 @@ impl ChatPreparationStage {
             None
         };
 
+        // Step 5: Create stop sequence decoder (build once, reuse in non-stream)
         let stop_decoder = utils::create_stop_decoder(
             &tokenizer,
             request.stop.as_ref(),

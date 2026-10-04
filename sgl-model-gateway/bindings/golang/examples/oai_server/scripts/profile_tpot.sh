@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# TPOT performance analysis script Quickly collect and analyze TPOT-related performance data
+# TPOT performance analysis script
+# Quickly collect and analyze TPOT-related performance data
 
 set -e
 
@@ -80,7 +81,7 @@ if kill -0 $CPU_PID 2>/dev/null; then
         sleep 1
     done
 else
-    # Process already completed or not found, wait a bit
+    # Process already completed or not found, just wait a bit
     sleep 2
 fi
 

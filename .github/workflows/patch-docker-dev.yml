@@ -25,7 +25,10 @@ jobs:
     runs-on: x64-docker-build-node
     steps:
       - name: Resolve and validate image tags
+        env:
           # Inject via env so a crafted input cannot break out of the script.
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          OUTPUT_TAG: ${{ inputs.output_tag }}
         run: |
           # Whole-string checks. A '^...$' regex anchors per LINE, so a
           # multi-line value would pass and then inject extra GITHUB_ENV lines.
@@ -37,11 +40,11 @@ jobs:
                 ;;
             esac
           }
-          validate_tag image_tag "${{ inputs.image_tag }}"
-          validate_tag output_tag "${{ inputs.output_tag }}"
+          validate_tag image_tag "${IMAGE_TAG}"
+          validate_tag output_tag "${OUTPUT_TAG}"
 
-          echo "BASE_IMAGE=lmsysorg/sglang:${{ inputs.image_tag }}" >> "$GITHUB_ENV"
-          echo "OUT_IMAGE=lmsysorg/sglang:${{ inputs.output_tag }}" >> "$GITHUB_ENV"
+          echo "BASE_IMAGE=lmsysorg/sglang:${IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo "OUT_IMAGE=lmsysorg/sglang:${OUTPUT_TAG}" >> "$GITHUB_ENV"
 
       - name: Cleanup workspace (remove root-owned files from prior runs)
         run: sudo rm -rf "$GITHUB_WORKSPACE"/* || true
@@ -83,6 +86,8 @@ jobs:
           docker image rm "${BASE_IMAGE}" || true
 
       - name: Generate patch
+        env:
+          PR_NUMBERS: ${{ inputs.pr_numbers }}
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git fetch origin main
@@ -107,8 +112,8 @@ jobs:
               merge --no-edit "$1"
           }
 
-          if [ -n "${{ inputs.pr_numbers }}" ]; then
-            IFS=',' read -ra PRS <<< "${{ inputs.pr_numbers }}"
+          if [ -n "${PR_NUMBERS}" ]; then
+            IFS=',' read -ra PRS <<< "${PR_NUMBERS}"
             for pr in "${PRS[@]}"; do
               pr=$(echo "${pr}" | xargs)
               case "${pr}" in
@@ -170,9 +175,11 @@ jobs:
             "${PATCH_CTX}/"
 
       - name: Write summary
+        env:
+          PR_NUMBERS: ${{ inputs.pr_numbers }}
         run: |
-          if [ -n "${{ inputs.pr_numbers }}" ]; then
-            SOURCE="PRs: ${{ inputs.pr_numbers }}"
+          if [ -n "${PR_NUMBERS}" ]; then
+            SOURCE="PRs: ${PR_NUMBERS}"
           else
             SOURCE="latest main"
           fi

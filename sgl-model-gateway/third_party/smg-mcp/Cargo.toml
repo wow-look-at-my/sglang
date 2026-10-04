@@ -1,3 +1,7 @@
+# smg-mcp 1.0.0 from crates.io (Apache-2.0, see LICENSE; upstream
+# https://github.com/lightseekorg/smg), ported to rmcp 3.x. The published
+# release pins rmcp ^0.8.3; the legacy HTTP+SSE client rmcp dropped lives in
+# src/sse_transport.rs.
 [package]
 name = "smg-mcp"
 version = "1.0.0"

@@ -1,16 +1,38 @@
 // Single `export const config` literal — no spreads/calls/IIFE (Mintlify re-evals at hydration).
 // Cells are denormalized: no `--nnodes`/`--node-rank`/`--dist-init-addr`/`--host`/`--port` literals — engine injects them.
 //
-// Standard architecture — no custom kernels and no model-code fork — so every
-// supported card runs it single-GPU at TP=1 with the stock backend. That leaves
-// one recipe per card, hence a single variant / quantization / strategy / node
-// option and no parallelism flags in any cell.
+// MiniCPM5-2B: 2.5B dense `LlamaForCausalLM` (42 layers, GQA 16Q/2KV, 131072
+// context). Standard architecture — no custom kernels and no model-code fork —
+// so every supported card runs it single-GPU at TP=1 with the stock backend.
+// That leaves one recipe per card, hence a single variant / quantization /
+// strategy / node option and no parallelism flags in any cell.
+//
+// Recipes are the OpenBMB model card's SGLang commands, rewritten from
+// `python -m sglang.launch_server` to `sglang serve`, plus the parser pair the
+// model needs to be usable through the OpenAI API. Both are baked into every
+// cell, so the Parsers card in the Playground reads as an opt-OUT:
+//   --tool-call-parser minicpm5   the model emits XML-style
+//     `<function name="f"><param name="p">v</param></function>`; without the
+//     detector `tool_calls` comes back None and the XML lands in `content`.
+//   --reasoning-parser qwen3      the chat template is Qwen-style
+//     (`<|im_start|>` + `<think>`) and there is no `minicpm5` reasoning
+//     detector, so `qwen3` is the one that applies; without it `</think>`
+//     leaks into `content`.
+//
+// DSpark is the separately published draft checkpoint
+// (openbmb/MiniCPM5-2B-DSpark). It is orthogonal to the card grid, so it is an
+// overlay row rather than a match dim. No DSpark speed numbers are published:
+// the speedup tracks acceptance length, which moves with the prompt
+// distribution, and a random-token dataset inflates it above real traffic.
 
 export const config = {
   modelName: "MiniCPM5-2B",
 
   supportedHardware: ["h200", "rtx6000", "rtx5090", "dgx-spark"],
 
+  // RTX PRO 6000 and RTX 5090 (SM120 / Blackwell workstation + desktop) are not
+  // datacenter parts, so the shared HARDWARE_CATALOG in _deployment.jsx does not
+  // carry them. Ids/labels match the DeepSeek-V4 and Qwen3.8-27B configs.
   hardware: [
     { id: "rtx6000", label: "RTX PRO 6000", vram: "96GB", vendor: "blackwell" },
     { id: "rtx5090", label: "RTX 5090", vram: "32GB", vendor: "blackwell" },
@@ -38,7 +60,9 @@ export const config = {
         {
           id: "dspark", label: "DSPARK",
           // Verbatim from the model card's DSpark command, including
-          // `--trust-remote-code`: the base checkpoint is plain Llama.
+          // `--trust-remote-code`: the base checkpoint is plain Llama and does
+          // not need it, the draft checkpoint's config does. gamma = 7, so the
+          // verify window is 8 tokens.
           flags: [
             "--trust-remote-code",
             "--speculative-algorithm DSPARK",
@@ -104,9 +128,10 @@ export const config = {
       ],
     },
 
-    // ----- Card: "Parsers" ----- Opt-OUT: both flags are already in every
-    // cell, so the handler derives each chip as on and strips the flag when
-    // one is toggled off.
+    // ----- Card: "Parsers" -----
+    // Opt-OUT: both flags are already in every cell, so the handler derives
+    // each chip as on and strips the flag when one is toggled off. The
+    // reasoning slug is `qwen3`, not `minicpm5` — see the header note.
     parsers: {
       items: [
         { id: "reasoning", label: "Reasoning Parser", flag: "--reasoning-parser qwen3" },
@@ -114,8 +139,9 @@ export const config = {
       ],
     },
 
-    // ----- Card: "Speculative Decoding" ----- Same DSpark flags as the
-    // Deploy panel's overlay row, so both paths compose an identical command.
+    // ----- Card: "Speculative Decoding" -----
+    // Same DSpark flags as the Deploy panel's overlay row, so the two paths
+    // compose an identical command.
     speculative: {
       options: [
         { id: "current", label: "Inherited from base" },
@@ -146,9 +172,13 @@ export const config = {
       ],
     },
     {
-      // Verification round still open on this card.
+      // Verification round still open on this card. `verificationStatus` alone,
+      // with NO `verified: true` baseline: the boolean is what the Playground
+      // reads for its own badge, so leaving it on would make the Playground
+      // claim "Verified" while the Deploy panel says the round is in progress.
       match: { hw: "rtx6000", variant: "default", quant: "bf16", nodes: "single" },
-      // Flat string, not a predicate: this cell is in-progress with or without the DSPARK overlay.
+      // Flat string, not a predicate: this cell is in-progress with or without
+      // the DSPARK overlay, so there is nothing for the selection to switch on.
       verificationStatus: "in-progress",
       env: [],
       flags: [
@@ -160,7 +190,14 @@ export const config = {
       ],
     },
     {
-      // The 32GB card is the one where the default KV pool starves decode CUDA-graph capture.
+      // The 32GB card is the one where the default KV pool starves decode
+      // CUDA-graph capture: with defaults the pool takes 473,718 tokens / 19 GB
+      // and leaves 4.6 GB, so capture stops around bs=48 and every larger batch
+      // runs eager (3810 tok/s at concurrency 64). The pair below gives back
+      // 4% of the pool -- still hugely oversized for a 2.5B model -- and keeps
+      // batches up to 128 graph-backed (7454 tok/s at the same concurrency).
+      // The two flags go together: raising the cap without freeing the memory
+      // just lets SGLang clamp capture back down.
       match: { hw: "rtx5090", variant: "default", quant: "bf16", nodes: "single" },
       verified: true,
       env: [],
@@ -175,7 +212,11 @@ export const config = {
       ],
     },
     {
-      // GB10 has no discrete VRAM, so `mem_get_info()` reports all 128GB of unified system memory and the default fraction claims ~89GB for KV.
+      // GB10 has no discrete VRAM, so `mem_get_info()` reports all 128GB of
+      // unified system memory and the default fraction claims ~89GB for KV --
+      // leaving ~5GB for the OS, which kills the node during warmup with no
+      // traceback and no OOMKilled event. 0.30 is required, not tuning; it
+      // still leaves a 658k-token pool.
       match: { hw: "dgx-spark", variant: "default", quant: "bf16", nodes: "single" },
       verified: true,
       env: [],

@@ -1,4 +1,11 @@
-//! Streaming response handling for OpenAI-compatible responses This module handles all streaming-related functionality including.
+//! Streaming response handling for OpenAI-compatible responses
+//!
+//! This module handles all streaming-related functionality including:
+//! - SSE (Server-Sent Events) parsing and forwarding
+//! - Streaming response accumulation for persistence
+//! - Tool call detection and interception during streaming
+//! - MCP tool execution loops within streaming responses
+//! - Event transformation and output index remapping
 
 use std::{borrow::Cow, io, sync::Arc};
 
@@ -54,6 +61,8 @@ pub(super) fn apply_event_transformations_inplace(
 ) -> bool {
     let mut changed = false;
 
+    // 1. Apply rewrite_streaming_block logic (store, previous_response_id, tools masking)
+    // Get event_type as owned String to avoid borrow conflict with mutable operations below
     let event_type = parsed_data
         .get("type")
         .and_then(|v| v.as_str())
@@ -171,7 +180,8 @@ fn build_mcp_tools_value(original_body: &ResponsesRequest) -> Option<Value> {
     Some(Value::Array(tools_array))
 }
 
-/// Send an SSE event to the client channel Returns false if client disconnected
+/// Send an SSE event to the client channel
+/// Returns false if client disconnected
 #[inline]
 fn send_sse_event(
     tx: &mpsc::UnboundedSender<Result<Bytes, io::Error>>,
@@ -182,7 +192,10 @@ fn send_sse_event(
     tx.send(Ok(Bytes::from(block))).is_ok()
 }
 
-/// Append a fully-formed SSE block to a `\n\n` terminator without going through `format!()`.
+/// Append a fully-formed SSE block to a `\n\n` terminator without going
+/// through `format!()` — the `/responses` streaming path forwards a chunk
+/// for every model token, so avoiding the intermediate `String` allocation
+/// matters under load.
 #[inline]
 fn sse_block_to_bytes(block: &str) -> Bytes {
     let mut buf = BytesMut::with_capacity(block.len() + 2);
@@ -520,11 +533,16 @@ pub(super) async fn handle_simple_streaming_passthrough(
             .unwrap_or_else(|err| format!("Failed to read upstream error body: {}", err));
         return (status_code, error_body).into_response();
     }
-    // Do NOT record_success here at status-OK time — the spawned forwarder below records the actual stream outcome on termination.
+    // Do NOT record_success here at status-OK time — the spawned forwarder
+    // below records the actual stream outcome on termination (success on
+    // clean end / `[DONE]`, failure on mid-stream error). Recording success
+    // eagerly here would mask 200-then-broken workers and double-count when
+    // the stream completes normally.
 
     let preserved_headers = preserve_response_headers(response.headers());
     // Wrap upstream in `BreakerTrackedStream` so the breaker tick is decided
-    // once on drop: success on clean `None`, failure on `Some(Err)`.
+    // once on drop: success on clean `None`, failure on `Some(Err)`, neither
+    // on early drop (client disconnected before upstream terminated).
     let upstream_stream = BreakerTrackedStream::new(
         response.bytes_stream(),
         Arc::clone(&worker),
@@ -540,14 +558,22 @@ pub(super) async fn handle_simple_streaming_passthrough(
     let storage = req.storage;
     let upstream_url = req.url;
 
-    // When persistence is needed (should_store || persist_needed).
+    // When persistence is needed (should_store || persist_needed), we must
+    // continue consuming upstream even after client disconnect to accumulate
+    // the full response — the upstream HTTP request is intentionally NOT
+    // cancelled in that branch. When neither is needed, we use select! to
+    // race stream.next() against tx.closed() so the upstream HTTP connection
+    // is dropped promptly when the client disconnects.
     let need_persistence = should_store || persist_needed;
 
     tokio::spawn(async move {
         let mut chunk_processor = ChunkProcessor::new();
 
         if need_persistence {
-            // Persistence path: keep consuming upstream even after client disconnect.
+            // Persistence path: keep consuming upstream even after client
+            // disconnect. The wrapper's terminal state at drop encodes the
+            // breaker outcome; `upstream_failed` is just a local flag used
+            // to skip persistence on stream error.
             let mut upstream_stream = upstream_stream;
             let mut accumulator = StreamingResponseAccumulator::new();
             let mut upstream_failed = false;
@@ -584,7 +610,8 @@ pub(super) async fn handle_simple_streaming_passthrough(
                     }
                     Err(err) => {
                         upstream_failed = true;
-                        // BreakerTrackedStream already marked terminal=Errored and logged.
+                        // BreakerTrackedStream already marked terminal=Errored
+                        // and logged; just forward the error to the client.
                         let io_err = io::Error::other(err);
                         let _ = tx.send(Err(io_err));
                         break;
@@ -628,8 +655,17 @@ pub(super) async fn handle_simple_streaming_passthrough(
                     warn!("Streaming completed without a final response payload");
                 }
             }
+            // upstream_stream dropped here → breaker tick fires (success or
+            // failure depending on terminal state set during the loop).
         } else {
             // No persistence: use select! to cancel upstream on client disconnect.
+            // `biased;` drains a ready upstream chunk before observing client
+            // disconnect, so a chunk already produced by reqwest reaches the
+            // client before we tear the loop down. The `BreakerTrackedStream`
+            // wrapper records the breaker outcome on drop based on the
+            // terminal it observed: clean `None` → success, `Some(Err)` →
+            // failure, dropped while still active (client disconnect or
+            // `tx.send` failure) → neither.
             futures_util::pin_mut!(upstream_stream);
             'outer: loop {
                 tokio::select! {
@@ -680,6 +716,8 @@ pub(super) async fn handle_simple_streaming_passthrough(
                     }
                 }
             }
+            // upstream_stream dropped here → breaker tick fires based on
+            // terminal state.
         }
     });
 
@@ -704,7 +742,7 @@ pub(super) async fn handle_simple_streaming_passthrough(
 /// Note on cancellation vs persistence:
 /// Unlike `handle_simple_streaming_passthrough`, this path does *not* keep
 /// consuming the upstream after a client disconnect even when `should_store`
-/// or `persist_needed` is set.
+/// or `persist_needed` is set. Tool interception is multi-iteration and
 /// drives MCP tool execution between iterations, which is unbounded work.
 /// We deliberately give up on persistence when the client is gone so we
 /// don't keep workers and external MCP services busy on results no one
@@ -774,8 +812,10 @@ pub(super) async fn handle_streaming_with_tool_interception(
         };
 
         loop {
-            // Check if the client has already disconnected before making a
-            // new upstream request (e.g. between tool-call iterations).
+            // Check if the client has already disconnected before making a new
+            // upstream request (e.g. between tool-call iterations). This avoids
+            // issuing a fresh upstream HTTP request whose response we'd just
+            // discard. Mid-stream disconnects are caught by the inner select!.
             if tx.is_closed() {
                 tracing::info!(
                     "Client disconnected before next tool-call iteration to {}, cancelling",
@@ -793,7 +833,7 @@ pub(super) async fn handle_streaming_with_tool_interception(
 
             // Race send() against tx.closed() so that a client disconnect
             // while we're still waiting for upstream response headers also
-            // cancels this in-flight HTTP request (not mid-stream).
+            // cancels this in-flight HTTP request (not just mid-stream).
             let response = tokio::select! {
                 biased;
                 res = request_builder.send() => res,
@@ -844,6 +884,12 @@ pub(super) async fn handle_streaming_with_tool_interception(
             }
 
             // Stream events and check for tool calls.
+            // Uses select! to race stream.next() against tx.closed() so that
+            // when the client disconnects the upstream HTTP connection is dropped
+            // promptly, allowing the engine to abort the request.
+            // `biased;` drains a ready upstream chunk before observing client
+            // disconnect, so a chunk already produced by reqwest reaches both
+            // the client and the chunk_processor before we tear the loop down.
             let upstream_stream = response.bytes_stream();
             futures_util::pin_mut!(upstream_stream);
             let mut handler = StreamingToolHandler::with_starting_index(next_output_index);
@@ -949,6 +995,7 @@ pub(super) async fn handle_streaming_with_tool_interception(
                                     }
                                 }
                                 StreamAction::Buffer => {
+                                    // Don't forward, just buffer
                                 }
                                 StreamAction::ExecuteTools => {
                                     if !forward_streaming_event(
@@ -1081,7 +1128,11 @@ pub(super) async fn handle_streaming_with_tool_interception(
             };
 
             if state.total_calls > effective_limit {
-                // Reaching the tool-call iteration limit is a request-level shape problem (.
+                // Reaching the tool-call iteration limit is a request-level
+                // shape problem (the user asked for unbounded work or the
+                // model is in a tight tool-call loop); the upstream worker
+                // is not unhealthy. Record a success to reflect that the
+                // last upstream call returned cleanly.
                 worker_for_breaker.circuit_breaker().record_success();
                 warn!(
                     "Reached tool call limit during streaming: {}",
@@ -1128,9 +1179,13 @@ pub(super) async fn handle_streaming_with_tool_interception(
                     current_payload = resume_payload;
                     // Mark that we're no longer on the first iteration
                     is_first_iteration = false;
+                    // Continue loop to make next streaming request
                 }
                 Err(e) => {
-                    // Upstream stream finished cleanly (we got pending tool calls out of it).
+                    // Upstream stream finished cleanly (we got pending tool
+                    // calls out of it); the gateway-side payload build failed.
+                    // Credit the worker for the upstream call, mirroring the
+                    // tool-iteration-limit path above.
                     worker_for_breaker.circuit_breaker().record_success();
                     if should_store || persist_needed {
                         warn!(

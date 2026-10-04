@@ -1,4 +1,6 @@
-//! Pipeline stages for regular (non-harmony).
+//! Pipeline stages for regular (non-harmony) model processing
+//!
+//! This module defines stages specific to regular tokenizer-based models.
 
 pub(crate) mod chat;
 pub(crate) mod classify;

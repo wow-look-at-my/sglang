@@ -38,7 +38,8 @@ fn terminal_error_status_maps_abort_to_cancelled() {
     assert_eq!(status.code(), Code::Cancelled);
 }
 
-// SAFETY: env vars are process-global; bundle all SGLANG_TONIC_PAYLOAD cases into one serial test so they don't race each other.
+// SAFETY: env vars are process-global; bundle all SGLANG_TONIC_PAYLOAD cases into one
+// serial test so they don't race each other under `cargo test`'s default parallelism.
 #[test]
 fn resolve_max_message_size_honors_env_var() {
     const VAR: &str = "SGLANG_TONIC_PAYLOAD";

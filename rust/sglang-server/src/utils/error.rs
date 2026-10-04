@@ -1,8 +1,10 @@
-//! Error type shared by all stages.
+//! Error type shared by all stages. Kept `Clone` so a single failure can be
+//! reported to the client stream and logged without moving ownership around.
 
 use thiserror::Error;
 
-// Some variants are emitted only once their stage matures (real validation, the deferred Encoder, HF detok).
+// Some variants are emitted only once their stage matures (real validation,
+// the deferred Encoder, HF detok). They are part of the stable error surface.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Error)]
 pub enum Error {

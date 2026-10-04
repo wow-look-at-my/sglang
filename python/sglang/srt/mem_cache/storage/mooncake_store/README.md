@@ -11,7 +11,7 @@ Related documentation:
 
 ## About Mooncake
 
-Mooncake aims to enhance the inference efficiency of large language models (LLMs), especially in slow object storage environments, by constructing a multi-level caching pool. This is on high-speed interconnected DRAM/SSD resources. Compared to traditional caching systems, Mooncake utilizes (GPUDirect) RDMA technology to transfer data directly in a zero-copy manner. This is while maximizing the use of multi-NIC resources on a single machine.
+Mooncake aims to enhance the inference efficiency of large language models (LLMs), especially in slow object storage environments, by constructing a multi-level caching pool on high-speed interconnected DRAM/SSD resources. Compared to traditional caching systems, Mooncake utilizes (GPUDirect) RDMA technology to transfer data directly in a zero-copy manner, while maximizing the use of multi-NIC resources on a single machine.
 
 For more details about Mooncake, please refer to [Mooncake project](https://github.com/kvcache-ai/Mooncake) and [Mooncake documents](https://kvcache-ai.github.io/Mooncake/).
 
@@ -19,7 +19,7 @@ For more details about Mooncake, please refer to [Mooncake project](https://gith
 
 Mooncake serves as a high-performance L3 storage backend for SGLang HiCache, enabling distributed KV cache storage across multiple servers with RDMA-accelerated data transfer. This integration addresses the capacity limitations of traditional GPU-only or GPU+CPU caching by providing virtually unlimited cache storage through a distributed memory pool.
 
-When a cache miss occurs in L1 and L2, HiCache automatically fetches the required KV cache from Mooncake's distributed memory pool. The system uses intelligent prefetching strategies to minimize latency, and utilize RDMA technology and zero-copy technique to ensure high-bandwidth. Low-latency data transfer between SGLang instances. Mooncake storage nodes.
+When a cache miss occurs in L1 and L2, HiCache automatically fetches the required KV cache from Mooncake's distributed memory pool. The system uses intelligent prefetching strategies to minimize latency, and utilize RDMA technology and zero-copy technique to ensure high-bandwidth, low-latency data transfer between SGLang instances and Mooncake storage nodes.
 
 **Key Advantages:**
 
@@ -29,7 +29,7 @@ When a cache miss occurs in L1 and L2, HiCache automatically fetches the require
 - **Zero Copy**: Direct data transfer between L2 and Mooncake without intermediate copying, maximizing throughput.
 - **Fault Tolerance**: Distributed architecture provides resilience against individual node failures.
 
-This integration is particularly valuable for production deployments involving long-context models, multi-turn conversations, and high-throughput serving scenarios. This is where traditional caching approaches become capacity-constrained.
+This integration is particularly valuable for production deployments involving long-context models, multi-turn conversations, and high-throughput serving scenarios where traditional caching approaches become capacity-constrained.
 
 ## Install Mooncake
 
@@ -75,7 +75,7 @@ For more details, please refer to [Mooncake official installation guide](https:/
 
 **Mooncake** is a distributed system that efficiently aggregates memory resources across multiple servers. It can also be deployed on a single server for simpler setups.
 
-When integrated with **SGLang**, the system conceptually consists of multiple key components: `the master service`, `metadata service` (Optional), `store service`  (Optional), and the `SGLang server`. Among them, the `master service` and `metadata service` are responsible for object and metadata maintenance. The `store service` manages a contiguous memory segment that contributes to the distributed KV cache, making its memory accessible to both local and remote `SGLang servers`. Data transfer occurs directly between the `store service` and `SGLang servers`, bypassing the `master service`.
+When integrated with **SGLang**, the system conceptually consists of four key components: `the master service`, `metadata service` (Optional), `store service`  (Optional), and the `SGLang server`. Among them, the `master service` and `metadata service` are responsible for object and metadata maintenance. The `store service` manages a contiguous memory segment that contributes to the distributed KV cache, making its memory accessible to both local and remote `SGLang servers`. Data transfer occurs directly between the `store service` and `SGLang servers`, bypassing the `master service`.
 
 ### Single Server Deployment
 
@@ -109,7 +109,7 @@ mooncake_master --enable_http_metadata_server=true --http_metadata_server_port=8
 
 **Understanding `eviction_high_watermark_ratio`:**
 
-When a `PutStart` request fails due to insufficient memory, or when the eviction thread detects that space usage has reached the configured high watermark ratio. An eviction task is triggered to free up space by evicting a portion of objects.
+When a `PutStart` request fails due to insufficient memory, or when the eviction thread detects that space usage has reached the configured high watermark ratio, an eviction task is triggered to free up space by evicting a portion of objects.
 
 Due to memory fragmentation, allocation failures may occur even when memory usage has not yet reached 100%. The actual threshold depends on the workload. This [benchmark document](https://kvcache-ai.github.io/Mooncake/performance/allocator-benchmark-result.html) provides memory allocation efficiency results under different scenarios. if excessive allocation failures are observed, consider lowering this parameter accordingly.
 
@@ -160,8 +160,8 @@ python -m mooncake.mooncake_store_service --port=8081
 * `metadata_server`, `MOONCAKE_TE_META_DATA_SERVER` : The network address of the `metadata service`. The default port is 8080. If the `metadata service` is not deployed, set this field to: `"metadata_server": "P2PHANDSHAKE"`.
 * `master_server_address`, `MOONCAKE_MASTER`: The network address of the `master service`. The default port is 50051.
 * `protocol`, `MOONCAKE_PROTOCOL`: The protocol used by Mooncake. Supported values are `"rdma"` or `"tcp"`. For optimal performance, `"rdma"` is recommended.
-* `device_name`, `MOONCAKE_DEVICE`: The RDMA devices used by Mooncake. This field can usually be left empty, as Mooncake automatically discovers available NICs by default. This parameter is required only when the protocol is set to `"rdma"` **and** a specific set of NICs needs to be used. Example: `"device_name": "mlx5_0,mlx5_1"`. To list available devices, run `ibv_devices`. **Note:** If the environment variable `MC_MS_AUTO_DISC` is set to `1`, any `device_name` or `MOONCAKE_DEVICE` configuration will be overridden. Mooncake will switch to auto-discovery mode.
-  - For tensor parallel deployments where different ranks must use different devices, you can specify device configurations using JSON format:
+* `device_name`, `MOONCAKE_DEVICE`: The RDMA devices used by Mooncake. This field can usually be left empty, as Mooncake automatically discovers available NICs by default. This parameter is required only when the protocol is set to `"rdma"` **and** a specific set of NICs needs to be used. Example: `"device_name": "mlx5_0,mlx5_1"`. To list available devices, run `ibv_devices`. **Note:** If the environment variable `MC_MS_AUTO_DISC` is set to `1`, any `device_name` or `MOONCAKE_DEVICE` configuration will be overridden, and Mooncake will switch to auto-discovery mode.
+  - For tensor parallel deployments where different ranks should use different devices, you can specify device configurations using JSON format:
     ```json
     {
     "device_name": "{0: \"ib0,ib1\", 1: \"ib2,ib3\", 2: \"ib4,ib5\"}"
@@ -172,7 +172,7 @@ python -m mooncake.mooncake_store_service --port=8081
     MOONCAKE_DEVICE="{\"0\": \"ib0,ib1\", \"1\": \"ib2,ib3\", \"2\": \"ib4,ib5\"}"
     ```
 * `global_segment_size`, `MOONCAKE_GLOBAL_SEGMENT_SIZE`: The amount of memory contributed to the global memory pool. Accepts either bytes (integer) or a string with the `gb` suffix, e.g., `"4294967296"` or `"4gb"`. A larger value allows Mooncake to cache more KV tensors.
-* `local_buffer_size`, `MOONCAKE_LOCAL_BUFFER_SIZE`: Local buffer is used to do request operations such as `Get` or `Put`. In this case, it is set to 0 because the instance functions solely as a storage server, contributing memory to the global pool without issuing. Any request operations.
+* `local_buffer_size`, `MOONCAKE_LOCAL_BUFFER_SIZE`: Local buffer is used to do request operations such as `Get` or `Put`. In this case, it is set to 0 because the instance functions solely as a storage server, contributing memory to the global pool without issuing any request operations.
 
 **Important: Understanding Global Segment Size**
 
@@ -180,11 +180,11 @@ python -m mooncake.mooncake_store_service --port=8081
 
 Adjust this value according to system’s available memory and expected cache requirements.
 
-Note: If `MOONCAKE_GLOBAL_SEGMENT_SIZE` is set to a non-zero value when starting the `SGLang server`, launching the `store service` can be skipped. In this case, the `SGLang server` also takes on the role of the `store service`, which simplifies deployment but couples the components together. Users can choose the deployment approach that best fits their needs.
+Note: If `MOONCAKE_GLOBAL_SEGMENT_SIZE` is set to a non-zero value when starting the `SGLang server`, launching the `store service` can be skipped. In this case, the `SGLang server` also takes on the role of the `store service`, which simplifies deployment but couples the two components together. Users can choose the deployment approach that best fits their needs.
 
 **Start the `SGLang server` with Mooncake enabled:**
 
-There are ways to configure Mooncake:
+There are three ways to configure Mooncake:
 
 1. Via extra configuration passed through sglang parameters
 2. Using JSON configuration files
@@ -196,9 +196,9 @@ Mooncake loads configuration in the following priority order:
 2. If not, Mooncake checks whether the environment variable `DEFAULT_MOONCAKE_CONFIG_PATH_ENV` is set, and loads the JSON config file from that path.
 3. If neither of the above is provided, Mooncake falls back to environment variables.
 
-For multi-node deployments that attach Mooncake at runtime via `PUT /hicache/storage-backend`, omit `local_hostname` from the attach payload and set `MOONCAKE_LOCAL_HOSTNAME` (or `LOCAL_HOSTNAME`) per node. This is before launching SGLang. Each rank resolves `local_hostname` from its own process environment instead of a shared default.
+For multi-node deployments that attach Mooncake at runtime via `PUT /hicache/storage-backend`, omit `local_hostname` from the attach payload and set `MOONCAKE_LOCAL_HOSTNAME` (or `LOCAL_HOSTNAME`) per node before launching SGLang. Each rank resolves `local_hostname` from its own process environment instead of a shared default.
 
-When loading from a JSON config file, `local_hostname` follows the same per-process precedence: `MOONCAKE_LOCAL_HOSTNAME`, then `LOCAL_HOSTNAME`. This is then the value in the JSON file, then `"localhost"`.
+When loading from a JSON config file, `local_hostname` follows the same per-process precedence: `MOONCAKE_LOCAL_HOSTNAME`, then `LOCAL_HOSTNAME`, then the value in the JSON file, then `"localhost"`.
 
 **Using extra-config of sglang arguments to configure Mooncake**
 
@@ -252,13 +252,13 @@ python -m sglang.launch_server \
 
 The Mooncake parameters used here are essentially the same as those configured for the `store service`.
 
-In particular, for the `global segment size`, if at least one `store service` instance is running, this value can be set to `0`. In this case, the SGLang server will not contribute any memory to the system. Note that KV tensors stored in this contributed memory will be lost when the process exits. However, this will **not** cause any system errors.
+In particular, for the `global segment size`, if at least one `store service` instance is running, this value can be set to `0`. In this case, the SGLang server will not contribute any memory to the system. Note that KV tensors stored in this contributed memory will be lost when the process exits; however, this will **not** cause any system errors.
 
 **Important:** when `tp > 1`, each Tensor Parallel (TP) rank launches its own Mooncake backend instance and contributes `1/global_segment_size` memory. Therefore, the total memory consumption equals `global segment size`.
 
 **Tenant Isolation (`tenant_id`):**
 
-When `tenant_id` is set, SGLang forwards it to `MooncakeDistributedStore.setup(..., tenant_id=...)`. Producers and consumers that must share HiCache data must use the same `tenant_id`.
+When `tenant_id` is set, SGLang forwards it to `MooncakeDistributedStore.setup(..., tenant_id=...)`. Producers and consumers that should share HiCache data must use the same `tenant_id`.
 
 You can configure it through `tenant_id` in `--hicache-storage-backend-extra-config`, `tenant_id` in the JSON config file, or `MOONCAKE_TENANT_ID`.
 
@@ -270,7 +270,7 @@ When `enable_ssd_offload` is set to `true`, SGLang will request that Mooncake en
 
 If you need to explicitly control the SSD spill directory, set `ssd_offload_path` or the `MOONCAKE_OFFLOAD_FILE_STORAGE_PATH` environment variable. SGLang forwards this value to `MooncakeDistributedStore.setup(..., ssd_offload_path=...)`, while other SSD offload tuning parameters continue to be read directly by the Mooncake C++ library.
 
-You can enable it in any of the supported configuration methods:
+You can enable it in any of the three supported configuration methods:
 
 - **Via `--hicache-storage-backend-extra-config`:**
   ```bash
@@ -305,7 +305,7 @@ You can enable it in any of the supported configuration methods:
 
 **Mooncake Group Semantics (`enable_group_semantics`):**
 
-When `enable_group_semantics` is set to `true`, SGLang passes Mooncake `group_ids` for physical objects derived from the same logical HiCache page. This allows Mooncake to apply group-aware metadata routing, lease refresh, and eviction behavior to related KV objects such as MHA K/V pairs. This is split-head shards, MLA objects, and supported sidecar objects.
+When `enable_group_semantics` is set to `true`, SGLang passes Mooncake `group_ids` for physical objects derived from the same logical HiCache page. This allows Mooncake to apply group-aware metadata routing, lease refresh, and eviction behavior to related KV objects such as MHA K/V pairs, split-head shards, MLA objects, and supported sidecar objects.
 
 This option is disabled by default. It requires a Mooncake version that exposes `ReplicateConfig.group_ids`. If the installed Mooncake package does not support it, SGLang automatically falls back to the existing write path and prints a warning.
 
@@ -324,7 +324,12 @@ python -m sglang.launch_server \
 For a comprehensive overview of HiCache-related parameters, please refer to [this document](https://docs.sglang.io/advanced_features/hicache_design.html#related-parameters).
 
 
-Note that, for `--hicache-mem-layout {layer_first,page_first,page_first_direct}`, the regular Mooncake backend path still uses `page_first` or `page_first_direct`. When HiSparse provides an MLA host KV pool or DeepSeek V4 C4 side pool with layer-first page metadata. Mooncake Store uses Mooncake's multi-buffer zero-copy APIs (`batch_put_from_multi_buffers` / `batch_get_into_multi_buffers`) to store each logical page across its per-layer buffers.
+Note that, for `--hicache-mem-layout {layer_first,page_first,page_first_direct}`,
+the regular Mooncake backend path still uses `page_first` or `page_first_direct`.
+When HiSparse provides an MLA host KV pool or DeepSeek V4 C4 side pool with
+layer-first page metadata, Mooncake Store uses Mooncake's multi-buffer zero-copy
+APIs (`batch_put_from_multi_buffers` / `batch_get_into_multi_buffers`) to store
+each logical page across its per-layer buffers.
 
 ### Distributed Deployment
 
@@ -334,7 +339,7 @@ Mooncake also supports high availability mode. This mode enhances fault toleranc
 
 ### Deployment with Dummy Client (Experimental)
 
-In addition to the standard deployment where SGLang acts as a full Mooncake node, you can use the **Dummy Client** mode. In this mode, SGLang connects to a local **Mooncake Store Service** (Real Client) via RPC/IPC. This decouples the SGLang process from the heavy RDMA and memory management, potentially improving stability and allowing the cache to persist even. This is if the SGLang process restarts.
+In addition to the standard deployment where SGLang acts as a full Mooncake node, you can use the **Dummy Client** mode. In this mode, SGLang connects to a local **Mooncake Store Service** (Real Client) via RPC/IPC. This decouples the SGLang process from the heavy RDMA and memory management, potentially improving stability and allowing the cache to persist even if the SGLang process restarts.
 
 **Architecture:**
 * **Mooncake Master**: Manages the cluster topology (same as standard).
@@ -417,7 +422,7 @@ python -m sglang.launch_server \
 
 ### Prefill/Decode Disaggregation
 
-In **PD disaggregation**, the configurations for the `metadata service`, `mooncake master`, and the optional `store service` remain the same as described above. The difference is that SGLang introduces multiple distinct roles: `prefill worker`, `decode worker`, and `router`.
+In **PD disaggregation**, the configurations for the `metadata service`, `mooncake master`, and the optional `store service` remain the same as described above. The difference is that SGLang introduces three distinct roles: `prefill worker`, `decode worker`, and `router`.
 
 Among these, the `prefill worker` supports enabling **HiCache**. To run with PD disaggregation, start from the [PD configuration](https://kvcache-ai.github.io/Mooncake/getting_started/examples/sglang-integration-v1.html), and add the HiCache-related parameters (as previously described for the `SGLang server`) to the `prefill worker`.
 
@@ -475,11 +480,11 @@ python -m sglang_router.launch_router \
 
 **HiCache CPU Memory Usage:**
 
-When using HiCache, the default L2 host DRAM (CPU memory) size for KV cache is **2 times** the size of the L1 device memory (GPU memory). This is for KV cache.
+When using HiCache, the default L2 host DRAM (CPU memory) size for KV cache is **2 times** the size of the L1 device memory (GPU memory) for KV cache.
 
-If the model is small but the GPU memory is large — especially in multi-TP (tensor parallel) setups. This may cause the L1 KV cache to become large, which in turn can consume excessive CPU DRAM.
+If the model is small but the GPU memory is large — especially in multi-TP (tensor parallel) setups — this may cause the L1 KV cache to become very large, which in turn can consume excessive CPU DRAM.
 
-In such cases, you must manually configure an appropriate L2 cache size based on your hardware. This can be done by setting `--hicache-ratio` or `--hicache-size`.
+In such cases, you should manually configure an appropriate L2 cache size based on your hardware. This can be done by setting `--hicache-ratio` or `--hicache-size`.
 
 **More Information:**
 

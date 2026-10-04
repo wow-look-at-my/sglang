@@ -1,6 +1,6 @@
-//! Power of Load balancing integration tests
+//! Power of Two load balancing integration tests
 //!
-//! Tests for the Power of Choices algorithm that selects the less loaded worker.
+//! Tests for the Power of Two Choices algorithm that selects the less loaded worker.
 
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -22,7 +22,7 @@ use crate::common::{AppTestContext, TestRouterConfig, TestWorkerConfig};
 mod power_of_two_tests {
     use super::*;
 
-    /// Test that power of distributes requests across workers
+    /// Test that power of two distributes requests across workers
     #[tokio::test]
     async fn test_power_of_two_distribution() {
         let config = TestRouterConfig::power_of_two(3600);
@@ -63,7 +63,7 @@ mod power_of_two_tests {
         ctx.shutdown().await;
     }
 
-    /// Test that power of prefers less loaded workers
+    /// Test that power of two prefers less loaded workers
     #[tokio::test]
     async fn test_power_of_two_prefers_less_loaded() {
         let config = TestRouterConfig::power_of_two(3601);
@@ -122,7 +122,7 @@ mod power_of_two_tests {
         ctx.shutdown().await;
     }
 
-    /// Test power of with failing worker uses retry/CB to route to healthy worker
+    /// Test power of two with failing worker uses retry/CB to route to healthy worker
     #[tokio::test]
     async fn test_power_of_two_with_failing_worker() {
         use smg::config::{CircuitBreakerConfig, RetryConfig};

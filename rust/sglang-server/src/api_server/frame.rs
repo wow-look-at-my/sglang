@@ -1,4 +1,8 @@
-//! Frame shaping for the native `/generate` protocol: the cumulative [`OutputAccumulator`] plus the functions.
+//! Frame shaping for the native `/generate` protocol: the cumulative
+//! [`OutputAccumulator`] plus the functions that render [`ChunkEvent`]s /
+//! accumulated state into wire JSON (`meta_info`, logprob tuples, error and
+//! abort frames). No HTTP here — the sibling `native_api` module owns the handlers
+//! and streams; it calls these per frame.
 
 use crate::message::response::{ChunkEvent, ChunkExtras};
 
@@ -12,7 +16,7 @@ fn text_slot(texts: Option<&[String]>, j: usize) -> serde_json::Value {
 }
 
 /// A decoded-text column becomes the tuples' text source only when populated
-/// (`return_text_in_logprobs`).
+/// (`return_text_in_logprobs`); empty → `None` → null text slots.
 fn opt_texts(t: &[String]) -> Option<&[String]> {
     (!t.is_empty()).then_some(t)
 }
@@ -76,6 +80,10 @@ fn ragged_logprob_tuples(
 /// Append a flat family's `[logprob, token_id, text]` tuples to `dst`, comma
 /// separated and WITHOUT the enclosing brackets, so a cumulative frame can
 /// concatenate each delta instead of re-rendering every accumulated position.
+///
+/// Byte-identical to [`logprob_tuples`]'s serialization: `serde_json` writes an
+/// array as `[`, elements joined by `,`, `]` with no spaces, and each element here
+/// is rendered by the same `Value` Display.
 fn push_logprob_tuples(dst: &mut String, vals: &[f32], idxs: &[i32], texts: Option<&[String]>) {
     use std::fmt::Write;
     for (j, (&v, &tid)) in vals.iter().zip(idxs.iter()).enumerate() {
@@ -141,7 +149,10 @@ fn hidden_states_rows(vals: &[f32], lens: &[u32]) -> serde_json::Value {
     let mut off = 0usize;
     for &l in lens {
         let l = l as usize;
-        // `get`, not a clamped index: clamping only the END leaves `off` past `vals.len()` after one over-long row.
+        // `get`, not a clamped index: clamping only the END leaves `off` past
+        // `vals.len()` after one over-long row, making the next range reversed
+        // (`start > end`) — which panics on the api thread rather than yielding
+        // an empty row. Same reasoning as the decoder's `take_f32`.
         rows.push(serde_json::json!(vals.get(off..off + l).unwrap_or(&[])));
         off += l;
     }
@@ -149,7 +160,7 @@ fn hidden_states_rows(vals: &[f32], lens: &[u32]) -> serde_json::Value {
 }
 
 /// Format a decoded [`ChunkEvent`] as one SGLang `/generate` frame's JSON. `rid`
-/// (response `meta_info.id`) is passed as a string.
+/// (response `meta_info.id`) is passed as a string; the event's numeric `rid` is
 /// just the shard routing key.
 pub(super) fn frame_value(out: &ChunkEvent, rid: &str) -> serde_json::Value {
     let mut v = serde_json::json!({
@@ -165,8 +176,9 @@ pub(super) fn frame_value(out: &ChunkEvent, rid: &str) -> serde_json::Value {
     if !out.token_ids.is_empty() {
         v["output_ids"] = serde_json::json!(out.token_ids);
     }
-    // Logprobs + hidden states ride behind the boxed extras (absent for a
-    // plain token/text frame).
+    // Logprobs + hidden states ride behind the boxed extras (absent for a plain
+    // token/text frame). `[logprob, token_id, text|null]` tuples; text
+    // (`return_text_in_logprobs`) was decoded on the detok shard into `*_txt`.
     let Some(ex) = out.extras.as_deref() else {
         return v;
     };
@@ -237,10 +249,13 @@ pub(super) fn cumulative_frame_json(
         return None;
     }
     let o = acc.snapshot();
-    // Through `Value` rather than `to_string` on the struct: it is the same encoder the slow path runs the finish reason through.
+    // Through `Value` rather than `to_string` on the struct: it is the same
+    // encoder the slow path runs the finish reason through, so any representation
+    // quirk is reproduced instead of re-derived.
     let finish = serde_json::to_value(&o.finish_reason).ok()?.to_string();
 
-    // Alphabetical by convention only — a stable order that is easy to extend and diff.
+    // Alphabetical by convention only — a stable order that is easy to extend and
+    // diff.
     let mut m = String::new();
     let _ = write!(m, "{{\"completion_tokens\":{}", o.completion_tokens);
     let _ = write!(m, ",\"finish_reason\":{finish}");
@@ -251,7 +266,9 @@ pub(super) fn cumulative_frame_json(
     if let Some(v) = &acc.in_tid_json {
         let _ = write!(m, ",\"input_token_ids_logprobs\":{v}");
     }
-    // Input+output token logprobs are emitted as a PAIR whenever either side has data (empty list included).
+    // Input+output token logprobs are emitted as a PAIR whenever either side has
+    // data (empty list included), matching `frame_value` byte for byte — see the
+    // PD-router rationale there.
     let lp_pair = acc.in_lp_json.is_some() || !acc.out_lp_json.is_empty();
     if lp_pair {
         let v = acc.in_lp_json.as_deref().unwrap_or("[]");
@@ -261,7 +278,7 @@ pub(super) fn cumulative_frame_json(
         let _ = write!(m, ",\"input_top_logprobs\":{v}");
     }
     // The `Value` path keys these off the source columns being non-empty; an empty
-    // source renders to an empty body, so both guards coincide.
+    // source renders to an empty body, so the two guards coincide.
     if !acc.out_tid_json.is_empty() {
         let _ = write!(m, ",\"output_token_ids_logprobs\":[{}]", acc.out_tid_json);
     }
@@ -341,24 +358,45 @@ pub(super) fn stream_frame_value(
     }
 }
 
-/// Folds per-chunk [`ChunkEvent`] deltas into a cumulative view — used by the drain loops needing cumulative output.
+/// Folds per-chunk [`ChunkEvent`] deltas into a cumulative view — used by the drain
+/// loops needing cumulative output (every unary response + the cumulative SGLang
+/// stream; OpenAI streaming forwards deltas and skips this). Holds a single
+/// [`ChunkEvent`] so `snapshot` hands back a **borrow** per frame — no per-frame
+/// clone of the growing buffers (that added O(T²) atop the wire's inherent O(T²)).
+/// Shared with the [`openai`] submodule.
 #[derive(Default)]
 pub(super) struct OutputAccumulator {
     out: ChunkEvent,
-    /// Serialized cumulative `output_ids` body (`"1,2,3"`, no brackets), appended per delta so a frame memcpy's it instead.
+    /// Serialized cumulative `output_ids` body (`"1,2,3"`, no brackets), appended per
+    /// delta so a frame memcpy's it instead of rebuilding the array — O(T), not O(T²).
     ids_json: String,
-    /// JSON-escaped cumulative text, without the surrounding quotes.
+    /// JSON-escaped cumulative text, without the surrounding quotes. Escaping is
+    /// per-character, so `escape(a + b) == escape(a) + escape(b)` and deltas append.
     text_json: String,
-    /// Memoized bodies (no enclosing brackets) of those CUMULATIVE logprob families.
+    /// Memoized bodies (no enclosing brackets) of the three CUMULATIVE logprob
+    /// families, appended per delta — the same O(T) trick `ids_json` uses, extended
+    /// to the families that made a cumulative stream with logprobs O(T²). Cumulative
+    /// is SGLang's default, so that path re-rendered every accumulated position on
+    /// every frame: measured 117 ms for one 500-token top-5 request, versus 1.2 ms
+    /// incremental.
     out_lp_json: String,
     out_top_json: String,
     out_tid_json: String,
-    /// Set-once families — they ride the prefill or the final chunk.
+    /// Set-once families — they ride the prefill or the final chunk, so they are
+    /// rendered when they arrive rather than on every frame after.
     in_lp_json: Option<String>,
     in_top_json: Option<String>,
     in_tid_json: Option<String>,
     hidden_json: Option<String>,
-    /// Set once a family's text column falls out of lockstep with its values.
+    /// Set once a family's text column falls out of lockstep with its values, at
+    /// which point the memo is abandoned for the `Value` path.
+    ///
+    /// Appending per delta assumes `text_slot(accumulated, global_j)` equals
+    /// `text_slot(delta, local_j)`, which holds only while every delta supplies
+    /// either a text per value or none at all. That is what a real request does —
+    /// `return_text_in_logprobs` is per-request, so the detok shard fills `*_txt`
+    /// for all deltas or none — but a mixed sequence would silently diverge from
+    /// `frame_value`, so it is detected rather than assumed.
     extras_memo_broken: bool,
 }
 
@@ -397,9 +435,8 @@ impl OutputAccumulator {
         if d.finish_reason.is_some() {
             o.finish_reason = d.finish_reason.clone();
         }
-        // Logprobs/hidden ride behind the boxed extras — most frames have
-        // none, so only allocate the accumulator's box once a delta carries
-        // some.
+        // Logprobs/hidden ride behind the boxed extras — most frames have none, so
+        // only allocate the accumulator's box once a delta actually carries some.
         let Some(de) = d.extras.as_deref() else {
             return;
         };
@@ -417,8 +454,9 @@ impl OutputAccumulator {
         oe.out_lp_txt.extend_from_slice(&de.out_lp_txt);
         oe.out_top_txt.extend_from_slice(&de.out_top_txt);
         oe.out_tid_txt.extend_from_slice(&de.out_tid_txt);
-        // Append THIS delta's tuples, indexed within the delta — equivalent to indexing the accumulated arrays only
-        // while texts stay in lockstep.
+        // Append THIS delta's tuples, indexed within the delta — equivalent to
+        // indexing the accumulated arrays only while texts stay in lockstep, which
+        // the guard below verifies.
         push_logprob_tuples(
             &mut self.out_lp_json,
             &de.out_lp_val,
@@ -531,9 +569,11 @@ mod tests {
         );
     }
 
-    /// Ragged reshape restores null positions (len) — mirrors detokenize_top_logprobs_tokens emitting None.
+    /// Ragged reshape restores null positions (len 0) — mirrors
+    /// detokenize_top_logprobs_tokens emitting None for empty positions.
     #[test]
     fn ragged_logprob_tuples_restores_null_positions() {
+        // 2 positions: first null (len 0), second k=1.
         let v = ragged_logprob_tuples(&[-0.3], &[9], &[0, 1], None);
         assert_eq!(
             v,
@@ -544,7 +584,9 @@ mod tests {
         );
     }
 
-    /// The `NaN` sentinel (the Python `None` logprob for the first prompt token) becomes a JSON `null` logprob.
+    /// The `NaN` sentinel (the Python `None` logprob for the first prompt token)
+    /// becomes a JSON `null` logprob, while its token id in the parallel `idx`
+    /// column is preserved. Guards the scheduler-killing prompt-logprob crash.
     #[test]
     fn nan_sentinel_becomes_null_logprob() {
         // Flat (input/output logprobs): first value absent, second present.
@@ -564,7 +606,9 @@ mod tests {
         );
     }
 
-    /// End-to-end: a `ChunkEvent` carrying a prompt-logprob request (first input logprob is the `NaN` sentinel) formats without panicking.
+    /// End-to-end: a `ChunkEvent` carrying a prompt-logprob request (first input
+    /// logprob is the `NaN` sentinel) formats without panicking and emits
+    /// `input_token_logprobs` with a leading `[null, token_id, text]`.
     #[test]
     fn prompt_logprob_frame_emits_null_first() {
         let out = ChunkEvent {
@@ -583,7 +627,8 @@ mod tests {
         );
     }
 
-    /// The accumulator folds deltas cumulatively and `snapshot` borrows the running state (no per-frame clone).
+    /// The accumulator folds deltas cumulatively and `snapshot` borrows the
+    /// running state (no per-frame clone); `into_output` moves the same state.
     #[test]
     fn accumulator_snapshot_is_cumulative() {
         let mut acc = OutputAccumulator::default();
@@ -614,7 +659,8 @@ mod tests {
         assert_eq!(out.text, "hello");
     }
 
-    /// A populated text column (decoded on the detok shard) → `Some`.
+    /// A populated text column (decoded on the detok shard) → `Some`; empty
+    /// (`return_text_in_logprobs` off) → `None` → null text slots.
     #[test]
     fn opt_texts_gates_on_population() {
         assert!(opt_texts(&[]).is_none());
@@ -627,7 +673,11 @@ mod tests {
         serde_json::from_str(frame).expect("a frame must be valid JSON")
     }
 
-    /// The memoized cumulative fast path must emit the **same JSON document** as the `serde_json::Value` builder it replaces — same keys.
+    /// The memoized cumulative fast path must emit the **same JSON document** as the
+    /// `serde_json::Value` builder it replaces — same keys, same values, same
+    /// escaping. Covers unicode and control chars, an empty-ids first frame, a
+    /// finish_reason, and the batch `index`. Guards the O(T) rewrite of the O(T²)
+    /// `output_ids` serialization.
     #[test]
     fn cumulative_frame_json_matches_serde() {
         let deltas = [
@@ -687,7 +737,9 @@ mod tests {
         }
     }
 
-    /// The same equivalence, for the shape that made cumulative streaming O(T²): every logprob family at once, across several deltas.
+    /// The same equivalence, for the shape that made cumulative streaming O(T²):
+    /// every logprob family at once, across several deltas, with and without
+    /// `return_text_in_logprobs` texts and with a null ragged position.
     #[test]
     fn cumulative_frame_json_matches_serde_with_logprobs() {
         for with_texts in [false, true] {
@@ -788,7 +840,10 @@ mod tests {
         }
     }
 
-    /// A delta sequence that supplies texts for some values and not others breaks the append-equivalence the memo rests.
+    /// A delta sequence that supplies texts for some values and not others breaks
+    /// the append-equivalence the memo rests on (`text_slot` is indexed globally,
+    /// so a gap shifts every later text). The accumulator must notice and defer to
+    /// the `Value` builder rather than emit a frame that disagrees with it.
     #[test]
     fn mismatched_logprob_texts_fall_back_to_the_value_path() {
         let mut acc = OutputAccumulator::default();

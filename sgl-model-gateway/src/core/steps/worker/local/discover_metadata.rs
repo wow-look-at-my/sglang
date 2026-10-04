@@ -47,7 +47,9 @@ pub struct ServerInfo {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelInfo {
     pub model_path: Option<String>,
-    /// The identity the worker serves under.
+    /// The identity the worker currently serves under. A weight update moves
+    /// this (and `model_path`) on the worker's manager, so it is answered here
+    /// rather than by `/server_info`, which reports the launch record.
     pub served_model_name: Option<String>,
     pub tokenizer_path: Option<String>,
     pub is_generation: Option<bool>,
@@ -112,6 +114,7 @@ pub async fn get_server_info(url: &str, api_key: Option<&str>) -> Result<ServerI
         .await
         .map_err(|e| format!("Failed to connect to {}: {}", server_info_url, e))?;
 
+    // If /server_info returns 404, fallback to /get_server_info for backward compatibility
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         let json = get_json_fallback(base_url, "server_info", api_key).await?;
         return serde_json::from_value(json)
@@ -149,6 +152,7 @@ pub async fn get_model_info(url: &str, api_key: Option<&str>) -> Result<ModelInf
         .await
         .map_err(|e| format!("Failed to connect to {}: {}", model_info_url, e))?;
 
+    // If /model_info returns 404, fallback to /get_model_info for backward compatibility
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         let json = get_json_fallback(base_url, "model_info", api_key).await?;
         return serde_json::from_value(json)
@@ -278,7 +282,8 @@ impl StepExecutor<LocalWorkerWorkflowData> for DiscoverMetadataStep {
                 let mut labels = HashMap::new();
 
                 // /server_info reports the launch configuration; /model_info
-                // reports the model the worker is serving now.
+                // reports the model the worker is serving now. Both are read
+                // here, and a failure of one does not lose the other.
                 let server_info = get_server_info(&config.url, config.api_key.as_deref())
                     .await
                     .ok();
@@ -286,7 +291,9 @@ impl StepExecutor<LocalWorkerWorkflowData> for DiscoverMetadataStep {
                     .await
                     .ok();
 
-                // Identity comes from /model_info, which a weight update moves.
+                // Identity comes from /model_info, which a weight update moves;
+                // /server_info answers the launch record and is the fallback for
+                // workers that predate the fields there.
                 let present = |value: Option<&String>| value.filter(|s| !s.is_empty()).cloned();
                 let identity = [
                     (

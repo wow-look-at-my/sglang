@@ -815,7 +815,11 @@ async fn test_openai_router_circuit_breaker() {
     }
 }
 
-/// Test that /v1/models returns models from registered workers' ModelCards With the new worker-based design, models are returned.
+/// Test that /v1/models returns models from registered workers' ModelCards
+///
+/// With the new worker-based design, models are returned from the WorkerRegistry
+/// and don't require calling external APIs. Auth headers are used for routing
+/// requests to workers, not for the models endpoint.
 #[tokio::test]
 async fn test_openai_router_models_from_registry() {
     let ctx = crate::common::test_app::create_test_app_context().await;

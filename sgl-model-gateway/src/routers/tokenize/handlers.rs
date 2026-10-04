@@ -1,4 +1,7 @@
-//! Tokenize.
+//! Tokenize and detokenize handlers
+//!
+//! Provides tokenization, detokenization, and tokenizer management operations.
+//! These handlers use the TokenizerRegistry for tokenizer storage and retrieval.
 
 use std::sync::Arc;
 

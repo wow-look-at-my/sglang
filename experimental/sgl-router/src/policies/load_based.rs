@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) The SGLang Authors
+// SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::policies::admission::FreshLoadLookup;
@@ -31,7 +31,7 @@ impl ScoringPolicy for LoadBasedPolicy {
     /// `1 - load/256` reads a busy fleet as all-`0.0`, tied inside
     /// `TIE_EPSILON`, so the term dies exactly when load matters most.
     ///
-    /// Purely a preference.
+    /// Purely a preference: "everybody is busy" is not a reason to refuse to
     /// route, so this term never constrains. Capacity is `--filter`'s job.
     fn scores(&self, workers: &[Arc<Worker>], ctx: &SelectionContext<'_>) -> Vec<f32> {
         let lookup = FreshLoadLookup::new(ctx.load_snapshot(), workers.iter());
@@ -73,7 +73,14 @@ mod tests {
         assert!(LoadBasedPolicy::new().select(&[], &ctx).is_none());
     }
 
-    /// `select()` alone CANNOT detect a broken score: ARGMAX breaks a tie on load.
+    /// `select()` alone CANNOT detect a broken score: ARGMAX breaks a tie on
+    /// load, so a constant `scores()` still lands on the minimum and that arm
+    /// passes for the wrong reason. Ranking is therefore asserted on the vector
+    /// itself, strictly outside `TIE_EPSILON` so a saturating curve cannot hide
+    /// in the tie band -- what `300,900` is for. NaN needs its own arm because
+    /// no ORDERING sees it: it makes every comparison false, which on `0,0` is
+    /// the expected answer. Upstream's `picks_lowest_active_load` goes under
+    /// rule 4 -- the unique-minimum 2-worker case, which `0,1` subsumes.
     #[test]
     fn scores_rank_strictly_by_load_and_the_choice_lands_on_the_minimum() {
         let model = ModelId("tiny".into());
@@ -103,6 +110,7 @@ mod tests {
         let w0 = worker("w0");
         let w1 = worker("w1");
         // After the request snapshot, local counters say w0 is lighter.
+        // The policy must still preserve the frozen Engine Load ordering.
         let _after_snapshot: Vec<_> = (0..10).map(|_| w1.load_guard()).collect();
         let snapshot = EngineReportedLoadSnapshot::from_workers(
             23,

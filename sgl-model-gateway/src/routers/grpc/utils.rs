@@ -90,6 +90,7 @@ pub(crate) fn resolve_tokenizer(
 pub(crate) async fn get_grpc_client_from_worker(
     worker: &Arc<dyn Worker>,
 ) -> Result<GrpcClient, Response> {
+    // Get cached client from worker (or create one if not cached yet)
     let client_arc = worker
         .get_grpc_client()
         .await
@@ -252,6 +253,7 @@ pub(crate) fn generate_tool_constraints(
             Ok(Some((String::from("json_schema"), params_schema)))
         }
 
+        // Required: Array of tool calls with minItems: 1
         ToolChoice::Value(ToolChoiceValue::Required) => {
             let schema = build_required_array_schema(tools)?;
             Ok(Some(("json_schema".to_string(), schema)))
@@ -276,6 +278,8 @@ pub(crate) fn generate_tool_constraints(
     }
 }
 
+/// Build JSON schema for required tool calls (array with minItems: 1)
+/// Includes $defs consolidation from all tools (matching Python's behavior)
 fn build_required_array_schema(tools: &[Tool]) -> Result<String, String> {
     let mut any_of_schemas = Vec::with_capacity(tools.len());
     for tool in tools {
@@ -666,8 +670,10 @@ pub(crate) async fn collect_stream_responses(
                         ));
                     }
                     ProtoResponseVariant::Chunk(_chunk) => {
+                        // Streaming chunk - no action needed
                     }
                     ProtoResponseVariant::None => {
+                        // Empty response - no action needed
                     }
                 }
             }
@@ -701,8 +707,16 @@ pub(crate) fn get_history_tool_calls_count(request: &ChatCompletionRequest) -> u
         .sum()
 }
 
-/// Generate a tool call ID based on model format # Arguments * `model` - Model name to determine ID format * `tool_name` - Name of the tool being called * `tool_index` - Index of this tool call within the current message * `history_count` - Number of tool calls in previous messages # Returns A unique ID string. KimiK2 uses
-/// `functions.{name}:{global_index}`, others use `call_{uuid}`
+/// Generate a tool call ID based on model format
+///
+/// # Arguments
+/// * `model` - Model name to determine ID format
+/// * `tool_name` - Name of the tool being called
+/// * `tool_index` - Index of this tool call within the current message
+/// * `history_count` - Number of tool calls in previous messages
+///
+/// # Returns
+/// A unique ID string. KimiK2 uses `functions.{name}:{global_index}`, others use `call_{uuid}`
 pub(crate) fn generate_tool_call_id(
     model: &str,
     tool_name: &str,
@@ -972,6 +986,8 @@ pub(crate) fn convert_generate_input_logprobs(
 /// Uses serde to deserialize the finish_reason, which handles all tagged variants automatically.
 /// The GenerateFinishReason enum is tagged with `#[serde(tag = "type", rename_all = "lowercase")]`,
 /// so it expects JSON objects like:
+/// - `{"type":"stop"}` -> Stop
+/// - `{"type":"length","length":100}` -> Length { length: 100 }
 /// - Any other JSON -> Other(...)
 ///
 /// For backward compatibility, also handles simple string "stop" -> Stop

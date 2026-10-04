@@ -1,4 +1,14 @@
-//! Typed workflow data structures This module defines the typed data structures for all workflows.
+//! Typed workflow data structures
+//!
+//! This module defines the typed data structures for all workflows, enabling
+//! compile-time type safety and state persistence. Each workflow has its own
+//! strongly-typed data structure, and steps are typed to their specific workflow.
+//!
+//! # Shared Step Trait
+//!
+//! For steps that are shared between local and external worker workflows,
+//! we use the `WorkerRegistrationData` trait. This trait provides a common
+//! interface for accessing worker data while maintaining full type safety.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -28,6 +38,10 @@ use crate::{
 // ============================================================================
 
 /// Trait for workflow data that supports worker registration operations.
+///
+/// This trait is implemented by both `LocalWorkerWorkflowData` and
+/// `ExternalWorkerWorkflowData`, allowing shared steps to work with either
+/// workflow type while maintaining full type safety.
 pub trait WorkerRegistrationData: WorkflowData {
     /// Get the application context (transient, not serialized).
     fn get_app_context(&self) -> Option<&Arc<AppContext>>;
@@ -60,7 +74,9 @@ impl WorkerList {
     }
 }
 
-// ============================================================================ Workflow-specific data types.
+// ============================================================================
+// Workflow-specific data types
+// ============================================================================
 
 /// Data for tokenizer registration workflow
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,7 +317,7 @@ impl McpWorkflowData {
 pub struct WasmRegistrationWorkflowData {
     pub config: WasmModuleConfigRequest,
     pub wasm_bytes: Option<Vec<u8>>,
-    /// SHA256 hash of the module file (many bytes)
+    /// SHA256 hash of the module file (32 bytes)
     pub sha256_hash: Option<[u8; 32]>,
     /// File size in bytes
     pub file_size_bytes: Option<u64>,
