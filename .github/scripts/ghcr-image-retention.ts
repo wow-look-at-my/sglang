@@ -1,23 +1,11 @@
-/**
- * Retention for the sglang images Fork CI publishes to ghcr.io.
- *
- * Every push publishes one image. The default branch tags it `dev-<commit>`
- * and moves `dev`; any other branch tags it `dev-<branch>`. The newest image
- * of a live branch is that branch's HEAD and stays, and the default branch
- * keeps its newest MASTER_RETENTION images. Everything else goes once it is
- * older than MIN_AGE_DAYS: a superseded image of a live branch, every image of
- * a branch that merged or was deleted, and older default-branch images.
- *
- * `planDeletions` reads no registry and writes nothing, so the rules are
- * tested directly; `prune-ghcr-images.ts` does the registry work.
- */
+/** Retention for the sglang images Fork CI publishes to ghcr.io. */
 
 export const ARCH_SUFFIX = "-amd64";
 export const POINTER_TAG = "dev";
 export const SHORT_SHA_LENGTH = 7;
 /** Never delete an image younger than this, whatever the other rules say. */
 export const MIN_AGE_DAYS = 7;
-/** Default-branch images to keep: the HEAD image plus four more. */
+/** Default-branch images to keep: the HEAD image plus more. */
 export const MASTER_RETENTION = 5;
 
 export interface ImageVersion {

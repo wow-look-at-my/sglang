@@ -1,10 +1,4 @@
-/**
- * Delete the sglang images Fork CI no longer keeps.
- *
- * Runs from the "Fork CI image prune" workflow through the org's typescript
- * action, so `core`, `octokit` and `github`'s `context` are injected. The
- * retention rules themselves live in ghcr-image-retention.ts.
- */
+/** Delete the sglang images Fork CI no longer keeps. */
 
 /** An image as the packages API describes one. */
 interface ImageVersion {
@@ -36,9 +30,8 @@ interface RetentionRules {
   POINTER_TAG: string;
 }
 
-// The action type-checks the script as one virtual file beside its own globals,
-// so a relative import has nothing to resolve to. require() is what the action
-// itself resolves at run time, against the script's own directory.
+// The action type-checks the script as one virtual file beside its own
+// globals.
 const rules: RetentionRules = require(
   path.join(__dirname, "ghcr-image-retention.ts"),
 );

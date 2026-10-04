@@ -13,8 +13,8 @@ on:
 
 # Bound the API cost when the same ref fires repeatedly.
 concurrency:
-  group: fork-ci-image-prune-${{ github.ref }}
-  cancel-in-progress: true
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 permissions:
   contents: read
