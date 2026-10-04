@@ -22,6 +22,7 @@ interface RetentionRules {
     liveBranches: string[];
     retiredBranches: string[];
     now: Date;
+    reachableDigests?: ReadonlySet<string>;
   }) => { deletions: Verdict[]; keeps: Verdict[] };
   isManagedTag: (tag: string) => boolean;
   baseTag: (tag: string) => string;
