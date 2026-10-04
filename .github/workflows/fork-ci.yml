@@ -86,7 +86,7 @@ jobs:
           fi
 
           BUILD_DOCKER=false
-          if [ "$ON_DEFAULT" = true ] && [ "${{ github.event_name }}" = push ]; then
+          if [ "${{ github.event_name }}" = push ] || [ "${{ inputs.build_docker }}" = true ]; then
             BUILD_DOCKER=true
           fi
 
@@ -842,6 +842,7 @@ jobs:
             --cache-to "type=registry,ref=${CACHE},mode=max,ignore-error=true" \
             --label org.opencontainers.image.source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
             --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            --label ai.sglang.build.branch="${GITHUB_REF_NAME}" \
             --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true" \
             --metadata-file "${RUNNER_TEMP}/build-metadata.json" \
             .
