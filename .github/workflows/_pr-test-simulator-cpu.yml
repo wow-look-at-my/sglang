@@ -23,6 +23,10 @@ on:
         description: 'cache-upload name of libgoipc.so (Fork CI sched-policy-build). The install step fails when it is empty or missing.'
         type: string
         default: ''
+      coverage_artifact:
+        description: 'Non-empty measures python/sglang line coverage (scripts/ci/utils/engine-coverage.toml) and uploads it as this artifact.'
+        type: string
+        default: ''
 
 env:
   SGLANG_IS_IN_CI: true
@@ -41,6 +45,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ fromJson(inputs.caller_inputs).git_ref || github.sha }}
+
+      # git_ref picks the code under test; the scripts this workflow calls come from the workflow's own commit.
+      - name: Checkout CI scripts
+        uses: actions/checkout@v4
+        with:
+          path: .ci-tooling
+          sparse-checkout: scripts/ci/utils
 
       - uses: ./.github/actions/check-pr-test-health
 
@@ -78,7 +89,7 @@ jobs:
         run: |
           OVERRIDE_ARGS=$(bash scripts/ci/utils/uv_kernel_pin_override.sh)
           uv pip install -e "python" --index-strategy unsafe-best-match --prerelease allow $OVERRIDE_ARGS
-          uv pip install pytest
+          uv pip install pytest "coverage>=7.10"
           uv pip install -e "tools/sglang-simulator[aic]"
 
       - name: Prebuild HiCache native hash extension
@@ -103,7 +114,7 @@ jobs:
           path: ${{ runner.temp }}/libgoipc
 
       - name: Install the policy process and libgoipc
-        run: bash scripts/ci/utils/install_sched_policy_runtime.sh install "${{ runner.temp }}/sched-policy" "${{ runner.temp }}/libgoipc"
+        run: bash .ci-tooling/scripts/ci/utils/install_sched_policy_runtime.sh install "${{ runner.temp }}/sched-policy" "${{ runner.temp }}/libgoipc"
 
       - name: Run SGLang Simulator compatibility tests
         timeout-minutes: 10
@@ -114,7 +125,26 @@ jobs:
           PYTEST_ADDOPTS: "-s"
           TORCH_EXTENSIONS_DIR: ${{ runner.temp }}/torch-extensions
         run: |
-          python3 -m pytest -q tools/sglang-simulator/test/test_simulation_sglang_runner.py
-          python3 -m pytest -q tools/sglang-simulator/test/test_simulation_sglang_serving.py
-          python3 -m pytest -q tools/sglang-simulator/test/test_simulation_cache_hit_ratio.py
-          python3 -m pytest -q tools/sglang-simulator/test/test_simulation_offline_blocking.py
+          PYTHON=(python3)
+          if [ -n "${{ inputs.coverage_artifact }}" ]; then
+            mkdir -p "$GITHUB_WORKSPACE/.coverage-engine"
+            PYTHON=(python3 -m coverage run --rcfile="$GITHUB_WORKSPACE/.ci-tooling/scripts/ci/utils/engine-coverage.toml")
+          fi
+          "${PYTHON[@]}" -m pytest -q tools/sglang-simulator/test/test_simulation_sglang_runner.py
+          "${PYTHON[@]}" -m pytest -q tools/sglang-simulator/test/test_simulation_sglang_serving.py
+          "${PYTHON[@]}" -m pytest -q tools/sglang-simulator/test/test_simulation_cache_hit_ratio.py
+          "${PYTHON[@]}" -m pytest -q tools/sglang-simulator/test/test_simulation_offline_blocking.py
+
+      - name: Combine coverage
+        if: ${{ !cancelled() && inputs.coverage_artifact != '' }}
+        run: python3 -m coverage combine --rcfile="$GITHUB_WORKSPACE/.ci-tooling/scripts/ci/utils/engine-coverage.toml"
+
+      - name: Upload coverage
+        if: ${{ !cancelled() && inputs.coverage_artifact != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.coverage_artifact }}
+          path: .coverage-engine/.coverage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7

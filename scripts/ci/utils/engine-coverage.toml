@@ -1,4 +1,4 @@
-# Line coverage of python/sglang for the CPU test stage, read by `coverage --rcfile`.
+# Line coverage of python/sglang for the CPU test and simulator jobs, read by `coverage --rcfile`.
 [tool.coverage.run]
 source_dirs = ["${GITHUB_WORKSPACE}/python/sglang"]
 data_file = "${GITHUB_WORKSPACE}/.coverage-engine/.coverage"
@@ -7,7 +7,7 @@ core = "sysmon"
 patch = ["subprocess", "_exit"]
 parallel = true
 # Processes that never import sglang would otherwise print these to stderr, which some tests read.
-disable_warnings = ["no-data-collected", "module-not-measured", "module-not-imported"]
+disable_warnings = ["no-data-collected", "module-not-measured", "module-not-imported", "no-sysmon"]
 
 [tool.coverage.report]
 precision = 2
