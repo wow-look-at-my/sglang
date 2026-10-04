@@ -191,6 +191,12 @@ ENV LANG=en_US.UTF-8 \
 # SGL_KERNEL_WHEEL_REQUIRED=1 then fails the build instead of falling back to PyPI.
 FROM base AS sgl_kernel_wheels
 
+# Holds no modules by default, so the editable install compiles rust/. Override it with
+# `--build-context rust_ext_modules=<dir>` holding rust_extensions/_*.so and
+# mem_cache/rust_tree_core/mem_cache*.so for this Python (the artifact of
+# .github/workflows/_pr-test-rust-ext-build.yml) to install those instead.
+FROM base AS rust_ext_modules
+
 FROM base AS torch_deps
 
 ARG CUDA_VERSION
@@ -629,9 +635,19 @@ RUN if [ "$BRANCH_TYPE" = "local" ]; then \
 # Editable install (fast - dependencies already installed via constraints)
 # Clean up __pycache__/tests/pyc in same RUN to avoid writing ~28k files to layer
 RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,from=rust_ext_modules,target=/tmp/rust_ext_modules \
     if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
     && cd /sgl-workspace/sglang \
-    && python3 -m pip install --no-deps -e "python[${BUILD_TYPE}]" \
+    && PIP_BUILD_ARGS="" \
+    # Prebuilt modules leave nothing to compile, so the build needs no isolated env holding torch.
+    && if ls /tmp/rust_ext_modules/rust_extensions/_*.so >/dev/null 2>&1; then \
+        cp /tmp/rust_ext_modules/rust_extensions/_*.so python/sglang/srt/rust_extensions/ \
+        && cp /tmp/rust_ext_modules/mem_cache/rust_tree_core/mem_cache*.so python/sglang/srt/mem_cache/rust_tree_core/ \
+        && export SGLANG_BUILD_RUST_EXTS=none \
+        && python3 -m pip install "setuptools>=61.0" "setuptools-scm>=8.0" wheel \
+        && PIP_BUILD_ARGS="--no-build-isolation"; \
+    fi \
+    && python3 -m pip install --no-deps $PIP_BUILD_ARGS -e "python[${BUILD_TYPE}]" \
     && kernels lock python \
     && ( success=0; \
          # aarch64: kernels-community/sgl-flash-attn3 ships no arm variants; JIT-compile at runtime.
@@ -642,8 +658,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
          else \
              for i in 1 2 3; do \
                  echo "Attempt $i/3: downloading sgl-kernel cubins..." && \
-                 kernels download python && \
-                 success=1 && break; \
+                 kernels download python > /tmp/kernels-download.log 2>&1; rc=$?; \
+                 cat /tmp/kernels-download.log; \
+                 [ "$rc" = 0 ] && success=1 && break; \
+                 # A missing variant is a fact about the published repo, so a retry cannot find one.
+                 grep -q "Cannot find a build variant" /tmp/kernels-download.log && break; \
                  echo "sgl-kernel cubin download failed, retrying in 30s..." && sleep 30; \
              done; \
              # x86: if no prebuilt sgl-flash-attn3 variant matches this torch+CUDA \

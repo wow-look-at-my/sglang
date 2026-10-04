@@ -34,8 +34,15 @@ jobs:
   fork-plan:
     if: github.repository != 'sgl-project/sglang'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      packages: read
     outputs:
       kernel_version: ${{ steps.plan.outputs.kernel_version }}
+      kernel_key: ${{ steps.plan.outputs.kernel_key }}
+      kernel_released: ${{ steps.plan.outputs.kernel_released }}
+      cuda_archs: ${{ steps.plan.outputs.cuda_archs }}
       build_kernel: ${{ steps.plan.outputs.build_kernel }}
       kernel_changed: ${{ steps.plan.outputs.kernel_changed }}
       publish_kernel: ${{ steps.plan.outputs.publish_kernel }}
@@ -44,6 +51,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       - name: Decide what to build
         id: plan
         env:
@@ -51,10 +64,24 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PUSH_BEFORE: ${{ github.event.before }}
           INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+          CUDA_ARCHS: ${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}
         run: |
           set -euo pipefail
           KERNEL_VERSION=$(grep -Po '(?<=^version = ")[^"]*' python/sglang/kernels/aot/pyproject.toml)
           echo "kernel_version=${KERNEL_VERSION}" >> "$GITHUB_OUTPUT"
+
+          # Everything the wheel is built from: the AOT source tree (submodule pins included), the archs, and the CUDA and Python versions fork-sgl-kernel-wheel passes to build.sh.
+          AOT_TREE=$(git rev-parse HEAD:python/sglang/kernels/aot)
+          KERNEL_KEY=$(printf 'aot=%s archs=%s cuda=13.0 python=3.12\n' "$AOT_TREE" "$CUDA_ARCHS" | sha256sum | cut -d' ' -f1)
+          KERNEL_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang:sgl-kernel-wheel-x86_64-${KERNEL_KEY}"
+          if INSPECT=$(docker buildx imagetools inspect "$KERNEL_IMAGE" 2>&1); then
+            KERNEL_CACHED=true
+          elif printf '%s\n' "$INSPECT" | grep -q 'not found'; then
+            KERNEL_CACHED=false
+          else
+            echo "::error::cannot look up ${KERNEL_IMAGE}: ${INSPECT}"
+            exit 1
+          fi
 
           BASE=""
           if [ "${{ github.event_name }}" = push ]; then
@@ -88,15 +115,18 @@ jobs:
             KERNEL_AVAILABLE=true
           fi
 
-          BUILD_KERNEL=false
-          if [ "$KERNEL_CHANGED" = true ] || [ "${{ inputs.build_kernel }}" = true ] \
-             || { [ "$ON_DEFAULT" = true ] && [ "$KERNEL_AVAILABLE" = false ]; }; then
-            BUILD_KERNEL=true
-          fi
-
           BUILD_DOCKER=false
           if [ "$ON_DEFAULT" = true ] && [ "${{ github.event_name }}" = push ] || [ "${{ inputs.build_docker }}" = true ]; then
             BUILD_DOCKER=true
+          fi
+
+          # A wheel already pushed under KERNEL_KEY came from identical inputs, so only a missing one is built.
+          BUILD_KERNEL=false
+          if [ "${{ inputs.build_kernel }}" = true ]; then
+            BUILD_KERNEL=true
+          elif [ "$KERNEL_CACHED" = false ] \
+               && { [ "$KERNEL_CHANGED" = true ] || [ "$ON_DEFAULT" = true ] || [ "$BUILD_DOCKER" = true ]; }; then
+            BUILD_KERNEL=true
           fi
           SHORT_SHA="${GITHUB_SHA::7}"
           if [ -n "$INPUT_IMAGE_TAG" ]; then
@@ -108,6 +138,9 @@ jobs:
           fi
 
           {
+            echo "kernel_key=${KERNEL_KEY}"
+            echo "kernel_released=${KERNEL_AVAILABLE}"
+            echo "cuda_archs=${CUDA_ARCHS}"
             echo "kernel_changed=${KERNEL_CHANGED}"
             echo "build_kernel=${BUILD_KERNEL}"
             echo "publish_kernel=${ON_DEFAULT}"
@@ -119,6 +152,7 @@ jobs:
             echo "| item | value |"
             echo "|---|---|"
             echo "| sglang-kernel version | ${KERNEL_VERSION} (available: ${KERNEL_AVAILABLE}) |"
+            echo "| kernel inputs key | ${KERNEL_KEY} (wheel in registry: ${KERNEL_CACHED}) |"
             echo "| AOT kernel changed | ${KERNEL_CHANGED} |"
             echo "| build kernel wheels | ${BUILD_KERNEL} |"
             echo "| publish kernel release | ${ON_DEFAULT} |"
@@ -449,6 +483,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Hosted-runner ceiling. A full build can outlast it on 4 cores; the ccache saved below lets the next run resume where this one stopped.
     timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Free disk space
         run: |
@@ -460,25 +497,15 @@ jobs:
         with:
           submodules: recursive
 
-      # The same kernel source and archs never compile twice, across branches and PRs.
-      - name: Restore a wheel built from this exact source
-        id: wheel_cache
-        uses: actions/cache/restore@v4
-        with:
-          path: python/sglang/kernels/aot/dist
-          key: fork-sgl-kernel-wheel-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}-${{ hashFiles('python/sglang/kernels/aot/**') }}
-
       - name: Restore ccache
         id: ccache
-        if: steps.wheel_cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/sgl-kernel/ccache
-          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}-${{ github.run_id }}
-          restore-keys: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}-
+          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ needs.fork-plan.outputs.cuda_archs }}-${{ github.run_id }}
+          restore-keys: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ needs.fork-plan.outputs.cuda_archs }}-
 
       - name: Add swap
-        if: steps.wheel_cache.outputs.cache-hit != 'true'
         run: |
           sudo fallocate -l 16G /swapfile-kernel-build
           sudo chmod 600 /swapfile-kernel-build
@@ -487,15 +514,13 @@ jobs:
           free -g
 
       - name: Build wheel (Python 3.12, CUDA 13.0)
-        id: build
-        if: steps.wheel_cache.outputs.cache-hit != 'true'
         timeout-minutes: 320
         env:
           USE_CCACHE: 1
           # Empty lets build.sh size jobs to cores and RAM + swap.
           BUILD_JOBS: ${{ vars.FORK_KERNEL_BUILD_JOBS || '' }}
           NVCC_THREADS: ${{ vars.FORK_KERNEL_NVCC_THREADS || '1' }}
-          CMAKE_ARGS: -DSGL_KERNEL_CUDA_ARCHS=${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}
+          CMAKE_ARGS: -DSGL_KERNEL_CUDA_ARCHS=${{ needs.fork-plan.outputs.cuda_archs }}
         run: |
           cd python/sglang/kernels/aot
           ./build.sh 3.12 13.0
@@ -509,13 +534,7 @@ jobs:
         if: always() && steps.ccache.outcome == 'success'
         with:
           path: ~/.cache/sgl-kernel/ccache
-          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}-${{ github.run_id }}
-
-      - uses: actions/cache/save@v4
-        if: steps.wheel_cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
-        with:
-          path: python/sglang/kernels/aot/dist
-          key: fork-sgl-kernel-wheel-${{ matrix.arch }}-${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}-${{ hashFiles('python/sglang/kernels/aot/**') }}
+          key: fork-sgl-kernel-ccache-${{ matrix.arch }}-${{ needs.fork-plan.outputs.cuda_archs }}-${{ github.run_id }}
 
       - name: Check wheel version and ops
         run: |
@@ -525,25 +544,42 @@ jobs:
           WHEELS=$(ls python/sglang/kernels/aot/dist/sglang_kernel-${VERSION}+*_${{ matrix.arch }}.whl)
           python3 scripts/ci/utils/check_sgl_kernel_wheel_ops.py $WHEELS
 
-      - uses: actions/upload-artifact@v4
+      - uses: docker/login-action@v3
         with:
-          name: sgl-kernel-wheel-${{ matrix.arch }}
-          path: python/sglang/kernels/aot/dist/*.whl
-          if-no-files-found: error
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # A one-layer image tagged by fork-plan's input key: fork-plan skips this job when the tag exists, and the image build mounts it, so the same bytes reach every image and its layer cache stays valid.
+      - name: Push the wheel under its input key
+        run: |
+          set -euo pipefail
+          REF="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang:sgl-kernel-wheel-${{ matrix.arch }}-${{ needs.fork-plan.outputs.kernel_key }}"
+          printf 'FROM scratch\nCOPY *.whl /\n' | docker build -t "$REF" -f - python/sglang/kernels/aot/dist
+          docker push "$REF"
 
   fork-sgl-kernel-release:
     needs: [fork-plan, fork-sgl-kernel-wheel]
-    if: ${{ !cancelled() && needs.fork-plan.outputs.publish_kernel == 'true' && needs.fork-sgl-kernel-wheel.result != 'skipped' }}
+    if: ${{ !cancelled() && needs.fork-plan.outputs.publish_kernel == 'true' && (needs.fork-sgl-kernel-wheel.result == 'success' || (needs.fork-sgl-kernel-wheel.result == 'skipped' && needs.fork-plan.outputs.kernel_released == 'false')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: read
     steps:
-      - uses: actions/download-artifact@v4
-        continue-on-error: true
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
         with:
-          pattern: sgl-kernel-wheel-*
-          path: wheels
-          merge-multiple: true
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Fetch the wheel pushed under the kernel input key
+        run: |
+          set -euo pipefail
+          REF="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang:sgl-kernel-wheel-x86_64-${{ needs.fork-plan.outputs.kernel_key }}"
+          printf 'FROM %s\n' "$REF" | docker buildx build -o type=local,dest=wheels -f - .
+          ls -alh wheels
 
       - name: Publish to release sglang-kernel-v${{ needs.fork-plan.outputs.kernel_version }}
         env:
@@ -589,10 +625,10 @@ jobs:
             echo "$NAME already published; keeping it"
           done
 
-  # Publishes only a tree that passed the constructor-order check and the CPU suite.
+  # Builds in parallel with the tests and pushes by digest only; fork-docker-manifest tags it once the constructor-order check and the CPU suite pass.
   fork-docker-image:
-    needs: [fork-plan, fork-sgl-kernel-wheel, fork-init-order-check, base-a-test-cpu]
-    if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' && needs.fork-init-order-check.result == 'success' && needs.base-a-test-cpu.result == 'success' }}
+    needs: [fork-plan, fork-sgl-kernel-wheel, fork-rust-ext-build]
+    if: ${{ !cancelled() && needs.fork-plan.result == 'success' && needs.fork-plan.outputs.build_docker == 'true' && (needs.fork-sgl-kernel-wheel.result == 'success' || needs.fork-sgl-kernel-wheel.result == 'skipped') && needs.fork-rust-ext-build.outputs.artifact_name != '' }}
     name: fork-docker-image (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -604,20 +640,24 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest_amd64: ${{ steps.build.outputs.digest_amd64 }}
     steps:
+      # One rm per directory, all running at once; a single sequential rm of this list took three to four minutes.
       - name: Free disk space
         run: |
           df -h / /mnt || true
           sudo swapoff -a || true
           sudo rm -f /mnt/swapfile /swapfile || true
-          sudo rm -rf \
+          printf '%s\n' \
             /usr/share/dotnet /usr/share/swift /usr/share/miniconda /usr/share/az_* \
             /usr/local/lib/android /usr/local/lib/node_modules /usr/local/share/boost \
             /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/vcpkg \
             /usr/local/.ghcup /usr/local/julia* /usr/local/aws-cli /usr/local/aws-sam-cli \
             /usr/lib/jvm /usr/lib/google-cloud-sdk /usr/lib/firefox /usr/lib/mono \
             /opt/ghc /opt/hostedtoolcache /opt/az /opt/microsoft /opt/google /opt/pipx \
-            /opt/mssql-tools /opt/pipx_bin /opt/actionarchivecache || true
+            /opt/mssql-tools /opt/pipx_bin /opt/actionarchivecache \
+            | sudo xargs -P 0 -n 1 rm -rf || true
           docker system prune -af --volumes || true
           sudo apt-get clean || true
           df -h / /mnt || true
@@ -656,31 +696,11 @@ jobs:
             https://raw.githubusercontent.com/wow-look-at-my/go-toolchain/master/.github/scripts/register-ape-binfmt.sh
           bash "${{ runner.temp }}/register-ape-binfmt.sh"
 
+      # The PyO3 modules fork-rust-ext-build compiled for the CPU suite; the image installs them instead of compiling rust/ again.
       - uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
-          name: sgl-kernel-wheel-${{ matrix.arch }}
-          path: ${{ runner.temp }}/sgl-kernel-wheels
-
-      # The image carries this fork's kernel build and nothing else: the version python/pyproject.toml pins may never have been published upstream.
-      - name: Collect the sglang-kernel wheel
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.fork-plan.outputs.kernel_version }}
-        run: |
-          set -euo pipefail
-          DIR="${RUNNER_TEMP}/sgl-kernel-wheels"
-          PATTERN="sglang_kernel-${VERSION}+*_${{ matrix.arch }}.whl"
-          mkdir -p "$DIR"
-          if ! compgen -G "$DIR/$PATTERN" >/dev/null; then
-            gh release download "sglang-kernel-v${VERSION}" --repo "$GITHUB_REPOSITORY" \
-              --pattern "$PATTERN" --dir "$DIR" || true
-          fi
-          ls -alh "$DIR"
-          if ! compgen -G "$DIR/$PATTERN" >/dev/null; then
-            echo "::error::no ${PATTERN}: not built in this run and not in release sglang-kernel-v${VERSION}; dispatch with build_kernel"
-            exit 1
-          fi
+          name: ${{ needs.fork-rust-ext-build.outputs.artifact_name }}
+          path: ${{ runner.temp }}/rust-ext-modules
 
       - uses: docker/setup-buildx-action@v3
 
@@ -692,16 +712,15 @@ jobs:
 
       # The layer cache lives next to the image on ghcr.io: the image is far larger than the 10 GB Actions cache, which also holds the kernel caches.
       - name: Build and push ${{ matrix.platform }}
+        id: build
         env:
-          IMAGE_TAGS: ${{ needs.fork-plan.outputs.image_tags }}
           KERNEL_VERSION: ${{ needs.fork-plan.outputs.kernel_version }}
-          GPU_ARCHS: ${{ vars.FORK_KERNEL_CUDA_ARCHS || '80;120a' }}
+          GPU_ARCHS: ${{ needs.fork-plan.outputs.cuda_archs }}
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang"
           CACHE="${IMAGE}:buildcache-${{ matrix.suffix }}"
-          TAG_ARGS=()
-          for TAG in $IMAGE_TAGS; do TAG_ARGS+=(-t "${IMAGE}:${TAG}-${{ matrix.suffix }}"); done
+          KERNEL_WHEEL_IMAGE="${IMAGE}:sgl-kernel-wheel-${{ matrix.arch }}-${{ needs.fork-plan.outputs.kernel_key }}"
           # Same bound as python/sglang/kernels/aot/build.sh: a CUDA or CUTLASS
           # translation unit can peak near 10 GB, so jobs <= (RAM + swap) / 10 GB.
           MEM_JOBS=$(awk '/^(MemTotal|SwapTotal):/ {kb += $2} END {print int(kb / (10 * 1024 * 1024))}' /proc/meminfo)
@@ -722,14 +741,18 @@ jobs:
             --build-arg SGL_KERNEL_VERSION="${KERNEL_VERSION}" \
             --build-arg SGL_KERNEL_WHEEL_REQUIRED=1 \
             --build-arg SGLANG_BUILD_COMMIT="${GITHUB_SHA}" \
-            --build-context sgl_kernel_wheels="${RUNNER_TEMP}/sgl-kernel-wheels" \
+            --build-context sgl_kernel_wheels="docker-image://${KERNEL_WHEEL_IMAGE}" \
+            --build-context rust_ext_modules="${RUNNER_TEMP}/rust-ext-modules" \
             --cache-from "type=registry,ref=${CACHE}" \
             --cache-to "type=registry,ref=${CACHE},mode=max,ignore-error=true" \
             --label org.opencontainers.image.source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
             --label org.opencontainers.image.revision="${GITHUB_SHA}" \
-            "${TAG_ARGS[@]}" \
-            --push \
+            --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file "${RUNNER_TEMP}/build-metadata.json" \
             .
+          DIGEST=$(jq -er '."containerimage.digest"' "${RUNNER_TEMP}/build-metadata.json")
+          echo "digest_${{ matrix.suffix }}=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Pushed ${IMAGE}@${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Disk and memory after the build
         if: always()
@@ -737,9 +760,10 @@ jobs:
           df -h / /mnt || true
           free -g || true
 
+  # Publishes only a tree that passed the constructor-order check and the CPU suite.
   fork-docker-manifest:
-    needs: [fork-plan, fork-docker-image]
-    if: ${{ !cancelled() && needs.fork-plan.outputs.build_docker == 'true' && needs.fork-docker-image.result != 'skipped' }}
+    needs: [fork-plan, fork-docker-image, fork-init-order-check, base-a-test-cpu]
+    if: ${{ !cancelled() && needs.fork-plan.outputs.build_docker == 'true' && needs.fork-docker-image.result == 'success' && needs.fork-init-order-check.result == 'success' && needs.base-a-test-cpu.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -759,10 +783,9 @@ jobs:
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang"
           for TAG in ${{ needs.fork-plan.outputs.image_tags }}; do
             SOURCES=()
-            for SUFFIX in amd64; do
-              if docker buildx imagetools inspect "${IMAGE}:${TAG}-${SUFFIX}" >/dev/null 2>&1; then
-                SOURCES+=("${IMAGE}:${TAG}-${SUFFIX}")
-              fi
+            for DIGEST in ${{ needs.fork-docker-image.outputs.digest_amd64 }}; do
+              docker buildx imagetools create -t "${IMAGE}:${TAG}-amd64" "${IMAGE}@${DIGEST}"
+              SOURCES+=("${IMAGE}@${DIGEST}")
             done
             if [ ${#SOURCES[@]} -eq 0 ]; then
               echo "no per-arch image was pushed for ${TAG}" >&2
