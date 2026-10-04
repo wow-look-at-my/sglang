@@ -80,7 +80,6 @@ jobs:
               [ "$(printf '%s\n' "$FILES" | grep -c .)" -lt 300 ] && CHANGED="$FILES"
             fi
           fi
-          touched() { [ "$CHANGED" = "unknown" ] || printf '%s\n' "$CHANGED" | grep -qE "$1"; }
 
           KERNEL_CHANGED=false
           if [ -n "$BASE" ] && touched '^python/sglang/kernels/aot/'; then
