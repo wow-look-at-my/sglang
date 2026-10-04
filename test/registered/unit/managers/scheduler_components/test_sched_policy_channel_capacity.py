@@ -19,10 +19,11 @@ class TestPromptChannelCapacity(unittest.TestCase):
     def test_a_whole_prompt_fits_the_service_payload(self):
         for context_len in (4096, 131072, 262144, 1 << 20):
             capacity = sched_policy._prompt_channel_capacity(context_len)
-            self.assertEqual(capacity & (capacity - 1), 0, "a ring takes a power of two")
+            self.assertEqual(
+                capacity & (capacity - 1), 0, "a ring takes a power of two"
+            )
             payload = (
-                goipc.wire.max_message_size(capacity)
-                - goipc.wire.SERVICE_SEQUENCE_SIZE
+                goipc.wire.max_message_size(capacity) - goipc.wire.SERVICE_SEQUENCE_SIZE
             )
             self.assertGreaterEqual(
                 payload, sched_policy._TOKEN_BYTES * context_len, context_len
