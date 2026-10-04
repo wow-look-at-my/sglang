@@ -254,7 +254,27 @@ endif()
 
 # Restrict gencodes to the GPUs actually deployed, e.g. -DSGL_KERNEL_CUDA_ARCHS=120a
 # for RTX PRO 6000 Blackwell. Empty builds every arch this CUDA version supports.
-set(SGL_KERNEL_CUDA_ARCHS "" CACHE STRING "GPU archs to build for (e.g. 120a). Empty builds all") set(SGL_KERNEL_BUILD_SM90_VARIANT ON) set(SGL_KERNEL_BUILD_FLASHMLA ON) set(SGL_KERNEL_ARCH_GENCODES "") if (SGL_KERNEL_CUDA_ARCHS) foreach(arch IN LISTS SGL_KERNEL_CUDA_ARCHS) list(APPEND SGL_KERNEL_ARCH_GENCODES "-gencode=arch=compute_${arch},code=sm_${arch}") endforeach() list(FILTER SGL_KERNEL_CUDA_FLAGS EXCLUDE REGEX "^-gencode=") list(APPEND SGL_KERNEL_CUDA_FLAGS ${SGL_KERNEL_ARCH_GENCODES}). This is # sgl_kernel/load_utils.py loads the sm90 copy only on SM90. FA3 is Hopper-only. if (NOT SGL_KERNEL_CUDA_ARCHS MATCHES "(^|. )90a?(. |$)") set(SGL_KERNEL_BUILD_SM90_VARIANT OFF) set(SGL_KERNEL_ENABLE_FA3 OFF) endif() # FlashMLA kernels exist only for SM90a and SM100-family datacenter parts. This is if (NOT SGL_KERNEL_CUDA_ARCHS MATCHES "(^|. )(90a|100a|100f|103a)(. |$)") set(SGL_KERNEL_BUILD_FLASHMLA OFF) endif() message(STATUS "sgl-kernel: building only for ${SGL_KERNEL_CUDA_ARCHS}") endif()
+set(SGL_KERNEL_CUDA_ARCHS "" CACHE STRING "GPU archs to build for (e.g. 120a); empty builds all")
+set(SGL_KERNEL_BUILD_SM90_VARIANT ON)
+set(SGL_KERNEL_BUILD_FLASHMLA ON)
+set(SGL_KERNEL_ARCH_GENCODES "")
+if (SGL_KERNEL_CUDA_ARCHS)
+    foreach(arch IN LISTS SGL_KERNEL_CUDA_ARCHS)
+        list(APPEND SGL_KERNEL_ARCH_GENCODES "-gencode=arch=compute_${arch},code=sm_${arch}")
+    endforeach()
+    list(FILTER SGL_KERNEL_CUDA_FLAGS EXCLUDE REGEX "^-gencode=")
+    list(APPEND SGL_KERNEL_CUDA_FLAGS ${SGL_KERNEL_ARCH_GENCODES})
+    # sgl_kernel/load_utils.py loads the sm90 copy only on SM90; FA3 is Hopper-only.
+    if (NOT SGL_KERNEL_CUDA_ARCHS MATCHES "(^|;)90a?(;|$)")
+        set(SGL_KERNEL_BUILD_SM90_VARIANT OFF)
+        set(SGL_KERNEL_ENABLE_FA3 OFF)
+    endif()
+    # FlashMLA kernels exist only for SM90a and SM100-family datacenter parts.
+    if (NOT SGL_KERNEL_CUDA_ARCHS MATCHES "(^|;)(90a|100a|100f|103a)(;|$)")
+        set(SGL_KERNEL_BUILD_FLASHMLA OFF)
+    endif()
+    message(STATUS "sgl-kernel: building only for ${SGL_KERNEL_CUDA_ARCHS}")
+endif()
 # sgl_kernel/load_utils.py reads this list to refuse a GPU that no built arch runs on.
 list(JOIN SGL_KERNEL_CUDA_ARCHS "\n" SGL_KERNEL_CUDA_ARCHS_LINES)
 
@@ -559,7 +579,9 @@ target_link_libraries(spatial_ops PRIVATE ${TORCH_LIBRARIES} c10 cuda)
 install(TARGETS spatial_ops LIBRARY DESTINATION sgl_kernel)
 
 # ============================ Extra Install: FLashMLA ============================= #
-if (SGL_KERNEL_BUILD_FLASHMLA) include(${CMAKE_CURRENT_LIST_DIR}/cmake/flashmla.cmake) endif()
+if (SGL_KERNEL_BUILD_FLASHMLA)
+    include(${CMAKE_CURRENT_LIST_DIR}/cmake/flashmla.cmake)
+endif()
 
 # ============================ Extra Install: triton kernels ============================= #
 install(DIRECTORY "${repo-triton_SOURCE_DIR}/python/triton_kernels/triton_kernels/"

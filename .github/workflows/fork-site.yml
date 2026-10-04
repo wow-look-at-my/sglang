@@ -20,8 +20,8 @@ permissions:
   deployments: write
 
 concurrency:
-  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+  group: fork-site-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   publish-simulator:
