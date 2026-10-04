@@ -290,7 +290,7 @@ def handle_hicache_auto(server_args: Any):
         return
     logger.info(
         "HiCache (host-memory prefix cache) auto: on, sized from free host "
-        "memory at startup; --no-enable-hierarchical-cache opts out."
+        "memory at startup."
     )
     declare_resolution(
         server_args,
