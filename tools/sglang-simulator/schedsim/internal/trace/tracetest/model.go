@@ -85,5 +85,5 @@ func (l *Log) ColdChunks(m Model, tokens, ctx0, chunk, running, queue, pendingAf
 
 // Accepts cycles through the accepted-token counts a speculative decoder with drafts reports.
 func Accepts(i int) float64 {
-	return []float64{2.70, 2.74, 2.78, 2.81, 2.76}[i%5]
+	return []float64{2.40, 2.74, 3.10, 2.81, 2.76}[i%5]
 }
