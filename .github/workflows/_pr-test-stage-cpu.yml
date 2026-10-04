@@ -91,6 +91,13 @@ jobs:
         with:
           ref: ${{ fromJson(inputs.caller_inputs).git_ref || github.sha }}
 
+      # git_ref picks the code under test; the scripts this workflow calls come from the workflow's own commit.
+      - name: Checkout CI scripts
+        uses: actions/checkout@v4
+        with:
+          path: .ci-tooling
+          sparse-checkout: scripts/ci/utils
+
       - uses: ./.github/actions/check-pr-test-health
 
       - uses: ./.github/actions/check-maintenance
@@ -173,7 +180,7 @@ jobs:
           path: ${{ runner.temp }}/libgoipc
 
       - name: Install the policy process and libgoipc
-        run: bash scripts/ci/utils/install_sched_policy_runtime.sh install "${{ runner.temp }}/sched-policy" "${{ runner.temp }}/libgoipc"
+        run: bash .ci-tooling/scripts/ci/utils/install_sched_policy_runtime.sh install "${{ runner.temp }}/sched-policy" "${{ runner.temp }}/libgoipc"
 
       - name: Run test
         timeout-minutes: ${{ fromJson(inputs.run_timeout_minutes) }}
@@ -188,13 +195,13 @@ jobs:
           SUITE_PYTHON=(python3)
           if [ -n "$COVERAGE_ARTIFACT" ]; then
             mkdir -p "$GITHUB_WORKSPACE/.coverage-engine"
-            SUITE_PYTHON=(python3 -m coverage run --rcfile="$GITHUB_WORKSPACE/scripts/ci/utils/engine-coverage.toml")
+            SUITE_PYTHON=(python3 -m coverage run --rcfile="$GITHUB_WORKSPACE/.ci-tooling/scripts/ci/utils/engine-coverage.toml")
           fi
           "${SUITE_PYTHON[@]}" run_suite.py --hw cpu --suite ${{ inputs.self_name }} --auto-partition-id ${{ matrix.partition }} --auto-partition-size ${{ fromJson(inputs.partitions)[inputs.self_name].size }} --partition-model-file /tmp/partition-model.json --fork-worker-batch-size 20 $CONTINUE_ON_ERROR_FLAG
 
       - name: Combine partition coverage
         if: ${{ !cancelled() && inputs.coverage_artifact != '' }}
-        run: python3 -m coverage combine --rcfile="$GITHUB_WORKSPACE/scripts/ci/utils/engine-coverage.toml"
+        run: python3 -m coverage combine --rcfile="$GITHUB_WORKSPACE/.ci-tooling/scripts/ci/utils/engine-coverage.toml"
 
       - name: Upload partition coverage
         if: ${{ !cancelled() && inputs.coverage_artifact != '' }}
