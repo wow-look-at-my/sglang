@@ -155,8 +155,7 @@ func (r *Result) ColdRequest(win ColdWindow) *Request {
 	return nil
 }
 
-// WindowCensus tallies one run's cold windows by whether they can be priced,
-// so a bound that excludes windows can state how many.
+// WindowCensus tallies one run's cold windows by whether they can be priced.
 type WindowCensus struct {
 	Arrived int
 	Priced  int

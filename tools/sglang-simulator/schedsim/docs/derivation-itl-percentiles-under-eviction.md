@@ -14,7 +14,7 @@ Conversations at 150K-430K contexts against a device pool of 1,406,118 tokens (d
 | host 1.5x, 1800 s | 183 / 71 / 12 | 87.1 s / 2.00 s / 664.4 ms | 85.3% / 19.0% / 0.0% | 45.8 / 165.5 / 191.5 |
 | host 4x, 600 s | 0 / 0 / 0 | 932.5 ms / 899.8 ms / 831.0 ms | 0.0% / 0.0% / 0.0% | 317.6 / 315.4 / 317.5 |
 
-At 0x and 1.5x the pool is over-subscribed and OLD spends most of the run refilling it. 68 to multiple whole prefixes rebuilt, 84.7 s of longest stall, and a lower count.8% of all stream time inside a single gap longer than a second. NEW wins every latency cell in those episodes, so no bound is consulted. At 4x the host tier is large enough to hold the working set, recomputes fall to zero for all policies. The episode stops being about eviction -- which is where the cells this document argues live.
+At 0x and 1.5x the pool is over-subscribed and OLD spends most of the run refilling it. 68 to multiple whole prefixes rebuilt, 84.7 s of longest stall, and 95.8% of all stream time inside a single gap longer than a second. NEW wins every latency cell in those episodes, so no bound is consulted. At 4x the host tier is large enough to hold the working set, recomputes fall to zero for all policies. The episode stops being about eviction -- which is where the cells this document argues live.
 
 ## The two cells, and the class they are drawn from
 
@@ -36,7 +36,7 @@ That is why the same policy wins `ITL p99` outright in these scenarios -- 28.4 m
 
 ## Why a batch's cost is the right ceiling, and what the bound checks
 
-The percentile is only comparable between multiple policies if it measures the same wait, so `boundITLTailUnderEviction` refuses the cell unless conditions hold. This is each on numbers the run prints:
+The percentile is only comparable between multiple policies if it measures the same wait, so `boundITLTailUnderEviction` refuses the cell unless conditions hold, each on numbers. The run prints:
 
 1. NEW's percentile must not outlast the longest prefill batch it launched: 427.8 ms below 831.0 ms at 600 s, 453.7 ms below 1.0 s at 1800 s. Above that the tail is not a batch's stall and nothing here explains it.
 2. The share of NEW's samples above the opponent's percentile must be at least the tail the metric names (0.1% for p99.9): measured 0.287% and 0.318% at 600 s. This is 0.298% and 0.302% at 1800 s. Below that floor the percentiles are not separated by this population at all -- they will be the same point in a different policy's ordering.

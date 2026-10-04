@@ -6,7 +6,7 @@ Covers `boundAdmissionRate`, the bound `contract_test.go` reads for the `output 
 
     output tok/s = tokens with d.T <= window / window
 
-The window is the scenario's, 300 s in A, and it is the same number for all policies. As a result, this is the metric is a token count divided by a constant. Runs execute to `HardStop`, 420 s in A, so an in-flight turn finishes rather than being cut, but every token it delivers. This is after 300 s is outside the count for every policy. Nothing normalizes by how much work a policy actually had the chance to do inside the window - which is the whole question. This is in a scenario whose streams do not exist until multiple cold prompts are prefilled.
+The window is the scenario's, 300 s in A, and it is the same number for all policies, so the metric is a token count divided. This is by a constant. Runs execute to `HardStop`, 420 s in A, so an in-flight turn finishes rather than being cut, but every token it delivers. This is after 300 s is outside the count for every policy. Nothing normalizes by how much work a policy actually had the chance to do inside the window - which is the whole question. This is in a scenario whose streams do not exist until multiple cold prompts are prefilled.
 
 ## The cell, from the committed run
 

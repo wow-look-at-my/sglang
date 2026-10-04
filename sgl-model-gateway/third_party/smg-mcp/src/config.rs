@@ -271,8 +271,12 @@ mod tests {
         assert!(config.refresh_on_error);
     }
 
+    // The proxy tests share the process environment, and cargo runs tests on parallel threads.
+    static PROXY_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_proxy_from_env_empty() {
+        let _env = PROXY_ENV.lock().unwrap_or_else(|e| e.into_inner());
         // Ensure no proxy env vars are set for this test
         std::env::remove_var("MCP_HTTP_PROXY");
         std::env::remove_var("MCP_HTTPS_PROXY");
@@ -285,6 +289,7 @@ mod tests {
 
     #[test]
     fn test_proxy_from_env_with_vars() {
+        let _env = PROXY_ENV.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("MCP_HTTP_PROXY", "http://test-proxy:8080");
         std::env::set_var("MCP_NO_PROXY", "localhost,127.0.0.1");
 
