@@ -252,8 +252,7 @@ if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_FP4)
     )
 endif()
 
-# Restrict gencodes to the GPUs actually deployed, e.g. -DSGL_KERNEL_CUDA_ARCHS=120a
-# for RTX PRO 6000 Blackwell. Empty builds every arch this CUDA version supports.
+# Empty builds every arch this CUDA version supports.
 set(SGL_KERNEL_CUDA_ARCHS "" CACHE STRING "GPU archs to build for (e.g. 120a); empty builds all")
 set(SGL_KERNEL_BUILD_SM90_VARIANT ON)
 set(SGL_KERNEL_BUILD_FLASHMLA ON)
