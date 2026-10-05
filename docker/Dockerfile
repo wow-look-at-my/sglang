@@ -7,7 +7,71 @@ ARG GPU_ARCHS=
 # Compile jobs per native build step; empty keeps each tool's own default.
 ARG BUILD_JOBS=
 ARG INSTALL_GATEWAY=1
-FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
+
+# The toolkit packages of NVIDIA's -devel tag, on its -base tag. The -runtime and -devel
+# layers also carry NPP, which nothing in this image links, static archives that no build
+# here links, the Nsight Compute GUI, and a cuDNN that torch never loads (it uses the pip
+# cuDNN). This stage leaves them out, in the same layer that installs them.
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04 AS cuda_runtime
+
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS cuda_devel
+# Package pins of the matching -runtime tag, which -base does not set.
+ENV NV_CUDA_LIB_VERSION=13.0.3-1 \
+    NV_LIBCUBLAS_VERSION=13.1.1.3-1 \
+    NV_LIBCUSPARSE_VERSION=12.6.3.3-1 \
+    NV_LIBNCCL_PACKAGE_VERSION=2.28.3-1 \
+    NCCL_VERSION=2.28.3-1 \
+    NVIDIA_PRODUCT_NAME=CUDA
+COPY --from=cuda_runtime /opt/nvidia /opt/nvidia
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+ARG GPU_ARCHS
+# prune-cuda-libs.sh rebuilds cuBLAS, cuBLASLt, cuRAND, cuSPARSE and cuSOLVER with SASS for GPU_ARCHS only.
+# An image built with a GPU_ARCHS list cannot run these libraries on any other GPU.
+RUN --mount=type=bind,source=docker/prune-cuda-libs.sh,target=/tmp/prune-cuda-libs.sh \
+    apt-get update && apt-get install -y --no-install-recommends \
+        cuda-command-line-tools-13-0=${NV_CUDA_LIB_VERSION} \
+        cuda-cudart-dev-13-0=${NV_CUDA_CUDART_VERSION} \
+        cuda-libraries-dev-13-0=${NV_CUDA_LIB_VERSION} \
+        cuda-minimal-build-13-0=${NV_CUDA_LIB_VERSION} \
+        cuda-nsight-compute-13-0=${NV_CUDA_LIB_VERSION} \
+        cuda-nvml-dev-13-0 \
+        libcublas-dev-13-0=${NV_LIBCUBLAS_VERSION} \
+        libcusparse-dev-13-0=${NV_LIBCUSPARSE_VERSION} \
+        libnccl-dev=${NV_LIBNCCL_PACKAGE_VERSION}+cuda13.0 \
+        libnccl2=${NV_LIBNCCL_PACKAGE_VERSION}+cuda13.0 \
+        libcublas-13-0=${NV_LIBCUBLAS_VERSION} \
+    && apt-mark hold libcublas-13-0 libcublas-dev-13-0 libnccl2 libnccl-dev \
+    # Purging NPP also drops the cuda-libraries-dev metapackage; the libraries it pulled stay, marked manual.
+    && apt-mark manual $(dpkg-query -W -f '${Package}\n' | grep -E '^(cuda-|libcu|libnv|libnccl)' | grep -v '^libnpp') \
+    && apt-get purge -y 'libnpp-*' \
+    && ! ls /usr/local/cuda-13.0/targets/*/lib/libnpp* 2>/dev/null \
+    && bash /tmp/prune-cuda-libs.sh "$GPU_ARCHS" \
+    # nvcc links libcudart_static.a by default, so it stays.
+    && find /usr/local/cuda-13.0 -name '*_static*.a' ! -name libcudart_static.a -delete \
+    && rm -f /usr/lib/$(uname -m)-linux-gnu/libnccl_static.a \
+    # host/ holds the ncu-ui GUI; the ncu CLI lives under target/.
+    && rm -rf /opt/nvidia/nsight-compute/*/host/linux-desktop-* \
+    && NSYS_PATH=$(find /opt/nvidia/nsight-compute -type f -name nsys | head -n 1) \
+    && if [ -n "$NSYS_PATH" ]; then ln -s "$NSYS_PATH" /usr/local/bin/nsys; fi \
+    && rm -rf /var/lib/apt/lists/*
+ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
+
+# The Rust toolchain lives in /opt/rust of this stage only. A RUN that compiles Rust
+# bind-mounts it read-write, so its writes and the toolchain stay out of every layer.
+FROM cuda_devel AS rust_toolchain
+ENV RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal \
+    && /opt/rust/cargo/bin/rustc --version && /opt/rust/cargo/bin/cargo --version \
+    && rm -rf /var/lib/apt/lists/*
+
+# fclones (MIT) finds identical files for docker/dedup-layer.sh. Upstream ships x86_64 binaries only.
+FROM rust_toolchain AS fclones
+RUN --mount=type=cache,target=/opt/rust/cargo/registry \
+    /opt/rust/cargo/bin/cargo install --locked --root /usr/local fclones@0.35.0
+
+FROM cuda_devel AS base
 
 ARG TARGETARCH
 ARG BUILD_TYPE=all
@@ -23,6 +87,11 @@ ARG INSTALL_FLASHINFER_JIT_CACHE=0
 ARG FLASHINFER_VERSION=0.6.18
 ARG MOONCAKE_VERSION=0.3.13
 ARG MSCCLPP_VERSION=sglang-v0.10.1
+# Every pip call in this build writes no .pyc. The editable install deletes
+# __pycache__, so .pyc from earlier layers shipped as dead bytes. An ARG, so
+# the shipped image keeps pip's default. PIP_NO_COMPILE=1 would not work: pip
+# reads it inverted.
+ARG PIP_COMPILE=0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     CUDA_HOME=/usr/local/cuda \
@@ -32,6 +101,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Add GKE default lib and bin locations
 ENV PATH="${PATH}:/usr/local/nvidia/bin" \
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+
+# Every RUN that installs files ends with dedup-layer, which hardlinks the identical files it wrote.
+COPY --from=fclones /usr/local/bin/fclones /usr/local/bin/fclones
+COPY --chmod=755 docker/dedup-layer.sh /usr/local/bin/dedup-layer
 
 # Replace Ubuntu sources if specified
 RUN if [ -n "$UBUNTU_MIRROR" ]; then \
@@ -75,7 +148,8 @@ ENV PATH="/opt/sglang/bin:${PATH}"
 
 # Install system dependencies (organized by category for better caching)
 RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
-    apt-retry update && apt-get install -y --no-install-recommends \
+    dedup-layer --begin \
+    && apt-retry update && apt-get install -y --no-install-recommends \
     # Core system utilities
     ca-certificates \
     software-properties-common \
@@ -113,23 +187,12 @@ RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
     ibverbs-providers \
     infiniband-diags \
     perftest \
-    # Development libraries
-    libgoogle-glog-dev \
-    libgtest-dev \
-    libjsoncpp-dev \
-    libunwind-dev \
-    libboost-all-dev \
+    # Development libraries. Mooncake ships as a wheel that bundles its own
+    # glog/gflags/jsoncpp, so its build deps (boost, grpc, hiredis, ...) are absent.
     libssl-dev \
-    libgrpc-dev \
-    libgrpc++-dev \
     libprotobuf-dev \
     protobuf-compiler \
-    protobuf-compiler-grpc \
-    pybind11-dev \
-    libhiredis-dev \
     libcurl4-openssl-dev \
-    libczmq4 \
-    libczmq-dev \
     libfabric-dev \
     linux-libc-dev \
     # Package building tools
@@ -142,7 +205,8 @@ RUN --mount=type=cache,target=/var/cache/apt,id=base-apt \
     libsubunit-dev \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && apt-get clean \
+    && dedup-layer /usr /etc /opt
 
 # Replace pip global cache if specified
 RUN if [ -n "${PIP_DEFAULT_INDEX}" ]; then \
@@ -208,13 +272,6 @@ ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
-# Rust toolchain for setuptools-rust extensions (e.g. sglang-grpc). Inherited
-# by framework via FROM torch_deps.
-ENV PATH="/root/.cargo/bin:${PATH}"
-RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --no-modify-path --profile minimal \
-    && rustc --version && cargo --version
-
 # Install sgl-kernel (from pre-built wheel)
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,from=sgl_kernel_wheels,target=/tmp/sgl_kernel_wheels \
@@ -247,9 +304,13 @@ COPY proto                 /tmp/sglang_deps/proto
 
 # Install sglang dependencies (torch, transformers, etc.).
 # Generate constraints.txt to prevent reinstalling these deps in later stages.
+# setuptools-rust builds the Rust extensions (e.g. sglang-grpc) with the mounted toolchain.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=cache,target=/root/.cargo/registry \
-    case "$CUDA_VERSION" in \
+    --mount=type=bind,from=rust_toolchain,source=/opt/rust,target=/opt/rust,rw \
+    --mount=type=cache,target=/opt/rust/cargo/registry \
+    export RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo PATH="/opt/rust/cargo/bin:${PATH}" \
+    && dedup-layer --begin \
+    && case "$CUDA_VERSION" in \
         13.0.3) CUINDEX=130 ;; \
         *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
     esac \
@@ -261,6 +322,20 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && touch README.md \
     && touch LICENSE \
     && python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cu${CUINDEX} ".[${BUILD_TYPE}]" \
+    # The pip CUDA wheels hold copies of libraries in /usr/local/cuda; a symlink keeps one. A copy matches when it
+    # is byte-identical, or when its sha256 is that of the original that prune-cuda-libs.sh replaced.
+    && n=0 && mb=0 \
+    && for f in /opt/sglang/lib/python3.12/site-packages/nvidia/cu13/lib/*; do \
+           s=$(readlink -f "/usr/local/cuda/lib64/${f##*/}"); \
+           if [ -f "$f" ] && [ ! -L "$f" ] && [ -f "$s" ] \
+               && { cmp -s "$f" "$s" || grep -qx "$(sha256sum "$f" | cut -d' ' -f1)  ${f##*/}" /usr/local/share/cuda-unpruned.sha256 2>/dev/null; }; then \
+               mb=$((mb + $(stat -c %s "$f") / 1048576)) && n=$((n + 1)) && ln -sf "$s" "$f"; \
+           fi; \
+       done \
+    && echo "Linked ${n} pip CUDA libraries (${mb} MB) to their /usr/local/cuda copies" \
+    # Binds every symbol now, so a rebuilt CUDA library that torch cannot use fails the build here.
+    && LD_BIND_NOW=1 python3 -c "import torch; print('torch', torch.__version__, 'CUDA', torch.version.cuda)" \
+    && dedup-layer /opt/sglang \
     && cd /sgl-workspace \
     && rm -rf /tmp/sglang_deps \
     && pip freeze | grep -v "^sglang==" > /sgl-workspace/constraints.txt
@@ -314,9 +389,15 @@ FROM torch_deps AS flashinfer_cache
 ARG CUDA_VERSION
 ARG INSTALL_FLASHINFER_JIT_CACHE
 ARG FLASHINFER_VERSION
+ARG GPU_ARCHS
 
-# Stage jit-cache/cubin artifacts into /flashinfer_jit_output for clean COPY later
+# Stage jit-cache/cubin artifacts into /flashinfer_jit_output for clean COPY later.
+# flashinfer-cubin is GBs of kernels named for the SM they target, nearly all
+# Blackwell; prune-cubins.sh drops those no GPU_ARCHS entry can run. flashinfer
+# downloads any cubin it cannot find, and JIT-builds any jit-cache module it cannot
+# find, so an image run on another GPU still works.
 RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,source=docker/prune-cubins.sh,target=/tmp/prune-cubins.sh \
     case "$CUDA_VERSION" in \
         13.0.3) CUINDEX=130 ;; \
         *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
@@ -326,10 +407,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && python3 -m pip install flashinfer-cubin==${FLASHINFER_VERSION} --index-url https://flashinfer.ai/whl \
     && cp -r /opt/sglang/lib/python3.12/site-packages/flashinfer_cubin /flashinfer_jit_output/ \
     && cp -r /opt/sglang/lib/python3.12/site-packages/flashinfer_cubin-*.dist-info /flashinfer_jit_output/ \
+    && sh /tmp/prune-cubins.sh /flashinfer_jit_output/flashinfer_cubin "$GPU_ARCHS" \
     && if [ "$INSTALL_FLASHINFER_JIT_CACHE" = "1" ]; then \
         python3 -m pip install flashinfer-jit-cache==${FLASHINFER_VERSION} --index-url https://flashinfer.ai/whl/cu${CUINDEX} \
         && cp -r /opt/sglang/lib/python3.12/site-packages/flashinfer_jit_cache /flashinfer_jit_output/ \
-        && cp -r /opt/sglang/lib/python3.12/site-packages/flashinfer_jit_cache-*.dist-info /flashinfer_jit_output/ ; \
+        && cp -r /opt/sglang/lib/python3.12/site-packages/flashinfer_jit_cache-*.dist-info /flashinfer_jit_output/ \
+        && sh /tmp/prune-cubins.sh /flashinfer_jit_output/flashinfer_jit_cache "$GPU_ARCHS" --modules ; \
     fi
 
 FROM base AS devtools_builder
@@ -440,15 +523,19 @@ WORKDIR /sgl-workspace
 # Copy artifacts from parallel builders
 # =============================================================================
 
-# Copy HPC-Ops wheel and install (empty on non-x86_64 or without sm90 in GPU_ARCHS)
-COPY --from=hpc_ops_builder /wheels /tmp/wheels/hpc-ops
+# Install the HPC-Ops wheel (none on non-x86_64 or without sm90 in GPU_ARCHS).
+# A bind mount, not COPY: a copied wheel stays in its layer after rm.
 RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,from=hpc_ops_builder,source=/wheels,target=/tmp/wheels/hpc-ops \
     if ls /tmp/wheels/hpc-ops/*.whl >/dev/null 2>&1; then \
         pip install --no-deps /tmp/wheels/hpc-ops/*.whl; \
-    fi && rm -rf /tmp/wheels/hpc-ops
+    fi
 
 # Copy flashinfer cubin (always) and jit-cache (if installed) packages
-COPY --from=flashinfer_cache /flashinfer_jit_output/ /opt/sglang/lib/python3.12/site-packages/
+RUN --mount=type=bind,from=flashinfer_cache,source=/flashinfer_jit_output,target=/tmp/flashinfer_jit_output \
+    dedup-layer --begin \
+    && cp -a /tmp/flashinfer_jit_output/. /opt/sglang/lib/python3.12/site-packages/ \
+    && dedup-layer /opt/sglang
 
 # Copy dev tools
 COPY --from=devtools_builder /tools/diff-so-fancy /usr/local/bin/
@@ -464,7 +551,8 @@ COPY --from=devtools_builder /root/.oh-my-zsh /root/.oh-my-zsh
 
 # Install dev apt packages (need to re-run since we're in a different stage)
 RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
-    apt-retry update && apt-get install -y --no-install-recommends \
+    dedup-layer --begin \
+    && apt-retry update && apt-get install -y --no-install-recommends \
     gdb \
     ninja-build \
     vim \
@@ -489,17 +577,20 @@ RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
     libnl-route-3-200 \
     librdmacm1 \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && apt-get clean \
+    && dedup-layer /usr /etc
 
 # Install NVIDIA development tools
 RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
-    apt-retry update -y \
+    dedup-layer --begin \
+    && apt-retry update -y \
     && apt install -y --no-install-recommends gnupg \
     && echo "deb http://developer.download.nvidia.com/devtools/repos/ubuntu2004/$(if [ "$(uname -m)" = "aarch64" ]; then echo "arm64"; else echo "amd64"; fi) /" | tee /etc/apt/sources.list.d/nvidia-devtools.list \
     && apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/$(if [ "$(uname -m)" = "aarch64" ]; then echo "arm64"; else echo "x86_64"; fi)/7fa2af80.pub \
     && apt-retry update -y \
     && apt install -y --no-install-recommends nsight-systems-cli \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && dedup-layer /opt /usr
 
 # =============================================================================
 # Python packages and tools (before source copy for better caching)
@@ -507,11 +598,14 @@ RUN --mount=type=cache,target=/var/cache/apt,id=framework-apt \
 
 # Install Mooncake
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install mooncake-transfer-engine-cuda13==${MOONCAKE_VERSION}
+    dedup-layer --begin \
+    && python3 -m pip install mooncake-transfer-engine-cuda13==${MOONCAKE_VERSION} \
+    && dedup-layer /opt/sglang
 
 # Install MSCCL++ Python dependencies and package (builds extension via CMake through pip)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ -n "$BUILD_JOBS" ]; then export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"; fi \
+    dedup-layer --begin \
+    && if [ -n "$BUILD_JOBS" ]; then export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"; fi \
     && git clone --depth=1 --branch ${MSCCLPP_VERSION} https://${GITHUB_ARTIFACTORY}/microsoft/mscclpp.git /tmp/mscclpp \
     && case "${CUDA_VERSION}" in \
            13.*) \
@@ -522,11 +616,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
                echo "Unsupported CUDA version for MSCCL++: ${CUDA_VERSION}" && exit 1; \
                ;; \
        esac \
-    && rm -rf /tmp/mscclpp
+    && rm -rf /tmp/mscclpp \
+    # A wheel holds no symlinks, so every libmscclpp*.so name is a full copy.
+    && dedup-layer /opt/sglang
 
 # Install essential Python packages (use constraints to prevent conflicts)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install -c /sgl-workspace/constraints.txt \
+    dedup-layer --begin \
+    && python3 -m pip install -c /sgl-workspace/constraints.txt \
     datamodel_code_generator \
     pre-commit \
     pytest \
@@ -543,7 +640,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     matplotlib \
     tabulate \
     termplotlib \
-    "runai-model-streamer[s3,gcs,azure]>=0.15.7"
+    "runai-model-streamer[s3,gcs,azure]>=0.15.7" \
+    && dedup-layer /opt/sglang
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --force-reinstall --no-deps \
@@ -553,12 +651,24 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # unconditionally requires nixl-cu12, so install it with --no-deps and pair it
 # with the nixl-cu13 binary to avoid shipping wrong-CUDA libs.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install nixl nixl-cu13 --no-deps \
-    && python3 -m pip install "cuda-python>=13,<14"
+    dedup-layer --begin \
+    && python3 -m pip install nixl nixl-cu13 --no-deps \
+    && python3 -m pip install "cuda-python>=13,<14" \
+    && dedup-layer /opt/sglang
 
 # Install the latest available AI Dynamo prerelease from NVIDIA's package index.
+# Its aisimulate dependency pulls jax, flax, optax and tfp. Only dynamo's planner, profiler,
+# mocker and replay tools import it, and only lazily, so the worker and frontend run without it.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install --pre --extra-index-url https://pypi.nvidia.com/ ai-dynamo
+    dedup-layer --begin \
+    && python3 -m pip install --pre --no-deps --extra-index-url https://pypi.nvidia.com/ ai-dynamo \
+    && python3 -c "from importlib.metadata import requires; from packaging.requirements import Requirement as R; print('\n'.join(str(r) for r in map(R, requires('ai-dynamo')) if r.name != 'aisimulate' and (r.marker is None or r.marker.evaluate({'extra': ''}))))" > /tmp/dynamo-deps.txt \
+    && cat /tmp/dynamo-deps.txt \
+    && python3 -m pip install --pre --extra-index-url https://pypi.nvidia.com/ -r /tmp/dynamo-deps.txt \
+    && rm /tmp/dynamo-deps.txt \
+    && ! python3 -c "import jax" 2>/dev/null \
+    && python3 -c "import dynamo.frontend.frontend_args, dynamo.sglang" \
+    && dedup-layer /opt/sglang
 
 # Add yank script
 COPY --chown=root:root --chmod=755 docker/configs/yank /usr/local/bin/yank
@@ -592,7 +702,7 @@ COPY . /src
 
 # libgoipc for the goipc Python binding; the spec submodule supplies wire.json.
 FROM base AS goipc_builder
-ARG GO_IPC_REF=typed-service
+ARG GO_IPC_REF=master
 RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*
 ADD https://github.com/wow-look-at-my/go-ipc.git#${GO_IPC_REF} /go-ipc
 RUN make -C /go-ipc/c /go-ipc/c/build/libgoipc.so
@@ -603,7 +713,7 @@ ADD --chmod=755 https://dl.pazer.build/go-toolchain?os=linux&arch=amd64 /usr/loc
 COPY --from=local_src /src/tools/sched-policy /sched-policy/tools/sched-policy
 COPY --from=local_src /src/python/sglang/srt/managers/scheduler_components /sched-policy/python/sglang/srt/managers/scheduler_components
 WORKDIR /sched-policy/tools/sched-policy
-RUN go-toolchain && ./build/sglang-sched-policy --help
+RUN --mount=type=tmpfs,target=/dev/shm,size=1g go-toolchain && ./build/sglang-sched-policy --help
 # A serving host registers no APE handler, so the binary is started through /bin/sh as that handler would.
 RUN printf '#!/bin/sh\nexec /bin/sh /opt/sglang/sched-policy/sglang-sched-policy.ape "$@"\n' > build/launcher \
     && chmod 755 build/launcher
@@ -620,8 +730,9 @@ ARG BUILD_JOBS
 
 WORKDIR /sgl-workspace
 
-COPY --from=local_src /src /tmp/local_src
-RUN if [ "$BRANCH_TYPE" = "local" ]; then \
+# A bind mount, not COPY: a copied tree stays in its layer after rm.
+RUN --mount=type=bind,from=local_src,source=/src,target=/tmp/local_src \
+    if [ "$BRANCH_TYPE" = "local" ]; then \
         cp -r /tmp/local_src /sgl-workspace/sglang; \
     elif [ "$USE_LATEST_SGLANG" = "1" ]; then \
         git clone --depth=1 https://github.com/sgl-project/sglang.git /sgl-workspace/sglang; \
@@ -629,14 +740,17 @@ RUN if [ "$BRANCH_TYPE" = "local" ]; then \
         echo "ERROR: SGL_VERSION must be set when USE_LATEST_SGLANG=0 and BRANCH_TYPE!=local" && exit 1; \
     else \
         git clone --depth=1 --branch v${SGL_VERSION} https://github.com/sgl-project/sglang.git /sgl-workspace/sglang; \
-    fi \
-    && rm -rf /tmp/local_src
+    fi
 
 # Editable install (fast - dependencies already installed via constraints)
 # Clean up __pycache__/tests/pyc in same RUN to avoid writing ~28k files to layer
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,from=rust_ext_modules,target=/tmp/rust_ext_modules \
-    if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
+    --mount=type=bind,from=rust_toolchain,source=/opt/rust,target=/opt/rust,rw \
+    --mount=type=cache,target=/opt/rust/cargo/registry \
+    export RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo PATH="/opt/rust/cargo/bin:${PATH}" \
+    && dedup-layer --begin \
+    && if [ -n "$BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$BUILD_JOBS"; fi \
     && cd /sgl-workspace/sglang \
     && PIP_BUILD_ARGS="" \
     # Prebuilt modules leave nothing to compile, so the build needs no isolated env holding torch.
@@ -676,7 +790,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
          [ "$success" = "1" ] ) \
     && mkdir -p /root/.cache/huggingface /root/.cache/sglang \
     && ( if [ -f python/kernels.lock ]; then mv python/kernels.lock /root/.cache/sglang/; fi ) \
-    && ( find /opt/sglang/lib/python3.12/site-packages -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true )
+    && ( find /opt/sglang/lib/python3.12/site-packages -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true ) \
+    && dedup-layer /opt/sglang /sgl-workspace /root/.cache
 
 ENV SGLANG_RUST_BUILD_MODE=never
 
@@ -691,12 +806,11 @@ ENV SGLANG_SCHED_POLICY_BIN=/opt/sglang/sched-policy/sglang-sched-policy \
 
 # Install pre-built gateway artifacts from parallel builder (none when INSTALL_GATEWAY=0)
 COPY --from=gateway_artifacts /build/gateway_bin/ /opt/sglang/bin/
-COPY --from=gateway_artifacts /build/gateway_wheels /tmp/gateway_wheels
 RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,from=gateway_artifacts,source=/build/gateway_wheels,target=/tmp/gateway_wheels \
     if ls /tmp/gateway_wheels/*.whl >/dev/null 2>&1; then \
         python3 -m pip install --force-reinstall /tmp/gateway_wheels/*.whl; \
-    fi \
-    && rm -rf /tmp/gateway_wheels
+    fi
 
 # Every later pip step could have swapped the kernel wheel installed in torch_deps.
 RUN python3 -c "import importlib.metadata as m, sys; v = m.version('sglang-kernel'); print('sglang-kernel', v); sys.exit(0 if v.split('+')[0] == '${SGL_KERNEL_VERSION}' else 'sglang-kernel ' + v + ' is not ${SGL_KERNEL_VERSION}')"
@@ -737,7 +851,7 @@ LABEL org.opencontainers.image.source="https://github.com/sgl-project/sglang" \
 # - Ready-to-run inference server environment
 #
 # Note: Uses devel base for complete NVCC toolchain required by DeepGEMM JIT
-FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS runtime
+FROM cuda_devel AS runtime
 
 ARG CUDA_VERSION
 ARG TARGETARCH
