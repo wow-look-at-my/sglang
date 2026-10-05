@@ -2,9 +2,9 @@ module github.com/wow-look-at-my/sglang/tools/sched-policy // go-toolchain:gener
 
 go 1.26
 
-require github.com/wow-look-at-my/go-ipc v0.0.0 // go-toolchain:branch=typed-service
+require github.com/wow-look-at-my/go-ipc v0.0.0 // go-toolchain:branch=master
 
-require github.com/wow-look-at-my/go-ipc/ipcgen v0.0.0 // indirect; go-toolchain:branch=typed-service
+require github.com/wow-look-at-my/go-ipc/ipcgen v0.0.0 // indirect; go-toolchain:branch=master
 
 require (
 	github.com/stretchr/testify v1.12.1
