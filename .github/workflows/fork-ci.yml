@@ -37,6 +37,7 @@ jobs:
       cuda_archs: ${{ steps.plan.outputs.cuda_archs }}
       build_kernel: ${{ steps.plan.outputs.build_kernel }}
       publish_kernel: ${{ steps.plan.outputs.publish_kernel }}
+      on_default: ${{ steps.plan.outputs.on_default }}
       build_docker: ${{ steps.plan.outputs.build_docker }}
       image_tags: ${{ steps.plan.outputs.image_tags }}
     steps:
@@ -85,6 +86,7 @@ jobs:
             KERNEL_AVAILABLE=true
           fi
 
+          # Every push builds the image, so a Dockerfile change is proven before it merges. A branch publishes only its own dev-<branch> tag.
           BUILD_DOCKER=false
           if [ "${{ github.event_name }}" = push ] || [ "${{ inputs.build_docker }}" = true ]; then
             BUILD_DOCKER=true
@@ -108,6 +110,7 @@ jobs:
             echo "cuda_archs=${CUDA_ARCHS}"
             echo "build_kernel=${BUILD_KERNEL}"
             echo "publish_kernel=${ON_DEFAULT}"
+            echo "on_default=${ON_DEFAULT}"
             echo "build_docker=${BUILD_DOCKER}"
             echo "image_tags=${IMAGE_TAGS}"
           } >> "$GITHUB_OUTPUT"
@@ -815,6 +818,11 @@ jobs:
           set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang"
           CACHE="${IMAGE}:buildcache-${{ matrix.suffix }}"
+          # A branch reads the default branch's cache and writes its own, so it never evicts the default branch's layers.
+          CACHE_TO="$CACHE"
+          if [ '${{ needs.fork-plan.outputs.on_default }}' != true ]; then
+            CACHE_TO="${CACHE}-$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-100)"
+          fi
           KERNEL_WHEEL_IMAGE="${IMAGE}:sgl-kernel-wheel-${{ matrix.arch }}-${{ needs.fork-plan.outputs.kernel_key }}"
           # Same bound as python/sglang/kernels/aot/build.sh: a CUDA or CUTLASS
           # translation unit can peak near 10 GB, so jobs <= (RAM + swap) / 10 GB.
@@ -839,11 +847,12 @@ jobs:
             --build-context sgl_kernel_wheels="docker-image://${KERNEL_WHEEL_IMAGE}" \
             --build-context rust_ext_modules="${RUNNER_TEMP}/rust-ext-modules" \
             --cache-from "type=registry,ref=${CACHE}" \
-            --cache-to "type=registry,ref=${CACHE},mode=max,ignore-error=true" \
+            --cache-from "type=registry,ref=${CACHE_TO}" \
+            --cache-to "type=registry,ref=${CACHE_TO},mode=max,ignore-error=true,oci-mediatypes=true,compression=zstd,compression-level=12" \
             --label org.opencontainers.image.source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
             --label org.opencontainers.image.revision="${GITHUB_SHA}" \
             --label ai.sglang.build.branch="${GITHUB_REF_NAME}" \
-            --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true" \
+            --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true,compression=zstd,compression-level=12,force-compression=true" \
             --metadata-file "${RUNNER_TEMP}/build-metadata.json" \
             .
           DIGEST=$(jq -er '."containerimage.digest"' "${RUNNER_TEMP}/build-metadata.json")
