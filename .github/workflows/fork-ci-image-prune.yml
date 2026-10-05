@@ -1,0 +1,36 @@
+name: Fork CI image prune
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report the deletions without deleting anything'
+        type: boolean
+        default: false
+  delete:
+
+# Bound the API cost when the same ref fires repeatedly.
+concurrency:
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: read
+
+jobs:
+  prune:
+    name: Prune images
+    if: github.repository != 'sgl-project/sglang'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Delete the images Fork CI no longer keeps
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          file: .github/scripts/prune-ghcr-images.ts
