@@ -1381,7 +1381,11 @@ class Scheduler(
                 name, src=0, group=self.attn_tp_cpu_group
             )
         self.prefill_decode_balancer = SchedPolicy(
-            name=name[0], rank=get_parallel().attn_tp_rank, world=world, timeout=timeout
+            name=name[0],
+            rank=get_parallel().attn_tp_rank,
+            world=world,
+            timeout=timeout,
+            context_len=self.model_config.context_len,
         )
 
     def maybe_init_eviction_throttle(self) -> None:

@@ -26,6 +26,18 @@ PROTOCOL_VERSION = 2
 BINARY_ENV = "SGLANG_SCHED_POLICY_BIN"
 CLASS_OTHER, CLASS_PREFILL, CLASS_DECODE = 0, 1, 2
 _TAIL_TOKENS = 64
+_TOKEN_BYTES = array.array("i").itemsize
+_CHANNEL_SLACK = 4096
+
+
+# A ring carries a message in half its capacity and takes a power of two,
+# so the channel is sized at twice a whole prompt.
+def _prompt_channel_capacity(context_len: int) -> int:
+    needed = 2 * (_TOKEN_BYTES * context_len + _CHANNEL_SLACK)
+    capacity = goipc.MIN_CAPACITY
+    while capacity < needed:
+        capacity *= 2
+    return capacity
 
 
 def binary_path() -> str:
@@ -69,9 +81,14 @@ def _tokens(ids: Sequence[int]) -> bytes:
 
 
 class SchedPolicy:
-    def __init__(self, *, name: str, rank: int, world: int, timeout: float) -> None:
+    def __init__(
+        self, *, name: str, rank: int, world: int, timeout: float, context_len: int
+    ) -> None:
         self._client = goipc.service.connect(
-            name, timeout=timeout, messages=msg.MESSAGES
+            name,
+            timeout=timeout,
+            capacity=_prompt_channel_capacity(context_len),
+            messages=msg.MESSAGES,
         )
         self._call(msg.Hello(protocol=PROTOCOL_VERSION, rank=rank, world=world))
 
