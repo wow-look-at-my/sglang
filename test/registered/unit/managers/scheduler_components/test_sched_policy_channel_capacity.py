@@ -15,8 +15,16 @@ from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=5, suite="base-a-test-cpu")
 
-# More tokens than a service channel of go-ipc's default size carries.
+# A whole prompt, large enough that only a channel sized for it carries one.
 _PROMPT_TOKENS = 1 << 17
+
+# A service channel carries half its capacity in one message, so go-ipc's own
+# default rejects a prompt past that point: the failure the wrapper avoids.
+_DEFAULT_CHANNEL_TOKENS = (
+    goipc.wire.max_message_size(goipc.service.SERVICE_CAPACITY)
+    // sched_policy._TOKEN_BYTES
+    + 1
+)
 
 
 # The policy process answers Hello with HelloOk and every other request with Ack.
@@ -50,7 +58,7 @@ class TestPromptChannelCapacity(unittest.TestCase):
 
 
 class TestPromptChannelCarriesThePrompt(unittest.TestCase):
-    """The shipped send path. A channel of go-ipc's default size rejects this prompt."""
+    """The shipped send path carries a whole prompt; an unsized channel does not."""
 
     def _serve(self):
         name = sched_policy.new_name()
@@ -75,14 +83,14 @@ class TestPromptChannelCarriesThePrompt(unittest.TestCase):
         self.addCleanup(client.close)
         client.on_request_queued(rid="long", token_ids=range(context_len))
 
-    def test_go_ipcs_default_channel_rejects_the_same_prompt(self):
+    def test_go_ipcs_default_channel_rejects_an_oversized_prompt(self):
         name = self._serve()
         client = goipc.service.connect(name, timeout=5.0, messages=msg.MESSAGES)
         self.addCleanup(client.close)
         request = msg.RequestQueued(
             now=0.0,
             rid="prompt",
-            tokens=sched_policy._tokens(range(_PROMPT_TOKENS)),
+            tokens=sched_policy._tokens(range(_DEFAULT_CHANNEL_TOKENS)),
         )
         with self.assertRaises(goipc.MessageTooLarge):
             client.call_typed(request)
