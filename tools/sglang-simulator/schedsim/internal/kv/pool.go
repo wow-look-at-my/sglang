@@ -1,6 +1,7 @@
-// Package kv models the device KV cache and the HiCache host tier the
-// scheduler admits against: one cached prefix per conversation, whole-prefix
-// eviction to host, and the reload or recompute an evicted prefix costs.
+// Package kv models the device KV cache. The HiCache host tier the scheduler
+// admits against: one cached prefix per conversation. This also covers
+// whole-prefix eviction to host, and the reload or recompute an evicted
+// prefix costs.
 package kv
 
 import "sort"
@@ -165,7 +166,7 @@ type Eviction struct {
 
 // Evict moves one device prefix to host, dropping colder host copies to make
 // room. A prefix larger than the whole host tier is lost outright, and so is
-// each host copy dropped for it; both come back as evictions the caller prices.
+// each host copy dropped for it. Both come back as evictions the caller prices.
 func (p *Pool) Evict(e *Entry) []Eviction {
 	var out []Eviction
 	p.devCached -= e.DevLen
@@ -225,7 +226,7 @@ func (p *Pool) Admit(conv, inputLen, outTarget, devHit, hostHit int, now float64
 	return evicted
 }
 
-// CountRecompute records what a request found on arrival: a conversation that
+// CountRecompute records what a request found on arrival. A conversation that
 // had been served before and now matches less than half of its input is
 // paying for its whole prefix again.
 func (p *Pool) CountRecompute(conv, inputLen, devHit, hostHit int) {

@@ -7,10 +7,10 @@
 //	go run ./cmd/schedsim -log FILE -chunk-size 2048 -prefill-share 0.5
 //	go run ./cmd/schedsim -log FILE -replay-boots 4 -replay-seconds 0
 //
-// A production log (timestamped lines, several boots) adds sections: the
-// boots it holds, every cold prompt with its measured stall beside the
-// policies, and a replay of each stalled boot's own traffic through the
-// engine. docs/replaying-a-serving-log.md describes them.
+// A production log (timestamped lines, several boots) adds sections. The
+// boots it holds. It also holds every cold prompt with its measured stall
+// beside the policies, and a replay of each stalled boot's own traffic
+// through the engine. docs/replaying-a-serving-log.md describes them.
 package main
 
 import (

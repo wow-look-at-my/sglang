@@ -165,9 +165,8 @@ export function planDeletions(input: PlanInput): Decision {
     });
   }
 
-  // Ranked over every default-branch image, so the retention count is what
-  // bounds the history: an image a week old does not hold a slot that then
-  // falls to the newest of the images the age guard has already spared.
+  // Ranked over every default-branch image, so the retention count is what bounds the history. The retention count an image a week old does not hold a slot. That then falls to the newest of the
+  // images the age guard has already spared.
   const ranked = [...master.entries()].sort((left, right) => {
     const newest = (group: ImageVersion[]) =>
       Math.min(...group.map((version) => ageDays(version, input.now)));

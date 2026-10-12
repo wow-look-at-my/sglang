@@ -47,7 +47,8 @@ func PrefillRuns(res *Result) []GapRun {
 }
 
 // decodeWait is the GPU time held between the decode batch before the stretch
-// and the decode batch after it: the whole window a stream sees no decode step.
+// and the decode batch after it. This is the whole window a stream sees no
+// decode step.
 func decodeWait(bs []*Batch, lo, hi int) float64 {
 	before := -1.0
 	for i := lo - 1; i >= 0; i-- {
@@ -143,7 +144,7 @@ type deliveryClass struct {
 
 // classifyDeliveries labels every delivery with the batch that emitted it. The
 // engine records a row's token at its mixed batch's end and a decode step's
-// accepted tokens at that batch's end, so (request, time) names one batch.
+// accepted tokens at that batch's end, so (request, time). Names one batch.
 func classifyDeliveries(res *Result) map[deliveryKey]string {
 	out := map[deliveryKey]string{}
 	key := func(r *Request, t float64) deliveryKey { return deliveryKey{r.ID, int64(math.Round(t * 1e6))} }
@@ -207,10 +208,9 @@ func deliveryClassStats(res *Result) map[string]*deliveryClass {
 // WriteDeliveryClassBreakdown prints, per class of delivering batch, how many
 // tokens it handed out and what per-token gap it therefore contributed. A
 // mixed batch hands one token per riding request where a decode step hands
-// the sampled accept length, so the same wall-clock wait is divided
-// differently.
+// the sampled accept length. The same wall-clock wait is divided differently.
 //
-// The tail lines name the class the reported p99 and p99.9 fall in, which is
+// The tail lines name the class the reported p99 and p99.9 fall in. This is
 // decided by each class's weight in samples, not its delivery count.
 func WriteDeliveryClassBreakdown(w io.Writer, res *Result) {
 	type tokenSample struct {
@@ -310,7 +310,7 @@ func WritePrefillCostBreakdown(w io.Writer, res *Result) {
 }
 
 // WriteGapDiagnostic prints the inter-token gap distribution and the batch
-// sequence around the widest gaps, so a latency difference can be traced to the
+// sequence around the widest gaps. A latency difference can be traced to the
 // batches that caused it rather than argued about.
 func WriteGapDiagnostic(w io.Writer, res *Result, top int) {
 	samples := GapSamples(res, func(r *Request) bool { return true })

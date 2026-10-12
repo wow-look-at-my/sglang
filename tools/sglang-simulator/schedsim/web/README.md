@@ -6,7 +6,7 @@ Schedulers run side by side on the same traffic: the upstream prefill-priority r
 
 Traffic: a few agent conversations taking turns (200–new tokens, 200–800 out, 1–5 s think), random cold prompts of 150k–400k tokens on a Poisson clock. This is buttons that inject a cold prompt, a new conversation, or a follow-up turn into both sides at the same instant. Each stream draws from its own seeded generator, so both sides see the same turn sizes and think times however differently they schedule them.
 
-What to watch: press Play, then inject a cold prompt while the agents are decoding. On the left the decode steps stop until every chunk of the prompt has run and the stall counter climbs. On the right decode keeps going, the prompt finishes later, and the balance stat shows prefill's lead in GPU seconds. Push the random cold cadence up to see the overload regime, where the balancer protects running streams. This is at the cost of cold time-to-first-token and queued turns.
+What to watch: press Play, then inject a cold prompt while the agents decod. On the left the decode steps stop until every chunk of the prompt ran and the stall counter climbs. On the right decode keeps going, the prompt finishes later, and the balance stat shows prefill's lead in GPU seconds. Push the random cold cadence up to see the overload regime, where the balancer protects running streams. This is at the cost of cold time-to-first-token and queued turns.
 
 Not modelled: the eviction throttle. The cede here is the simple half-chunk rule rather than the fork's amortised one. The pool evicts whole conversations where the server evicts pages.
 

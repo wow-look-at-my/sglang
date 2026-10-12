@@ -233,9 +233,8 @@ pub fn process_chat_messages(
 }
 
 /// Build the structured-output constraint implied by `tool_choice`, as
-/// `(constraint_type, constraint_value)` for `SamplingParams`.
-///
-/// `tools` must already be narrowed to the tools the choice permits.
+/// `(constraint_type, constraint_value)` for `SamplingParams`. `tools` must
+/// already be narrowed to the tools the choice permits.
 pub fn generate_tool_constraints(
     tools: &[Tool],
     tool_choice: &Option<ToolChoice>,

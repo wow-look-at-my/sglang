@@ -2,7 +2,6 @@ package sim
 
 import "sort"
 
-// Throttle is EvictionThrottle (scheduler_components/eviction_throttle.py):
 // it holds a request back when admitting it would evict a cached prefix.
 type Throttle struct {
 	// Capacity is the larger cache tier: write-through mirrors every cached prefix on host.
@@ -119,9 +118,9 @@ func (t *Throttle) prune() {
 // BeginPass starts one scan of the waiting queue.
 func (t *Throttle) BeginPass() { t.headTaken = false }
 
-// ShouldHold is should_hold: a request whose own conversation is already
+// ShouldHold is should_hold. A request whose own conversation is already
 // resident on device is never held, only the first eviction-triggering
-// candidate of a pass is adjudicated, and a held head goes through once it has
+// candidate of a pass is adjudicated. And a held head goes through once it has
 // waited longer than rebuilding the device pool would take.
 func (t *Throttle) ShouldHold(id, inputLen, deviceHit, totalTokens int, wouldEvict bool, queuedAt, now float64) bool {
 	// Half the input separates a conversation's own resident context from a hit

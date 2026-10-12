@@ -1,6 +1,6 @@
 name: Fork site
 
-# Publish the visual scheduler simulator (tools/sglang-simulator/schedsim/web) to buildhost on every push. The project defaults to this repository's name, so the default branch serves at https://sglang.pazer.site/ and every other branch at https://sglang.pazer.site/@<branch>/ (slashes flattened to `-`). Authentication is the runner's OIDC token: buildhost auto-provisions the project for this org, so no secret is stored here.
+# Publish the visual scheduler simulator (tools/sglang-simulator/schedsim/web) to buildhost on every push. The project defaults to this repository's name. The default branch serves at https://sglang.pazer.site/ and every other branch at https://sglang.pazer.site/@<branch>/ (slashes flattened to `-`). Authentication is the runner's OIDC token: buildhost auto-provisions the project for this org, so no secret is stored here.
 
 on:
   push:

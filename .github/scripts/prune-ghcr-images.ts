@@ -166,8 +166,9 @@ async function reachableDigests(
 }
 
 /**
- * Read the recorded branch for images whose tag cannot name a live branch,
- * so an image of a live branch is never taken for an image of a dead one.
+ * Read the recorded branch for images whose tag cannot name a live branch.
+ * Do this so an image of a live branch is never taken for an image of a
+ * dead one.
  */
 async function attachRecordedBranches(
   versions: ImageVersion[],

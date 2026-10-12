@@ -26,7 +26,7 @@ pip install -e tools/sglang-simulator
 
 The simulator does not install or pin a second `sglang` package. Run it from a checkout whose `python/sglang` package is available on `PYTHONPATH`, or from a matching official SGLang image.
 
-AIConfigurator is optional. Install it separately when using the `aiconfigurator` predictor. The `aic` extra pins AIConfigurator to the exact release validated with the simulator so upstream API changes cannot silently alter an installation. In a clean virtual environment, install the extra with:
+AIConfigurator is optional. Install it separately when using the `aiconfigurator` predictor. The `aic` extra pins AIConfigurator to the exact release validated with the simulator so upstream API changes cannot silently change an installation. In a clean virtual environment, install the extra with:
 
 ```bash
 pip install -e "tools/sglang-simulator[aic]"
@@ -56,7 +56,7 @@ python3 -m pytest -q test/test_simulation_sglang_runner.py
 python3 -m pytest -q test/test_simulation_sglang_serving.py
 ```
 
-Read these tests as the minimal maintained examples for constructing a dataset, running a benchmark, starting a simulator server, sending programmatic, ShareGPT, or timestamped traffic. This is comparing execution modes, and collecting request, latency, throughput, and prefix-cache metrics.
+Read these tests as the minimal maintained examples for constructing a dataset, running a benchmark, starting a simulator server. Those tests send programmatic, ShareGPT, or timestamped traffic. This compars execution modes, and collecting request, latency, throughput, and prefix-cache metrics.
 
 ## Serving mode
 
@@ -149,7 +149,7 @@ A simulator configuration has sections:
 
 ### Prefix-cache accuracy
 
-Prefix-cache hit accuracy is highly sensitive to `max_total_tokens`. It controls the simulated device KV-cache capacity and participates in hierarchical host-cache sizing. As a result, a mismatch changes eviction timing and device, host, and storage hit attribution. For deployment-faithful results, copy `max_total_num_tokens=N` from the real SGLang server startup log and launch the simulator with `--max-total-tokens N`. Avoid relying on a separately estimated capacity when comparing the simulator with production traces.
+Prefix-cache hit accuracy is very sensitive to `max_total_tokens`. It controls the simulated device KV-cache capacity and participates in hierarchical host-cache sizing. As a result, a mismatch changes eviction timing and device, host, and storage hit attribution. For deployment-faithful results, copy `max_total_num_tokens=N` from the real log of the SGLang server startup and launch the simulator with `--max-total-tokens N`. Avoid relying on a separately estimated capacity when comparing the simulator with production traces.
 
 Supported predictors:
 

@@ -1,7 +1,7 @@
 // Package server runs the policy for one TP group as a go-ipc service. Every
 // rank makes each call; a call is answered once every rank has made it, with
 // the same reply for all. A rank that diverges, that exits, or that does not
-// arrive within the lockstep timeout fails the group: every rank hears the
+// arrive within the lockstep timeout fails the group. Every rank hears the
 // reason as a call error instead of hanging.
 package server
 

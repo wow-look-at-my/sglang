@@ -1,6 +1,6 @@
 // Command sglang-sched-policy decides prefill/decode time sharing and
 // eviction throttling for one TP group of the SGLang scheduler. The ranks
-// connect to the go-ipc service of the given name; the process exits
+// connect to the go-ipc service of the given name. The process exits
 // non-zero when the ranks diverge, once every rank has heard why.
 package main
 

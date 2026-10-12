@@ -3,7 +3,7 @@ package sim
 import "testing"
 
 // A cold prompt whose run ended before it reached a first token has no
-// arrival-to-first-token interval, and must not be priced as if it did.
+// arrival-to-first-token interval. It must not be priced as if it did.
 func TestColdWindowWithoutFirstTokenIsNotServed(t *testing.T) {
 	cost := ScenarioCost()
 	for _, mode := range Modes {

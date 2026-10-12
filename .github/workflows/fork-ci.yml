@@ -60,7 +60,7 @@ jobs:
           KERNEL_VERSION=$(grep -Po '(?<=^version = ")[^"]*' python/sglang/kernels/aot/pyproject.toml)
           echo "kernel_version=${KERNEL_VERSION}" >> "$GITHUB_OUTPUT"
 
-          # Everything the wheel is built from: the AOT source tree (submodule pins included), the archs, and the CUDA and Python versions fork-sgl-kernel-wheel passes to build.sh.
+          # Everything the wheel is built from. The AOT source tree (submodule pins included), the archs, and the CUDA and Python versions fork-sgl-kernel-wheel passes to build.sh.
           AOT_TREE=$(git rev-parse HEAD:python/sglang/kernels/aot)
           KERNEL_KEY=$(printf 'aot=%s archs=%s cuda=13.0 python=3.12\n' "$AOT_TREE" "$CUDA_ARCHS" | sha256sum | cut -d' ' -f1)
           KERNEL_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sglang:sgl-kernel-wheel-x86_64-${KERNEL_KEY}"
@@ -540,7 +540,7 @@ jobs:
           shared-key: fork-gateway-golang
           cache-on-failure: true
 
-      # No pre-commit hook covers Go, so this is the only thing holding both trees this fork adds to the formatting the rest of them already uses.
+      # No pre-commit hook covers Go. This is the only thing holding both trees this fork adds to the formatting the rest of them already uses.
       - name: gofmt
         working-directory: .
         run: test -z "$(gofmt -l sgl-model-gateway/bindings/golang tools/sglang-simulator/schedsim)"
@@ -558,7 +558,7 @@ jobs:
       - name: Build cdylib
         run: make build-dev
 
-      # The cgo directives name the library but not the directory it sits in, and the Makefile's CGO_LDFLAGS is what supplies it, so a `go build` of the example binaries outside make cannot link.
+      # The cgo directives name the library but not the directory it sits in. The Makefile's CGO_LDFLAGS is what supplies it, so a `go build` of the example binaries outside make cannot link.
       - name: Build the Go SDK and examples
         run: |
           make build-go BUILD_MODE=debug

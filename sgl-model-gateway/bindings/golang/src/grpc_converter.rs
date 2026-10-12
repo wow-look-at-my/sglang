@@ -220,11 +220,9 @@ pub unsafe extern "C" fn sgl_grpc_response_converter_create(
 /// * `error_out` - Optional pointer to receive error message
 ///
 /// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `handle` must be live; `response_json` must be NUL-terminated UTF-8;
-/// `result_json_out` must be writable and its buffer freed with `sgl_free_string`.
+/// * SglErrorCode::Success on success, error code on failure # Safety `handle`
+/// must be live. `response_json` must be NUL-terminated UTF-8. `result_json_out`
+/// must be writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_grpc_response_converter_convert_chunk(
     handle: *mut GrpcResponseConverterHandle,

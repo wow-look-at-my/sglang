@@ -8,10 +8,11 @@ ARG GPU_ARCHS=
 ARG BUILD_JOBS=
 ARG INSTALL_GATEWAY=1
 
-# The toolkit packages of NVIDIA's -devel tag, on its -base tag. The -runtime and -devel
-# layers also carry NPP, which nothing in this image links, static archives that no build
-# here links, the Nsight Compute GUI, and a cuDNN that torch never loads (it uses the pip
-# cuDNN). This stage leaves them out, in the same layer that installs them.
+# The toolkit packages of NVIDIA's -devel tag, on its -base tag. Consider the -runtime
+# and -devel layers. That -runtime also carry NPP, which nothing in this image links,
+# static archives that no build here links. The Nsight Compute GUI, and a cuDNN that
+# torch never loads (it uses the pip cuDNN). This stage leaves them out, in the same
+# layer that installs them.
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04 AS cuda_runtime
 
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS cuda_devel
@@ -112,10 +113,10 @@ RUN if [ -n "$UBUNTU_MIRROR" ]; then \
     sed -i "s|http://.*security.ubuntu.com|$UBUNTU_MIRROR|g" /etc/apt/sources.list; \
 fi
 
-# Package mirrors (Ubuntu, NVIDIA) serve a truncated or mismatched index
-# while a mirror sync is in progress, and apt fails the whole build on that
-# one fetch ("File has unexpected size ... Mirror sync in progress?"). Every
-# apt update below goes through apt-retry, which retries with a growing delay;
+# Package mirrors (Ubuntu, NVIDIA) serve a truncated or mismatched index while
+# a mirror sync is in progress. Apt fails the whole build on that one fetch
+# ("File has unexpected size ... Mirror sync in progress?"). Every apt update
+# below goes through apt-retry, which retries with a growing delay;
 # Acquire::Retries covers the package downloads themselves.
 RUN printf '%s\n' '#!/bin/sh' \
       '# Retries apt-get while a package mirror is mid-sync (see docker/Dockerfile).' \
@@ -251,7 +252,7 @@ ENV LANG=en_US.UTF-8 \
 
 # Holds no wheel by default, so sglang-kernel comes from PyPI. Override it with
 # `--build-context sgl_kernel_wheels=<dir of sglang_kernel-*.whl>` to install the
-# kernel built from this checkout, e.g. before that version is published;
+# kernel built from this checkout, e.g. before that version is published.
 # SGL_KERNEL_WHEEL_REQUIRED=1 then fails the build instead of falling back to PyPI.
 FROM base AS sgl_kernel_wheels
 
@@ -395,7 +396,7 @@ ARG GPU_ARCHS
 # flashinfer-cubin is GBs of kernels named for the SM they target, nearly all
 # Blackwell; prune-cubins.sh drops those no GPU_ARCHS entry can run. flashinfer
 # downloads any cubin it cannot find, and JIT-builds any jit-cache module it cannot
-# find, so an image run on another GPU still works.
+# find. An image run on another GPU still works.
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,source=docker/prune-cubins.sh,target=/tmp/prune-cubins.sh \
     case "$CUDA_VERSION" in \
@@ -866,10 +867,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 ENV PATH="${PATH}:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/cuda/nvvm/bin" \
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
 
-# Package mirrors (Ubuntu, NVIDIA) serve a truncated or mismatched index
-# while a mirror sync is in progress, and apt fails the whole build on that
-# one fetch ("File has unexpected size ... Mirror sync in progress?"). Every
-# apt update below goes through apt-retry, which retries with a growing delay;
+# Package mirrors (Ubuntu, NVIDIA) serve a truncated or mismatched index while
+# a mirror sync is in progress. Apt fails the whole build on that one fetch
+# ("File has unexpected size ... Mirror sync in progress?"). Every apt update
+# below goes through apt-retry, which retries with a growing delay;
 # Acquire::Retries covers the package downloads themselves.
 RUN printf '%s\n' '#!/bin/sh' \
       '# Retries apt-get while a package mirror is mid-sync (see docker/Dockerfile).' \

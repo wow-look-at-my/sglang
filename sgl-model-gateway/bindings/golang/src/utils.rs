@@ -33,7 +33,6 @@ pub fn generate_tool_call_id(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
-///
 /// # Safety
 /// The out pointers must be null or writable `char**`; only `error_out` is
 /// ever written.

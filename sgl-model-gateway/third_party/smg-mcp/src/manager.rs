@@ -262,12 +262,10 @@ impl McpManager {
             .collect()
     }
 
-    /// List tools only from specific servers plus all static servers
-    ///
-    /// Tools from the specified dynamic servers
-    ///
-    /// This provides request-scoped tool isolation while maintaining
-    /// global visibility for static servers.
+    /// List tools only from specific servers plus all static servers Tools
+    /// from the specified dynamic servers This provides request-scoped tool
+    /// isolation. This happens while maintaining global visibility for
+    /// static servers.
     pub fn list_tools_for_servers(&self, server_keys: &[String]) -> Vec<Tool> {
         self.inventory
             .list_tools()
@@ -286,10 +284,9 @@ impl McpManager {
         self.static_clients.contains_key(server_key)
     }
 
-    /// Call a tool by name with automatic type coercion
-    ///
-    /// Accepts either JSON string or parsed Map as arguments.
-    /// Automatically converts string numbers to actual numbers based on tool schema.
+    /// Call a tool by name with automatic type coercion Accepts either JSON
+    /// string or parsed Map as arguments. Automatically converts string
+    /// numbers to actual numbers based on tool schema.
     pub async fn call_tool(
         &self,
         tool_name: &str,
@@ -581,11 +578,11 @@ impl McpManager {
     // Internal Helper Methods
     // ========================================================================
 
-    /// Static helper for loading inventory (for new())
-    /// Discover and cache tools/prompts/resources for a connected server
-    ///
-    /// This method is public to allow workflow-based inventory loading.
-    /// It discovers all tools, prompts, and resources from the client and caches them in the inventory.
+    /// Static helper for loading inventory (for new()) Discover and cache
+    /// tools/prompts/resources. For a connected server This method is
+    /// public to allow workflow-based inventory loading. It discovers all
+    /// tools, prompts, and resources from the client and caches them in the
+    /// inventory.
     pub async fn load_server_inventory(
         inventory: &Arc<ToolInventory>,
         server_key: &str,
@@ -664,14 +661,10 @@ impl McpManager {
         }
     }
 
-    // ========================================================================
-    // Connection Logic (from client_manager.rs)
-    // ========================================================================
 
-    /// Connect to an MCP server
-    ///
-    /// This method is public to allow workflow-based server registration at runtime.
-    /// It handles connection with automatic retry for network-based transports (SSE/Streamable).
+    /// Connect to an MCP server This method is public to allow workflow-based
+    /// server registration at runtime. It handles connection with automatic
+    /// retry for network-based transports (SSE/Streamable).
     pub async fn connect_server(
         config: &McpServerConfig,
         global_proxy: Option<&McpProxyConfig>,

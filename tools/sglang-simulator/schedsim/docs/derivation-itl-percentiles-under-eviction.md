@@ -40,10 +40,10 @@ The percentile is only comparable between multiple policies if it measures the s
 
 1. NEW's percentile must not outlast the longest prefill batch it launched: 427.8 ms below 831.0 ms at 600 s, 453.7 ms below 1.0 s at 1800 s. Above that the tail is not a batch's stall and nothing here explains it.
 2. The share of NEW's samples above the opponent's percentile must be at least the tail the metric names (0.1% for p99.9): measured 0.287% and 0.318% at 600 s. This is 0.298% and 0.302% at 1800 s. Below that floor the percentiles are not separated by this population at all -- they will be the same point in a different policy's ordering.
-3. That count must fit inside the mixed rows the run served: 1,644 against 3,679 rows and 4,601 against 8,180. If more samples sat above the cut than there were riding tokens, some of the tail will not be the ride.
+3. That count must fit inside the mixed rows the run served: 1,644 against 3,679 rows and 4,601 against 8,180. If more samples sat above the cut than there rids tokens, some of the tail will not be the ride.
 4. NEW's longest stall must not be the worse of the two: 831.0 ms against OLD's 932.5 ms and PREV's 899.8 ms at 600 s. This is 1.01 s against 1.19 s and 1.09 s at 1800 s.
-5. NEW's median inter-token gap must not exceed the opponent's: 6.8 ms against 7.0 ms and 6.9 ms at 600 s, and 6.6 ms against 6.6 ms at 1800 s. A policy whose whole distribution sat higher will not be excused by a tail argument.
-6. Both policies must have run the same deployment: the GPU busy share is 98.4% for all three at 600 s and 99.5% at 1800 s. The decode share is 77.8-78.1% at 600 s and 77.1-77.3% at 1800 s. `TestDeliveryClassShareTable` prints the busy and decode shares, the medians in condition 5 and the longest stalls in condition 4 for both tiers.
+5. NEW's median inter-token gap must not exceed the opponent's: 6.8 ms against 7.0 ms and 6.9 ms at 600 s, and 6.6 ms against 6.6 ms at 1800 s. A tail argument excused a policy whose whole distribution sat higher will not.
+6. Both policies must ran the same deployment: the GPU busy share is 98.4% for all three at 600 s and 99.5% at 1800 s. The decode share is 77.8-78.1% at 600 s and 77.1-77.3% at 1800 s. `TestDeliveryClassShareTable` prints the busy and decode shares, the medians in condition 5 and the longest stalls in condition 4 for both tiers.
 
 Conditions 1 and 3 together are the claim: the tail samples are tokens handed out inside a prefill batch. No such token can wait longer than the batch that carried it.
 
@@ -56,6 +56,6 @@ Covers multiple cells: `ITL p99.9` in thrash at the 4x host tier over 600 s and 
 Refuses:
 
 * Every `ITL p99` cell under eviction. NEW wins all six: 25.0-42.5 ms against PREV's 81.7-258.4 ms and against OLD's 82.7 ms to 9.2 s, so there is nothing to argue.
-* The `output tok/s` caret on thrash at 4x over 600 s (317.5 against OLD's 317.6). That is +0.02% at the precision the contract prints, inside the tie band it judges. A derivation will be claiming a loss the contract does not see.
+* The `output tok/s` caret on thrash at 4x over 600 s (317.5 against OLD's 317.6). That is +0.02% at the precision the contract prints, inside the tie band it judges. A derivation will claims a loss the contract does not see.
 * `longest stall` at the 4x tier. NEW's is the shortest of the three (831.0 ms). As a result, it is a win, not an exception.
-* Any claim that the 4x tier is where the mechanism matters. At that tier the host cache holds the working set and nothing is recomputed by anyone. The episode is a busy short-chat mix with long prompts, and the tail belongs to the same delivery classes the mixed-chunk document describes. What this document adds is only that the cold-prompt accounts cannot speak for it, because there is no cold prompt.
+* Any claim that the 4x tier is where the mechanism matters. Anyone recomputs at that tier the host cache holds the working set and nothing. The episode is a busy short-chat mix with long prompts, and the tail belongs to the same delivery classes the mixed-chunk document describes. What this document adds is only that the cold-prompt accounts cannot speak for it, because there is no cold prompt.

@@ -7,7 +7,8 @@ import (
 	"time"
 )
 
-// A production log is many process lifetimes in one file: every restart prints a new server_args line, workers overlap during a rolling update, and a cold run of chunks that straddles a restart is prompts.
+// A production log is many process lifetimes in one file. Every restart prints a new server_args line, workers overlap during a rolling update, and a cold run of chunks. That straddles a restart is
+// prompts.
 
 // ServerArgs is the subset of the server_args line the simulator prices with.
 type ServerArgs struct {
@@ -102,10 +103,10 @@ func linePrefix(raw string) (at time.Time, worker string) {
 }
 
 // ParseBoots splits a log into process lifetimes. A server_args line opens a
-// boot for the worker that printed it; every later line from that worker
+// boot for the worker that printed it. Every later line from that worker
 // belongs to it until the worker prints another server_args line. Lines with
-// no worker (the bare format) belong to the most recently opened boot, and a
-// log with no server_args line at all is one boot with ArgsKnown=false, whose
+// no worker (the bare format) belong to the most recently opened boot. A log
+// with no server_args line at all is one boot with ArgsKnown=false, whose
 // Steps are exactly what Parse returns.
 func ParseBoots(log string) ([]Boot, error) {
 	var boots []*Boot
@@ -277,11 +278,11 @@ func (b *Boot) ColdRunsAll(chunkSize int) []ColdRun {
 }
 
 // PrefillStretches lists every maximal run of consecutive prefill steps
-// holding at least minCold cold chunks. A stretch is what a stall measures:
-// the GPU ran nothing but prefill from its first step to the decode step
+// holding at least minCold cold chunks. A stretch is what a stall measures.
+// The GPU ran nothing but prefill from its first step to the decode step
 // after it, however many prompts arrived and joined in the meantime. Its
 // Tokens count every prefill step's work, its RunningAtStart is #running-req
-// on the first step that had any, and its CtxStart is the first cold run's.
+// on the first step that had any. Its CtxStart is the first cold run's.
 func (b *Boot) PrefillStretches(chunkSize, minCold int) []ColdRun {
 	var out []ColdRun
 	steps := b.Steps

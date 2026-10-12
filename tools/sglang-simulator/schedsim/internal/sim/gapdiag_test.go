@@ -49,10 +49,11 @@ func ScenarioCost() Cost {
 	return NewCost(trace.Calibrate(incidentSteps(), BaselineChunkSize, 64))
 }
 
-// TestGapDiagnosticScenarioB dumps, for each policy, where scenario B's
-// inter-token latency comes from: the gap distribution, the class of batch that
-// delivered each token, the cost of a single prefill batch, and the batch
-// sequence around the widest gaps. Run it with -v to read the numbers.
+// TestGapDiagnosticScenarioB dumps, for each policy. This happens where
+// scenario B's inter-token latency comes from: the gap distribution, the class
+// of batch that delivered each token. The cost of a single prefill batch, and
+// the batch sequence around the widest gaps. Run it with -v to read the
+// numbers.
 func TestGapDiagnosticScenarioB(t *testing.T) {
 	cost := ScenarioCost()
 	for _, every := range []float64{2, 5} {
@@ -83,10 +84,10 @@ func TestGapDiagnosticScenarioB(t *testing.T) {
 // diagnostic can quote the same population the pooled metrics are quantiled over.
 //
 // Each seed is re-identified on the way in. classifyDeliveries keys a delivery by
-// (request id, delivery time) because within one run that pair names exactly one batch,
-// but ids are assigned per seed, so seeds can present the same pair with different
-// classes and the merged map would label both with whichever batch wrote last. The
-// clones exist only in the merged trace; the runs themselves are not touched.
+// (request id, delivery time) because within one run that pair names exactly one batch.
+// However, ids are assigned per seed, so seeds can present the same pair with different
+// classes. The merged map would label both with whichever batch wrote last. The clones
+// exist only in the merged trace; the runs themselves are not touched.
 func pooledTrace(runs []*Result) *Result {
 	merged := &Result{Agents: runs[0].Agents, End: runs[0].End}
 	for ri, r := range runs {
@@ -138,10 +139,10 @@ func remapRequests(rs []*Request, remap func(*Request) *Request) []*Request {
 	return out
 }
 
-// TestMergedTraceAttributesEverySeed checks the merge against the seeds it joined: the
-// per-class sample counts must be the sum of what each run produced on its own, because
-// a delivery counted once as "mixed" in one run cannot arrive in the merged trace as
-// "decode", and one lost to a key collision cannot reappear anywhere.
+// TestMergedTraceAttributesEverySeed checks the merge against the seeds it joined. The
+// per-class sample counts must be the sum of what each run produced on its own. This is
+// because a delivery counted once as "mixed" in one run cannot arrive in the merged
+// trace as "decod. One lost to a key collision cannot reappear anywhere.
 func TestMergedTraceAttributesEverySeed(t *testing.T) {
 	cost := ScenarioCost()
 	for _, sc := range []Scenario{ScenarioA(testEpisode()), ScenarioB(2), ScenarioThrash(4, 600)} {

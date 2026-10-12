@@ -33,10 +33,9 @@ impl CachedConnection {
     }
 }
 
-/// Connection pool for dynamic MCP servers
-///
-/// Provides thread-safe connection pooling with LRU eviction.
-/// Connections are keyed by server URL and reused across requests.
+/// Connection pool for dynamic MCP servers Provides thread-safe connection
+/// pooling with LRU eviction. Connections are keyed by server URL and reused
+/// across requests.
 pub struct McpConnectionPool {
     /// LRU cache of server_url -> cached connection
     connections: Arc<Mutex<LruCache<String, CachedConnection>>>,
@@ -56,7 +55,6 @@ impl McpConnectionPool {
     const DEFAULT_MAX_CONNECTIONS: usize = 200;
 
     /// Create a new connection pool with default settings
-    ///
     /// - global_proxy: Loaded from environment variables (MCP_HTTP_PROXY, etc.)
     pub fn new() -> Self {
         Self {
@@ -102,14 +100,11 @@ impl McpConnectionPool {
     }
 
     /// Get an existing connection or create a new one
-    ///
     /// Checks if a connection exists for the given URL (fast path <1ms)
-    ///
     /// # Arguments
     /// * `server_url` - The MCP server URL (used as cache key)
     /// * `server_config` - Server configuration (used to create new connection if needed)
     /// * `connect_fn` - Async function to create a new client connection
-    ///
     /// # Returns
     /// Arc to the MCP client, either from cache or newly created
     pub async fn get_or_create<F, Fut>(

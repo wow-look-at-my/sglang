@@ -32,7 +32,7 @@ pub enum SseTransportError {
     InvalidUrl(String, url::ParseError),
 }
 
-/// An rmcp client [`Transport`] over the legacy HTTP+SSE protocol.
+/// An rmcp client [`Transport`] over the HTTP+SSE protocol.
 pub struct SseClientTransport {
     client: reqwest::Client,
     sse_url: Url,
@@ -46,9 +46,9 @@ pub struct SseClientTransport {
 }
 
 impl SseClientTransport {
-    /// Opens the event stream at `sse_url` and waits for the server's `endpoint` event.
-    ///
-    /// Authentication and proxying are taken from `client` (default headers, proxy config).
+    /// Opens the event stream at `sse_url` and waits for the server's
+    /// `endpoint` event. Authentication and proxying are taken from `client`
+    /// (default headers, proxy config).
     pub async fn start(client: reqwest::Client, sse_url: &str) -> Result<Self, SseTransportError> {
         let sse_url = Url::parse(sse_url)
             .map_err(|e| SseTransportError::InvalidUrl(sse_url.to_string(), e))?;

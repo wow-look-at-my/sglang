@@ -62,8 +62,8 @@ func (l *Log) DecodeAt(m Model, running, fullTokens int, accept float64) *Log {
 	return l.Advance(40 * step)
 }
 
-// ColdChunks writes a prompt of tokens prefilled from context ctx0 in chunks:
-// every full chunk alone, with no prefix hit, and a final partial chunk when
+// ColdChunks writes a prompt of tokens prefilled from context ctx0 in chunks.
+// Every full chunk alone, with no prefix hit, and a final partial chunk when
 // tokens is not a multiple of chunk. pendingAfter is what the queue holds
 // besides this prompt; each line reports it plus what is left of the prompt.
 // Chunk durations come from m, and the clock advances by each.

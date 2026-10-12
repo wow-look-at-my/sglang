@@ -1,7 +1,7 @@
 package sim
 
 // Balancer is PrefillDecodeBalancer (prefill_decode_balancer.py), shared by
-// both balancing modes: Prev selects the balance floored at zero with no
+// both balancing modes. Prev selects the balance floored at zero with no
 // token bound and no piggyback credit, and the default selects HEAD's rules.
 type Balancer struct {
 	Prev        bool
@@ -60,7 +60,7 @@ func (b *Balancer) marginalSecondsPerToken() float64 {
 }
 
 // ShouldDeferPrefill is should_defer_prefill. Without contention the balance is
-// cleared and nothing is deferred; continuesChunk says the pending prefill work
+// cleared and nothing is deferred. ContinuesChunk says the pending prefill work
 // is the next chunk of a request already being chunked.
 func (b *Balancer) ShouldDeferPrefill(prefillPending, decodeRunnable, continuesChunk bool) bool {
 	if !prefillPending || !decodeRunnable {

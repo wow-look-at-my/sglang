@@ -46,9 +46,9 @@ type CalibReport struct {
 }
 
 // CalibrateBoots fits the cost model across process lifetimes. Cold runs
-// never cross a boot; the largest run anywhere is the fit set and every other
+// never cross a boot. The largest run anywhere is the fit set and every other
 // run of at least minHoldoutChunks chunks is a holdout. The decode step time
-// pools steady single-request lines from every boot, and the pool size is
+// pools steady single-request lines from every boot. The pool size is
 // reported per boot (boots with different --context-length carry different
 // pools) with the fit boot's used for the calibration.
 func CalibrateBoots(boots []Boot, chunkSize, page int) (Calibration, CalibReport) {

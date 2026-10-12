@@ -1,8 +1,8 @@
 // Package tracetest writes serving logs in the production format for tests:
-// timestamped, worker-prefixed lines with the server_args header, batch
-// lines, completions, kernel compiles and the signals that end a boot. A
-// test states what the deployment did and reads back what the parser and
-// the models make of it, without carrying a corpus around.
+// timestamped, worker-prefixed lines with the server_args header and batch
+// lines. This also covers completions, kernel compiles and the signals that
+// end a boot. A test states what the deployment did and reads back what the
+// parser and the models make of it, without carrying a corpus around.
 package tracetest
 
 import (
@@ -175,7 +175,7 @@ func (l *Log) Steady(n, running, fullTokens int) *Log {
 }
 
 // ColdPrompt writes a chunked cold prompt of tokens, running behind
-// running decoding requests: the first chunk reports the whole prompt
+// running decoding requests. The first chunk reports the whole prompt
 // pending, each later chunk what is left.
 func (l *Log) ColdPrompt(tokens, chunk, running, queue int) *Log {
 	left := tokens
@@ -191,7 +191,7 @@ func (l *Log) ColdPrompt(tokens, chunk, running, queue int) *Log {
 }
 
 // Stalled is a canned boot: server_args, a warm-up, a few conversations
-// decoding, a cold prompt of chunks*4096 tokens that stalls them, and a
+// decoding, a cold prompt of chunks*4096 tokens that stalls them. A
 // return to decoding, ending in a drain. It exercises every section a
 // timestamped log adds to the report.
 func Stalled(worker string, chunks int) *Log {

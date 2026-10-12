@@ -133,7 +133,7 @@ func PolicyIndex(m Mode) int {
 }
 
 // SeedValues lists one metric's value for each seed of one policy, in seed
-// order, so a comparison can be read against the spread across seeds rather
+// order. A comparison can be read against the spread across seeds rather
 // than against a single pooled number.
 func (r Row) SeedValues(mode Mode, k MetricKey) []float64 {
 	out := make([]float64, len(r.Runs[PolicyIndex(mode)]))
@@ -200,7 +200,7 @@ func (v Verdict) String() string {
 }
 
 // Judge compares one metric between the new policy and another, returning the
-// shortfall as a fraction of the other value: positive only when the new policy
+// shortfall as a fraction of the other value. Positive only when the new policy
 // is worse by more than TieRelative.
 func Judge(k MetricKey, newv, other float64) (Verdict, float64) {
 	if isNaN(newv) || isNaN(other) {
@@ -218,7 +218,8 @@ func Judge(k MetricKey, newv, other float64) (Verdict, float64) {
 }
 
 // Deficient reports how far a falls short of b under the metric's direction,
-// as a fraction of b: positive when a is worse, negative when a is better.
+// as a fraction of b: positive when a is worse, negative. This happens when
+// a is better.
 func Deficient(k MetricKey, a, b float64) float64 {
 	if isNaN(a) || isNaN(b) {
 		return 0

@@ -6,10 +6,10 @@ import (
 	"schedsim/internal/trace"
 )
 
-// TestSweepCoversThePerturbations pins the sensitivity sweep's breadth: one-at-a-time
+// TestSweepCoversThePerturbations pins the sensitivity sweep's breadth. One-at-a-time
 // perturbations of the calibrated cost terms, the scheduler's own knobs and the
 // workload, each compared across the policies. The first variant is the reference the
-// others are read against and perturbs nothing by design; every other row has to change
+// others are read against and perturbs nothing by design. Every other row has to change
 // something, or it measures the reference twice.
 func TestSweepCoversThePerturbations(t *testing.T) {
 	steps := mustSteps(t)

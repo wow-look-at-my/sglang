@@ -187,7 +187,7 @@ func (c WindowCensus) String() string {
 }
 
 // StreamSeconds is the time every stream in the run spent past its first token
-// and inside the window: the denominator a throughput has to be divided by before
+// and inside the window. The denominator a throughput has to be divided by before
 // it can be compared between policies that admit streams at different times.
 func StreamSeconds(res *Result, window float64) float64 {
 	total := 0.0
@@ -246,11 +246,10 @@ func (c Cost) ChunkCostSeconds(prefix int) float64 {
 	})
 }
 
-// SingleTokenSamples counts the per-token inter-token samples that came from a
-// one-token delivery, and the total sample count, for the streams the ITL
-// percentiles are measured over: with speculative decoding a delivery of N tokens
-// contributes N samples of gap/N, so a delivery's share of a percentile depends on
-// how many tokens it carried, not only on how long the wait was.
+// SingleTokenSamples counts the per-token inter-token samples that came from
+// a one-token delivery, and the total sample count. Those SingleTokenSamples
+// are for the streams the ITL percentiles are measured over: with speculative
+// decoding a delivery of N. Tokens contributes N samples of gap/N.
 func SingleTokenSamples(res *Result, window float64) (single, total int, longest float64) {
 	for _, r := range res.Requests {
 		if len(r.Deliveries) < 2 {

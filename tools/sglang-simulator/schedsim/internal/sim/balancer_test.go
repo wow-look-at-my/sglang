@@ -3,7 +3,7 @@ package sim
 import "testing"
 
 // TestFeaturesTablePinsTheModes guards the comparison itself: each mode's rule set
-// is what the Python at its own commit does, and those must differ only where the
+// is what the Python at its own commit does. Those must differ only where the
 // ports say they do. A silent edit here would compare NEW against an invented
 // PREV, which is worse than no comparison.
 func TestFeaturesTablePinsTheModes(t *testing.T) {
@@ -42,8 +42,8 @@ func TestFeaturesTablePinsTheModes(t *testing.T) {
 	}
 }
 
-// The debt floors are the line both balancers differ on besides the stall bound:
-// a decode slice longer than the prefill it faces can never become credit under
+// The debt floors are the line both balancers differ on besides the stall bound.
+// A decode slice longer than the prefill it faces can never become credit under
 // PREV, and under NEW is credit up to one decode batch.
 func TestBalancerDebtFloorsDiffer(t *testing.T) {
 	for _, tc := range []struct {
@@ -83,7 +83,7 @@ func TestBalancerWithoutContentionClearsState(t *testing.T) {
 }
 
 // A chunk continuation may not run while any prefill tokens are unrepaid, and a
-// fresh prefill may run only inside the bound; the token budget then caps what the
+// fresh prefill may run only inside the bound. The token budget then caps what the
 // next batch may take.
 func TestBurstBoundGatesContinuationsNotFreshWork(t *testing.T) {
 	b := NewBalancer(FeaturesOf(ModeNew), 4096)
@@ -104,11 +104,11 @@ func TestBurstBoundGatesContinuationsNotFreshWork(t *testing.T) {
 	}
 }
 
-// Cost per prefill token rises with the context attention reads, so a token
+// Cost per prefill token rises with the context attention reads. A token
 // bound alone lets a chunked prompt's later chunks stall decode for several
 // times the seconds one chunk promises. The continuation's cap is the GPU
-// seconds one chunk is worth at the measured average rate, priced at the
-// marginal rate of the batch that ran.
+// seconds one chunk is worth. This holds at the measured average rate,
+// priced at the marginal rate of the batch that ran.
 func TestContinuationBudgetIsDenominatedInSeconds(t *testing.T) {
 	b := NewBalancer(FeaturesOf(ModeNew), 4096)
 	b.OnLaunch(true, 4000, 0, 0)
@@ -137,10 +137,10 @@ func TestContinuationBudgetIsDenominatedInSeconds(t *testing.T) {
 	}
 }
 
-// The prefill rates are prefill measurements: a decode batch also reports extend
-// tokens (one per running request) and costs an order of magnitude more per token,
-// so letting one in would price prefill work at decode cost and un-bind every
-// continuation cap.
+// The prefill rates are prefill measurements. A decode batch also reports extend
+// tokens (one per running request). The decode batch costs an order of magnitude
+// more per token. Letting one in would price prefill work at decode cost and
+// un-bind every continuation cap.
 func TestDecodeBatchTokensDoNotEnterThePrefillRates(t *testing.T) {
 	b := NewBalancer(FeaturesOf(ModeNew), 4096)
 	b.OnLaunch(true, 4000, 0, 0)

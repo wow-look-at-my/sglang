@@ -1,5 +1,5 @@
 // Package report renders the parsed log facts and both models' results as a
-// side-by-side before/after, and states which numbers are measured, which are
+// side-by-side before/after, and states which numbers are measured. This are
 // derived, and which the log cannot supply at all.
 package report
 

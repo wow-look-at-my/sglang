@@ -1,5 +1,5 @@
 // Package trace parses a live serving log into the sequence of scheduler steps
-// it records, so a simulation can be driven by measured timings instead of
+// it records. A simulation can be driven by measured timings instead of
 // constants chosen to produce a desired answer.
 package trace
 
@@ -335,8 +335,8 @@ func Summarize(steps []Step, chunkSize int) Metrics {
 			if s.Throughput > m.ColdPeakTP {
 				m.ColdPeakTP = s.Throughput
 			}
-			// The first chunk of a fresh sequence runs cold-start work, so the
-			// steady band and the sag's bottom are taken from the chunks after it.
+			// The first chunk of a fresh sequence runs cold-start work. The steady
+			// band and the sag's bottom are taken from the chunks after it.
 			if chunks == 1 {
 				continue
 			}

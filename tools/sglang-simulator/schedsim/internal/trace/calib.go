@@ -35,7 +35,7 @@ type DecodeCost struct {
 	Base        float64
 	PerReq      float64
 	PerTokenCtx float64
-	// MeanCtx is the context of the steady single-request lines the base term was solved at, so a term can be re-scaled without moving the fitted.
+	// MeanCtx is the context of the steady single-request lines the base term was solved at. A term can be re-scaled without moving the fitted.
 	MeanCtx  float64
 	NumDraft int
 	// Accept carries the accepted-token counts the log reported per step.
@@ -68,7 +68,7 @@ const (
 // ColdRuns groups the indices of consecutive full cold chunks: a prefill step
 // of exactly chunkSize new tokens with no prefix hit. Runs in the log are
 // isolated cold prompts, the first with nothing running and the second with
-// requests running, which makes the second a genuine holdout for the fit.
+// requests running. This makes the second a genuine holdout for the fit.
 func ColdRuns(steps []Step, chunkSize int) [][]int {
 	var runs [][]int
 	var run []int
@@ -88,8 +88,7 @@ func ColdRuns(steps []Step, chunkSize int) [][]int {
 	return runs
 }
 
-// FitPrefill fits the quadratic in mid-context to the logged cold chunks,
-// using the first run as the fit set and the second as the holdout.
+// FitPrefill fits the quadratic in mid-context to the logged cold chunks.
 func FitPrefill(steps []Step, chunkSize int) PrefillCost {
 	return fitPrefill(steps, chunkSize, 2)
 }
@@ -187,7 +186,7 @@ func (p PrefillCost) Scaled(k float64) PrefillCost {
 }
 
 // FitDecode solves the step time of the log's steady single-stream decodes,
-// where the line before it was also a decode line: step seconds are the accepted
+// where the line before it was also a decode line. Step seconds are the accepted
 // tokens over the gen throughput that line reports. The base term is what is
 // left once the assumed context cost is subtracted at the observed context.
 func FitDecode(steps []Step) DecodeCost {
@@ -254,7 +253,7 @@ func (d DecodeCost) StepSeconds(batch int, sumCtx int) float64 {
 	return d.Base + d.PerReq*float64(batch-1) + d.PerTokenCtx*float64(sumCtx)
 }
 
-// DevicePoolTokens derives the KV pool capacity from the log: every decode line
+// DevicePoolTokens derives the KV pool capacity from the log. Every decode line
 // reports both the tokens held and the fraction of the pool that is, so their
 // ratio is the capacity. The median over the lines is the estimate.
 func DevicePoolTokens(steps []Step) int {

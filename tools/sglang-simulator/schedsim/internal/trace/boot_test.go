@@ -167,7 +167,8 @@ func TestCorpusBoots(t *testing.T) {
 }
 
 // Every prompt that held the GPU for a few seconds with requests running is
-// a stall, measured from its first chunk to the decode step after its last.
+// a stall, measured from its first chunk to the decode step. This holds
+// after its last.
 func TestCorpusStalls(t *testing.T) {
 	gen, boots := corpus(t)
 	var longest, longestWant Stall
