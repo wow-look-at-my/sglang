@@ -35,7 +35,7 @@ At the 5 minute cadence the same policy has 10,226 mixed samples out of 1,316,98
 
 so there the p99 is a decode sample and NEW beats PREV's 39.1 ms. One count crossing one threshold flips the metric. The schedule did not change shape.
 
-A mixed delivery is a *bonus* token: the riding request gets it because mixed chunked prefill extends it inside the prefill batch. The balancer charges that batch as prefill minus the rows so decode's half is untouched. The metric charges the batch's whole wall-clock window to that single token, where the same window spent on a decode step is divided by 2.70. With identical waits, a policy that delivers during prefill is charged 2.7x more per token than one that waits.
+A mixed delivery is a *bonus* token: the riding request gets it because mixed chunked prefill extends it inside the prefill batch. The balancer charges that batch as prefill minus the rows so decode's half is untouched. 2.70 divids the metric charges the batch's whole wall-clock window to that single token, where the same window spent on a decode step. With same waits, a policy that delivers during prefill is charged 2.7x more per token than one that waits.
 
 ## What is asserted instead, and why each bound holds
 
@@ -78,9 +78,9 @@ What prices the remaining 47 is one prefill pass, not two and not idle hardware.
     calibrated step at the largest decode batch  23.9 ms
     ceiling                                    1.20 s  >  NEW's 77.6 ms and > 748.2 + 23.9 ms
 
-The pass is a continuation of another request's chunked prompt, already under the seconds cap `prefill_token_budget` imposes. As a result, no further bound on chunk size is available to the scheduler here. Nor is the alternative delivery form better for the stream. A first token that rode the pass will carry exactly one token and file the pass's whole seconds as its sample. This is moving the gap from a divided wait to the mixed band instead of out of it.
+The pass is a continuation of another request's chunked prompt, already under the seconds cap `prefill_token_budget` imposes. As a result, no further bound on chunk size is available to the scheduler here. Nor is the alternative delivery form better for the stream. A first token that rode the pass will carry exactly one token and file the pass's whole seconds as its sample. This movs the gap from a divided wait to the mixed band instead of out of it.
 
-The improvement claim in this cell is the last a couple of rows. Take the pass-cost samples out and NEW's own decode steps reach 23.8 ms at their 99th percentile against OLD's reported 26.6 ms. As a result, NEW is not the policy with the slower steps. The cell is lost on the weighting above. The bound fails the build the day a control law makes NEW's own steps the slower ones.
+The improvement claim in this cell is the last a couple of rows. Take the pass-cost samples out. NEW's own decode steps reach 23.8 ms at their 99th percentile against OLD's reported 26.6 ms. As a result, NEW is not the policy with the slower steps. The cell is lost on the weighting above. The bound fails the build the day a control law makes NEW's own steps the slower ones.
 
 At p99.9 in the same scenario the cut is samples and 41 of them are mixed rides. As a result, the named sample is a ride under the longest forward pass (479.3 ms below 748.2 ms), and NEW's decode class reaches 89.7 ms there against OLD's 196.7 ms.
 
@@ -96,9 +96,11 @@ Experiments on the committed model, both printed by `TestMixedRideIsWhatDecidesT
 | on for both | 290.9 ms | 934.3 ms | 332.0 ms | 822.3 ms | 66.5 | 66.7 |
 | off for both | 211.5 ms | 1.72 s | 157.7 ms | 848.5 ms | 64.7 | 65.7 |
 
-Giving a policy the ride raises its own p99 by 37% (211.5 to 290.9 ms) while halving its longest stall (1.72 to 0.934 s). This is because each of its tokens now arrives at the end of a prefill batch and carries a weight of one in the population. Put both policies on the same delivery form and NEW's deficit is 332.0 against 290.9 ms, 14%. The rest of the reported gap is the ride's weighting. Take the ride away from NEW and it wins the cell outright, 157.7 against 211.5 ms, and loses `stream decode tok/s in cold` to PREV (64.7 against 65.7 tok/s). Those riding tokens are what streams generate during a cold prompt at all. Mixed chunked prefill is the deployment's resolved default (`arg_groups/mixed_chunk_hook.py`), not part of the control law. The sweep prints that variant's trade in its own `contract` column.
+Giving a policy the ride raises its own p99 by 37% (211.5 to 290.9 ms) while halving its longest stall (1.72 to 0.934 s). This is because each of its tokens now arrives at the end of a prefill batch and carries a weight of one in the population. Put both policies on the same delivery form and NEW's deficit is 332.0 against 290.9 ms, 14%. The rest of the reported gap is the ride's weighting. Take the ride away from NEW and it wins the cell outright, 157.7 against 211.5 ms, and loses `stream decode tok/s in cold` to PREV (64.7 against 65.7 tok/s). Those riding tokens are what streams generate during a cold prompt at all.
 
-Sweeping the only parameter the balancer shares with the chunk size shows the same trade. Each row is OLD / PREV / NEW from the sensitivity sweep:
+Mixed chunked prefill is the deployment's resolved default (`arg_groups/mixed_chunk_hook.py`), not part of the control law. The sweep prints that variant's trade in its own `contract` column.
+
+Sweeping the only parameter the balancer shares with the chunk size shows the same trade. Each row is NEW of the / of the / PREV from the sensitivity sweep:
 
 | setting | B ITL p99 | B longest stall | B cold TTFT mean | B output tok/s |
 | --- | --- | --- | --- | --- |
@@ -106,7 +108,9 @@ Sweeping the only parameter the balancer shares with the chunk size shows the sa
 | `chunked_prefill_size 2048` | 28.2 / 59.6 / 226.4 ms | 46.5 s / 873.2 ms / 520.4 ms | 46.4 / 64.5 / 109.7 s | 224 / 212 / 235 |
 | `chunked_prefill_size 8192` | 28.2 / 49.2 / 27.4 ms | 45.0 s / 3.19 s / 1.23 s | 44.8 / 97.3 / 100.6 s | 228 / 219 / 230 |
 
-Halving the chunk moves NEW's p99 down to 226.4 ms, because the p99 tracks the cap one-for-one. The chunk moves PREV's down to 59.6 ms at the same time. As a result, NEW's deficit *grows* from 1.6x to 3.8x while PREV's cold TTFT improves by 38 s and NEW's worsens. Reaching PREV's 211.5 ms that way needs a smaller chunk still, and continues the same trade. Doubling the chunk puts NEW's mixed count under the 1% line. Wins p99 outright (27.4 against 49.2 ms) - by changing `chunked_prefill_size`, a launch flag the balancer must not decide, and at 1.23 s of stall for NEW. This is 3.19 s for PREV.
+Halving the chunk moves NEW's p99 down to 226.4 ms, because the p99 tracks the cap one-for-one. The chunk moves PREV's down to 59.6 ms at the same time. As a result, NEW's deficit *grows* from 1.6x to 3.8x while PREV's cold TTFT improves by 38 s and NEW's worsens. Reaching PREV's 211.5 ms that way needs a smaller chunk still, and continues the same trade. Doubling the chunk puts NEW's mixed count under the 1% line. Wins p99 outright (27.4 against 49.2 ms) - by changing `chunked_prefill_size`, a launch flag the balancer must not decide, and at 1.23 s of stall for NEW.
+
+This is 3.19 s for PREV.
 
 What the balancer does own - how many tokens a *continuation* may take - shows up as the band's height against the band's count. Uncapped (PREV) the continuation batches cost p50 463.0 ms, p99 825.8 ms and a max of 942.9 ms at 4,096 tokens each, mean 120 us per token. Capped in seconds (NEW) they cost p50 413.3 ms, p99 652.7 ms and a max of 841.7 ms at a median of 3,606 tokens, mean 126 us per token. There are 4,352 of them against PREV's 3,698 - 18% more passes to be ridden. The cap pays for itself in the wait metrics (longest stall 841.7 ms against PREV's 1.72 s, raw gap p99 459.6 against 720.2 ms). The cap costs p99, because while the riding count is above 1% of samples the reported percentile sits in the band whatever the band's height is.
 
@@ -143,4 +147,4 @@ OLD finishes a cold 400K prompt in 45.3 s, NEW in 105.0 s. A 400K prompt at the 
     cold TTFT >= 2 x (prompt tokens x prefill seconds per token)
                = 2 x 400,000 x 126 us ~= 101 s
 
-which both interleaving policies sit on (PREV 103.1 s, NEW 105.0 s) and which OLD escapes only by giving decode multiple steps for the whole window. OLD's in-window stream rate is 0.7 tok/s against NEW's 66.1. 35.14% of its stream time is inside a stall longer than a second against NEW's 0.00%. NEW's 1.9 s above PREV is the continuation cap buying shorter chunks (4,352 continuation batches against 3,698) and is inside the same 2x bound.
+which both interleaving policies sit on (PREV 103.1 s, NEW 105.0 s) and which OLD escapes only by giving decode multiple steps for the whole window. OLD's in-window stream rate is 0.7 tok/s against NEW's 66.1. 35.14% of its stream time is inside a stall longer than a second against NEW's 0.00%. NEW's 1.9 s above PREV is the shorter of the continuation cap buying chunks (4,352 continuation batches against 3,698) and is inside the same 2x bound.

@@ -87,8 +87,8 @@ clean: lib-clean
 	@CARGO_TARGET_DIR=$(CARGO_BUILD_DIR) cargo clean --manifest-path Cargo.toml
 	@echo "Clean complete"
 
-# The cgo directives name the library but not the directory it sits in; LIB_DIR is
-# this file's answer, so the Go side is built and vetted here.
+# The cgo directives name the library but not the directory it sits in. LIB_DIR is
+# this file's answer. The Go side is built and vetted here.
 build-go: check-lib
 	@echo "Building and vetting the Go SDK..."
 	@go build ./...

@@ -30,8 +30,8 @@ func (p Prompt) CtxStart(chunk int) int {
 }
 
 // Prompt writes a request of tokens new tokens on top of a hit-token cached
-// prefix. Up to a chunk it is one line; past that the first line carries the
-// hit and a full chunk and every later chunk reuses nothing, with #pending-token
+// prefix. Up to a chunk it is one line. Past that the first line carries the hit
+// and a full chunk and every later chunk reuses nothing, with #pending-token
 // counting what is left. A prompt of more than one chunk is recorded in
 // l.Prompts.
 func (l *Log) Prompt(m Model, hit, tokens, chunk, running int) *Log {
@@ -167,8 +167,8 @@ func NewTraffic(s TrafficSpec) *Traffic {
 	return t
 }
 
-// DefaultTraffic is a boot of conversations whose contexts stay far apart, so
-// every turn names its conversation unambiguously: a returning prompt, a long
+// DefaultTraffic is a boot of conversations whose contexts stay far apart.
+// Every turn names its conversation unambiguously: a returning prompt, a long
 // turn on a cached prefix and fresh cold prompts larger than any conversation.
 func DefaultTraffic(worker string, at time.Time) TrafficSpec {
 	args := DefaultArgs
@@ -184,9 +184,9 @@ func DefaultTraffic(worker string, at time.Time) TrafficSpec {
 }
 
 // Corpus is a deployment's log across restarts: a boot at the shorter context
-// length that crashes, a boot that compiles kernels while serving and drains,
-// a hierarchical-cache boot carrying the longest cold prompt, and a boot the
-// log stops in the middle of. Each boot starts after the last one's final line.
+// length that crashes, a boot that compiles kernels while serving and drains. A
+// hierarchical-cache boot carrying the longest cold prompt, and a boot the log
+// stops in the middle of. Each boot starts after the last one's final line.
 func Corpus() []*Traffic {
 	crash := DefaultTraffic("w0-crash", Start)
 	crash.Args.ContextLength = 262144

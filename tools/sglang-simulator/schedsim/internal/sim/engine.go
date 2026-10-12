@@ -341,8 +341,8 @@ func (e *engine) nextBatch() *Batch {
 	return nil
 }
 
-// prefillBatch is get_new_batch_prefill: the chunked request's next chunk first,
-// capped by the cede and the balancer's token budget, then the waiting queue in
+// prefillBatch is get_new_batch_prefill. The chunked request's next chunk first,
+// capped by the cede and the balancer's token budget. Then the waiting queue in
 // order until a request cannot be added.
 func (e *engine) prefillBatch(policyOn bool) *Batch {
 	if e.chunked == nil && len(e.waiting) == 0 {
@@ -572,7 +572,7 @@ func (e *engine) launch(b *Batch) {
 }
 
 // advanceRows steps the requests a mixed prefill batch decodes and drops the ones
-// that ran out: speculative decoding degrades to a plain decode inside a mixed
+// that ran out. Speculative decoding degrades to a plain decode inside a mixed
 // step, so every row is one token.
 func (e *engine) advanceRows(rows []*Request) {
 	if len(rows) == 0 {
@@ -712,9 +712,9 @@ func (e *engine) cedeHalf(chunked *Request, budget, runningBs int) int {
 	return e.reserveCeded(chunked, budget, maxReserved, e.cfg.MaxRunning-runningBs-1)
 }
 
-// cedeFair is the revised cede: it amortizes the half over the chunked request's
-// progress since it first ceded, so a chunk it ran alone banks room for a
-// follow-up of up to a whole chunk in one step.
+// cedeFair is the revised cede. It amortizes the half over the chunked request's
+// progress. This happens since it first ceded, so a chunk it ran alone banks
+// room for a follow-up of up to a whole chunk. That chunk is in one step.
 func (e *engine) cedeFair(chunked *Request, budget, runningBs int) int {
 	page := e.cfg.Page
 	if budget < 2*page || len(e.waiting) == 0 {

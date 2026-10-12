@@ -24,11 +24,11 @@ func mixedShare(res *Result) float64 {
 	return float64(mixed) / float64(total)
 }
 
-// TestScenarioBBalanceWinsAgainstPrev pins the scenario-B comparisons the
-// balancer decides, over the committed seeds: a change to the control law that
-// gives one of them back fails the build instead of costing a re-read of the
-// printed table. ITL p99 is absent on purpose: docs/derivation-itl-percentiles-under-mixed-chunk.md
-// derives that cell from the delivery accounting rather than from the schedule.
+// TestScenarioBBalanceWinsAgainstPrev pins the scenario-B comparisons the balancer decides, over
+// the committed seeds. A change to the control law that gives one of them back fails the build
+// instead of costing a re-read of the printed table. ITL p99 is absent on purpose:
+// docs/derivation-itl-percentiles-under-mixed-chunk.md derives. Those derives cell from the
+// delivery accounting rather than from the schedule.
 func TestScenarioBBalanceWinsAgainstPrev(t *testing.T) {
 	cost := ScenarioCost()
 	rows := RunSuite([]Scenario{ScenarioB(2), ScenarioB(5)}, cost, DefaultConfig, 0)
@@ -93,11 +93,11 @@ func TestScenarioBBalanceWinsAgainstPrev(t *testing.T) {
 	}
 }
 
-// TestMixedRideIsWhatDecidesTheP99Cell runs scenario B with mixed chunked prefill
+// TestMixedRideIsWhatDecidesTheP99Cell runs scenario B. With mixed chunked prefill
 // on and off for the interleaving policies, to separate what the control law costs
 // from what the delivery form costs. The ride hands each running request one token
-// per prefill batch, so it halves the longest stall and, because the metric divides
-// a gap by the tokens it carried, raises that policy's own ITL p99. Turning the ride
+// per prefill batch. It halves the longest stall and, because the metric divides a
+// gap by the tokens it carried, raises that policy's own ITL p99. Turning the ride
 // off wins p99 outright and gives back the tokens streams generate during a cold
 // prompt. Numbers quoted in docs/derivation-itl-percentiles-under-mixed-chunk.md.
 //
@@ -167,7 +167,7 @@ func TestMixedRideIsWhatDecidesTheP99Cell(t *testing.T) {
 	}
 }
 
-// The dense cold cadence and the busy short-chat scenario land above the line, the sparse cadence below
+// The dense cold cadence and the busy short-chat scenario land above the line. The sparse cadence below
 // it, and that is the whole difference between NEW winning p99 in one and losing it in the other.
 func TestITLP99BandFollowsTheMixedShare(t *testing.T) {
 	cost := ScenarioCost()

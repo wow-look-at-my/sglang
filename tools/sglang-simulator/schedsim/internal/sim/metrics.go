@@ -194,8 +194,8 @@ func Measure(res *Result, window float64) Metrics {
 
 // coldWindows merges the cold prompts' prefill stretches, clipped to the run
 // window. A prompt that never reached its first token keeps a window that runs
-// to the end of the measurement, so the streams it crowded out are still
-// counted against the policy that left it unserved.
+// to the end of the measurement. The streams it crowded out are still counted
+// against the policy that left it unserved.
 func coldWindows(res *Result, window float64) []interval {
 	var raw []interval
 	for _, w := range res.Windows {
@@ -315,8 +315,8 @@ func spread(res *Result, sel func(*Request) bool) []float64 {
 	return out
 }
 
-// stalledFraction is the share of stream time spent inside a stall longer than
-// a second, which separates one unlucky stream from a system that stalls always.
+// stalledFraction is the share of stream time spent inside a stall longer than a
+// second. This separates one unlucky stream from a system that stalls always.
 func stalledFraction(res *Result, window float64) float64 {
 	inStall, live := 0.0, 0.0
 	for _, r := range res.Requests {

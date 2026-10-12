@@ -73,7 +73,7 @@ type Variant struct {
 	SkipA bool
 }
 
-// SweepVariants returns the one-at-a-time perturbations: the calibrated cost
+// SweepVariants returns the one-at-a-time perturbations. The calibrated cost
 // terms, the speculative and overlap settings, the chunk size, the queue policy,
 // the traffic shape, and the cache tiers. `linear` is the same log refitted with
 // a degree-1 polynomial, which is the alternative form the fit must beat.

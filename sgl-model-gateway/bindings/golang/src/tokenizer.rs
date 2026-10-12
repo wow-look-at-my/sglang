@@ -137,11 +137,9 @@ pub unsafe extern "C" fn sgl_tokenizer_encode(
 /// * `error_out` - Optional pointer to receive error message
 ///
 /// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `handle` must be live; `messages_json` must be NUL-terminated UTF-8 and
-/// `tools_json` null or UTF-8; `result_out` must be writable.
+/// * SglErrorCode::Success on success, error code on failure # Safety
+/// `handle` must be live. `messages_json` must be NUL-terminated UTF-8 and
+/// `tools_json` null or UTF-8. `result_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
     handle: *mut TokenizerHandle,
@@ -256,10 +254,8 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template_with_tools(
 /// * `error_out` - Optional pointer to receive error message
 ///
 /// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `handle` must be live; `messages_json` must be NUL-terminated UTF-8;
+/// * SglErrorCode::Success on success, error code on failure # Safety
+/// `handle` must be live. `messages_json` must be NUL-terminated UTF-8.
 /// `result_out` must be writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
@@ -350,10 +346,7 @@ pub unsafe extern "C" fn sgl_tokenizer_apply_chat_template(
 ///
 /// # Returns
 /// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `handle` must be live; `token_ids` must point to at least `token_count`
-/// readable `u32`s; `result_out` must be writable.
+/// `token_count` readable `u32`s. `result_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tokenizer_decode(
     handle: *mut TokenizerHandle,

@@ -88,7 +88,7 @@ type Workload struct {
 
 // WorkloadFromLog builds the workload out of the parsed steps. The cold chunks
 // are exactly the steps of the isolated stretch, so their costs are measured
-// rather than modelled, and the decode cost is the measured median decode step.
+// rather than modelled. The decode cost is the measured median decode step.
 func WorkloadFromLog(steps []trace.Step, m trace.Metrics, chunkSize int) Workload {
 	w := Workload{
 		ChunkSize:           chunkSize,
@@ -259,9 +259,9 @@ func (x *runner) fixedInterval() {
 	}
 }
 
-// timeBalance implements the shipped balancer: it keeps a running balance of
+// timeBalance implements the shipped balancer. It keeps a running balance of
 // measured prefill seconds minus measured decode seconds, settled only while
-// both classes contend, and defers prefill while the balance is positive.
+// both classes contend. Defers prefill while the balance is positive.
 func (x *runner) timeBalance() {
 	// weight converts decode seconds into prefill-equivalent seconds.
 	weight := x.p.PrefillShare / (1 - x.p.PrefillShare)
@@ -277,7 +277,7 @@ func (x *runner) timeBalance() {
 	}
 }
 
-// queueBalance implements the revised balancer (python/sglang/srt/managers/scheduler_components/prefill_decode_balancer.py). A prefill batch's seconds are charged in full (a mixed chunk's minus its decode rows), so decode keeps half of contended time; the queue behind the chunk does not count. burst counts prefill tokens since decode last caught up; a chunk continuation runs only once it is zero, and no batch runs once it reaches a chunk. The balance may go
+// queueBalance implements the revised balancer (python/sglang/srt/managers/scheduler_components/prefill_decode_balancer.py). A prefill batch's seconds are charged in full (a mixed chunk's minus its decode rows), so decode keeps half of contended time; the queue behind the chunk does not count. burst counts prefill tokens since decode last caught up. A chunk continuation runs only once it is zero, and no batch runs once it reaches a chunk. The balance may go
 // negative by one decode step, the overshoot the balancer carries.
 func (x *runner) queueBalance() {
 	var debt float64

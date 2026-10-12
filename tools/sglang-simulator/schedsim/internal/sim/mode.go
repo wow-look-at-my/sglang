@@ -1,11 +1,11 @@
-// Package sim runs the scheduler as a discrete-event simulation: requests
-// arrive, batches are formed by the shipped batch-formation rules, each batch
+// Package sim runs the scheduler as a discrete-event simulation. Requests
+// arrive, batches are formed by the shipped batch-formation rules. Each batch
 // costs the GPU time the production log calibrated, and those scheduler
 // policies choose between prefill and decode under their own control laws.
 //
-// The policies are the only difference between multiple runs of the same
-// scenario: arrivals, batch formation, admission against the KV pool, the cost
-// model and the acceptance draws are shared, so a metric that moves is a policy effect.
+// The policies are the only difference between multiple runs of the same scenario. The
+// policies arrivals, batch formation, admission against the KV pool. The cost model and
+// the acceptance draws are shared, so a metric that moves is a policy effect.
 package sim
 
 // Mode names the scheduler under test.

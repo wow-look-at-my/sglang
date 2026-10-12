@@ -15,8 +15,8 @@ import (
 // lines it was solved on.
 
 // The composition depends on the page rounding, the token budget, the cede's
-// half-chunk rule and which prefix the pool reports for the follow-up, so it fails
-// if any of those drift.
+// half-chunk rule and which prefix the pool reports for the follow-up. It fails if
+// any of those drift.
 func TestReplayReproducesTheLoggedBatch(t *testing.T) {
 	sc := ScenarioA(testEpisode())
 	cost := NewCost(calib(t))
@@ -110,7 +110,7 @@ func TestOldRunsNoDecodeDuringTheColdPrefills(t *testing.T) {
 // solved: a decode line whose predecessor is also a decode line, on one request. Its
 // reported gen throughput covers a whole interval of decode steps, so accepted tokens
 // over throughput is a step time the model has to reproduce. Lines that follow a
-// prefill are excluded because their throughput window contains the prefill; they are
+// prefill are excluded because their throughput window contains the prefill. They are
 // reported, not fitted, and the gap between both populations is the reason.
 func TestDecodeRateMatchesTheLog(t *testing.T) {
 	steps := mustSteps(t)
@@ -152,7 +152,7 @@ func TestDecodeRateMatchesTheLog(t *testing.T) {
 	}
 }
 
-// TestRunIsDeterministic pins the entry point's promise: the same scenario, policy and
+// TestRunIsDeterministic pins the entry point's promise. The same scenario, policy and
 // seed produce byte-identical tables, and a parallel suite reports what a serial one
 // does. Both orderings dispatch the same runs through different goroutines, so this
 // also covers the suite's own aggregation.

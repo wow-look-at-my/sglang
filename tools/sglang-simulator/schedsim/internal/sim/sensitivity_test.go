@@ -7,15 +7,15 @@ import (
 )
 
 // The sweep and every scenario number are only evidence about the real cost
-// model if the model is what drives them: perturbing a calibrated cost has to
+// model if the model is what drives them. Perturbing a calibrated cost has to
 // move the reported metrics in the direction that cost implies. A run whose
 // outcome survived a cost change would mean some number in the tables came from
 // somewhere other than the calibration.
 //
 // Uniform scaling is the perturbation with a known answer. A prefill batch's
-// seconds are linear in every prefill term, so the scheduler's own ratios --
+// seconds are linear in every prefill term. The scheduler's own ratios --
 // average and marginal seconds per token, which is what the continuation cap and
-// the token budget divide -- are unchanged; only the wall clock each prefill
+// the token budget divide -- are unchanged. Only the wall clock each prefill
 // batch occupies moves, by the factor itself.
 func TestCostScaleMovesTheReportedMetrics(t *testing.T) {
 	cal := trace.Calibrate(mustSteps(t), BaselineChunkSize, 64)
@@ -38,10 +38,10 @@ func TestCostScaleMovesTheReportedMetrics(t *testing.T) {
 			k, newm.Value(MColdTTFT), newm.LongestStall, oldm.LongestStall)
 	}
 
-	// A cold prompt's own prefill is part of its time to first token, and every
-	// chunk a stream waits out is prefill wall clock, so both must grow with the
-	// prefill cost. OLD is the cleaner case: it runs prefill whenever one can be
-	// formed, so its stall is prefill seconds with no feedback loop to argue with.
+	// A cold prompt's own prefill is part of its time to first token. Every chunk
+	// a stream waits out is prefill wall clock, so both must grow with the prefill
+	// cost. OLD is the cleaner case: it runs prefill whenever one can be formed.
+	// Its stall is prefill seconds with no feedback loop to argue with.
 	for i := 1; i < len(ttft); i++ {
 		if !(ttft[i] > ttft[i-1]) {
 			t.Errorf("cold TTFT did not grow with the prefill cost: %.3f s then %.3f s", ttft[i-1], ttft[i])

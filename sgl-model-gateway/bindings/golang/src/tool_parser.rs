@@ -40,7 +40,6 @@ pub struct ToolParserHandle {
 ///
 /// # Returns
 /// * Pointer to ToolParserHandle on success, null on failure
-///
 /// # Safety
 /// `parser_type` must be a valid NUL-terminated UTF-8 string.
 #[no_mangle]
@@ -89,11 +88,9 @@ pub unsafe extern "C" fn sgl_tool_parser_create(
 /// * `error_out` - Optional pointer to receive error message
 ///
 /// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `handle` must be live; `text` must be NUL-terminated UTF-8; `result_json_out`
-/// must be writable and its buffer freed with `sgl_free_string`.
+/// * SglErrorCode::Success on success, error code on failure # Safety `handle`
+/// must be live. `text` must be NUL-terminated UTF-8. `result_json_out` must be
+/// writable and its buffer freed with `sgl_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_parse_complete(
     handle: *mut ToolParserHandle,
@@ -188,11 +185,9 @@ pub unsafe extern "C" fn sgl_tool_parser_parse_complete(
 /// * `error_out` - Optional pointer to receive error message
 ///
 /// # Returns
-/// * SglErrorCode::Success on success, error code on failure
-///
-/// # Safety
-/// `handle` must be live; `chunk` must be NUL-terminated UTF-8 and `tools_json`
-/// null or UTF-8; `result_json_out` must be writable.
+/// * SglErrorCode::Success on success, error code on failure # Safety `handle`
+/// must be live. `chunk` must be NUL-terminated UTF-8 and `tools_json` null or
+/// UTF-8. `result_json_out` must be writable.
 #[no_mangle]
 pub unsafe extern "C" fn sgl_tool_parser_parse_incremental(
     handle: *mut ToolParserHandle,

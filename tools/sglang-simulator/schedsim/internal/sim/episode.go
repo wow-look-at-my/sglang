@@ -123,8 +123,8 @@ func ExtractEpisode(steps []trace.Step, chunkSize int) (Episode, error) {
 }
 
 // MixedItems is the composition of the batch that finished C1: its tail, the
-// follow-up's uncached work, and what is left of the chunk budget for the
-// next cold prompt.
+// follow-up's uncached work, and what is left of the chunk budget. This
+// holds for the next cold prompt.
 func (e Episode) MixedItems() (tail, follow, next int) {
 	tail = e.TailLen()
 	follow = e.R2Work()

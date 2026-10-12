@@ -22,14 +22,11 @@ pub(crate) fn resolve_proxy_config<'a>(
 }
 
 /// Apply proxy configuration to a ClientBuilder
-///
 /// This is a reusable helper that applies proxy settings without building the client,
 /// allowing additional configuration (like auth headers) to be added afterward.
-///
 /// # Arguments
 /// * `builder` - The reqwest::ClientBuilder to configure
 /// * `proxy_config` - The proxy configuration to apply
-///
 /// # Returns
 /// The configured builder or error
 pub(super) fn apply_proxy_to_builder(
@@ -78,10 +75,8 @@ pub(super) fn apply_proxy_to_builder(
 }
 
 /// Create HTTP client with MCP-specific proxy configuration
-///
 /// # Arguments
 /// * `proxy_config` - Optional proxy configuration to apply
-///
 /// # Returns
 /// A configured reqwest::Client or error
 pub(crate) fn create_http_client(

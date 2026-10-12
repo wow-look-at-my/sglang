@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// Each losing cell is excused by exactly one derivation document, and
-// boundName is the only table of which cell gets which. A bound whose document is
-// missing, or a document no bound reads, means the excuse in the test and the
-// argument on disk have drifted apart -- the test would keep passing while the
+// Each losing cell is excused by exactly one derivation document, and boundName
+// is the only table of which cell gets which. A bound whose document is missing.
+// Otherwise, a document no bound reads, means the excuse in the test and the
+// argument on disk have drifted apart. The test would keep passing while the
 // reasoning it cites no longer exists. This checks the pair, in both directions.
 var derivationDocs = map[string]string{
 	boundWholeGPU:       "../../docs/derivation-cold-ttft-vs-old.md",
@@ -33,7 +33,7 @@ func TestEveryBoundNamesACommittedDerivation(t *testing.T) {
 	}
 }
 
-// boundName is consulted for every scenario the suite measures, so the set it can
+// boundName is consulted for every scenario the suite measures. The set it can
 // return is fixed by the table rather than by which cells happen to lose on this
 // run. A bound name with no document would excuse a loss with nothing behind it,
 // and a document no name returns is an argument nothing reads.

@@ -7,10 +7,11 @@ import (
 )
 
 // The contract suite compares NEW against PREV. If PREV ever stopped differing
-// from NEW -- a rule ported as a no-op, a feature flag wired to the wrong mode --
-// every comparison against it would still pass while proving nothing, because a
-// policy cannot lose to a copy of itself. TestFeaturesTablePinsTheModes checks the
-// rule sets differ; this checks that the difference reaches the numbers.
+// from NEW -- a rule ported as a no-op, a feature flag wired to the wrong mode.
+// Every comparison against it would still pass while proving nothing. This is
+// because a policy cannot lose to a copy of itself. TestFeaturesTablePinsTheModes
+// checks the rule sets differ; this checks that the difference reaches the
+// numbers.
 func TestPrevAndNewReportDifferentNumbers(t *testing.T) {
 	rows := suite(t)
 	var disagreeing, firstDetail []string

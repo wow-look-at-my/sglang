@@ -98,7 +98,7 @@ func TestDecodeIntervalMovesBothOutcomes(t *testing.T) {
 }
 
 // The prefill share is the balancer's split knob, so changing it must change how
-// the window is divided: a larger prefill share means a faster prefill and less
+// the window is divided. A larger prefill share means a faster prefill and less
 // generation, monotonically.
 func TestPrefillShareTradesPrefillTimeAgainstGeneration(t *testing.T) {
 	w, _ := workload(t)
@@ -190,9 +190,8 @@ func TestDecodeCostKnobResponds(t *testing.T) {
 
 // A decode step advances every running request. Since batch-size scaling of
 // decode cost is not measurable from this log, the default model charges a flat
-// cost per step, and the consequence must be exactly what "flat" means: the
-// batch generates proportionally more while each conversation's rate is
-// unchanged.
+// cost per step. The consequence must be exactly what "flat" means: the batch
+// generates proportionally more while each conversation's rate is unchanged.
 func TestFlatDecodeCostScalesGenerationWithTheBatch(t *testing.T) {
 	w, _ := workload(t)
 
@@ -262,9 +261,9 @@ func TestQueueBalanceIgnoresRequestsThatCannotRun(t *testing.T) {
 	}
 }
 
-// Mixed-chunk tokens ride on top of decode's half and never replace it: a
+// Mixed-chunk tokens ride on top of decode's half and never replace it. A
 // chunk that gives each running request one token is still followed by pure
-// decode worth its own time, so no stream collapses to a token per chunk.
+// decode worth its own time. No stream collapses to a token per chunk.
 func TestMixedChunkRidesOnTopOfDecodeHalf(t *testing.T) {
 	w, _ := workload(t)
 

@@ -3,7 +3,7 @@ package kv
 import "testing"
 
 // A pool with no host tier loses an evicted prefix outright, so the next turn
-// of that conversation recomputes its whole input; a host tier that can hold it
+// of that conversation recomputes its whole input. A host tier that can hold it
 // turns the same eviction into a reload. This is the difference between both
 // sides of the thrash collapse, so both directions are asserted on one run.
 func TestEvictionWithAndWithoutHostTier(t *testing.T) {

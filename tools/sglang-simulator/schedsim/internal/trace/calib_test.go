@@ -14,8 +14,8 @@ func cal(t *testing.T) Calibration {
 	return c
 }
 
-// The quadratic form is a claim about the log, not a constant: the second cold
-// run was never looked at by the fit and must still be predicted closely, and a
+// The quadratic form is a claim about the log, not a constant. The second cold
+// run was never looked at by the fit and must still be predicted closely. A
 // linear form must be visibly worse on it. If a future log makes the quadratic
 // unnecessary this test is the place that gets argued.
 func TestPrefillFitPredictsTheHeldOutRun(t *testing.T) {
@@ -78,7 +78,7 @@ func TestPrefillFitPredictsTheHeldOutRun(t *testing.T) {
 }
 
 // A cost model that is not increasing in the work it prices cannot be a cost
-// model; this fails if a fit coefficient ever goes negative on a longer context.
+// model. This fails if a fit coefficient ever goes negative on a longer context.
 func TestCostsRiseMonotonically(t *testing.T) {
 	c := cal(t)
 	lastTokens, lastCtx := 0.0, 0.0

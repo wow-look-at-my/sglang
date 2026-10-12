@@ -55,7 +55,7 @@ function decodeSeconds(c: Calibration, batch: number, sumCtx: number): number {
 // both have work; prefill is deferred while it is ahead. Time is charged at
 // completion, from the completion, because the overlap scheduler picks batch
 // N+1 while N still runs. A burst of at most one chunk's tokens runs before
-// decode must catch up; a chunk continuing a long prompt is bounded in GPU
+// decode must catch up. A chunk continuing a long prompt is bounded in GPU
 // seconds at its marginal (context-inflated) rate.
 class Balancer {
   debt = 0;
@@ -145,8 +145,8 @@ class Balancer {
 
 // The device pool holds running requests' reservations and finished
 // conversations' prefixes. Admission evicts the least recently used idle
-// prefixes, whole, when the free space is short; an optional host tier keeps
-// what was evicted, and a hit there is reloaded instead of recomputed.
+// prefixes, whole, when the free space is short. An optional host tier keeps
+// what was evicted. A hit there is reloaded instead of recomputed.
 class Pool {
   entries = new Map<number, { dev: number; host: number; lastUse: number }>();
   inflight = 0;
@@ -193,7 +193,7 @@ class Pool {
     return got >= short;
   }
   // Takes conv's reservation. The resident prefix stays in device memory
-  // for the run (it moves from the cached total to the reservation), a host
+  // for the run (it moves from the cached total to the reservation). A host
   // hit is reloaded into device memory, and the rest is computed: device
   // space is needed for everything but the resident prefix.
   admit(conv: number, input: number, out: number, devHit: number, hostHit: number, now: number): void {
@@ -517,7 +517,6 @@ class Engine {
 
 // ---------------------------------------------------------------- traffic
 
-// Mulberry32: one seed gives both engines the same draws.
 function rng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -555,7 +554,7 @@ interface TrafficParams {
 
 // Feed is one side's copy of the traffic. Each stream draws from its own
 // generator, so both engines see the same turn sizes and think times whatever
-// order they finish in; the random cold prompts are a precomputed schedule
+// order they finish in. The random cold prompts are a precomputed schedule
 // both engines share.
 class Feed {
   streams = new Map<number, Stream>();

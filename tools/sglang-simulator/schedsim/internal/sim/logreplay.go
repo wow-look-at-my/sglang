@@ -92,10 +92,10 @@ func BuildLogReplay(b *trace.Boot, chunkSize int, skipSeconds, maxSeconds float6
 		chain = s.Pending > 0 && s.NewTokens == chunkSize
 		rest := chainTokens(prefill, pi, chunkSize)
 		arrivals := splitArrivals(s, chunkSize, rest)
-		// A line admitting several requests does not itemise their prefix hits, but
-		// each follow-up is some conversation's next turn: the most recently idle
-		// conversations whose last prompts add up to the line's hit are the ones,
-		// and each's hit is its own last prompt.
+		// A line admitting several requests does not itemise their prefix hits.
+		// However, each follow-up is some conversation's next turn. The most
+		// recently idle conversations whose last prompts add up to the line's hit
+		// are the ones, and each's hit is its own last prompt.
 		if len(arrivals) > 1 {
 			var followUps []int
 			for k, arr := range arrivals {
@@ -224,9 +224,9 @@ type arrival struct {
 }
 
 // splitArrivals divides a batch line among the requests it admitted. One
-// line is one request; a line with #new-seq n and pending tokens holds one
+// line is one request. A line with #new-seq n. Pending tokens holds one
 // chunked prompt that took the chunk and n-1 follow-ups that took the rest,
-// which the log does not itemise, so they share it evenly. rest is the
+// which the log does not itemise. So they share it evenly. rest is the
 // chunked prompt's remaining tokens, summed from the lines that follow.
 func splitArrivals(s trace.Step, chunkSize, rest int) []arrival {
 	if s.NewSeq <= 1 {
@@ -282,9 +282,9 @@ func prefillSteps(steps []trace.Step) []trace.Step {
 	return out
 }
 
-// chainTokens sums the chunks that continue the prompt started at prefill[i]:
-// the following lines with one sequence and no prefix hit, up to and
-// including the first that is not a full chunk or leaves nothing pending.
+// chainTokens sums the chunks that continue the prompt started at prefill[i].
+// The following lines with one sequence. No prefix hit, up to and including
+// the first that is not a full chunk or leaves nothing pending.
 func chainTokens(prefill []trace.Step, i, chunkSize int) int {
 	if prefill[i].Pending == 0 || prefill[i].NewTokens != chunkSize {
 		return 0
@@ -347,7 +347,7 @@ func (l *LogReplay) Initial() []*Request {
 }
 
 // OnFinish releases the conversation's next turn at its measured arrival, or
-// now if the reply it follows finished later than the log's own run did: a
+// now if the reply it follows finished later than the log's own run did. A
 // client cannot send its next turn before it has the answer.
 func (l *LogReplay) OnFinish(r *Request, now float64) []*Request {
 	k := l.next[r.Conv]

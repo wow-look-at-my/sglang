@@ -58,9 +58,9 @@ func TestParseKeepsPrefillAndDecodeApart(t *testing.T) {
 	}
 }
 
-// The cold window must be the incident's C1: what its first chunk left
-// pending, every one of its full chunks, and the isolation the log shows:
-// full chunks, no cache reuse, nothing else on the GPU.
+// The cold window must be the incident's C1. What its first chunk left
+// pending, every one of its full chunks, and the isolation the log shows.
+// Full chunks, no cache reuse, nothing else on the GPU.
 func TestColdPrefillIsTheReportedOne(t *testing.T) {
 	steps := mustParse(t)
 	m := Summarize(steps, 4096)
@@ -92,7 +92,7 @@ func TestColdPrefillIsTheReportedOne(t *testing.T) {
 	}
 }
 
-// The prefill sag is measured, not invented: the steady band is the log's
+// The prefill sag is measured, not invented. The steady band is the log's
 // second chunk and the bottom its deepest one, each the rate the line printed.
 func TestMeasuredSagMatchesTheReportedNumbers(t *testing.T) {
 	steps := mustParse(t)
@@ -143,7 +143,7 @@ func TestDecodeLineIntervalBoundsTheWindow(t *testing.T) {
 	}
 }
 
-// The collapsed rate reads back as a share of steps: the band the operator
+// The collapsed rate reads back as a share of steps. The band the operator
 // reported is partial starvation, well under the total starvation the log shows.
 func TestCollapseBandReadsBackAsADutyCycle(t *testing.T) {
 	steps := mustParse(t)
