@@ -1,0 +1,41 @@
+name: dag-view render bench (GPU)
+
+on:
+  push:
+    branches: [claude/determined-dirac-awdtwb]
+    paths: [dag-bench/**, .github/workflows/dag-bench-gpu.yml]
+
+concurrency:
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  bench:
+    runs-on: wow-linux
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: dag-bench
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: GPU on this host
+        run: nvidia-smi || echo "::warning::nvidia-smi found no GPU"
+      - name: Install Google Chrome
+        run: |
+          curl -fsSLo /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq /tmp/chrome.deb
+          google-chrome --version
+      - name: Install playwright-core
+        working-directory: dag-bench
+        run: npm install --no-save --no-audit --no-fund playwright-core@1.56.1
+      - name: Bench, vsync off (frame gap is the real cost)
+        env:
+          CHROME_ARGS: --use-angle=vulkan --enable-features=Vulkan --ignore-gpu-blocklist --enable-gpu-rasterization --disable-gpu-vsync --disable-frame-rate-limit
+        run: node dag-bench/run.mjs "auto&n=200,1000,3000,6000&frames=180"
